@@ -1,0 +1,12 @@
+/target/
+**/*.rs.bk
+.DS_Store
+
+# Native SimpleX libraries (downloaded or built locally)
+/third_party/libsimplex/**
+!/third_party/libsimplex/.gitkeep
+
+# Local IDE / env
+.env
+.idea/
+.vscode/

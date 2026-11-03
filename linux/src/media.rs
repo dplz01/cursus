@@ -1,0 +1,427 @@
+//! Lightweight media helpers (ffmpeg CLI — no heavy player crates).
+
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use base64::Engine;
+
+pub const WAVEFORM_BARS: usize = 96;
+/// Official SimpleX `maxProfileImageSize` (characters of the data-URL).
+pub const MAX_PROFILE_IMAGE_CHARS: usize = 12_500;
+/// Official bio cap (`MAX_BIO_LENGTH_BYTES`).
+pub const MAX_BIO_BYTES: usize = 160;
+
+/// Downsample mono float PCM into normalized peak bars for chat waveforms.
+pub fn extract_waveform_peaks(path: &Path, bars: usize) -> Result<Vec<f32>, String> {
+    let bars = bars.max(8);
+    let raw = path.with_extension("peaks.f32");
+    let status = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+        ])
+        .arg(path)
+        .args(["-ac", "1", "-ar", "8000", "-f", "f32le"])
+        .arg(&raw)
+        .status()
+        .map_err(|e| format!("ffmpeg waveform: {e}"))?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&raw);
+        return Err("ffmpeg could not decode audio for waveform".into());
+    }
+    let bytes = std::fs::read(&raw).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&raw);
+    if bytes.len() < 4 {
+        return Err("empty audio".into());
+    }
+    let samples: Vec<f32> = bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let chunk = (samples.len() / bars).max(1);
+    let mut peaks = Vec::with_capacity(bars);
+    for i in 0..bars {
+        let start = i * chunk;
+        let end = (start + chunk).min(samples.len());
+        let peak = samples[start..end]
+            .iter()
+            .map(|s| s.abs())
+            .fold(0.0_f32, f32::max);
+        peaks.push(peak);
+    }
+    let max = peaks.iter().copied().fold(0.0_f32, f32::max).max(1e-6);
+    Ok(peaks.into_iter().map(|p| (p / max).clamp(0.05, 1.0)).collect())
+}
+
+/// Poster frame for a video (JPEG next to the file, reused if fresh).
+pub fn video_thumbnail(path: &Path) -> Result<PathBuf, String> {
+    let thumb = thumb_path(path);
+    if thumb.is_file() {
+        if let (Ok(src), Ok(dst)) = (std::fs::metadata(path), std::fs::metadata(&thumb)) {
+            if dst.len() > 0 && dst.modified().ok() >= src.modified().ok() {
+                return Ok(thumb);
+            }
+        }
+    }
+    if let Some(parent) = thumb.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let status = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            "0.3",
+            "-i",
+        ])
+        .arg(path)
+        .args([
+            "-frames:v",
+            "1",
+            "-q:v",
+            "4",
+            "-vf",
+            "scale=720:-2",
+        ])
+        .arg(&thumb)
+        .status()
+        .map_err(|e| format!("ffmpeg thumb: {e}"))?;
+    if !status.success() || !thumb.is_file() {
+        return Err("could not extract video thumbnail".into());
+    }
+    Ok(thumb)
+}
+
+fn thumb_path(path: &Path) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("media");
+    path.with_file_name(format!("{stem}.thumb.jpg"))
+}
+
+/// Return a cached video poster if one already exists (never runs ffmpeg).
+pub fn cached_video_thumbnail(path: &Path) -> Option<PathBuf> {
+    let thumb = thumb_path(path);
+    if !thumb.is_file() {
+        return None;
+    }
+    let src = std::fs::metadata(path).ok()?;
+    let dst = std::fs::metadata(&thumb).ok()?;
+    if dst.len() == 0 || dst.modified().ok()? < src.modified().ok()? {
+        return None;
+    }
+    Some(thumb)
+}
+
+/// Downscaled still for the in-app media reader (avoids decoding multi‑MB originals on the UI thread).
+pub fn viewer_still_preview(path: &Path, max_side: u32) -> Result<PathBuf, String> {
+    let max_side = max_side.max(320);
+    let (sw, sh) = image::image_dimensions(path).map_err(|e| format!("viewer size: {e}"))?;
+    if sw == 0 || sh == 0 {
+        return Err("empty image".into());
+    }
+    let (w, h) = fit_within(sw, sh, max_side, max_side);
+    if w == sw && h == sh {
+        return Ok(path.to_path_buf());
+    }
+    let out = viewer_preview_path(path, max_side);
+    if out.is_file() {
+        if let (Ok(src), Ok(dst)) = (std::fs::metadata(path), std::fs::metadata(&out)) {
+            if dst.len() > 0 && dst.modified().ok() >= src.modified().ok() {
+                return Ok(out);
+            }
+        }
+    }
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let img = image::open(path).map_err(|e| format!("viewer decode: {e}"))?;
+    let rgba = img.to_rgba8();
+    let resized =
+        image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Triangle);
+    let mut bytes = Vec::new();
+    let mut cursor = Cursor::new(&mut bytes);
+    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 85);
+    image::DynamicImage::ImageRgba8(resized)
+        .write_with_encoder(enc)
+        .map_err(|e| format!("viewer jpeg: {e}"))?;
+    std::fs::write(&out, bytes).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+fn viewer_preview_path(path: &Path, max_side: u32) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("media");
+    path.with_file_name(format!("{stem}.view{max_side}.jpg"))
+}
+
+pub fn is_video_name(name: &str) -> bool {
+    matches!(
+        Path::new(name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("mp4" | "mov" | "mkv" | "webm" | "m4v" | "avi")
+    )
+}
+
+pub fn is_image_name(name: &str) -> bool {
+    matches!(
+        Path::new(name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp")
+    )
+}
+
+/// Scale `(sw, sh)` to fit inside `max_w` × `max_h` without changing aspect ratio.
+pub fn fit_within(sw: u32, sh: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+    let max_w = max_w.max(1);
+    let max_h = max_h.max(1);
+    let sw = sw.max(1) as f32;
+    let sh = sh.max(1) as f32;
+    let scale = (max_w as f32 / sw).min(max_h as f32 / sh);
+    let w = (sw * scale).round().clamp(1.0, max_w as f32) as u32;
+    let h = (sh * scale).round().clamp(1.0, max_h as f32) as u32;
+    (w.max(1), h.max(1))
+}
+
+/// Aspect-preserving resize + rounded-corner PNG (iced can't clip to radius).
+///
+/// Returns `(cached_path, display_width, display_height)`.
+/// Header-only dimension probe first so cached previews skip a full decode.
+pub fn rounded_fitted_preview(
+    path: &Path,
+    max_w: u32,
+    max_h: u32,
+    radius: f32,
+) -> Result<(PathBuf, u32, u32), String> {
+    let (sw, sh) = image::image_dimensions(path).map_err(|e| format!("preview size: {e}"))?;
+    if sw == 0 || sh == 0 {
+        return Err("empty image".into());
+    }
+    let (width, height) = fit_within(sw, sh, max_w.max(32), max_h.max(32));
+    let out = rounded_preview_path(path, width, height);
+    if out.is_file() {
+        if let (Ok(src), Ok(dst)) = (std::fs::metadata(path), std::fs::metadata(&out)) {
+            if dst.len() > 0 && dst.modified().ok() >= src.modified().ok() {
+                return Ok((out, width, height));
+            }
+        }
+    }
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let img = image::open(path).map_err(|e| format!("decode preview: {e}"))?;
+    let rgba = img.to_rgba8();
+    let mut resized =
+        image::imageops::resize(&rgba, width, height, image::imageops::FilterType::Triangle);
+    let r = radius
+        .max(0.0)
+        .min(width as f32 / 2.0)
+        .min(height as f32 / 2.0);
+    for y in 0..height {
+        for x in 0..width {
+            let cover =
+                rounded_rect_coverage(x as f32 + 0.5, y as f32 + 0.5, width as f32, height as f32, r);
+            if cover >= 0.999 {
+                continue;
+            }
+            let px = resized.get_pixel_mut(x, y);
+            px.0[3] = ((px.0[3] as f32) * cover).round() as u8;
+        }
+    }
+    resized
+        .save(&out)
+        .map_err(|e| format!("write rounded preview: {e}"))?;
+    Ok((out, width, height))
+}
+
+fn rounded_preview_path(path: &Path, width: u32, height: u32) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("media");
+    path.with_file_name(format!("{stem}.round{width}x{height}.png"))
+}
+
+fn rounded_rect_coverage(x: f32, y: f32, w: f32, h: f32, r: f32) -> f32 {
+    if r <= 0.0 {
+        return 1.0;
+    }
+    let in_corner = (x < r || x > w - r) && (y < r || y > h - r);
+    if !in_corner {
+        return 1.0;
+    }
+    let cx = if x < r { r } else { w - r };
+    let cy = if y < r { r } else { h - r };
+    let dx = x - cx;
+    let dy = y - cy;
+    let dist = (dx * dx + dy * dy).sqrt();
+    let aa = 1.0;
+    if dist <= r - aa {
+        1.0
+    } else if dist >= r + aa {
+        0.0
+    } else {
+        ((r + aa - dist) / (2.0 * aa)).clamp(0.0, 1.0)
+    }
+}
+
+/// Resize an image file into a SimpleX profile data-URL (≤ [`MAX_PROFILE_IMAGE_CHARS`]).
+pub fn encode_profile_image(path: &Path) -> Result<String, String> {
+    let img = image::open(path).map_err(|e| format!("open profile image: {e}"))?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    if w == 0 || h == 0 {
+        return Err("empty image".into());
+    }
+    // Shrink until JPEG data-URL fits the official char budget.
+    let mut max_side = 256u32;
+    loop {
+        let scale = (max_side as f32 / w as f32).min(max_side as f32 / h as f32).min(1.0);
+        let rw = ((w as f32) * scale).round().max(1.0) as u32;
+        let rh = ((h as f32) * scale).round().max(1.0) as u32;
+        let resized = image::imageops::resize(&rgba, rw, rh, image::imageops::FilterType::Triangle);
+        for quality in [80u8, 60, 40, 25] {
+            let mut bytes = Vec::new();
+            let mut cursor = Cursor::new(&mut bytes);
+            let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality);
+            image::DynamicImage::ImageRgba8(resized.clone())
+                .write_with_encoder(enc)
+                .map_err(|e| format!("jpeg encode: {e}"))?;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let data_url = format!("data:image/jpg;base64,{b64}");
+            if data_url.len() <= MAX_PROFILE_IMAGE_CHARS {
+                return Ok(data_url);
+            }
+        }
+        if max_side <= 48 {
+            return Err("image too large for profile (could not fit 12.5KB data-URL)".into());
+        }
+        max_side = (max_side * 3 / 4).max(48);
+    }
+}
+
+/// Decode a profile data-URL into raw image bytes (png/jpeg) for iced.
+pub fn decode_profile_image_bytes(data_url: &str) -> Result<Vec<u8>, String> {
+    let s = data_url.trim();
+    let (_, b64) = s
+        .split_once("base64,")
+        .ok_or_else(|| "profile image is not a data-URL".to_string())?;
+    base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .map_err(|e| format!("base64 decode: {e}"))
+}
+
+/// Decode a profile data-URL into circular RGBA pixels `(width, height, raw RGBA)`.
+pub fn round_profile_avatar_rgba(
+    data_url: &str,
+    size_px: u32,
+) -> Result<(u32, u32, Vec<u8>), String> {
+    let size = size_px.max(16);
+    let raw = decode_profile_image_bytes(data_url)?;
+    let img = image::load_from_memory(&raw).map_err(|e| format!("decode profile image: {e}"))?;
+    let rgba = img.to_rgba8();
+    let (sw, sh) = rgba.dimensions();
+    if sw == 0 || sh == 0 {
+        return Err("empty profile image".into());
+    }
+    let scale = (size as f32 / sw as f32).max(size as f32 / sh as f32);
+    let rw = ((sw as f32) * scale).round().max(1.0) as u32;
+    let rh = ((sh as f32) * scale).round().max(1.0) as u32;
+    let resized = image::imageops::resize(&rgba, rw, rh, image::imageops::FilterType::Triangle);
+    let x0 = rw.saturating_sub(size) / 2;
+    let y0 = rh.saturating_sub(size) / 2;
+    let mut cropped = image::imageops::crop_imm(&resized, x0, y0, size, size).to_image();
+    let r = size as f32 / 2.0;
+    for y in 0..size {
+        for x in 0..size {
+            let cover = rounded_rect_coverage(x as f32 + 0.5, y as f32 + 0.5, size as f32, size as f32, r);
+            if cover >= 0.999 {
+                continue;
+            }
+            let px = cropped.get_pixel_mut(x, y);
+            px.0[3] = ((px.0[3] as f32) * cover).round() as u8;
+        }
+    }
+    Ok((size, size, cropped.into_raw()))
+}
+
+/// Decode a profile data-URL into a circular PNG (legacy helper; UI uses RGBA cache).
+#[allow(dead_code)]
+pub fn round_profile_avatar_png(data_url: &str, size_px: u32) -> Result<Vec<u8>, String> {
+    let (w, h, pixels) = round_profile_avatar_rgba(data_url, size_px)?;
+    let cropped = image::RgbaImage::from_raw(w, h, pixels)
+        .ok_or_else(|| "avatar rgba buffer mismatch".to_string())?;
+    let mut out = Vec::new();
+    let mut cursor = Cursor::new(&mut out);
+    image::DynamicImage::ImageRgba8(cropped)
+        .write_with_encoder(image::codecs::png::PngEncoder::new(&mut cursor))
+        .map_err(|e| format!("png encode avatar: {e}"))?;
+    Ok(out)
+}
+
+/// Truncate a bio to at most [`MAX_BIO_BYTES`] UTF-8 bytes (official client rule).
+pub fn truncate_bio_bytes(s: &str) -> String {
+    if s.len() <= MAX_BIO_BYTES {
+        return s.to_string();
+    }
+    let mut end = MAX_BIO_BYTES;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fit_within_preserves_landscape() {
+        let (w, h) = fit_within(1920, 1080, 300, 400);
+        assert_eq!(w, 300);
+        assert_eq!(h, 169);
+        assert!((w as f32 / h as f32 - 1920.0 / 1080.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn fit_within_preserves_portrait() {
+        let (w, h) = fit_within(1080, 1920, 300, 400);
+        assert_eq!(h, 400);
+        assert_eq!(w, 225);
+        assert!((w as f32 / h as f32 - 1080.0 / 1920.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn fit_within_square() {
+        let (w, h) = fit_within(800, 800, 300, 400);
+        assert_eq!(w, 300);
+        assert_eq!(h, 300);
+    }
+
+    #[test]
+    fn viewer_preview_path_is_stable() {
+        let p = PathBuf::from("/tmp/photo.JPG");
+        let a = viewer_preview_path(&p, 1600);
+        let b = viewer_preview_path(&p, 1600);
+        assert_eq!(a, b);
+        assert!(a
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.contains("view1600")));
+    }
+}

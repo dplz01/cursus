@@ -885,33 +885,20 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     let suggestions = app.emoji_suggestions();
     let suggest_idx = app.emoji_suggest_index();
 
-    // Auto-growing multi-line field (Enter sends, Shift+Enter newline).
-    // Height follows hard newlines + a rough wrap estimate, capped for history space.
-    let line_px = d.body * 1.35;
+    // Auto-growing field: Shrink uses the editor's real wrapped layout
+    // (no char-count heuristics that wrap too early/late). WordOrGlyph
+    // breaks long tokens like Telegram/WhatsApp.
+    let line_px = d.body * 1.3;
     let h_pad = 10.0;
-    let min_h = send_size;
-    let max_h = line_px * 6.0 + 16.0;
-    let hard_lines = app.composer_content().line_count().max(1) as f32;
-    let composer_text = app.composer();
-    let editor_width = (app.window_width() - d.pad * 2.0 - send_size * 3.0 - 24.0).max(80.0);
-    let col_w = (d.body * 0.55).max(6.0);
-    let wrap_lines = (composer_text.chars().count() as f32 * col_w / editor_width)
-        .ceil()
-        .max(1.0);
-    let lines = hard_lines.max(wrap_lines);
-    let editor_h = (lines * line_px + 16.0).clamp(min_h, max_h);
-    // Vertically center single-line text; top-align once the field grows.
-    let v_pad = if lines <= 1.0 {
-        ((editor_h - line_px) / 2.0).max(4.0)
-    } else {
-        8.0
-    };
+    let v_pad = ((send_size - line_px) / 2.0).max(6.0);
     let editor_padding = Padding {
         top: v_pad,
         right: h_pad,
         bottom: v_pad,
         left: h_pad,
     };
+    let min_content = (send_size - editor_padding.y()).max(line_px);
+    let max_content = line_px * 6.0;
 
     use crate::touch_mouse::touch_as_mouse;
 
@@ -921,8 +908,11 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             .on_action(Message::ComposerEdit)
             .padding(editor_padding)
             .size(d.body)
-            .height(Length::Fixed(editor_h))
-            .wrapping(Wrapping::Word)
+            .line_height(1.3)
+            .height(Length::Shrink)
+            .min_height(min_content)
+            .max_height(max_content)
+            .wrapping(Wrapping::WordOrGlyph)
             .style(theme::composer_editor())
             .key_binding(|key_press| {
                 // Enter sends (Shift+Enter = newline via default Binding::Enter).

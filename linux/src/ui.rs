@@ -937,32 +937,32 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     let suggestions = app.emoji_suggestions();
     let suggest_idx = app.emoji_suggest_index();
 
-    // Match the icon button height when collapsed. Shrink + vertical padding
-    // was producing a different height than `send_size`, and with End-align
-    // the placeholder sat visibly lower than the glyphs.
+    // Single-line: Fixed(send_size) with padding sized to the *line height*
+    // (body * 1.3), not the font size. Padding to `d.body` left ~0.3*body of
+    // overflow so cosmic-text scrolled as glyphs changed → per-keystroke jiggle.
     let line_px = d.body * 1.3;
     let h_pad = 10.0;
     let composer_text = app.composer();
-    let hard_lines = composer_text.lines().count().max(1);
+    let hard_lines = app.composer_content().line_count().max(1);
     // Soft-wrap estimate only gates "single-line vs growing"; Shrink then
     // sizes multi-line from real layout.
     let editor_width = (app.window_width() - d.pad * 2.0 - send_size * 3.0).max(80.0);
     let col_w = (d.body * 0.55).max(6.0);
     let wrap_lines = composer_text
         .lines()
-        .map(|line| {
-            ((line.chars().count() as f32 * col_w / editor_width).ceil()).max(1.0)
-        })
+        .map(|line| ((line.chars().count() as f32 * col_w / editor_width).ceil()).max(1.0))
         .sum::<f32>()
         .max(1.0);
     let lines = (hard_lines as f32).max(wrap_lines);
     let single_line = lines <= 1.0;
     let max_content = line_px * 6.0 + 16.0;
+    // Absolute line height locks metrics so padding ↔ layout stay matched.
+    let line_height = iced::widget::text::LineHeight::Absolute(line_px.into());
 
     use crate::touch_mouse::touch_as_mouse;
 
     let editor = if single_line {
-        let v_pad = ((send_size - d.body) / 2.0).max(0.0);
+        let v_pad = ((send_size - line_px) / 2.0).max(0.0);
         touch_as_mouse(
             text_editor(app.composer_content())
                 .id(iced::widget::Id::new("composer-input"))
@@ -975,7 +975,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
                     left: h_pad,
                 })
                 .size(d.body)
-                .line_height(1.3)
+                .line_height(line_height)
                 .height(Length::Fixed(send_size))
                 .wrapping(Wrapping::WordOrGlyph)
                 .style(theme::composer_editor())
@@ -995,7 +995,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
                     left: h_pad,
                 })
                 .size(d.body)
-                .line_height(1.3)
+                .line_height(line_height)
                 .height(Length::Shrink)
                 .min_height((send_size - 16.0).max(line_px))
                 .max_height(max_content)

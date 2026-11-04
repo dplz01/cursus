@@ -4,7 +4,7 @@
 //! chrome stays consistent without editing paths at runtime.
 
 use iced::widget::{container, svg, text, Svg};
-use iced::{Alignment, Background, Border, Color, Element, Length};
+use iced::{Alignment, Background, Border, Color, ContentFit, Element, Length};
 
 use crate::theme;
 use crate::Message;
@@ -399,4 +399,72 @@ fn tinted<'a>(handle: svg::Handle, color: Color, size: f32) -> Element<'a, Messa
         .center_x(size)
         .center_y(size)
         .into()
+}
+
+/// Composer chrome icon: fills `hit` for hover hit-testing, draws at the SVG's
+/// intrinsic size (~24px) centered, and tints idle → hot via [`svg::Status`].
+///
+/// Prefer this over baking a color into the view tree — `request_redraw` alone
+/// does not rebuild the app view, so Cell-based tints never appear.
+pub fn composer_tool_icon<'a>(
+    handle: svg::Handle,
+    hit: f32,
+    idle: Color,
+    hot: Color,
+    hover_ok: bool,
+) -> Element<'a, Message> {
+    let icon: Svg<'a, iced::Theme> = svg(handle)
+        .width(Length::Fixed(hit))
+        .height(Length::Fixed(hit))
+        .content_fit(ContentFit::None)
+        .style(move |_, status| svg::Style {
+            color: Some(match status {
+                svg::Status::Hovered if hover_ok => hot,
+                _ => idle,
+            }),
+        });
+    icon.into()
+}
+
+pub fn plus_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
+    composer_tool_icon(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/plus.svg").as_slice()),
+        hit,
+        theme::t().text_secondary,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn mic_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
+    composer_tool_icon(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/mic.svg").as_slice()),
+        hit,
+        theme::t().text_secondary,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn send_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Message> {
+    let handle =
+        svg::Handle::from_memory(include_bytes!("../assets/icons/send.svg").as_slice());
+    if active {
+        // Solid accent button — fixed on-accent glyph, no hover swap needed.
+        composer_tool_icon(
+            handle,
+            hit,
+            theme::t().accent_on,
+            theme::t().accent_on,
+            false,
+        )
+    } else {
+        composer_tool_icon(
+            handle,
+            hit,
+            theme::t().text_secondary,
+            theme::t().text_primary,
+            hover_ok,
+        )
+    }
 }

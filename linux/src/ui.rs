@@ -829,42 +829,20 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         18.0
     };
     let hover_ok = app.hover_ok();
-    let slots = app.hover_slots();
-    let attach_hot = hover_ok && slots.composer_attach.get();
-    let mic_hot = hover_ok && slots.composer_mic.get();
-    let tool_idle = theme::t().text_secondary;
-    let tool_hot = theme::t().text_primary;
 
-    let attach_btn = button(icons::centered_hit(
-        icons::plus_icon(icon_size, if attach_hot { tool_hot } else { tool_idle }),
-        send_size,
-    ))
-    .on_press(Message::AttachFile)
-    .width(send_size)
-    .height(send_size)
-    .padding(0)
-    .style(theme::composer_tool());
-    let attach_slot = slots.composer_attach.clone();
-    let attach: Element<'_, Message> = hover::HoverArea::new(attach_btn)
-        .on_hover_slots(
-            {
-                let slot = attach_slot.clone();
-                move || slot.set(true)
-            },
-            {
-                let slot = attach_slot;
-                move || slot.set(false)
-            },
-        )
-        .redraw_on_hover(hover_ok)
-        .into();
+    let attach = button(icons::plus_tool(send_size, hover_ok))
+        .on_press(Message::AttachFile)
+        .width(send_size)
+        .height(send_size)
+        .padding(0)
+        .style(theme::composer_tool());
 
     if let Some(draft) = app.voice_draft() {
         return voice_draft_bar(draft, send_size, icon_size, d, hover_ok);
     }
 
     let recording = app.voice_recording();
-    let mic_btn = if recording {
+    let mic = if recording {
         button(icons::centered_hit(
             icons::stop_icon(icon_size, Color::from_rgb(0.95, 0.35, 0.35)),
             send_size,
@@ -875,63 +853,21 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         .padding(0)
         .style(theme::composer_tool())
     } else {
-        button(icons::centered_hit(
-            icons::mic_icon(icon_size, if mic_hot { tool_hot } else { tool_idle }),
-            send_size,
-        ))
-        .on_press(Message::ToggleVoiceRecord)
+        button(icons::mic_tool(send_size, hover_ok))
+            .on_press(Message::ToggleVoiceRecord)
+            .width(send_size)
+            .height(send_size)
+            .padding(0)
+            .style(theme::composer_tool())
+    };
+
+    let can_send = !app.composer().trim().is_empty();
+    let send = button(icons::send_tool(send_size, can_send, hover_ok))
+        .on_press(Message::Send)
         .width(send_size)
         .height(send_size)
         .padding(0)
-        .style(theme::composer_tool())
-    };
-    let mic_slot = slots.composer_mic.clone();
-    let mic: Element<'_, Message> = hover::HoverArea::new(mic_btn)
-        .on_hover_slots(
-            {
-                let slot = mic_slot.clone();
-                move || slot.set(true)
-            },
-            {
-                let slot = mic_slot;
-                move || slot.set(false)
-            },
-        )
-        .redraw_on_hover(hover_ok)
-        .into();
-
-    let can_send = !app.composer().trim().is_empty();
-    let send_hot = hover_ok && slots.composer_send.get();
-    let send_icon_color = if can_send {
-        theme::t().accent_on
-    } else if send_hot {
-        tool_hot
-    } else {
-        tool_idle
-    };
-    let send_btn = button(icons::centered_hit(
-        icons::send_icon(icon_size, send_icon_color),
-        send_size,
-    ))
-    .on_press(Message::Send)
-    .width(send_size)
-    .height(send_size)
-    .padding(0)
-    .style(theme::composer_send(can_send, hover_ok));
-    let send_slot = slots.composer_send.clone();
-    let send: Element<'_, Message> = hover::HoverArea::new(send_btn)
-        .on_hover_slots(
-            {
-                let slot = send_slot.clone();
-                move || slot.set(true)
-            },
-            {
-                let slot = send_slot;
-                move || slot.set(false)
-            },
-        )
-        .redraw_on_hover(hover_ok && !can_send)
-        .into();
+        .style(theme::composer_send(can_send, hover_ok));
 
     let placeholder = if recording {
         "Recording… tap stop when done"

@@ -27,10 +27,6 @@ pub struct HoverSlots {
     pub chat: Rc<Cell<Option<usize>>>,
     pub msg: Rc<Cell<Option<i64>>>,
     pub reaction: Rc<RefCell<Option<(i64, String)>>>,
-    /// Composer tool icons (SVG tint can't read button Status).
-    pub composer_attach: Rc<Cell<bool>>,
-    pub composer_mic: Rc<Cell<bool>>,
-    pub composer_send: Rc<Cell<bool>>,
 }
 
 impl HoverSlots {
@@ -38,9 +34,6 @@ impl HoverSlots {
         self.chat.set(None);
         self.msg.set(None);
         *self.reaction.borrow_mut() = None;
-        self.composer_attach.set(false);
-        self.composer_mic.set(false);
-        self.composer_send.set(false);
     }
 }
 

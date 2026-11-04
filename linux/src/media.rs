@@ -70,8 +70,9 @@ pub fn video_thumbnail(path: &Path) -> Result<PathBuf, String> {
     if let Some(parent) = thumb.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let status = Command::new("ffmpeg")
-        .args([
+    // Try a few ffmpeg recipes — ARM builds often fail mid-file `-ss` seeks.
+    let attempts: &[&[&str]] = &[
+        &[
             "-hide_banner",
             "-loglevel",
             "error",
@@ -79,23 +80,70 @@ pub fn video_thumbnail(path: &Path) -> Result<PathBuf, String> {
             "-ss",
             "0.3",
             "-i",
-        ])
-        .arg(path)
-        .args([
+            "__IN__",
             "-frames:v",
             "1",
             "-q:v",
             "4",
             "-vf",
             "scale=720:-2",
-        ])
-        .arg(&thumb)
-        .status()
-        .map_err(|e| format!("ffmpeg thumb: {e}"))?;
-    if !status.success() || !thumb.is_file() {
-        return Err("could not extract video thumbnail".into());
+            "__OUT__",
+        ],
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            "__IN__",
+            "-frames:v",
+            "1",
+            "-q:v",
+            "5",
+            "-vf",
+            "scale=480:-2",
+            "__OUT__",
+        ],
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            "__IN__",
+            "-vf",
+            "thumbnail,scale=480:-2",
+            "-frames:v",
+            "1",
+            "__OUT__",
+        ],
+    ];
+    let mut last = String::from("ffmpeg thumb failed");
+    for recipe in attempts {
+        let args: Vec<&str> = recipe
+            .iter()
+            .map(|s| match *s {
+                "__IN__" => path.to_str().unwrap_or(""),
+                "__OUT__" => thumb.to_str().unwrap_or(""),
+                other => other,
+            })
+            .collect();
+        if args.iter().any(|s| s.is_empty()) {
+            continue;
+        }
+        match Command::new("ffmpeg").args(&args).status() {
+            Ok(status) if status.success() && thumb.is_file() => {
+                if std::fs::metadata(&thumb).map(|m| m.len() > 0).unwrap_or(false) {
+                    return Ok(thumb);
+                }
+                last = "ffmpeg wrote empty thumb".into();
+            }
+            Ok(status) => last = format!("ffmpeg thumb exited {status}"),
+            Err(e) => last = format!("ffmpeg thumb: {e}"),
+        }
+        let _ = std::fs::remove_file(&thumb);
     }
-    Ok(thumb)
+    Err(last)
 }
 
 fn thumb_path(path: &Path) -> PathBuf {

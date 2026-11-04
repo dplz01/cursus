@@ -103,10 +103,25 @@ fn composer_send_hit<'a>(
     mouse_area(face).on_press(on_press).into()
 }
 
-fn scroll_y<'a>(
+fn scroll_y<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    // Default list/settings scroll — kinetic fling on touch (GTK-like).
+    kinetic_scroll("page-scroll", content)
+}
+
+fn kinetic_scroll<'a>(
+    id: &'static str,
     content: impl Into<Element<'a, Message>>,
-) -> iced::widget::Scrollable<'a, Message> {
-    scrollable(content).direction(Direction::Vertical(no_bar()))
+) -> Element<'a, Message> {
+    let scroller = scrollable(content)
+        .id(iced::widget::Id::new(id))
+        .height(Length::Fill)
+        .direction(Direction::Vertical(no_bar()));
+    crate::kinetic::track(id, scroller, |fling| match fling {
+        crate::kinetic::FlingMessage::Start { id, velocity_y } => {
+            Message::ScrollFlingStart { id, velocity_y }
+        }
+        crate::kinetic::FlingMessage::Cancel { id } => Message::ScrollFlingCancel { id },
+    })
 }
 
 /// Text with Advanced shaping so emoji can fall back to Noto Color Emoji.
@@ -624,7 +639,7 @@ fn chat_list(app: &App) -> Element<'_, Message> {
             ),
         };
         col = col.push(placeholder(title, body, d));
-        return scroll_y(col).height(Length::Fill).into();
+        return scroll_y(col);
     }
 
     for (index, chat) in rows {
@@ -686,7 +701,7 @@ fn chat_list(app: &App) -> Element<'_, Message> {
 
         col = col.push(row);
     }
-    scroll_y(col).height(Length::Fill).into()
+    scroll_y(col)
 }
 
 fn content_pane(app: &App, with_back: bool) -> Element<'_, Message> {
@@ -695,7 +710,6 @@ fn content_pane(app: &App, with_back: bool) -> Element<'_, Message> {
     if app.compose_open() {
         return container(compose_page(app, with_back))
             .width(Length::Fill)
-            .height(Length::Fill)
             .padding(if with_back { 0.0 } else { d.pad })
             .style(theme::panel_style())
             .into();
@@ -1390,10 +1404,19 @@ fn message_history<'a>(app: &'a App, d: Density) -> Element<'a, Message> {
     // anchor_bottom() before direction() is overwritten by Scrollbar::default().
     // No on_scroll: every wheel tick was publishing a Message and rebuilding
     // the whole chat view (major scroll lag).
-    let history = scrollable(col)
-        .id(iced::widget::Id::new("chat-history"))
-        .height(Length::Fill)
-        .direction(Direction::Vertical(no_bar().anchor(Anchor::End)));
+    let history = crate::kinetic::track(
+        "chat-history",
+        scrollable(col)
+            .id(iced::widget::Id::new("chat-history"))
+            .height(Length::Fill)
+            .direction(Direction::Vertical(no_bar().anchor(Anchor::End))),
+        |fling| match fling {
+            crate::kinetic::FlingMessage::Start { id, velocity_y } => {
+                Message::ScrollFlingStart { id, velocity_y }
+            }
+            crate::kinetic::FlingMessage::Cancel { id } => Message::ScrollFlingCancel { id },
+        },
+    );
 
     // Telegram-style “jump to latest” FAB when scrolled up into history.
     let jump: Element<'_, Message> = if jump_visible {
@@ -1576,15 +1599,8 @@ fn message_bubble<'a>(
         } else if is_visual && matches!(state, FileTransferState::Complete) {
             if let Some(preview) = visual_media_preview(app, msg, file, state, d) {
                 media_flush = true;
-                // Stamp floats on the preview; footer is size-only (no second time).
-                body = body.push(
-                    column![
-                        preview,
-                        attachment_size_line(file, state, msg.outgoing, d),
-                    ]
-                    .spacing(4)
-                    .width(Length::Shrink),
-                );
+                // Stamp floats on the preview; size/status live in Message info.
+                body = body.push(preview);
             } else {
                 body = body.push(file_title_row(app, msg, file, state, d));
                 body = body.push(attachment_status_footer(msg, file, state, d, false));
@@ -2431,24 +2447,6 @@ fn transfer_progress_bar(file: &cursus_core::FileInfo) -> Element<'static, Messa
         .into()
 }
 
-fn attachment_size_line<'a>(
-    file: &'a cursus_core::FileInfo,
-    state: FileTransferState,
-    outgoing: bool,
-    d: Density,
-) -> Element<'a, Message> {
-    let line = transfer_status_line(file, state, outgoing);
-    if line.is_empty() {
-        return vertical().height(0).into();
-    }
-    let color = if matches!(state, FileTransferState::Failed) {
-        theme::t().danger
-    } else {
-        theme::t().text_muted
-    };
-    text(line).size(d.meta).color(color).into()
-}
-
 fn attachment_status_footer<'a>(
     msg: &'a ChatMessage,
     file: &'a cursus_core::FileInfo,
@@ -2806,13 +2804,11 @@ fn visual_media_preview<'a>(
         .width(Length::Fixed(w))
         .height(Length::Fixed(h))
         .clip(true);
-    // Image hit opens the file; capture so the bubble HoverArea does not treat
-    // double-taps here as “open message menu”. Padding / footer stay menu-able.
-    let open = Message::OpenLocalFile(path);
+    // Single tap opens the file. Double-tap is handled by the bubble HoverArea
+    // (menu) — do not swallow it here.
     Some(
-        hover::HoverArea::new(framed)
-            .on_release(open.clone())
-            .on_double_tap(open)
+        mouse_area(framed)
+            .on_release(Message::OpenLocalFile(path))
             .into(),
     )
 }
@@ -3034,8 +3030,7 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
             right: d.pad,
             bottom: d.pad,
             left: d.pad,
-        }))
-        .height(Length::Fill),
+        })),
     ]
     .height(Length::Fill)
     .into()
@@ -3127,10 +3122,6 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 .size(d.meta)
                 .color(theme::t().text_muted),
             text_input("Display name", &draft.fields.display_name)
-                .id(iced::widget::Id::from(format!(
-                    "settings-name-{}",
-                    app.settings_input_gen()
-                )))
                 .on_input(Message::OwnProfileDisplayName)
                 .on_submit(Message::SaveOwnProfile)
                 .padding(d.composer)
@@ -3141,10 +3132,6 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 .size(d.meta)
                 .color(theme::t().text_muted),
             text_input("Short bio", &draft.fields.short_descr)
-                .id(iced::widget::Id::from(format!(
-                    "settings-bio-{}",
-                    app.settings_input_gen()
-                )))
                 .on_input(Message::OwnProfileBio)
                 .on_submit(Message::SaveOwnProfile)
                 .padding(d.composer)
@@ -3155,10 +3142,6 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 .size(d.meta)
                 .color(theme::t().text_muted),
             text_input("Longer description", &draft.fields.description)
-                .id(iced::widget::Id::from(format!(
-                    "settings-desc-{}",
-                    app.settings_input_gen()
-                )))
                 .on_input(Message::OwnProfileDescription)
                 .on_submit(Message::SaveOwnProfile)
                 .padding(d.composer)
@@ -3218,7 +3201,6 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
         .spacing(0)
         .padding(d.pad),
     )
-    .height(Length::Fill)
     .into()
 }
 
@@ -3755,6 +3737,7 @@ fn message_menu_overlay(app: &App) -> Element<'_, Message> {
             time,
             status,
             text: info_text,
+            file_detail,
         } => {
             let mut info_col = Column::new().spacing(6).width(Length::Fill);
             info_col = info_col.push(
@@ -3777,6 +3760,13 @@ fn message_menu_overlay(app: &App) -> Element<'_, Message> {
             if let Some(st) = status {
                 info_col = info_col.push(
                     txt(format!("Status: {st}"))
+                        .size(d.meta)
+                        .color(theme::t().text_secondary),
+                );
+            }
+            if let Some(file) = file_detail {
+                info_col = info_col.push(
+                    txt(format!("File: {file}"))
                         .size(d.meta)
                         .color(theme::t().text_secondary),
                 );
@@ -4056,8 +4046,7 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
             right: d.pad,
             bottom: d.pad,
             left: d.pad,
-        }))
-        .height(Length::Fill),
+        })),
     ]
     .height(Length::Fill)
     .into()
@@ -4375,7 +4364,7 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
             );
         }
     }
-    scroll_y(col).height(Length::Fill).into()
+    scroll_y(col)
 }
 
 fn calls_detail(app: &App) -> Element<'_, Message> {
@@ -4640,8 +4629,7 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
                 bottom: d.pad,
                 left: d.pad,
             }),
-        )
-        .height(Length::Fill),
+        ),
     ]
     .height(Length::Fill)
     .into()
@@ -5485,8 +5473,7 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
             right: d.pad,
             bottom: d.pad,
             left: d.pad,
-        }))
-        .height(Length::Fill),
+        })),
     ]
     .height(Length::Fill)
     .into()

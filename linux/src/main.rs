@@ -6,6 +6,7 @@ mod avatar_cache;
 mod desktop;
 mod hover;
 mod icons;
+mod kinetic;
 mod layout;
 mod media;
 mod theme;
@@ -298,6 +299,8 @@ pub enum MsgMenuPane {
         time: Option<String>,
         status: Option<String>,
         text: String,
+        /// Local size · transfer status (kept out of the image bubble).
+        file_detail: Option<String>,
     },
 }
 
@@ -815,6 +818,10 @@ pub enum Message {
     PlayVoice { file_id: i64, path: PathBuf, duration_secs: u32 },
     StopVoicePlayback,
     VoiceTick,
+    /// GTK-style inertial fling after a touch scroll.
+    ScrollFlingStart { id: String, velocity_y: f32 },
+    ScrollFlingCancel { id: String },
+    ScrollFlingTick,
     WaveformReady { path: PathBuf, peaks: Result<Vec<f32>, String> },
     /// Async video poster for chat-bubble previews.
     VideoThumbReady { path: PathBuf, thumb: Option<PathBuf> },
@@ -997,8 +1004,8 @@ struct App {
     core_connect_launched: bool,
     /// Settings → My profile draft.
     own_profile: OwnProfileDraft,
-    /// Bumped on profile save so settings text_inputs remount unfocused.
-    settings_input_gen: u64,
+    /// Active inertial fling after a touch scroll (GTK-style kinetic feel).
+    scroll_fling: Option<ScrollFling>,
     /// Direct-contact profile overlay.
     contact_profile: Option<ContactProfileOverlay>,
     /// Create group / channel dialog.
@@ -1033,6 +1040,13 @@ struct VoicePlayback {
     duration_secs: u32,
     started: Instant,
     child: Child,
+}
+
+/// Inertial scroll after finger-up (GTK ScrolledWindow kinetic equivalent).
+struct ScrollFling {
+    id: String,
+    /// Pixels per second along iced AbsoluteOffset.y.
+    velocity_y: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -1158,7 +1172,6 @@ impl App {
                 window_focused: true,
                 main_window: Some(main_window),
                 core_connect_launched: false,
-                settings_input_gen: 0,
                 own_profile: OwnProfileDraft {
                     fields: ProfileFields {
                         display_name: "Cursus".into(),
@@ -1166,6 +1179,7 @@ impl App {
                     },
                     dirty: false,
                 },
+                scroll_fling: None,
                 contact_profile: None,
                 create_chat: None,
                 group_settings: None,
@@ -1307,6 +1321,12 @@ impl App {
             Subscription::none()
         };
 
+        let fling_tick = if self.scroll_fling.is_some() {
+            iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::ScrollFlingTick)
+        } else {
+            Subscription::none()
+        };
+
         let tray_tick = if let Some(tray) = self.tray.as_ref() {
             let show = tray.show_id.clone();
             let hide = tray.hide_id.clone();
@@ -1319,7 +1339,7 @@ impl App {
             Subscription::none()
         };
 
-        Subscription::batch([window, events, voice_tick, tray_tick])
+        Subscription::batch([window, events, voice_tick, fling_tick, tray_tick])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -2050,9 +2070,6 @@ impl App {
                 self.own_profile.fields.display_name = name;
                 let fields = self.own_profile.fields.clone();
                 self.status = "Saving profile…".into();
-                // Remount settings text_inputs under a new Id so Enter leaves
-                // them unfocused (iced has no public unfocus Task).
-                self.settings_input_gen = self.settings_input_gen.wrapping_add(1);
                 Task::perform(save_own_profile(session, fields), Message::OwnProfileSaved)
             }
             Message::OwnProfileSaved(Ok(user)) => {
@@ -3671,11 +3688,16 @@ impl App {
             }
             Message::ItemInfoLoaded(Ok(info)) => {
                 if let Some(menu) = self.message_menu.as_mut() {
+                    let file_detail = match &menu.pane {
+                        MsgMenuPane::Info { file_detail, .. } => file_detail.clone(),
+                        _ => None,
+                    };
                     menu.pane = MsgMenuPane::Info {
                         item_id: info.item_id,
                         time: info.time,
                         status: info.status,
                         text: info.text,
+                        file_detail,
                     };
                 }
                 Task::none()
@@ -3767,6 +3789,34 @@ impl App {
             Message::StopVoicePlayback => {
                 self.stop_voice_playback();
                 Task::none()
+            }
+            Message::ScrollFlingStart { id, velocity_y } => {
+                self.scroll_fling = Some(ScrollFling { id, velocity_y });
+                Task::none()
+            }
+            Message::ScrollFlingCancel { id } => {
+                if self.scroll_fling.as_ref().is_some_and(|f| f.id == id) {
+                    self.scroll_fling = None;
+                }
+                Task::none()
+            }
+            Message::ScrollFlingTick => {
+                let Some(fling) = self.scroll_fling.as_mut() else {
+                    return Task::none();
+                };
+                const DT: f32 = 1.0 / 60.0;
+                const FRICTION: f32 = 0.92;
+                let dy = fling.velocity_y * DT;
+                fling.velocity_y *= FRICTION;
+                if fling.velocity_y.abs() < 30.0 {
+                    self.scroll_fling = None;
+                    return Task::none();
+                }
+                let id = iced::widget::Id::from(fling.id.clone());
+                iced::widget::operation::scroll_by(
+                    id,
+                    iced::widget::scrollable::AbsoluteOffset { x: 0.0, y: dy },
+                )
             }
             Message::VoiceTick => {
                 if let Some(play) = self.voice_playback.as_mut() {
@@ -5610,9 +5660,6 @@ impl App {
         self.reaction_members.as_ref()
     }
 
-    pub(crate) fn settings_input_gen(&self) -> u64 {
-        self.settings_input_gen
-    }
     pub(crate) fn own_profile(&self) -> &OwnProfileDraft {
         &self.own_profile
     }
@@ -6112,6 +6159,19 @@ impl App {
                 Task::none()
             }
             MsgMenuAction::Info => {
+                let file_detail = msg.file.as_ref().map(|f| {
+                    let state = effective_complete(f.state, msg.outgoing, msg.delivery);
+                    file_detail_line(f, state, msg.outgoing)
+                });
+                if let Some(menu) = self.message_menu.as_mut() {
+                    menu.pane = MsgMenuPane::Info {
+                        item_id,
+                        time: None,
+                        status: None,
+                        text: msg.text.clone(),
+                        file_detail,
+                    };
+                }
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
@@ -7383,7 +7443,6 @@ fn reaction_emoji_eq(a: &str, b: &str) -> bool {
 }
 
 fn start_voice_recording() -> Result<VoiceRec, String> {
-    // Match official desktop: AAC mono 16 kHz in an mp4/m4a container.
     // Record under tmp/ — send path encrypts into files/ (CryptoFile) then deletes this.
     let dir = cursus_core::temp_dir().join("rec");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -7392,9 +7451,18 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let path = dir.join(format!("voice-{stamp}.m4a"));
+    let mut last_err = String::from("no audio capture backend worked");
+
+    // On musl/ARM, prefer arecord first — ffmpeg ALSA/Pulse often opens a device
+    // that stays silent (UI thinks it records, file is near-empty header only).
+    #[cfg(target_env = "musl")]
+    {
+        if let Ok(rec) = try_arecord_voice(path.with_extension("wav"), &mut last_err) {
+            return Ok(rec);
+        }
+    }
 
     // Prefer AAC when available; fall back to PCM WAV.
-    // On musl/ARM, Pulse/PipeWire often hang instead of failing — ALSA first.
     #[cfg(target_env = "musl")]
     let backends: &[&[&str]] = &[
         &["-f", "alsa", "-i", "default"],
@@ -7414,51 +7482,44 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
     ];
     let encodes: &[&[&str]] = &[
         &["-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "32k", "-y"],
-        // musl/ARM builds sometimes ship ffmpeg without libfdk/aac — PCM WAV.
         &["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", "-y"],
     ];
-    let mut last_err = String::from("no audio capture backend worked");
 
     for input in backends {
         for encode in encodes {
-            let out = if encode.contains(&"-f") && encode.contains(&"wav") {
+            let out = if encode.iter().any(|s| *s == "wav") {
                 path.with_extension("wav")
             } else {
                 path.clone()
             };
-            let mut args = vec!["-hide_banner", "-loglevel", "error"];
+            let mut args = vec!["-hide_banner", "-loglevel", "error", "-nostdin"];
             args.extend_from_slice(input);
             args.extend_from_slice(encode);
             match Command::new("ffmpeg")
                 .args(&args)
                 .arg(&out)
-                .stdin(Stdio::piped())
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
                 .spawn()
             {
                 Ok(mut child) => {
-                    // Give ffmpeg a moment — device-open failures exit immediately.
-                    // Also require the output file to grow so a hung Pulse open
-                    // (common on ARM) is not treated as a live recorder.
-                    std::thread::sleep(std::time::Duration::from_millis(220));
+                    std::thread::sleep(std::time::Duration::from_millis(350));
                     match child.try_wait() {
                         Ok(None) => {
-                            let grew = std::fs::metadata(&out)
-                                .map(|m| m.len() > 0)
-                                .unwrap_or(false);
-                            if grew || input.iter().any(|s| *s == "alsa") {
+                            let len = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+                            // WAV header alone is ~44 bytes; require real PCM growth.
+                            if len > 256 {
                                 return Ok(VoiceRec {
                                     path: out,
                                     child,
                                     started: Instant::now(),
                                 });
                             }
-                            // Likely stuck on pulse/pipewire — kill and try next.
                             let _ = child.kill();
                             let _ = child.wait();
                             last_err = format!(
-                                "ffmpeg {:?} produced no audio (device hung?)",
+                                "ffmpeg {:?} wrote only {len} bytes (silent/hung device?)",
                                 input
                             );
                             let _ = std::fs::remove_file(&out);
@@ -7492,8 +7553,19 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
         }
     }
 
-    // Last resort: arecord → wav (common on Alpine/ARM images without ffmpeg demux).
-    let wav = path.with_extension("wav");
+    #[cfg(not(target_env = "musl"))]
+    {
+        if let Ok(rec) = try_arecord_voice(path.with_extension("wav"), &mut last_err) {
+            return Ok(rec);
+        }
+    }
+
+    Err(format!(
+        "{last_err}. Install ffmpeg (with ALSA/Pulse) or arecord for mic capture."
+    ))
+}
+
+fn try_arecord_voice(wav: PathBuf, last_err: &mut String) -> Result<VoiceRec, ()> {
     match Command::new("arecord")
         .args([
             "-q",
@@ -7513,38 +7585,50 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
         .spawn()
     {
         Ok(mut child) => {
-            std::thread::sleep(std::time::Duration::from_millis(180));
+            std::thread::sleep(std::time::Duration::from_millis(250));
             match child.try_wait() {
                 Ok(None) => {
-                    return Ok(VoiceRec {
-                        path: wav,
-                        child,
-                        started: Instant::now(),
-                    });
+                    let len = std::fs::metadata(&wav).map(|m| m.len()).unwrap_or(0);
+                    if len > 44 {
+                        return Ok(VoiceRec {
+                            path: wav,
+                            child,
+                            started: Instant::now(),
+                        });
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    *last_err = format!("arecord wrote only {len} bytes");
+                    let _ = std::fs::remove_file(&wav);
                 }
                 Ok(Some(status)) => {
-                    last_err = format!("arecord exited ({status})");
+                    *last_err = format!("arecord exited ({status})");
                     let _ = std::fs::remove_file(&wav);
                 }
                 Err(e) => {
-                    last_err = format!("arecord wait failed: {e}");
+                    *last_err = format!("arecord wait failed: {e}");
                     let _ = child.kill();
                     let _ = std::fs::remove_file(&wav);
                 }
             }
         }
         Err(e) => {
-            last_err = format!("{last_err}; arecord spawn failed: {e}");
+            *last_err = format!("arecord spawn failed: {e}");
         }
     }
-
-    Err(format!(
-        "{last_err}. Install ffmpeg (with ALSA/Pulse) or arecord for mic capture."
-    ))
+    Err(())
 }
 
 fn stop_ffmpeg(child: &mut Child) {
-    // ffmpeg: 'q' on stdin. arecord ignores stdin — send SIGINT via kill(1).
+    // Prefer SIGINT so arecord / ffmpeg finalize the WAV/m4a header.
+    // (stdin 'q' only works when ffmpeg stdin is a pipe — we use -nostdin now.)
+    #[cfg(unix)]
+    {
+        let pid = child.id();
+        let _ = Command::new("kill")
+            .args(["-INT", &pid.to_string()])
+            .status();
+    }
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write;
         let _ = stdin.write_all(b"q");
@@ -7571,23 +7655,87 @@ fn spawn_audio_player(path: &PathBuf) -> Result<Child, String> {
     if !path.is_file() {
         return Err(format!("Voice file missing: {}", path.display()));
     }
-    Command::new("mpv")
-        .args(["--no-video", "--really-quiet", "--"])
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .or_else(|_| {
-            Command::new("ffplay")
-                .args(["-nodisp", "-autoexit", "-loglevel", "quiet", "--"])
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if meta.len() < 64 {
+        return Err(format!(
+            "Voice file empty ({} bytes): {}",
+            meta.len(),
+            path.display()
+        ));
+    }
+    let is_wav = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
+
+    let mut attempts: Vec<(&str, Result<Child, std::io::Error>)> = Vec::new();
+    attempts.push((
+        "mpv",
+        Command::new("mpv")
+            .args(["--no-video", "--really-quiet", "--"])
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn(),
+    ));
+    attempts.push((
+        "ffplay",
+        Command::new("ffplay")
+            .args(["-nodisp", "-autoexit", "-loglevel", "quiet", "--"])
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn(),
+    ));
+    if is_wav {
+        attempts.push((
+            "aplay",
+            Command::new("aplay")
+                .args(["-q", "--"])
                 .arg(path)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .spawn()
-        })
-        .map_err(|e| format!("mpv/ffplay failed: {e}"))
+                .spawn(),
+        ));
+        attempts.push((
+            "paplay",
+            Command::new("paplay")
+                .arg(path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn(),
+        ));
+    }
+    // Decode via ffmpeg → aplay pipe for odd containers on ARM.
+    attempts.push((
+        "ffmpeg|aplay",
+        Command::new("sh")
+            .args([
+                "-c",
+                "ffmpeg -hide_banner -loglevel error -i \"$1\" -f wav -ac 1 -ar 16000 - | aplay -q -t wav -",
+                "sh",
+                path.to_str().unwrap_or(""),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn(),
+    ));
+
+    let mut last = String::from("no audio player worked");
+    for (name, result) in attempts {
+        match result {
+            Ok(child) => return Ok(child),
+            Err(e) => last = format!("{name}: {e}"),
+        }
+    }
+    Err(format!(
+        "{last}. Install mpv, ffplay, or aplay to play voice messages."
+    ))
 }
 
 async fn save_media_as(src: PathBuf, file_name: String) -> Result<String, String> {
@@ -7644,6 +7792,51 @@ fn effective_complete(
         return FileTransferState::Complete;
     }
     state
+}
+
+fn file_detail_line(
+    file: &cursus_core::FileInfo,
+    state: FileTransferState,
+    outgoing: bool,
+) -> String {
+    let size = if file.file_size > 0 {
+        let n = file.file_size as f64;
+        const KB: f64 = 1024.0;
+        const MB: f64 = KB * 1024.0;
+        if n >= MB {
+            format!("{:.1} MB", n / MB)
+        } else if n >= KB {
+            format!("{:.1} KB", n / KB)
+        } else {
+            format!("{} B", file.file_size)
+        }
+    } else {
+        String::new()
+    };
+    let label = match state {
+        FileTransferState::Complete => {
+            if outgoing {
+                "sent"
+            } else {
+                "saved"
+            }
+        }
+        FileTransferState::InProgress => {
+            if outgoing {
+                "sending"
+            } else {
+                "receiving"
+            }
+        }
+        FileTransferState::Failed => "failed",
+        FileTransferState::Offer => "offer",
+        FileTransferState::Other => "file",
+    };
+    if size.is_empty() {
+        format!("{} · {label}", file.file_name)
+    } else {
+        format!("{} · {size} · {label}", file.file_name)
+    }
 }
 
 async fn create_invitation(session: Arc<Session>) -> Result<ConnLink, String> {

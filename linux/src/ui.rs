@@ -332,7 +332,8 @@ fn stacked_shell(app: &App) -> Element<'_, Message> {
 
 fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
     // Primary destinations stay stacked from the top (where Chats already
-    // sat). Settings is a compact square pinned to the bottom-left corner.
+    // sat). Settings matches their hit size and sits at the bottom of the rail.
+    let pad_x = 8.0;
     let primary = column![
         nav_destination(app, NavSection::Chats, true, d.nav_hit, d),
         nav_destination(app, NavSection::Channels, true, d.nav_hit, d),
@@ -341,19 +342,30 @@ fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
     .spacing(8)
     .padding(Padding {
         top: 12.0,
-        right: 8.0,
+        right: pad_x,
         bottom: 0.0,
-        left: 8.0,
+        left: pad_x,
     })
     .align_x(Alignment::Center)
     .width(Length::Fill);
 
-    let corner = (d.icon + 8.0).max(32.0);
-    let settings = container(nav_corner(app, NavSection::Settings, corner, d)).padding(2.0);
+    let settings = container(nav_destination(
+        app,
+        NavSection::Settings,
+        true,
+        d.nav_hit,
+        d,
+    ))
+    .padding(Padding {
+        top: 0.0,
+        right: pad_x,
+        bottom: pad_x,
+        left: pad_x,
+    })
+    .width(Length::Fill);
 
     let col = column![primary, vertical().height(Length::Fill), settings]
         .spacing(0)
-        .align_x(Alignment::Start)
         .width(Length::Fill)
         .height(Length::Fill);
 
@@ -403,35 +415,6 @@ fn bottom_nav(app: &App) -> Element<'_, Message> {
                 ..container::Style::default()
             }
         })
-        .into()
-}
-
-fn nav_corner(app: &App, section: NavSection, hit: f32, d: Density) -> Element<'_, Message> {
-    let active = app.nav() == section;
-    let icon = icons::nav_icon(section.icon(), active, d.icon);
-    let hover_ok = app.hover_ok();
-
-    let content = container(icon)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill);
-
-    let btn = button(content)
-        .on_press(Message::Navigate(section))
-        .padding(0)
-        .width(hit)
-        .height(hit);
-
-    let styled = if active {
-        btn.style(theme::nav_active(hover_ok))
-    } else {
-        btn.style(theme::nav_idle(hover_ok))
-    };
-
-    container(styled)
-        .width(Length::Shrink)
-        .height(Length::Shrink)
         .into()
 }
 

@@ -104,15 +104,25 @@ impl PointerGate {
     fn touch_ended(&self) {
         self.hover_ok.store(false, Ordering::Relaxed);
         self.clear_press();
-        // Keep `moved` + `touch_gesture` until the next press / mouse click so
-        // release handlers in the same frame can still call `tap_allowed`.
+        // Keep `moved` + `touch_gesture` until release handlers in this frame
+        // read `tap_ok()`, then the next `begin_press` / `reset_gesture` clears them.
     }
 
     /// Mouse click — not a touch gesture; don't inherit the last scroll's `moved`.
     fn mouse_click_reset(&self) {
+        self.reset_gesture();
+        self.hover_ok.store(true, Ordering::Relaxed);
+    }
+
+    /// Drop sticky scroll/tap state (Back, successful open, etc.).
+    fn reset_gesture(&self) {
         self.moved.store(false, Ordering::Relaxed);
         self.touch_gesture.store(false, Ordering::Relaxed);
-        self.hover_ok.store(true, Ordering::Relaxed);
+        self.touch_down.store(false, Ordering::Relaxed);
+        self.long_press_msg.store(false, Ordering::Relaxed);
+        if let Ok(mut a) = self.anchor.lock() {
+            *a = None;
+        }
     }
 
     fn tap_ok(&self) -> bool {
@@ -1208,16 +1218,10 @@ impl App {
             }
             iced::Event::Touch(iced::touch::Event::FingerLifted { .. })
             | iced::Event::Touch(iced::touch::Event::FingerLost { .. }) => {
-                let cancel_long_press = POINTER_GATE
-                    .long_press_msg
-                    .swap(false, Ordering::Relaxed);
+                // Always end the gesture in App so press_moved cannot stick
+                // after a scroll (that blocked opening the next chat forever).
                 POINTER_GATE.touch_ended();
-                if cancel_long_press {
-                    Some(Message::PointerTouchEnded)
-                } else {
-                    // Sticky hover cleared via gate; view reads hover_ok() live.
-                    None
-                }
+                Some(Message::PointerTouchEnded)
             }
             iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, .. }) => {
                 use iced::keyboard::key::Named;
@@ -1304,6 +1308,9 @@ impl App {
                 Task::none()
             }
             Message::Back => {
+                // Back is often a button press after scrolling the chat — clear
+                // sticky press_moved or the chat list cannot open another row.
+                self.clear_pointer_gesture();
                 if let Some(support) = self.support.as_ref() {
                     match &support.pane {
                         SupportPane::Thread { from_list: true, .. } => {
@@ -1401,6 +1408,7 @@ impl App {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                self.clear_pointer_gesture();
                 self.selected = Some(index);
                 self.selected_id = self.chats.get(index).map(|c| c.id.without_scope());
                 self.support = None;
@@ -3442,9 +3450,10 @@ impl App {
                 })
             }
             Message::DecryptFileDone { encrypted, result } => {
+                let mut tasks = Vec::new();
                 match result {
                     Ok(plain) => {
-                        let wave = if plain.is_file() && !self.waveforms.contains_key(&plain) {
+                        if plain.is_file() && !self.waveforms.contains_key(&plain) {
                             // Voice / audio may need peaks from the plaintext cache.
                             let looks_audio = plain
                                 .extension()
@@ -3456,21 +3465,20 @@ impl App {
                                     )
                                 });
                             if looks_audio {
-                                self.load_waveform(plain.clone())
-                            } else {
-                                Task::none()
+                                tasks.push(self.load_waveform(plain.clone()));
                             }
-                        } else {
-                            Task::none()
-                        };
+                        }
                         self.plaintext_files.insert(encrypted, plain);
-                        return wave;
                     }
                     Err(err) => {
                         tracing::warn!(%err, "decrypt attachment failed");
                     }
                 }
-                Task::none()
+                // Keep the decrypt queue moving without blasting the thread pool.
+                let more = self.messages.clone();
+                tasks.push(self.enqueue_decrypts(&more));
+                tasks.push(self.enqueue_missing_video_thumbs(&more));
+                Task::batch(tasks)
             }
             Message::ShowFromTray => {
                 if let Some(id) = self.main_window {
@@ -3708,7 +3716,8 @@ impl App {
                 if let Some(thumb) = thumb {
                     self.video_thumbs.insert(path, thumb);
                 }
-                Task::none()
+                let more = self.messages.clone();
+                self.enqueue_missing_video_thumbs(&more)
             }
             Message::CloseMediaViewer => {
                 self.media_viewer = None;
@@ -4151,6 +4160,9 @@ impl App {
                 POINTER_GATE.touch_ended();
                 self.cancel_press_timers();
                 self.press_anchor = None;
+                // Do not leave App.press_moved stuck after a scroll: the next
+                // list tap often skips PointerPressed (hover not hot yet).
+                self.press_moved = false;
                 Task::none()
             }
             Message::TrayActions(actions) => {
@@ -4165,13 +4177,18 @@ impl App {
                 Task::batch(tasks)
             }
             Message::ChatRowReleased(index) => {
-                let open = !self.press_moved && self.chat_menu.is_none();
+                // Use the gate (not sticky App.press_moved): scroll sets
+                // press_moved true, and the next row tap used to never clear it
+                // when PointerPressed was skipped — chats became unopenable.
+                let open = POINTER_GATE.tap_ok() && self.chat_menu.is_none();
                 self.cancel_press_timers();
                 self.press_anchor = None;
+                self.press_moved = false;
                 if open {
                     // Short tap — open the chat (ignored after a scroll gesture).
                     return self.update(Message::SelectChat(index));
                 }
+                POINTER_GATE.reset_gesture();
                 Task::none()
             }
             Message::ChatRowLongPress { index, generation } => {
@@ -4910,8 +4927,14 @@ impl App {
         let Some(session) = self.session.clone() else {
             return Task::none();
         };
+        // Newest media first, limited parallelism — decrypting every CryptoFile
+        // in a 100-message history blocked the UI when opening a chat.
+        const MAX_DECRYPTS: usize = 8;
         let mut tasks = Vec::new();
-        for msg in messages {
+        for msg in messages.iter().rev() {
+            if tasks.len() >= MAX_DECRYPTS {
+                break;
+            }
             let Some(file) = msg.file.as_ref() else {
                 continue;
             };
@@ -5108,8 +5131,14 @@ impl App {
     }
 
     fn enqueue_missing_video_thumbs(&mut self, messages: &[ChatMessage]) -> Task<Message> {
+        // Newest first, hard cap — spawning ffmpeg for every video in history
+        // made opening a media-heavy chat hang for seconds.
+        const MAX_THUMBS: usize = 4;
         let mut tasks = Vec::new();
-        for msg in messages {
+        for msg in messages.iter().rev() {
+            if tasks.len() >= MAX_THUMBS {
+                break;
+            }
             let Some(file) = msg.file.as_ref() else {
                 continue;
             };
@@ -5158,8 +5187,13 @@ impl App {
     }
 
     fn enqueue_missing_waveforms(&self, messages: &[ChatMessage]) -> Task<Message> {
+        // Cap like video thumbs — waveform extract is also spawn_blocking/ffmpeg.
+        const MAX_WAVES: usize = 6;
         let mut tasks = Vec::new();
-        for msg in messages {
+        for msg in messages.iter().rev() {
+            if tasks.len() >= MAX_WAVES {
+                break;
+            }
             let Some(file) = msg.file.as_ref() else {
                 continue;
             };
@@ -5479,10 +5513,18 @@ impl App {
 
     /// True when a release should count as a tap (not a scroll gesture).
     ///
-    /// Touch presses track movement in [`POINTER_GATE`]; mouse clicks reset
-    /// that state so they always count as taps.
+    /// Driven only by [`POINTER_GATE`]: `App.press_moved` can stick after a
+    /// scroll if `PointerPressed` is skipped on the next tap (hover not hot
+    /// yet), which previously made every chat open no-op.
     pub(crate) fn tap_allowed(&self) -> bool {
-        POINTER_GATE.tap_ok() && !self.press_moved
+        POINTER_GATE.tap_ok()
+    }
+
+    fn clear_pointer_gesture(&mut self) {
+        self.press_moved = false;
+        self.press_anchor = None;
+        POINTER_GATE.reset_gesture();
+        self.cancel_press_timers();
     }
 
     fn cancel_press_timers(&mut self) {

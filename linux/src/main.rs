@@ -20,8 +20,9 @@ use std::time::Instant;
 
 use iced::futures::{sink::SinkExt, stream};
 use iced::font::Font;
-use iced::widget::scrollable::{self, RelativeOffset};
 use iced::widget::container;
+use iced::widget::scrollable::{self, RelativeOffset};
+use iced::widget::text_editor;
 use iced::{Element, Length, Subscription, Task, Theme};
 use tracing_subscriber::EnvFilter;
 
@@ -524,6 +525,8 @@ pub enum Message {
     Connected(Result<String, String>),
     SelectChat(usize),
     ComposerChanged(String),
+    /// Multi-line composer (`text_editor`) edit action.
+    ComposerEdit(text_editor::Action),
     /// Accept highlighted / clicked emoji shortcode suggestion.
     EmojiSuggestAccept,
     EmojiSuggestSelect(usize),
@@ -827,7 +830,7 @@ struct App {
     messages: Vec<ChatMessage>,
     /// Encrypted attachment path → decrypted cache under `tmp/plain/`.
     plaintext_files: HashMap<PathBuf, PathBuf>,
-    composer: String,
+    composer: text_editor::Content,
     connecting: bool,
     invite_input: String,
     invite_link: Option<String>,
@@ -1012,7 +1015,7 @@ impl App {
                 selected_id: None,
                 messages: Vec::new(),
                 plaintext_files: HashMap::new(),
-                composer: String::new(),
+                composer: text_editor::Content::new(),
                 connecting: false,
                 invite_input: String::new(),
                 invite_link: None,
@@ -1323,7 +1326,17 @@ impl App {
             }
             Message::ComposerChanged(value) => {
                 // Expand completed `:shortcode:` as you type (GitHub / gemoji names).
-                self.composer = cursus_core::expand_emoji_shortcodes(&value);
+                self.set_composer_text(cursus_core::expand_emoji_shortcodes(&value));
+                self.emoji_suggest_index = 0;
+                Task::none()
+            }
+            Message::ComposerEdit(action) => {
+                self.composer.perform(action);
+                let raw = self.composer_text();
+                let expanded = cursus_core::expand_emoji_shortcodes(&raw);
+                if expanded != raw {
+                    self.set_composer_text(expanded);
+                }
                 self.emoji_suggest_index = 0;
                 Task::none()
             }
@@ -1369,12 +1382,12 @@ impl App {
                         "Accept the contact request before sending messages.".into();
                     return Task::none();
                 }
-                let text = cursus_core::expand_emoji_shortcodes(self.composer.trim());
+                let text = cursus_core::expand_emoji_shortcodes(self.composer_text().trim());
                 if text.is_empty() {
                     return Task::none();
                 }
                 let quoted = self.reply_to.as_ref().map(|r| r.item_id);
-                self.composer.clear();
+                self.clear_composer();
                 self.reply_to = None;
                 Task::perform(send_text(session, chat, text, quoted), Message::Sent)
             }
@@ -3955,10 +3968,12 @@ impl App {
                     self.selection_mode = false;
                     self.selected_items.clear();
                     Task::none()
-                } else if cursus_core::pending_shortcode_query(&self.composer).is_some() {
+                } else if cursus_core::pending_shortcode_query(&self.composer_text()).is_some() {
                     // Drop the unfinished `:prefix` so suggestions close.
-                    if let Some(start) = self.composer.rfind(':') {
-                        self.composer.truncate(start);
+                    let mut text = self.composer_text();
+                    if let Some(start) = text.rfind(':') {
+                        text.truncate(start);
+                        self.set_composer_text(text);
                     }
                     self.emoji_suggest_index = 0;
                     Task::none()
@@ -4515,8 +4530,25 @@ impl App {
     pub(crate) fn selected(&self) -> Option<usize> {
         self.selected
     }
-    pub(crate) fn composer(&self) -> &str {
+    pub(crate) fn composer(&self) -> String {
+        self.composer_text()
+    }
+
+    pub(crate) fn composer_content(&self) -> &text_editor::Content {
         &self.composer
+    }
+
+    fn composer_text(&self) -> String {
+        // `Content::text` always joins with `\n` and forces a trailing newline.
+        self.composer.text().trim_end_matches('\n').to_string()
+    }
+
+    fn set_composer_text(&mut self, text: impl AsRef<str>) {
+        self.composer = text_editor::Content::with_text(text.as_ref());
+    }
+
+    fn clear_composer(&mut self) {
+        self.composer = text_editor::Content::new();
     }
 
     pub(crate) fn voice_recording(&self) -> bool {
@@ -4947,7 +4979,8 @@ impl App {
     }
 
     pub(crate) fn emoji_suggestions(&self) -> Vec<cursus_core::EmojiSuggestion> {
-        let Some(prefix) = cursus_core::pending_shortcode_query(&self.composer) else {
+        let text = self.composer_text();
+        let Some(prefix) = cursus_core::pending_shortcode_query(&text) else {
             return Vec::new();
         };
         cursus_core::suggest_emoji_shortcodes(prefix, 10)
@@ -5599,11 +5632,13 @@ impl App {
         }
         let index = self.emoji_suggest_index.min(suggestions.len() - 1);
         let glyph = suggestions[index].glyph;
-        let Some(start) = self.composer.rfind(':') else {
+        let mut text = self.composer_text();
+        let Some(start) = text.rfind(':') else {
             return;
         };
-        self.composer.truncate(start);
-        self.composer.push_str(glyph);
+        text.truncate(start);
+        text.push_str(glyph);
+        self.set_composer_text(text);
         self.emoji_suggest_index = 0;
     }
     pub(crate) fn chat_by_id(&self, id: &ChatId) -> Option<&ChatPreview> {

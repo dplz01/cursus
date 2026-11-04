@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use iced::theme::Palette;
-use iced::widget::{button, container, text_input};
+use iced::widget::{button, container, text_editor, text_input};
 use iced::{Background, Border, Color};
 
 /// Process-wide active palette — set from `App::view` / preference changes so
@@ -565,6 +565,29 @@ pub fn composer_input() -> impl Fn(&iced::Theme, text_input::Status) -> text_inp
             _ => c.border,
         };
         text_input::Style {
+            background: Background::Color(c.bg_sidebar),
+            border: Border {
+                color: border_color,
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            icon: c.text_muted,
+            placeholder: c.text_muted,
+            value: c.text_primary,
+            selection: c.accent_soft,
+        }
+    }
+}
+
+pub fn composer_editor() -> impl Fn(&iced::Theme, text_editor::Status) -> text_editor::Style {
+    |_, status| {
+        let c = t();
+        let border_color = match status {
+            text_editor::Status::Focused => c.accent,
+            text_editor::Status::Hovered => c.text_muted,
+            _ => c.border,
+        };
+        text_editor::Style {
             background: Background::Color(c.bg_sidebar),
             border: Border {
                 color: border_color,

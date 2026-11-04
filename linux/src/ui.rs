@@ -2,9 +2,12 @@ use iced::font::{self, Font};
 use iced::widget::canvas::{self, Canvas, Fill, Frame, Geometry};
 use iced::widget::scrollable::{Anchor, Direction, Scrollbar};
 use iced::widget::text::{Shaping, Wrapping};
+use iced::keyboard;
+use iced::keyboard::key;
+use iced::widget::text_editor::Binding as EditorBinding;
 use iced::widget::{
     button, column, container, image, mouse_area, progress_bar, rich_text, row, scrollable, span,
-    text, text_input, Column, Row, Space, Stack,
+    text, text_editor, text_input, Column, Row, Space, Stack,
 };
 use iced::{
     mouse, Alignment, Color, ContentFit, Element, Length, Padding, Point, Rectangle, Renderer, Size,
@@ -306,12 +309,13 @@ fn stacked_shell(app: &App) -> Element<'_, Message> {
         list_pane(app, Length::Fill)
     };
 
-    column![
-        container(body).height(Length::Fill),
-        bottom_nav(app),
-    ]
-    .height(Length::Fill)
-    .into()
+    // Open chat / detail covers the list on mobile/compact — hide bottom nav
+    // so the conversation feels like a full push over the shell.
+    let mut col = column![container(body).height(Length::Fill)];
+    if !show_detail {
+        col = col.push(bottom_nav(app));
+    }
+    col.height(Length::Fill).into()
 }
 
 fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
@@ -334,16 +338,19 @@ fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
 
 fn bottom_nav(app: &App) -> Element<'_, Message> {
     let d = app.density();
+    // Equal vertical inset so the bar height hugs the destination buttons.
+    let pad_v = 6.0;
+    let pad_h = 8.0;
     let mut r = Row::new()
         .spacing(6)
         .padding(Padding {
-            top: 6.0,
-            right: 8.0,
-            bottom: 10.0,
-            left: 8.0,
+            top: pad_v,
+            right: pad_h,
+            bottom: pad_v,
+            left: pad_h,
         })
         .width(Length::Fill)
-        .height(d.nav_bar_height);
+        .height(Length::Fill);
 
     for section in NavSection::all() {
         r = r.push(
@@ -355,7 +362,7 @@ fn bottom_nav(app: &App) -> Element<'_, Message> {
 
     container(r)
         .width(Length::Fill)
-        .height(d.nav_bar_height + 16.0)
+        .height(d.nav_bar_height)
         .style(theme::sidebar_style())
         .into()
 }
@@ -953,20 +960,46 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         Space::with_height(0).into()
     };
 
-    let input_row = row![
-        attach,
-        mic,
-        text_input(placeholder, app.composer())
-            .on_input(Message::ComposerChanged)
-            .on_submit(Message::Send)
-            .padding(d.composer)
-            .size(d.body)
-            .width(Length::Fill)
-            .style(theme::composer_input()),
-        send,
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
+    // Auto-growing multi-line field (Enter sends, Shift+Enter newline).
+    // Height follows hard newlines + a rough wrap estimate, capped for history space.
+    let line_px = f32::from(d.body) * 1.35;
+    let editor_pad = 8.0;
+    let min_h = send_size.max(line_px + editor_pad * 2.0);
+    let max_h = line_px * 6.0 + editor_pad * 2.0;
+    let hard_lines = app.composer_content().line_count().max(1) as f32;
+    let composer_text = app.composer();
+    let editor_width = (app.window_width() - d.pad * 2.0 - send_size * 3.0 - 24.0).max(80.0);
+    let col_w = (f32::from(d.body) * 0.55).max(6.0);
+    let wrap_lines = (composer_text.chars().count() as f32 * col_w / editor_width)
+        .ceil()
+        .max(1.0);
+    let lines = hard_lines.max(wrap_lines);
+    let editor_h = (lines * line_px + editor_pad * 2.0).clamp(min_h, max_h);
+
+    let editor = text_editor(app.composer_content())
+        .placeholder(placeholder)
+        .on_action(Message::ComposerEdit)
+        .padding(editor_pad)
+        .size(d.body)
+        .height(Length::Fixed(editor_h))
+        .wrapping(Wrapping::Word)
+        .style(theme::composer_editor())
+        .key_binding(|key_press| match key_press.key.as_ref() {
+            keyboard::Key::Named(key::Named::Enter) if !key_press.modifiers.shift() => {
+                Some(EditorBinding::Custom(Message::Send))
+            }
+            _ => EditorBinding::from_key_press(key_press),
+        });
+
+    let input_row = row![attach, mic, editor, send]
+        .spacing(8)
+        .align_y(Alignment::End);
+
+    let bar_pad_v = if app.layout() == LayoutMode::Mobile {
+        6.0
+    } else {
+        8.0
+    };
 
     container(
         column![suggest_panel, reply_bar, input_row]
@@ -974,9 +1007,9 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             .width(Length::Fill),
     )
     .padding(Padding {
-        top: d.pad_tight,
+        top: bar_pad_v,
         right: d.pad,
-        bottom: d.pad,
+        bottom: bar_pad_v,
         left: d.pad,
     })
     .width(Length::Fill)

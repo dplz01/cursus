@@ -1604,7 +1604,7 @@ fn message_bubble<'a>(
             emoji_message_text(&msg.text),
             msg,
             d,
-            BUBBLE_TEXT_MAX,
+            bubble_text_content_max(app),
         ));
         voice_owns_meta = true;
     } else {
@@ -1612,7 +1612,7 @@ fn message_bubble<'a>(
             message_text_content(app, msg, d),
             msg,
             d,
-            BUBBLE_TEXT_MAX,
+            bubble_text_content_max(app),
         ));
         voice_owns_meta = true;
     }
@@ -1739,8 +1739,7 @@ fn message_bubble<'a>(
         .align_x(align)
         .push(bubble_with_sender);
 
-    // Long-press is detected inside HoverArea (hold→lift) so touch works even
-    // when FingerPressed skips App::PointerPressed for scroll performance.
+    // Touch: double-tap opens the menu. Mouse: right-click.
     let bubble_area = hover::track_msg(
         stack,
         msg.item_id,
@@ -2120,22 +2119,50 @@ fn voice_draft_bar(
     .into()
 }
 
-/// Max width for bubble body text.
+/// Soft cap for bubble body text on wide desktops.
 const BUBBLE_TEXT_MAX: f32 = 420.0;
+/// Horizontal padding inside a normal text bubble (`Padding::from([8, 12])`).
+const BUBBLE_PAD_X: f32 = 12.0;
 
 /// Compact height for time + ticks.
 fn bubble_time_height(d: Density) -> f32 {
     f32::from(d.meta) + 2.0
 }
 
+/// Gap between last text glyphs and the time row.
+const STAMP_GAP: f32 = 8.0;
+/// Extra inset so the stamp stays inside the bubble padding.
+const STAMP_EDGE_PAD: f32 = 4.0;
+
+/// Actual text column width for the current window (not the desktop soft-cap).
+///
+/// Using a fixed 420 made short mobile bubbles keep the stamp inline even when
+/// `last_line + stamp` already exceeded the real bubble — the stamp then spilled
+/// onto the dark chat background and looked like a dark “chip”.
+fn bubble_text_content_max(app: &App) -> f32 {
+    let d = app.density();
+    let win = app.window_width().max(1.0);
+    let history_pad = d.pad * 2.0;
+    let bubble_chrome = BUBBLE_PAD_X * 2.0;
+    let slack = 8.0;
+    (win - history_pad - bubble_chrome - slack)
+        .min(BUBBLE_TEXT_MAX)
+        .max(96.0)
+}
+
+/// Full reserved width for time + receipt + gaps (no chip chrome — stamp is bare).
+///
+/// Includes the row gap and the right edge inset so fit checks match layout.
 fn estimate_time_width(d: Density, outgoing: bool) -> f32 {
-    let text_w = f32::from(d.meta) * 5.2;
+    // Conservative: "12:00 PM" (~8 glyphs) at ~0.62×meta advance.
+    let text_w = f32::from(d.meta) * 6.2;
     let ticks = if outgoing {
-        (f32::from(d.meta) * 0.85).clamp(10.0, 13.0) + 4.0
+        // icon + spacing inside the stamp row
+        (f32::from(d.meta) * 0.85).clamp(10.0, 13.0) + 6.0
     } else {
         0.0
     };
-    text_w + ticks + 10.0
+    text_w + ticks + STAMP_GAP + STAMP_EDGE_PAD
 }
 
 fn estimate_last_line_width(text: &str, d: Density) -> f32 {
@@ -2151,25 +2178,28 @@ fn count_visual_lines(text: &str, d: Density, content_max: f32) -> usize {
         .lines()
         .map(|line| {
             let w = line.chars().count() as f32 * col_w;
-            ((w / content_max).ceil() as usize).max(1)
+            ((w / content_max.max(1.0)).ceil() as usize).max(1)
         })
         .sum();
     hard.max(soft).max(1)
 }
 
-/// Overlay vs stack for the time chip (see .bugs.txt).
-fn should_overlay_timestamp(text: &str, d: Density, outgoing: bool, content_max: f32) -> bool {
+/// `last_line_width < max_line_width - (timestamps_width + paddings)`.
+fn should_keep_timestamp_inline(
+    text: &str,
+    d: Density,
+    outgoing: bool,
+    content_max: f32,
+) -> bool {
     let time_w = estimate_time_width(d, outgoing);
     let last_w = estimate_last_line_width(text, d);
-    if last_w + time_w >= content_max {
-        return false;
-    }
-    // Multi-line: float over the last line. Single-line: keep near the text
-    // (still overlay corner, not a full underneath stack).
-    true
+    last_w + time_w < content_max
 }
 
-/// Body + time/receipt: float when last line has room; otherwise sit underneath.
+/// Body + time/receipt: no chip background — stamp sits on the bubble face.
+///
+/// Inline (over / near) when the last line has room including gaps; else stack
+/// underneath.
 fn bubble_content_with_time<'a>(
     content: Element<'a, Message>,
     msg: &'a ChatMessage,
@@ -2177,57 +2207,54 @@ fn bubble_content_with_time<'a>(
     content_max: f32,
 ) -> Element<'a, Message> {
     let stamp = bubble_time_meta(msg, d);
-    let overlay = should_overlay_timestamp(&msg.text, d, msg.outgoing, content_max);
+    let stamp_w = estimate_time_width(d, msg.outgoing);
+    let inline = should_keep_timestamp_inline(&msg.text, d, msg.outgoing, content_max);
     let multi = count_visual_lines(&msg.text, d, content_max) > 1;
-    if overlay {
-        let chip_bg = if msg.outgoing {
-            theme::t().accent_soft
-        } else {
-            theme::t().bg_elevated
-        };
-        let chip = container(stamp)
-            .padding(Padding {
-                top: 1.0,
-                right: 2.0,
-                bottom: 0.0,
-                left: 6.0,
-            })
-            .style(move |_| container::Style {
-                background: Some(iced::Background::Color(chip_bg)),
-                border: iced::Border {
-                    radius: 8.0.into(),
-                    ..Default::default()
-                },
-                ..container::Style::default()
-            });
+    if inline {
         if multi {
-            // Float over the last line of a multi-line bubble.
+            // Float over the last line (bare stamp, no pill background).
             container(
                 Stack::new()
                     .push(container(content).max_width(content_max))
                     .push(
-                        container(chip)
+                        container(stamp)
                             .width(Length::Fill)
                             .height(Length::Fill)
                             .align_x(Alignment::End)
-                            .align_y(Alignment::End),
+                            .align_y(Alignment::End)
+                            .padding(Padding {
+                                top: 0.0,
+                                right: STAMP_EDGE_PAD,
+                                bottom: 0.0,
+                                left: 0.0,
+                            }),
                     ),
             )
             .into()
         } else {
-            // Single line with room: time sits on the same row, near the text.
-            row![
-                container(content).max_width((content_max - estimate_time_width(d, msg.outgoing)).max(40.0)),
-                chip,
-            ]
-            .spacing(4)
-            .align_y(Alignment::End)
+            // Single line: reserve stamp width so text cannot shove it past the
+            // bubble edge (max_width on the row alone does not shrink children).
+            let text_max = (content_max - stamp_w).max(40.0);
+            container(
+                row![container(content).max_width(text_max), stamp]
+                    .spacing(STAMP_GAP)
+                    .align_y(Alignment::End),
+            )
+            .max_width(content_max)
             .into()
         }
     } else {
         column![
             container(content).max_width(content_max),
-            container(stamp).width(Length::Fill).align_x(Alignment::End),
+            container(stamp)
+                .width(Length::Fill)
+                .align_x(Alignment::End)
+                .padding(Padding {
+                    top: 0.0,
+                    right: STAMP_EDGE_PAD,
+                    bottom: 0.0,
+                    left: 0.0,
+                }),
         ]
         .spacing(2)
         .into()
@@ -2682,23 +2709,20 @@ fn visual_media_preview<'a>(
     const PREVIEW_MAX_W: u32 = 220;
     const PREVIEW_MAX_H: u32 = 280;
     const RADIUS: f32 = 12.0;
-    // Never run ffmpeg on the UI thread — that blocked scroll when videos
-    // entered the viewport. Use cached posters only; async extract fills later.
-    let source = if is_video {
-        app.video_thumb_for(&path)
+    // Never decode / run ffmpeg on the UI thread — first-open hangs came from
+    // rounded_fitted_preview decoding every image during view(). Cache only.
+    let prepared = if is_video {
+        app.video_thumb_for(&path).and_then(|src| {
+            media::cached_rounded_fitted_preview(&src, PREVIEW_MAX_W, PREVIEW_MAX_H)
+                .or_else(|| Some((src, PREVIEW_MAX_W, PREVIEW_MAX_H * 2 / 3)))
+        })
     } else {
-        Some(path.clone())
+        app.image_preview_for(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)
     };
-    let has_poster = source.is_some();
-    let (w, h, face): (f32, f32, Element<'a, Message>) = if let Some(source) = source {
-        let (display_path, pw, ph) =
-            match media::rounded_fitted_preview(&source, PREVIEW_MAX_W, PREVIEW_MAX_H, RADIUS) {
-                Ok(v) => v,
-                Err(_) => {
-                    let (pw, ph) = (PREVIEW_MAX_W, PREVIEW_MAX_H * 2 / 3);
-                    (source, pw, ph)
-                }
-            };
+    let has_poster = prepared.is_some();
+    let (w, h, face): (f32, f32, Element<'a, Message>) = if let Some((display_path, pw, ph)) =
+        prepared
+    {
         let w = pw as f32;
         let h = ph as f32;
         let thumb = image(image::Handle::from_path(display_path))
@@ -2707,24 +2731,27 @@ fn visual_media_preview<'a>(
             .content_fit(ContentFit::Contain);
         (w, h, thumb.into())
     } else {
-        // Poster not ready yet — shrink-wrapped placeholder (no Fill pad).
+        // Still / poster not ready — shrink-wrapped placeholder.
         let w = 160.0;
         let h = 120.0;
-        let face = container(
-            icons::centered_hit(icons::play_icon(28.0, theme::t().text_secondary), 48.0),
-        )
-        .width(Length::Fixed(w))
-        .height(Length::Fixed(h))
-        .center_x(Length::Fixed(w))
-        .center_y(Length::Fixed(h))
-        .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().bg_elevated)),
-            border: iced::Border {
-                radius: RADIUS.into(),
-                ..Default::default()
-            },
-            ..container::Style::default()
-        });
+        let glyph = if is_video {
+            icons::play_icon(28.0, theme::t().text_secondary)
+        } else {
+            icons::image_icon(28.0, theme::t().text_secondary)
+        };
+        let face = container(icons::centered_hit(glyph, 48.0))
+            .width(Length::Fixed(w))
+            .height(Length::Fixed(h))
+            .center_x(Length::Fixed(w))
+            .center_y(Length::Fixed(h))
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(theme::t().bg_elevated)),
+                border: iced::Border {
+                    radius: RADIUS.into(),
+                    ..Default::default()
+                },
+                ..container::Style::default()
+            });
         (w, h, face.into())
     };
     let mut stack = Stack::new()
@@ -4951,23 +4978,46 @@ fn contact_feature_row(
     d: Density,
     _hover: bool,
 ) -> Element<'static, Message> {
-    settings_release_row(
+    // Only the yes/no/always value is a hit target (visible chip) so the rest
+    // of the row scrolls freely under a finger.
+    let cycle = mouse_area(
+        container(
+            text(you.label())
+                .size(d.meta)
+                .color(theme::t().text_primary),
+        )
+        .padding(Padding::from([6, 10]))
+        .style(|_| {
+            let c = theme::t();
+            container::Style {
+                background: Some(iced::Background::Color(c.bg_elevated)),
+                border: iced::Border {
+                    color: c.border,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..container::Style::default()
+            }
+        }),
+    )
+    .on_release(on_press);
+
+    container(
         row![
             icon,
             text(label)
                 .size(d.body)
                 .color(theme::t().text_primary)
                 .width(Length::Fill),
-            text(you.label())
-                .size(d.meta)
-                .color(theme::t().text_muted),
+            cycle,
             peer_allow_icon(peer),
         ]
         .spacing(10)
         .align_y(Alignment::Center)
-        .into(),
-        on_press,
+        .padding(Padding::from([10, 8])),
     )
+    .width(Length::Fill)
+    .into()
 }
 
 fn contact_feature_prefs(

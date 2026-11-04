@@ -390,14 +390,14 @@ pub fn back_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> b
     }
 }
 
-/// Round icon-only control (mute / favorite in contact header).
+/// Round icon-only control — idle is icon-only (no fill / border); hover tint only.
 pub fn round_icon(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
         let c = t();
         let background = match status {
             button::Status::Hovered if hover_ok => Some(Background::Color(c.bg_hover)),
             button::Status::Pressed => Some(Background::Color(c.accent_soft)),
-            _ => Some(Background::Color(c.bg_elevated)),
+            _ => None,
         };
         button::Style {
             background,

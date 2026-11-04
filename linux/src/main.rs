@@ -147,10 +147,11 @@ impl PointerGate {
                 let dy = y - ay;
                 if dx * dx + dy * dy > PRESS_MOVE_SLOP * PRESS_MOVE_SLOP {
                     self.moved.store(true, Ordering::Relaxed);
-                    // Only wake App when a long-press timer might need cancel,
-                    // or history FAB away-state must flip — always publish the
-                    // first move-past-slop so press_moved / timers stay in sync.
-                    publish = true;
+                    // Wake App only when a long-press timer was armed — otherwise
+                    // every scroll past slop rebuilt the whole shell (ARM stall).
+                    if self.long_press_msg.load(Ordering::Relaxed) {
+                        publish = true;
+                    }
                 }
             }
         }
@@ -175,11 +176,11 @@ thread_local! {
 }
 
 fn hover_target_hot() -> bool {
+    // Message bubbles intentionally omitted: menus are double-tap via HoverArea,
+    // and treating every bubble press as hot rebuilt the UI on each scroll start.
     HOVER_FOR_GATE.with(|g| {
         g.borrow().as_ref().is_some_and(|slots| {
-            slots.chat.get().is_some()
-                || slots.msg.get().is_some()
-                || slots.reaction.borrow().is_some()
+            slots.chat.get().is_some() || slots.reaction.borrow().is_some()
         })
     })
 }
@@ -819,6 +820,10 @@ pub enum Message {
     VideoThumbReady { path: PathBuf, thumb: Option<PathBuf> },
     /// Deferred media warm-up after the chat view has painted once.
     WarmChatMedia,
+    ImagePreviewReady {
+        path: PathBuf,
+        preview: Option<(PathBuf, u32, u32)>,
+    },
     OpenMedia { item_id: i64 },
     CloseMediaViewer,
     MediaPrev,
@@ -946,6 +951,9 @@ struct App {
     video_thumbs: std::collections::HashMap<PathBuf, PathBuf>,
     /// In-flight video thumb extractions (avoid duplicate ffmpeg jobs).
     video_thumbs_pending: HashSet<PathBuf>,
+    /// Cached rounded still-image previews (UI thread must not decode).
+    image_previews: std::collections::HashMap<PathBuf, (PathBuf, u32, u32)>,
+    image_previews_pending: HashSet<PathBuf>,
     /// Full-screen photo/video reader (legacy — open externally instead).
     media_viewer: Option<MediaViewer>,
     /// After opening a chat, pin history to the newest message once it loads.
@@ -1123,6 +1131,8 @@ impl App {
                 waveforms: std::collections::HashMap::new(),
                 video_thumbs: std::collections::HashMap::new(),
                 video_thumbs_pending: HashSet::new(),
+                image_previews: HashMap::new(),
+                image_previews_pending: HashSet::new(),
                 media_viewer: None,
                 pin_history_end: false,
                 pending_url: None,
@@ -1220,14 +1230,37 @@ impl App {
                 }
             }
             iced::Event::Touch(iced::touch::Event::FingerMoved { position, .. }) => {
-                POINTER_GATE.filter_move(position.x, position.y)
+                let prev = POINTER_GATE.last_xy();
+                let moved_msg = POINTER_GATE.filter_move(position.x, position.y);
+                // History FAB edge flips without requiring PointerMoved (which we
+                // no longer publish on ordinary scrolls).
+                if POINTER_GATE.touch_down.load(Ordering::Relaxed)
+                    && POINTER_GATE.moved.load(Ordering::Relaxed)
+                {
+                    let dy = position.y - prev.1;
+                    if dy > 2.0 {
+                        if let Some(away) = HISTORY_AWAY_GATE.mark_away() {
+                            return Some(Message::HistoryAwayChanged(away));
+                        }
+                    } else if dy < -2.0 {
+                        if let Some(away) = HISTORY_AWAY_GATE.mark_at_end() {
+                            return Some(Message::HistoryAwayChanged(away));
+                        }
+                    }
+                }
+                moved_msg
             }
             iced::Event::Touch(iced::touch::Event::FingerLifted { .. })
             | iced::Event::Touch(iced::touch::Event::FingerLost { .. }) => {
-                // Always end the gesture in App so press_moved cannot stick
-                // after a scroll (that blocked opening the next chat forever).
+                let armed = POINTER_GATE.long_press_msg.swap(false, Ordering::Relaxed);
                 POINTER_GATE.touch_ended();
-                Some(Message::PointerTouchEnded)
+                // Only wake App when a long-press press was published — otherwise
+                // every finger-up rebuilt the shell after a plain scroll.
+                if armed {
+                    Some(Message::PointerTouchEnded)
+                } else {
+                    None
+                }
             }
             iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, .. }) => {
                 use iced::keyboard::key::Named;
@@ -1713,8 +1746,8 @@ impl App {
                 Task::none()
             }
             Message::OpenMessageMenu(item_id) => {
-                // Touch long-press arrives here from HoverArea; don't require
-                // tap_allowed (press_moved may still be set from the hold).
+                // Touch double-tap / desktop right-click — don't require
+                // tap_allowed (press_moved may still be set).
                 self.open_message_menu(item_id);
                 Task::none()
             }
@@ -2014,7 +2047,12 @@ impl App {
                 self.own_profile.fields.display_name = name;
                 let fields = self.own_profile.fields.clone();
                 self.status = "Saving profile…".into();
-                Task::perform(save_own_profile(session, fields), Message::OwnProfileSaved)
+                // Enter submitted — focus a non-existent id to unfocus every
+                // text_input (iced has no public unfocus Task wrapper).
+                Task::batch([
+                    Task::perform(save_own_profile(session, fields), Message::OwnProfileSaved),
+                    iced::widget::operation::focus(iced::widget::Id::new("settings-unfocus")),
+                ])
             }
             Message::OwnProfileSaved(Ok(user)) => {
                 self.own_profile = OwnProfileDraft {
@@ -3963,8 +4001,17 @@ impl App {
                 Task::batch([
                     self.enqueue_missing_waveforms(&messages),
                     self.enqueue_missing_video_thumbs(&messages),
+                    self.enqueue_missing_image_previews(&messages),
                     self.enqueue_decrypts(&messages),
                 ])
+            }
+            Message::ImagePreviewReady { path, preview } => {
+                self.image_previews_pending.remove(&path);
+                if let Some(preview) = preview {
+                    self.image_previews.insert(path, preview);
+                }
+                let more = self.messages.clone();
+                self.enqueue_missing_image_previews(&more)
             }
             Message::MessagesLoaded(Err(err)) => {
                 self.status = err;
@@ -4165,28 +4212,11 @@ impl App {
                     }
                 }
 
-                if !self.selection_mode {
-                    if let Some(item_id) = self.hover.msg.get() {
-                        self.msg_long_press_generation =
-                            self.msg_long_press_generation.wrapping_add(1);
-                        self.msg_long_press_item = Some(item_id);
-                        // Ensure a stale list-row hover cannot open a second menu.
-                        self.long_press_index = None;
-                        self.long_press_generation =
-                            self.long_press_generation.wrapping_add(1);
-                        let generation = self.msg_long_press_generation;
-                        tasks.push(Task::perform(
-                            async move {
-                                tokio::time::sleep(std::time::Duration::from_millis(
-                                    LONG_PRESS_MS,
-                                ))
-                                .await;
-                                Message::MsgBubbleLongPress { item_id, generation }
-                            },
-                            |msg| msg,
-                        ));
-                        return Task::batch(tasks);
-                    }
+                // Message menus on touch use HoverArea double-tap (long-press
+                // was too clunky). Desktop still opens via right-click.
+                if !self.selection_mode && self.hover.msg.get().is_some() {
+                    // Swallow chat-row long-press while a bubble is hot.
+                    return Task::batch(tasks);
                 }
 
                 // Chat-row menu only when the list is the active surface.
@@ -4971,6 +5001,19 @@ impl App {
             .or_else(|| media::cached_video_thumbnail(path))
     }
 
+    /// Rounded still preview — memory/disk cache only (never decodes here).
+    pub(crate) fn image_preview_for(
+        &self,
+        path: &std::path::Path,
+        max_w: u32,
+        max_h: u32,
+    ) -> Option<(PathBuf, u32, u32)> {
+        self.image_previews
+            .get(path)
+            .cloned()
+            .or_else(|| media::cached_rounded_fitted_preview(path, max_w, max_h))
+    }
+
     pub(crate) fn auth(&self) -> Option<&AuthScreen> {
         self.auth.as_ref()
     }
@@ -5203,6 +5246,73 @@ impl App {
             },
             |m| m,
         )
+    }
+
+    fn enqueue_missing_image_previews(&mut self, messages: &[ChatMessage]) -> Task<Message> {
+        const MAX: usize = 4;
+        const PREVIEW_MAX_W: u32 = 220;
+        const PREVIEW_MAX_H: u32 = 280;
+        const RADIUS: f32 = 12.0;
+        let mut tasks = Vec::new();
+        for msg in messages.iter().rev() {
+            if tasks.len() >= MAX {
+                break;
+            }
+            let Some(file) = msg.file.as_ref() else {
+                continue;
+            };
+            if !matches!(
+                effective_complete(file.state, msg.outgoing, msg.delivery),
+                FileTransferState::Complete
+            ) {
+                continue;
+            }
+            let is_image = matches!(file.kind, cursus_core::FileKind::Image)
+                || media::is_image_name(&file.file_name);
+            let is_video = matches!(file.kind, cursus_core::FileKind::Video)
+                || media::is_video_name(&file.file_name);
+            if !is_image || is_video {
+                continue;
+            }
+            let Some(path) = self.plaintext_path_for(file) else {
+                continue;
+            };
+            if !path.is_file() {
+                continue;
+            }
+            if let Some(cached) =
+                media::cached_rounded_fitted_preview(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)
+            {
+                self.image_previews.insert(path.clone(), cached);
+                continue;
+            }
+            if self.image_previews.contains_key(&path)
+                || self.image_previews_pending.contains(&path)
+            {
+                continue;
+            }
+            self.image_previews_pending.insert(path.clone());
+            tasks.push(Task::perform(
+                async move {
+                    let path_for_work = path.clone();
+                    let preview = tokio::task::spawn_blocking(move || {
+                        media::rounded_fitted_preview(
+                            &path_for_work,
+                            PREVIEW_MAX_W,
+                            PREVIEW_MAX_H,
+                            RADIUS,
+                        )
+                        .ok()
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                    Message::ImagePreviewReady { path, preview }
+                },
+                |msg| msg,
+            ));
+        }
+        Task::batch(tasks)
     }
 
     fn enqueue_missing_video_thumbs(&mut self, messages: &[ChatMessage]) -> Task<Message> {

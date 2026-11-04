@@ -1172,68 +1172,91 @@ fn parse_support_chat(value: Option<&Value>) -> Option<crate::models::GroupSuppo
     })
 }
 
+fn parse_one_group_member(m: &Value) -> Option<GroupMemberInfo> {
+    let id = m
+        .get("groupMemberId")
+        .or_else(|| m.pointer("/groupMemberId"))
+        .and_then(|v| v.as_i64())?;
+    let role = m
+        .get("memberRole")
+        .and_then(|v| v.as_str())
+        .unwrap_or("member")
+        .to_string();
+    // Skip relay service accounts in the UI list.
+    if role.eq_ignore_ascii_case("relay") {
+        return None;
+    }
+    let status = m
+        .get("memberStatus")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    // Match official CLI: hide rejected / removed / left.
+    if matches!(
+        status.as_str(),
+        "rejected" | "removed" | "left"
+    ) {
+        return None;
+    }
+    let display_name = m
+        .get("localDisplayName")
+        .or_else(|| m.pointer("/profile/displayName"))
+        .or_else(|| m.pointer("/memberProfile/displayName"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Member")
+        .to_string();
+    let contact_id = m
+        .get("memberContactId")
+        .and_then(|v| v.as_i64())
+        .filter(|id| *id > 0);
+    let blocked_by_admin = m
+        .get("blockedByAdmin")
+        .or_else(|| m.get("memberBlockedByAdmin"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let show_messages = m
+        .pointer("/memberSettings/showMessages")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let support_chat = parse_support_chat(m.get("supportChat"));
+    Some(GroupMemberInfo {
+        group_member_id: id,
+        contact_id,
+        display_name,
+        role,
+        status,
+        blocked_by_admin,
+        show_messages,
+        support_chat,
+    })
+}
+
 fn parse_group_members(value: &Value) -> Vec<GroupMemberInfo> {
+    // Official view lists `membership : members` — the current user lives under
+    // groupInfo.membership and is not duplicated in the members array.
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let membership = value
+        .pointer("/group/groupInfo/membership")
+        .or_else(|| value.pointer("/groupInfo/membership"))
+        .or_else(|| value.pointer("/membership"));
+    if let Some(m) = membership.and_then(parse_one_group_member) {
+        seen.insert(m.group_member_id);
+        out.push(m);
+    }
     let members = value
         .pointer("/group/members")
         .or_else(|| value.get("members"))
         .and_then(|v| v.as_array());
-    let Some(members) = members else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for m in members {
-        let Some(id) = m
-            .get("groupMemberId")
-            .or_else(|| m.pointer("/groupMemberId"))
-            .and_then(|v| v.as_i64())
-        else {
-            continue;
-        };
-        let role = m
-            .get("memberRole")
-            .and_then(|v| v.as_str())
-            .unwrap_or("member")
-            .to_string();
-        // Skip relay service accounts in the UI list.
-        if role.eq_ignore_ascii_case("relay") {
-            continue;
+    if let Some(members) = members {
+        for m in members {
+            let Some(info) = parse_one_group_member(m) else {
+                continue;
+            };
+            if seen.insert(info.group_member_id) {
+                out.push(info);
+            }
         }
-        let display_name = m
-            .get("localDisplayName")
-            .or_else(|| m.pointer("/profile/displayName"))
-            .or_else(|| m.pointer("/memberProfile/displayName"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("Member")
-            .to_string();
-        let contact_id = m
-            .get("memberContactId")
-            .and_then(|v| v.as_i64())
-            .filter(|id| *id > 0);
-        let status = m
-            .get("memberStatus")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let blocked_by_admin = m
-            .get("blockedByAdmin")
-            .or_else(|| m.get("memberBlockedByAdmin"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let show_messages = m
-            .pointer("/memberSettings/showMessages")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        let support_chat = parse_support_chat(m.get("supportChat"));
-        out.push(GroupMemberInfo {
-            group_member_id: id,
-            contact_id,
-            display_name,
-            role,
-            status,
-            blocked_by_admin,
-            show_messages,
-            support_chat,
-        });
     }
     out
 }

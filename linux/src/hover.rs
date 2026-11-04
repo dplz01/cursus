@@ -40,11 +40,13 @@ impl HoverSlots {
 #[derive(Debug, Clone, Copy, Default)]
 struct HoverState {
     is_hovered: bool,
-    /// Finger/button down tracking for long-press (touch menus without App rebuild).
+    /// Finger/button down tracking for double-tap / short-release.
     press_at: Option<std::time::Instant>,
     press_x: f32,
     press_y: f32,
     press_moved: bool,
+    /// Last short-tap lift time (for double-tap on touch).
+    last_tap_at: Option<std::time::Instant>,
 }
 
 /// Mouse/touch area: release / right-press publish Messages; enter/exit only
@@ -53,7 +55,8 @@ pub struct HoverArea<'a, Message, Theme, Renderer> {
     content: Element<'a, Message, Theme, Renderer>,
     on_release: Option<Message>,
     on_right_press: Option<Message>,
-    on_long_press: Option<Message>,
+    /// Touch double-tap (two short lifts within `double_tap_ms`).
+    on_double_tap: Option<Message>,
     set_enter: Option<Rc<dyn Fn()>>,
     set_exit: Option<Rc<dyn Fn()>>,
     hover_bg: Option<Background>,
@@ -63,8 +66,7 @@ pub struct HoverArea<'a, Message, Theme, Renderer> {
     /// without an App Message.
     redraw_on_hover: bool,
     radius: f32,
-    /// Hold duration before lift counts as a long-press (touch message menus).
-    long_press_ms: u64,
+    double_tap_ms: u64,
 }
 
 impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
@@ -73,7 +75,7 @@ impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
             content: content.into(),
             on_release: None,
             on_right_press: None,
-            on_long_press: None,
+            on_double_tap: None,
             set_enter: None,
             set_exit: None,
             hover_bg: None,
@@ -81,7 +83,7 @@ impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
             idle_bg: None,
             redraw_on_hover: false,
             radius: 10.0,
-            long_press_ms: 480,
+            double_tap_ms: 320,
         }
     }
 
@@ -95,8 +97,8 @@ impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
         self
     }
 
-    pub fn on_long_press(mut self, msg: Message) -> Self {
-        self.on_long_press = Some(msg);
+    pub fn on_double_tap(mut self, msg: Message) -> Self {
+        self.on_double_tap = Some(msg);
         self
     }
 
@@ -253,18 +255,36 @@ where
                 let moved = state.press_moved;
                 state.press_moved = false;
                 if moved {
+                    state.last_tap_at = None;
                     return;
                 }
-                if held >= self.long_press_ms {
-                    if let Some(msg) = self.on_long_press.as_ref() {
-                        shell.publish(msg.clone());
-                        shell.capture_event();
-                        return;
-                    }
-                    // Long hold without a local handler: swallow the release so
-                    // App-level long-press menus (chat rows) are not followed by
-                    // an accidental open/select.
+                // Long hold without move: swallow so App chat-row long-press
+                // menus are not followed by an accidental open.
+                if held >= 480 {
+                    state.last_tap_at = None;
                     return;
+                }
+                let is_touch = matches!(
+                    event,
+                    Event::Touch(touch::Event::FingerLifted { .. })
+                        | Event::Touch(touch::Event::FingerLost { .. })
+                );
+                if is_touch {
+                    if let Some(msg) = self.on_double_tap.as_ref() {
+                        let now = std::time::Instant::now();
+                        if state
+                            .last_tap_at
+                            .is_some_and(|t| t.elapsed().as_millis() as u64 <= self.double_tap_ms)
+                        {
+                            state.last_tap_at = None;
+                            shell.publish(msg.clone());
+                            shell.capture_event();
+                            return;
+                        }
+                        state.last_tap_at = Some(now);
+                    }
+                } else {
+                    state.last_tap_at = None;
                 }
                 if let Some(msg) = self.on_release.as_ref() {
                     shell.publish(msg.clone());
@@ -409,21 +429,21 @@ pub fn chat_row<'a, Message: Clone + 'a>(
 
 /// Message bubble probe — slot only (no local paint).
 ///
-/// Long-press is detected inside the widget (hold then lift) so touchscreens
-/// get the message menu without an App rebuild on every FingerPressed.
+/// Mouse: right-click opens the menu. Touch: double-tap opens the menu
+/// (long-press was too clunky on ARM).
 pub fn track_msg<'a, Message: Clone + 'a>(
     content: impl Into<Element<'a, Message, iced::Theme, iced::Renderer>>,
     item_id: i64,
     slots: &HoverSlots,
     on_release: Message,
-    on_long_press: Message,
+    on_menu: Message,
 ) -> Element<'a, Message> {
     let enter = Rc::clone(&slots.msg);
     let exit = Rc::clone(&slots.msg);
     HoverArea::new(content)
         .on_release(on_release)
-        .on_right_press(on_long_press.clone())
-        .on_long_press(on_long_press)
+        .on_right_press(on_menu.clone())
+        .on_double_tap(on_menu)
         .on_hover_slots(
             move || enter.set(Some(item_id)),
             move || {

@@ -198,6 +198,29 @@ pub fn fit_within(sw: u32, sh: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     (w.max(1), h.max(1))
 }
 
+/// Return a cached rounded preview if one already exists (never decodes).
+pub fn cached_rounded_fitted_preview(
+    path: &Path,
+    max_w: u32,
+    max_h: u32,
+) -> Option<(PathBuf, u32, u32)> {
+    let (sw, sh) = image::image_dimensions(path).ok()?;
+    if sw == 0 || sh == 0 {
+        return None;
+    }
+    let (width, height) = fit_within(sw, sh, max_w.max(32), max_h.max(32));
+    let out = rounded_preview_path(path, width, height);
+    if !out.is_file() {
+        return None;
+    }
+    let src = std::fs::metadata(path).ok()?;
+    let dst = std::fs::metadata(&out).ok()?;
+    if dst.len() == 0 || dst.modified().ok()? < src.modified().ok()? {
+        return None;
+    }
+    Some((out, width, height))
+}
+
 /// Aspect-preserving resize + rounded-corner PNG (iced can't clip to radius).
 ///
 /// Returns `(cached_path, display_width, display_height)`.
@@ -208,19 +231,15 @@ pub fn rounded_fitted_preview(
     max_h: u32,
     radius: f32,
 ) -> Result<(PathBuf, u32, u32), String> {
+    if let Some(hit) = cached_rounded_fitted_preview(path, max_w, max_h) {
+        return Ok(hit);
+    }
     let (sw, sh) = image::image_dimensions(path).map_err(|e| format!("preview size: {e}"))?;
     if sw == 0 || sh == 0 {
         return Err("empty image".into());
     }
     let (width, height) = fit_within(sw, sh, max_w.max(32), max_h.max(32));
     let out = rounded_preview_path(path, width, height);
-    if out.is_file() {
-        if let (Ok(src), Ok(dst)) = (std::fs::metadata(path), std::fs::metadata(&out)) {
-            if dst.len() > 0 && dst.modified().ok() >= src.modified().ok() {
-                return Ok((out, width, height));
-            }
-        }
-    }
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }

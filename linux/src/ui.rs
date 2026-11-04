@@ -54,6 +54,23 @@ fn mobile_back_btn(on_press: Message, hover: bool) -> Element<'static, Message> 
         .into()
 }
 
+/// Composer tool / send hit — release-only so the editor keeps focus (OSK stays up).
+fn composer_hit<'a>(
+    icon: Element<'a, Message>,
+    size: f32,
+    on_release: Message,
+) -> Element<'a, Message> {
+    mouse_area(
+        container(icon)
+            .width(size)
+            .height(size)
+            .center_x(size)
+            .center_y(size),
+    )
+    .on_release(on_release)
+    .into()
+}
+
 fn scroll_y<'a>(
     content: impl Into<Element<'a, Message>>,
 ) -> iced::widget::Scrollable<'a, Message> {
@@ -962,12 +979,13 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     };
     let hover_ok = app.hover_ok();
 
-    let attach = button(icons::plus_tool(send_size, hover_ok))
-        .on_press(Message::AttachFile)
-        .width(send_size)
-        .height(send_size)
-        .padding(0)
-        .style(theme::composer_tool());
+    // Release-only hits: `button.on_press` steals focus from the editor on
+    // touch (OSK retracts) and often drops the first tap. mouse_area does not.
+    let attach = composer_hit(
+        icons::plus_tool(send_size, hover_ok),
+        send_size,
+        Message::AttachFile,
+    );
 
     if let Some(draft) = app.voice_draft() {
         return voice_draft_bar(draft, send_size, icon_size, d, hover_ok);
@@ -975,31 +993,28 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
 
     let recording = app.voice_recording();
     let mic = if recording {
-        button(icons::centered_hit(
-            icons::stop_icon(icon_size, Color::from_rgb(0.95, 0.35, 0.35)),
+        composer_hit(
+            icons::centered_hit(
+                icons::stop_icon(icon_size, Color::from_rgb(0.95, 0.35, 0.35)),
+                send_size,
+            ),
             send_size,
-        ))
-        .on_press(Message::ToggleVoiceRecord)
-        .width(send_size)
-        .height(send_size)
-        .padding(0)
-        .style(theme::composer_tool())
+            Message::ToggleVoiceRecord,
+        )
     } else {
-        button(icons::mic_tool(send_size, hover_ok))
-            .on_press(Message::ToggleVoiceRecord)
-            .width(send_size)
-            .height(send_size)
-            .padding(0)
-            .style(theme::composer_tool())
+        composer_hit(
+            icons::mic_tool(send_size, hover_ok),
+            send_size,
+            Message::ToggleVoiceRecord,
+        )
     };
 
     let can_send = !app.composer().trim().is_empty();
-    let send = button(icons::send_tool(send_size, can_send, hover_ok))
-        .on_press(Message::Send)
-        .width(send_size)
-        .height(send_size)
-        .padding(0)
-        .style(theme::composer_send(can_send, hover_ok));
+    let send = composer_hit(
+        icons::send_tool(send_size, can_send, hover_ok),
+        send_size,
+        Message::Send,
+    );
 
     let placeholder = if recording {
         "Recording… tap stop when done"
@@ -1948,17 +1963,17 @@ fn voice_draft_bar(
     .width(Length::Fill)
     .height(36.0);
 
+    let _ = hover;
     container(
         row![
-            button(icons::centered_hit(
-                icons::cancel_icon(icon_size, theme::t().text_secondary),
+            composer_hit(
+                icons::centered_hit(
+                    icons::cancel_icon(icon_size, theme::t().text_secondary),
+                    send_size,
+                ),
                 send_size,
-            ))
-            .on_press(Message::CancelVoiceDraft)
-            .width(send_size)
-            .height(send_size)
-            .padding(0)
-            .style(theme::secondary_action(hover)),
+                Message::CancelVoiceDraft,
+            ),
             column![
                 text(format!("Voice · {}", format_duration(draft.duration_secs)))
                     .size(d.meta)
@@ -1967,15 +1982,14 @@ fn voice_draft_bar(
             ]
             .spacing(4)
             .width(Length::Fill),
-            button(icons::centered_hit(
-                icons::send_icon(icon_size, Color::from_rgb(0.043, 0.063, 0.125)),
+            composer_hit(
+                icons::centered_hit(
+                    icons::send_icon(icon_size, Color::from_rgb(0.043, 0.063, 0.125)),
+                    send_size,
+                ),
                 send_size,
-            ))
-            .on_press(Message::SendVoiceDraft)
-            .width(send_size)
-            .height(send_size)
-            .padding(0)
-            .style(theme::icon_action(hover)),
+                Message::SendVoiceDraft,
+            ),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
@@ -3074,7 +3088,7 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
 fn settings_theme_cycle(app: &App, d: Density) -> Element<'_, Message> {
     let label = format!("Theme: {}", app.desktop_prefs().theme.label());
     let light = app.desktop_prefs().theme.resolve_light();
-    button(
+    settings_release_row(
         row![
             text(label)
                 .size(d.body)
@@ -3085,18 +3099,15 @@ fn settings_theme_cycle(app: &App, d: Density) -> Element<'_, Message> {
                 .color(theme::t().text_muted),
         ]
         .spacing(10)
-        .align_y(Alignment::Center),
+        .align_y(Alignment::Center)
+        .into(),
+        Message::CycleThemePreference,
     )
-    .on_press(Message::CycleThemePreference)
-    .padding(Padding::from([10, 8]))
-    .width(Length::Fill)
-    .style(theme::menu_item(app.hover_ok()))
-    .into()
 }
 
 fn settings_text_size_cycle(app: &App, d: Density) -> Element<'_, Message> {
     let pref = app.desktop_prefs().text_size;
-    button(
+    settings_release_row(
         row![
             text(format!("Text size: {}", pref.label()))
                 .size(d.body)
@@ -3107,13 +3118,10 @@ fn settings_text_size_cycle(app: &App, d: Density) -> Element<'_, Message> {
                 .color(theme::t().text_muted),
         ]
         .spacing(10)
-        .align_y(Alignment::Center),
+        .align_y(Alignment::Center)
+        .into(),
+        Message::CycleTextSize,
     )
-    .on_press(Message::CycleTextSize)
-    .padding(Padding::from([10, 8]))
-    .width(Length::Fill)
-    .style(theme::menu_item(app.hover_ok()))
-    .into()
 }
 
 fn settings_toggle<'a>(
@@ -3121,9 +3129,9 @@ fn settings_toggle<'a>(
     on: bool,
     msg: Message,
     d: Density,
-    hover: bool,
+    _hover: bool,
 ) -> Element<'a, Message> {
-    button(
+    settings_release_row(
         row![
             text(label)
                 .size(d.body)
@@ -3134,12 +3142,23 @@ fn settings_toggle<'a>(
                 .color(theme::t().text_muted),
         ]
         .spacing(10)
-        .align_y(Alignment::Center),
+        .align_y(Alignment::Center)
+        .into(),
+        msg,
     )
-    .on_press(msg)
-    .padding(Padding::from([10, 8]))
-    .width(Length::Fill)
-    .style(theme::menu_item(hover))
+}
+
+/// Settings row that activates on release so a drag can scroll the page.
+fn settings_release_row<'a>(
+    content: Element<'a, Message>,
+    on_release: Message,
+) -> Element<'a, Message> {
+    mouse_area(
+        container(content)
+            .padding(Padding::from([10, 8]))
+            .width(Length::Fill),
+    )
+    .on_release(on_release)
     .into()
 }
 
@@ -4708,25 +4727,21 @@ fn group_overview_pane(
             } else {
                 format!(" · {}", m.status)
             };
-            col = col.push(
-                button(
-                    row![
-                        text(m.display_name.clone())
-                            .size(d.body)
-                            .color(theme::t().text_primary)
-                            .width(Length::Fill),
-                        text(format!("{}{status}", m.role))
-                            .size(d.meta)
-                            .color(theme::t().text_muted),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                )
-                .on_press(Message::OpenGroupMember(mid))
-                .padding(Padding::from([8, 4]))
-                .width(Length::Fill)
-                .style(theme::menu_item(hover)),
-            );
+            col = col.push(settings_release_row(
+                row![
+                    text(m.display_name.clone())
+                        .size(d.body)
+                        .color(theme::t().text_primary)
+                        .width(Length::Fill),
+                    text(format!("{}{status}", m.role))
+                        .size(d.meta)
+                        .color(theme::t().text_muted),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .into(),
+                Message::OpenGroupMember(mid),
+            ));
         }
     }
     // Private groups: invite contacts directly. Channels (useRelays): core
@@ -4928,9 +4943,9 @@ fn contact_feature_row(
     peer: crate::FeatureAllow,
     on_press: Message,
     d: Density,
-    hover: bool,
+    _hover: bool,
 ) -> Element<'static, Message> {
-    button(
+    settings_release_row(
         row![
             icon,
             text(label)
@@ -4943,13 +4958,10 @@ fn contact_feature_row(
             peer_allow_icon(peer),
         ]
         .spacing(10)
-        .align_y(Alignment::Center),
+        .align_y(Alignment::Center)
+        .into(),
+        on_press,
     )
-    .on_press(on_press)
-    .padding(Padding::from([10, 8]))
-    .width(Length::Fill)
-    .style(theme::menu_item(hover))
-    .into()
 }
 
 fn contact_feature_prefs(

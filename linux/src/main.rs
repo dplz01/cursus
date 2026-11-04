@@ -1397,6 +1397,9 @@ impl App {
                 Task::none()
             }
             Message::Send => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 if !self.emoji_suggestions().is_empty() {
                     self.accept_emoji_suggestion();
                     return Task::none();
@@ -1430,6 +1433,9 @@ impl App {
                 Task::none()
             }
             Message::AttachFile => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
@@ -1669,6 +1675,9 @@ impl App {
                 Task::none()
             }
             Message::ToggleDesktopNotifications => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 self.desktop_prefs.notifications = !self.desktop_prefs.notifications;
                 desktop::save_prefs(&self.desktop_prefs);
                 self.status = if self.desktop_prefs.notifications {
@@ -1679,6 +1688,9 @@ impl App {
                 Task::none()
             }
             Message::ToggleTray => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 if self.desktop_prefs.tray {
                     self.tray = None;
                     self.desktop_prefs.tray = false;
@@ -1697,6 +1709,9 @@ impl App {
                 Task::none()
             }
             Message::ToggleCloseToTray => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 if !self.desktop_prefs.tray {
                     self.status = "Enable the tray first.".into();
                     return Task::none();
@@ -1711,6 +1726,9 @@ impl App {
                 Task::none()
             }
             Message::CycleThemePreference => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 self.desktop_prefs.theme = self.desktop_prefs.theme.cycle();
                 desktop::save_prefs(&self.desktop_prefs);
                 self.apply_appearance();
@@ -1721,6 +1739,9 @@ impl App {
                 Task::none()
             }
             Message::CycleTextSize => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 self.desktop_prefs.text_size = self.desktop_prefs.text_size.cycle();
                 desktop::save_prefs(&self.desktop_prefs);
                 self.status = format!(
@@ -1730,6 +1751,9 @@ impl App {
                 Task::none()
             }
             Message::ToggleAddressAutoAccept => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 let Some(session) = self.session.clone() else {
                     self.status = "Connect first to change address settings.".into();
                     return Task::none();
@@ -1836,6 +1860,9 @@ impl App {
                 Task::none()
             }
             Message::ToggleProfileAddress => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 let Some(session) = self.session.clone() else {
                     self.status = "Connect first.".into();
                     return Task::none();
@@ -3396,7 +3423,12 @@ impl App {
                 }
                 Task::batch(tasks)
             }
-            Message::ToggleVoiceRecord => self.toggle_voice_record(),
+            Message::ToggleVoiceRecord => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
+                self.toggle_voice_record()
+            }
             Message::VoiceDraftReady(Ok(draft)) => {
                 self.waveforms
                     .insert(draft.path.clone(), draft.peaks.clone());
@@ -6855,38 +6887,70 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let path = dir.join(format!("voice-{stamp}.m4a"));
-    let child = Command::new("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "pulse",
-            "-i",
-            "default",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "32k",
-            "-y",
-        ])
-        .arg(&path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            format!("ffmpeg failed to start ({e}). Install ffmpeg with PulseAudio support.")
-        })?;
-    Ok(VoiceRec {
-        path,
-        child,
-        started: Instant::now(),
-    })
+
+    // Pulse first (desktop), then PipeWire / ALSA — ARM images often lack Pulse.
+    let backends: &[&[&str]] = &[
+        &["-f", "pulse", "-i", "default"],
+        &["-f", "pipewire", "-i", "default"],
+        &["-f", "alsa", "-i", "default"],
+        &["-f", "alsa", "-i", "plughw:0,0"],
+    ];
+    let encode = ["-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "32k", "-y"];
+    let mut last_err = String::from("no audio capture backend worked");
+
+    for input in backends {
+        let mut args = vec!["-hide_banner", "-loglevel", "error"];
+        args.extend_from_slice(input);
+        args.extend_from_slice(&encode);
+        match Command::new("ffmpeg")
+            .args(&args)
+            .arg(&path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(mut child) => {
+                // Give ffmpeg a moment — device-open failures exit immediately.
+                std::thread::sleep(std::time::Duration::from_millis(120));
+                match child.try_wait() {
+                    Ok(None) => {
+                        return Ok(VoiceRec {
+                            path,
+                            child,
+                            started: Instant::now(),
+                        });
+                    }
+                    Ok(Some(status)) => {
+                        let stderr = child.stderr.as_mut().and_then(|s| {
+                            let mut buf = String::new();
+                            use std::io::Read;
+                            let _ = s.read_to_string(&mut buf);
+                            Some(buf)
+                        });
+                        last_err = format!(
+                            "ffmpeg {:?} exited ({status}): {}",
+                            input,
+                            stderr.unwrap_or_default().trim()
+                        );
+                        let _ = std::fs::remove_file(&path);
+                    }
+                    Err(e) => {
+                        last_err = format!("ffmpeg {:?} wait failed: {e}", input);
+                        let _ = child.kill();
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
+            Err(e) => {
+                last_err = format!("ffmpeg {:?} spawn failed: {e}", input);
+            }
+        }
+    }
+
+    Err(format!(
+        "{last_err}. Install ffmpeg with PulseAudio/PipeWire/ALSA capture support."
+    ))
 }
 
 fn stop_ffmpeg(child: &mut Child) {

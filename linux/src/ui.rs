@@ -315,19 +315,27 @@ fn stacked_shell(app: &App) -> Element<'_, Message> {
             .into();
     }
 
-    // Main page: list fills the space; section nav is a rounded block at the
+    // Main page: list is the full layer; section nav floats over it at the
     // bottom of *this* page only (not chrome that survives under later pages).
-    column![
-        container(list_pane(app, Length::Fill)).height(Length::Fill),
-        container(bottom_nav(app)).padding(Padding {
-            top: 4.0,
-            right: 8.0,
-            bottom: 8.0,
-            left: 8.0,
-        }),
-    ]
-    .height(Length::Fill)
-    .into()
+    let float_inset = 12.0;
+    let nav = container(bottom_nav(app))
+        .padding(Padding {
+            top: 0.0,
+            right: float_inset,
+            bottom: float_inset,
+            left: float_inset,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::End);
+
+    Stack::new()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .push(container(list_pane(app, Length::Fill)).height(Length::Fill))
+        .push(nav)
+        .into()
 }
 
 fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
@@ -403,18 +411,7 @@ fn bottom_nav(app: &App) -> Element<'_, Message> {
     container(r)
         .width(Length::Fill)
         .height(d.nav_bar_height)
-        .style(|_| {
-            let c = theme::t();
-            container::Style {
-                background: Some(iced::Background::Color(c.bg_sidebar)),
-                border: iced::Border {
-                    color: c.border,
-                    width: 1.0,
-                    radius: 14.0.into(),
-                },
-                ..container::Style::default()
-            }
-        })
+        .style(theme::floating_nav_style())
         .into()
 }
 
@@ -509,22 +506,31 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
         NavSection::Settings => settings_panel(app),
     };
 
-    container(
-        column![
-            container(header).padding(Padding {
-                top: d.pad,
-                right: d.pad,
-                bottom: d.pad_tight,
-                left: d.pad,
-            }),
-            body
-        ]
-        .height(Length::Fill),
-    )
-    .width(width)
-    .height(Length::Fill)
-    .style(theme::list_style())
-    .into()
+    // Reserve space under the scroll viewport so the floating section nav
+    // doesn't cover the last rows on mobile/compact.
+    let float_clearance = match app.layout() {
+        LayoutMode::Desktop => 0.0,
+        LayoutMode::Mobile | LayoutMode::Compact => d.nav_bar_height + 24.0,
+    };
+
+    let mut col = Column::new()
+        .push(container(header).padding(Padding {
+            top: d.pad,
+            right: d.pad,
+            bottom: d.pad_tight,
+            left: d.pad,
+        }))
+        .push(body)
+        .height(Length::Fill);
+    if float_clearance > 0.0 {
+        col = col.push(vertical().height(float_clearance));
+    }
+
+    container(col)
+        .width(width)
+        .height(Length::Fill)
+        .style(theme::list_style())
+        .into()
 }
 
 fn chat_list(app: &App) -> Element<'_, Message> {

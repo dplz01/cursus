@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use iced::theme::Palette;
 use iced::widget::{button, container, text_editor, text_input};
-use iced::{Background, Border, Color};
+use iced::{Background, Border, Color, Shadow, Vector};
 
 /// Process-wide active palette — set from `App::view` / preference changes so
 /// style closures and view helpers stay token-driven without threading `App`
@@ -206,6 +206,28 @@ pub fn sidebar_style() -> impl Fn(&iced::Theme) -> container::Style {
                 color: c.border,
                 width: 1.0,
                 radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        }
+    }
+}
+
+/// Rounded floating section nav that sits over the list page.
+pub fn floating_nav_style() -> impl Fn(&iced::Theme) -> container::Style {
+    |_| {
+        let c = t();
+        let shadow_a = if is_light_active() { 0.16 } else { 0.55 };
+        container::Style {
+            background: Some(Background::Color(c.bg_elevated)),
+            border: Border {
+                color: c.border,
+                width: 1.0,
+                radius: 18.0.into(),
+            },
+            shadow: Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, shadow_a),
+                offset: Vector::new(0.0, 6.0),
+                blur_radius: 18.0,
             },
             ..container::Style::default()
         }

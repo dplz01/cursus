@@ -627,10 +627,18 @@ fn content_pane(app: &App, with_back: bool) -> Element<'_, Message> {
         ),
     };
 
+    // Desktop chat: no outer inset so the composer can span the full pane
+    // width and sit flush on the bottom. Title/history keep their own padding.
+    let edge_to_edge = !with_back
+        && matches!(app.nav(), NavSection::Chats | NavSection::Channels);
     container(content)
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding(if with_back { 0.0 } else { d.pad })
+        .padding(if with_back || edge_to_edge {
+            0.0
+        } else {
+            d.pad
+        })
         .style(theme::panel_style())
         .into()
 }
@@ -1015,11 +1023,11 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             Alignment::End
         });
 
-    // Match top/bottom so the stack isn't visually top-heavy.
-    let bar_pad = if app.layout() == LayoutMode::Mobile {
-        6.0
+    // Mobile keeps even inset; desktop sits flush on the pane bottom.
+    let (bar_pad_top, bar_pad_bottom) = if app.layout() == LayoutMode::Mobile {
+        (6.0, 6.0)
     } else {
-        8.0
+        (8.0, 0.0)
     };
 
     // Keep a fixed 3-slot column ([suggest][reply][input]) so showing the
@@ -1137,13 +1145,17 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         .spacing(0)
         .width(Length::Fill);
 
-    // Keep vertical `bar_pad`; pull attach/send flush toward the bar edges.
-    let bar_pad_x = 2.0;
+    // Desktop: full-bleed L/R (pane already edge-to-edge). Mobile: tiny inset.
+    let bar_pad_x = if app.layout() == LayoutMode::Mobile {
+        2.0
+    } else {
+        0.0
+    };
     container(body)
         .padding(Padding {
-            top: bar_pad,
+            top: bar_pad_top,
             right: bar_pad_x,
-            bottom: bar_pad,
+            bottom: bar_pad_bottom,
             left: bar_pad_x,
         })
         .width(Length::Fill)

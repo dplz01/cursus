@@ -305,30 +305,29 @@ fn stacked_shell(app: &App) -> Element<'_, Message> {
             || app.support().is_some()
             || app.compose_open());
 
-    // Always keep list + bottom nav mounted (iOS-style). An open chat is an
-    // opaque full-screen layer stacked on top — the tab bar stays underneath
-    // rather than disappearing.
-    let shell_base = column![
-        container(list_pane(app, Length::Fill)).height(Length::Fill),
-        bottom_nav(app),
-    ]
-    .height(Length::Fill);
-
+    // Exclusive pages: a chat/settings detail fully replaces the main shell
+    // (list + nav box). No stack underneath — opening a page covers everything.
     if show_detail {
-        Stack::new()
+        return container(content_pane(app, true))
             .width(Length::Fill)
             .height(Length::Fill)
-            .push(shell_base)
-            .push(
-                container(content_pane(app, true))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .style(theme::panel_style()),
-            )
-            .into()
-    } else {
-        shell_base.into()
+            .style(theme::panel_style())
+            .into();
     }
+
+    // Main page: list fills the space; section nav is a rounded block at the
+    // bottom of *this* page only (not chrome that survives under later pages).
+    column![
+        container(list_pane(app, Length::Fill)).height(Length::Fill),
+        container(bottom_nav(app)).padding(Padding {
+            top: 4.0,
+            right: 8.0,
+            bottom: 8.0,
+            left: 8.0,
+        }),
+    ]
+    .height(Length::Fill)
+    .into()
 }
 
 fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
@@ -376,7 +375,18 @@ fn bottom_nav(app: &App) -> Element<'_, Message> {
     container(r)
         .width(Length::Fill)
         .height(d.nav_bar_height)
-        .style(theme::sidebar_style())
+        .style(|_| {
+            let c = theme::t();
+            container::Style {
+                background: Some(iced::Background::Color(c.bg_sidebar)),
+                border: iced::Border {
+                    color: c.border,
+                    width: 1.0,
+                    radius: 14.0.into(),
+                },
+                ..container::Style::default()
+            }
+        })
         .into()
 }
 

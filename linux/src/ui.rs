@@ -1404,7 +1404,7 @@ fn message_history<'a>(app: &'a App, d: Density) -> Element<'a, Message> {
     // anchor_bottom() before direction() is overwritten by Scrollbar::default().
     // No on_scroll: every wheel tick was publishing a Message and rebuilding
     // the whole chat view (major scroll lag).
-    let history = crate::kinetic::track(
+    let history = crate::kinetic::track_end_anchored(
         "chat-history",
         scrollable(col)
             .id(iced::widget::Id::new("chat-history"))
@@ -2727,11 +2727,15 @@ fn visual_media_preview<'a>(
     const RADIUS: f32 = 12.0;
     // Never decode / run ffmpeg on the UI thread — first-open hangs came from
     // rounded_fitted_preview decoding every image during view(). Cache only.
+    // Videos land in image_previews once the poster is rounded (keyed by video path).
     let prepared = if is_video {
-        app.video_thumb_for(&path).and_then(|src| {
-            media::cached_rounded_fitted_preview(&src, PREVIEW_MAX_W, PREVIEW_MAX_H)
-                .or_else(|| Some((src, PREVIEW_MAX_W, PREVIEW_MAX_H * 2 / 3)))
-        })
+        app.image_preview_for(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)
+            .or_else(|| {
+                app.video_thumb_for(&path).and_then(|src| {
+                    media::cached_rounded_fitted_preview(&src, PREVIEW_MAX_W, PREVIEW_MAX_H)
+                        .or_else(|| Some((src, PREVIEW_MAX_W, PREVIEW_MAX_H * 2 / 3)))
+                })
+            })
     } else {
         app.image_preview_for(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)
     };

@@ -1831,7 +1831,7 @@ fn is_video_name(name: &str) -> bool {
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase())
             .as_deref(),
-        Some("mp4" | "mov" | "mkv" | "webm" | "m4v" | "avi")
+        Some("mp4" | "mov" | "mkv" | "webm" | "m4v" | "avi" | "3gp" | "3g2" | "mpeg" | "mpg" | "ts")
     )
 }
 

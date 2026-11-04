@@ -3805,10 +3805,11 @@ impl App {
                     return Task::none();
                 };
                 const DT: f32 = 1.0 / 60.0;
-                const FRICTION: f32 = 0.92;
+                // Slightly snappier stop than GTK default — avoids runaway coasts.
+                const FRICTION: f32 = 0.86;
                 let dy = fling.velocity_y * DT;
                 fling.velocity_y *= FRICTION;
-                if fling.velocity_y.abs() < 30.0 {
+                if fling.velocity_y.abs() < 40.0 {
                     self.scroll_fling = None;
                     return Task::none();
                 }
@@ -3858,19 +3859,42 @@ impl App {
                 self.video_thumbs_pending.remove(&path);
                 let mut tasks = Vec::new();
                 if let Some(thumb) = thumb {
-                    // Round the poster off the UI thread so ARM chat open stays light.
+                    // Round the poster off the UI thread; stash under the video path
+                    // so chat bubbles reuse image_previews like stills.
                     let thumb_for_round = thumb.clone();
-                    self.video_thumbs.insert(path, thumb);
-                    tasks.push(Task::perform(
-                        async move {
-                            let _ = tokio::task::spawn_blocking(move || {
-                                media::rounded_fitted_preview(&thumb_for_round, 220, 280, 12.0)
-                            })
-                            .await;
-                            Message::WarmChatMedia
-                        },
-                        |m| m,
-                    ));
+                    let video_path = path.clone();
+                    self.video_thumbs.insert(path.clone(), thumb);
+                    if !self.image_previews.contains_key(&path)
+                        && !self.image_previews_pending.contains(&path)
+                    {
+                        self.image_previews_pending.insert(path);
+                        tasks.push(Task::perform(
+                            async move {
+                                let preview = tokio::task::spawn_blocking(move || {
+                                    media::rounded_fitted_preview(
+                                        &thumb_for_round,
+                                        220,
+                                        280,
+                                        12.0,
+                                    )
+                                    .ok()
+                                })
+                                .await
+                                .ok()
+                                .flatten();
+                                Message::ImagePreviewReady {
+                                    path: video_path,
+                                    preview,
+                                }
+                            },
+                            |m| m,
+                        ));
+                    }
+                } else {
+                    tracing::warn!(
+                        path = %path.display(),
+                        "video poster extraction failed"
+                    );
                 }
                 let more = self.messages.clone();
                 tasks.push(self.enqueue_missing_video_thumbs(&more));
@@ -5409,12 +5433,43 @@ impl App {
             if !path.is_file() {
                 continue;
             }
-            if let Some(cached) = media::cached_video_thumbnail(&path) {
-                self.video_thumbs.insert(path.clone(), cached);
+            if self.video_thumbs_pending.contains(&path) {
                 continue;
             }
-            if self.video_thumbs.contains_key(&path) || self.video_thumbs_pending.contains(&path)
-            {
+            if let Some(cached) = media::cached_video_thumbnail(&path) {
+                self.video_thumbs.insert(path.clone(), cached.clone());
+                if self.image_previews.contains_key(&path) {
+                    continue;
+                }
+                if let Some(rounded) =
+                    media::cached_rounded_fitted_preview(&cached, 220, 280)
+                {
+                    self.image_previews.insert(path.clone(), rounded);
+                    continue;
+                }
+                if self.image_previews_pending.contains(&path) {
+                    continue;
+                }
+                self.image_previews_pending.insert(path.clone());
+                let video_path = path.clone();
+                tasks.push(Task::perform(
+                    async move {
+                        let preview = tokio::task::spawn_blocking(move || {
+                            media::rounded_fitted_preview(&cached, 220, 280, 12.0).ok()
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                        Message::ImagePreviewReady {
+                            path: video_path,
+                            preview,
+                        }
+                    },
+                    |msg| msg,
+                ));
+                continue;
+            }
+            if self.video_thumbs.contains_key(&path) {
                 continue;
             }
             self.video_thumbs_pending.insert(path.clone());
@@ -7799,6 +7854,18 @@ fn file_detail_line(
     state: FileTransferState,
     outgoing: bool,
 ) -> String {
+    let ext = std::path::Path::new(&file.file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| format!(".{}", e.to_ascii_lowercase()))
+        .unwrap_or_else(|| {
+            match file.kind {
+                cursus_core::FileKind::Image => ".img".into(),
+                cursus_core::FileKind::Video => ".vid".into(),
+                cursus_core::FileKind::Voice => ".audio".into(),
+                _ => "file".into(),
+            }
+        });
     let size = if file.file_size > 0 {
         let n = file.file_size as f64;
         const KB: f64 = 1024.0;
@@ -7806,7 +7873,7 @@ fn file_detail_line(
         if n >= MB {
             format!("{:.1} MB", n / MB)
         } else if n >= KB {
-            format!("{:.1} KB", n / KB)
+            format!("{:.0} KB", n / KB)
         } else {
             format!("{} B", file.file_size)
         }
@@ -7833,9 +7900,9 @@ fn file_detail_line(
         FileTransferState::Other => "file",
     };
     if size.is_empty() {
-        format!("{} · {label}", file.file_name)
+        format!("{ext} · {label}")
     } else {
-        format!("{} · {size} · {label}", file.file_name)
+        format!("{ext} · {size} · {label}")
     }
 }
 

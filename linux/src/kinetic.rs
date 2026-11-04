@@ -17,8 +17,11 @@ use iced::mouse;
 use iced::touch;
 use iced::{Element, Event, Length, Rectangle, Size, Vector};
 
-const SAMPLE_WINDOW_MS: u128 = 100;
-const MIN_FLING_PX_PER_SEC: f32 = 400.0;
+const SAMPLE_WINDOW_MS: u128 = 80;
+const MIN_FLING_PX_PER_SEC: f32 = 550.0;
+const MAX_FLING_PX_PER_SEC: f32 = 2_200.0;
+/// Soften so flings coast instead of launching.
+const FLING_GAIN: f32 = 0.55;
 
 #[derive(Debug, Clone)]
 pub enum FlingMessage {
@@ -38,8 +41,41 @@ where
     Theme: 'a,
     Renderer: iced::advanced::Renderer + 'a,
 {
+    track_anchored(scroll_id, false, content, on_fling)
+}
+
+/// Like [`track`], but for scrollables with `Anchor::End` (chat history).
+///
+/// iced negates touch deltas for end-anchored scrollables via `Direction::align`,
+/// while `scroll_by` does **not** — fling velocity must not be pre-negated or the
+/// coast fights the swipe (spring feel).
+pub fn track_end_anchored<'a, Message, Theme, Renderer>(
+    scroll_id: &'static str,
+    content: impl Into<Element<'a, Message, Theme, Renderer>>,
+    on_fling: impl Fn(FlingMessage) -> Message + 'a,
+) -> Element<'a, Message, Theme, Renderer>
+where
+    Message: 'a,
+    Theme: 'a,
+    Renderer: iced::advanced::Renderer + 'a,
+{
+    track_anchored(scroll_id, true, content, on_fling)
+}
+
+fn track_anchored<'a, Message, Theme, Renderer>(
+    scroll_id: &'static str,
+    end_anchored: bool,
+    content: impl Into<Element<'a, Message, Theme, Renderer>>,
+    on_fling: impl Fn(FlingMessage) -> Message + 'a,
+) -> Element<'a, Message, Theme, Renderer>
+where
+    Message: 'a,
+    Theme: 'a,
+    Renderer: iced::advanced::Renderer + 'a,
+{
     Element::new(KineticTrack {
         scroll_id,
+        end_anchored,
         content: content.into(),
         on_fling: Box::new(on_fling),
     })
@@ -47,6 +83,8 @@ where
 
 struct KineticTrack<'a, Message, Theme, Renderer> {
     scroll_id: &'static str,
+    /// When true, fling velocity matches finger travel (no sign flip).
+    end_anchored: bool,
     content: Element<'a, Message, Theme, Renderer>,
     on_fling: Box<dyn Fn(FlingMessage) -> Message + 'a>,
 }
@@ -160,14 +198,21 @@ where
                 if state.pressed =>
             {
                 state.pressed = false;
-                if let Some(vy) = estimate_velocity(&state.samples) {
-                    if vy.abs() >= MIN_FLING_PX_PER_SEC {
+                if let Some(finger_vy) = estimate_velocity(&state.samples) {
+                    // Start-anchored: iced touch uses (old-new) = -finger.
+                    // End-anchored: iced also runs Direction::align → flips again,
+                    // so live scroll matches +finger; scroll_by must too.
+                    let mut scroll_vy = if self.end_anchored {
+                        finger_vy
+                    } else {
+                        -finger_vy
+                    };
+                    scroll_vy = (scroll_vy * FLING_GAIN)
+                        .clamp(-MAX_FLING_PX_PER_SEC, MAX_FLING_PX_PER_SEC);
+                    if scroll_vy.abs() >= MIN_FLING_PX_PER_SEC * FLING_GAIN {
                         shell.publish((self.on_fling)(FlingMessage::Start {
                             id: self.scroll_id.to_string(),
-                            // Match scrollable delta: finger up → content follows up
-                            // → negative offset in iced AbsoluteOffset.y terms when
-                            // we scroll_by with the finger-travel sign inverted.
-                            velocity_y: -vy,
+                            velocity_y: scroll_vy,
                         }));
                     }
                 }

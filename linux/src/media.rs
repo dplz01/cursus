@@ -57,38 +57,63 @@ pub fn extract_waveform_peaks(path: &Path, bars: usize) -> Result<Vec<f32>, Stri
     Ok(peaks.into_iter().map(|p| (p / max).clamp(0.05, 1.0)).collect())
 }
 
-/// Poster frame for a video (JPEG next to the file, reused if fresh).
+/// Poster frame for a video (PNG next to the file, reused if fresh).
+///
+/// Writes PNG — ffmpeg 7+ / 9 MJPEG JPEG encode often fails with
+/// "Non full-range YUV is non-standard" unless `-strict unofficial`.
 pub fn video_thumbnail(path: &Path) -> Result<PathBuf, String> {
-    let thumb = thumb_path(path);
-    if thumb.is_file() {
-        if let (Ok(src), Ok(dst)) = (std::fs::metadata(path), std::fs::metadata(&thumb)) {
-            if dst.len() > 0 && dst.modified().ok() >= src.modified().ok() {
-                return Ok(thumb);
-            }
-        }
+    if let Some(hit) = cached_video_thumbnail(path) {
+        return Ok(hit);
     }
+    let thumb = thumb_path_png(path);
     if let Some(parent) = thumb.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    // Try a few ffmpeg recipes — ARM builds often fail mid-file `-ss` seeks.
+    // Prefer no input-seek first — short clips break `-ss` before `-i`.
+    // PNG avoids ffmpeg's broken default MJPEG path on recent builds.
     let attempts: &[&[&str]] = &[
         &[
             "-hide_banner",
             "-loglevel",
             "error",
             "-y",
-            "-ss",
-            "0.3",
             "-i",
             "__IN__",
             "-frames:v",
             "1",
-            "-q:v",
-            "4",
             "-vf",
-            "scale=720:-2",
+            "scale=480:-2,format=rgb24",
             "__OUT__",
         ],
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            "__IN__",
+            "-ss",
+            "0.3",
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=720:-2,format=rgb24",
+            "__OUT__",
+        ],
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            "__IN__",
+            "-vf",
+            "thumbnail,scale=480:-2,format=rgb24",
+            "-frames:v",
+            "1",
+            "__OUT__",
+        ],
+        // Last resort: JPEG with unofficial MJPEG (ffmpeg 9+).
         &[
             "-hide_banner",
             "-loglevel",
@@ -102,29 +127,25 @@ pub fn video_thumbnail(path: &Path) -> Result<PathBuf, String> {
             "5",
             "-vf",
             "scale=480:-2",
-            "__OUT__",
-        ],
-        &[
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            "__IN__",
-            "-vf",
-            "thumbnail,scale=480:-2",
-            "-frames:v",
-            "1",
-            "__OUT__",
+            "-strict",
+            "unofficial",
+            "__JPG__",
         ],
     ];
+    let jpg_fallback = thumb_path_jpg(path);
     let mut last = String::from("ffmpeg thumb failed");
     for recipe in attempts {
+        let out = if recipe.contains(&"__JPG__") {
+            &jpg_fallback
+        } else {
+            &thumb
+        };
         let args: Vec<&str> = recipe
             .iter()
             .map(|s| match *s {
                 "__IN__" => path.to_str().unwrap_or(""),
                 "__OUT__" => thumb.to_str().unwrap_or(""),
+                "__JPG__" => jpg_fallback.to_str().unwrap_or(""),
                 other => other,
             })
             .collect();
@@ -132,21 +153,29 @@ pub fn video_thumbnail(path: &Path) -> Result<PathBuf, String> {
             continue;
         }
         match Command::new("ffmpeg").args(&args).status() {
-            Ok(status) if status.success() && thumb.is_file() => {
-                if std::fs::metadata(&thumb).map(|m| m.len() > 0).unwrap_or(false) {
-                    return Ok(thumb);
+            Ok(status) if status.success() && out.is_file() => {
+                if std::fs::metadata(out).map(|m| m.len() > 0).unwrap_or(false) {
+                    return Ok(out.clone());
                 }
                 last = "ffmpeg wrote empty thumb".into();
             }
             Ok(status) => last = format!("ffmpeg thumb exited {status}"),
             Err(e) => last = format!("ffmpeg thumb: {e}"),
         }
-        let _ = std::fs::remove_file(&thumb);
+        let _ = std::fs::remove_file(out);
     }
     Err(last)
 }
 
-fn thumb_path(path: &Path) -> PathBuf {
+fn thumb_path_png(path: &Path) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("media");
+    path.with_file_name(format!("{stem}.thumb.png"))
+}
+
+fn thumb_path_jpg(path: &Path) -> PathBuf {
     let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -154,18 +183,27 @@ fn thumb_path(path: &Path) -> PathBuf {
     path.with_file_name(format!("{stem}.thumb.jpg"))
 }
 
+fn thumb_fresh(path: &Path, thumb: &Path) -> bool {
+    let Ok(src) = std::fs::metadata(path) else {
+        return false;
+    };
+    let Ok(dst) = std::fs::metadata(thumb) else {
+        return false;
+    };
+    dst.len() > 0 && dst.modified().ok() >= src.modified().ok()
+}
+
 /// Return a cached video poster if one already exists (never runs ffmpeg).
 pub fn cached_video_thumbnail(path: &Path) -> Option<PathBuf> {
-    let thumb = thumb_path(path);
-    if !thumb.is_file() {
-        return None;
+    let png = thumb_path_png(path);
+    if thumb_fresh(path, &png) {
+        return Some(png);
     }
-    let src = std::fs::metadata(path).ok()?;
-    let dst = std::fs::metadata(&thumb).ok()?;
-    if dst.len() == 0 || dst.modified().ok()? < src.modified().ok()? {
-        return None;
+    let jpg = thumb_path_jpg(path);
+    if thumb_fresh(path, &jpg) {
+        return Some(jpg);
     }
-    Some(thumb)
+    None
 }
 
 /// Downscaled still for the in-app media reader (avoids decoding multi‑MB originals on the UI thread).
@@ -219,7 +257,7 @@ pub fn is_video_name(name: &str) -> bool {
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase())
             .as_deref(),
-        Some("mp4" | "mov" | "mkv" | "webm" | "m4v" | "avi")
+        Some("mp4" | "mov" | "mkv" | "webm" | "m4v" | "avi" | "3gp" | "3g2" | "mpeg" | "mpg" | "ts")
     )
 }
 

@@ -995,7 +995,21 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     let suggest_slot: Element<'_, Message> = if suggestions.is_empty() {
         Column::new().width(Length::Fill).into()
     } else {
-        let mut list = Column::new().spacing(2).width(Length::Fill);
+        // Fixed-height panel (always 5 rows). Growing/shrinking with the
+        // filter used to shove the composer up/down on every keystroke —
+        // very noticeable above the OSK on ARM.
+        const EMOJI_SUGGEST_ROWS: usize = 5;
+        let row_h = (d.body + 16.0).max(36.0);
+        let list_h =
+            row_h * EMOJI_SUGGEST_ROWS as f32 + 2.0 * (EMOJI_SUGGEST_ROWS.saturating_sub(1) as f32);
+        let mut list = Column::new()
+            .spacing(2)
+            .width(Length::Fill)
+            .height(Length::Fixed(list_h));
+        if suggestions.len() < EMOJI_SUGGEST_ROWS {
+            // Keep hits glued to the input; empty space sits above.
+            list = list.push(vertical().height(Length::Fill));
+        }
         for (i, hit) in suggestions.iter().enumerate() {
             let selected = i == suggest_idx;
             let fg = if selected {
@@ -1017,6 +1031,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
                 .on_press(Message::EmojiSuggestSelect(i))
                 .padding(Padding::from([8, 10]))
                 .width(Length::Fill)
+                .height(row_h)
                 .style(theme::emoji_suggest_row(selected, app.hover_ok()));
             list = list.push(row);
         }

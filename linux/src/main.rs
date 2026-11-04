@@ -5041,7 +5041,9 @@ impl App {
         let Some(prefix) = cursus_core::pending_shortcode_query(&text) else {
             return Vec::new();
         };
-        cursus_core::suggest_emoji_shortcodes(prefix, 10)
+        // Cap at 5 so the mobile suggest panel can keep a fixed height
+        // (variable row counts were making the composer wiggle on ARM).
+        cursus_core::suggest_emoji_shortcodes(prefix, 5)
     }
 
     pub(crate) fn emoji_suggest_index(&self) -> usize {

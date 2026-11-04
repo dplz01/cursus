@@ -332,27 +332,44 @@ fn stacked_shell(app: &App) -> Element<'_, Message> {
 
 fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
     // Primary destinations stay stacked from the top (where Chats already
-    // sat). Settings drops to the bottom-left corner instead of sharing the
-    // even vertical spacing.
+    // sat). Settings is pinned flush to the bottom-left corner.
     let primary = column![
-        nav_destination(app, NavSection::Chats, true, d),
-        nav_destination(app, NavSection::Channels, true, d),
-        nav_destination(app, NavSection::Calls, true, d),
+        nav_destination(app, NavSection::Chats, true, d.nav_hit, d),
+        nav_destination(app, NavSection::Channels, true, d.nav_hit, d),
+        nav_destination(app, NavSection::Calls, true, d.nav_hit, d),
     ]
     .spacing(8)
+    .padding(Padding {
+        top: 12.0,
+        right: 8.0,
+        bottom: 0.0,
+        left: 8.0,
+    })
     .align_x(Alignment::Center)
     .width(Length::Fill);
 
-    let col = column![
-        primary,
-        vertical().height(Length::Fill),
-        nav_destination(app, NavSection::Settings, true, d),
-    ]
-    .spacing(8)
-    .padding(Padding::from([12, 8]))
-    .align_x(Alignment::Center)
-    .width(Length::Fill)
-    .height(Length::Fill);
+    // Compact square hit so the gear itself sits in the corner — the tall
+    // rail hit was centering the icon well above the bottom edge.
+    let corner_hit = (d.icon + 16.0).max(40.0);
+    let settings = container(nav_destination(
+        app,
+        NavSection::Settings,
+        true,
+        corner_hit,
+        d,
+    ))
+    .padding(Padding {
+        top: 0.0,
+        right: 8.0,
+        bottom: 8.0,
+        left: 8.0,
+    })
+    .width(Length::Fill);
+
+    let col = column![primary, vertical().height(Length::Fill), settings]
+        .spacing(0)
+        .width(Length::Fill)
+        .height(Length::Fill);
 
     container(col)
         .width(d.rail_width)
@@ -379,7 +396,7 @@ fn bottom_nav(app: &App) -> Element<'_, Message> {
 
     for section in NavSection::all() {
         r = r.push(
-            container(nav_destination(app, section, false, d))
+            container(nav_destination(app, section, false, d.nav_hit, d))
                 .width(Length::Fill)
                 .height(Length::Fill),
         );
@@ -407,6 +424,7 @@ fn nav_destination(
     app: &App,
     section: NavSection,
     vertical: bool,
+    hit: f32,
     d: Density,
 ) -> Element<'_, Message> {
     let active = app.nav() == section;
@@ -414,8 +432,8 @@ fn nav_destination(
     let hover_ok = app.hover_ok();
 
     let (width, height) = if vertical {
-        // Fill the rail width with a tall square-ish hit target.
-        (Length::Fill, Length::Fixed(d.nav_hit))
+        // Fill the rail width; `hit` sets the square-ish target height.
+        (Length::Fill, Length::Fixed(hit))
     } else {
         // Fill each bottom-nav cell.
         (Length::Fill, Length::Fill)

@@ -17,3 +17,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 unicode-segmentation.workspace = true
+
+[build-dependencies]
+cc = "1"

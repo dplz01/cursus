@@ -12,6 +12,7 @@ use std::sync::{Once, OnceLock};
 use libloading::{Library, Symbol};
 
 use crate::error::{Error, Result};
+use crate::musl_compat::{self, is_musl_host};
 use crate::paths::{default_libs_dir, lib_filename};
 
 type HsInit = unsafe extern "C" fn(*mut c_int, *mut *mut *mut c_char);
@@ -69,12 +70,22 @@ impl LibSimplex {
         // Ensure dependent libHS*.so resolve from the same directory.
         set_library_path(&dir);
 
-        // On musl (Alpine / musl pmOS), preload gcompat + our glibc symbol shim
-        // before dlopening the official glibc-built libsimplex.
+        // On musl: RTLD_GLOBAL + statically linked fcntl64 (see musl_compat /
+        // build.rs). Prefer starting via ensure_ld_preload_reexec() in main.
         load_musl_glibc_compat();
 
         if let Some(hint) = glibc_loader_hint() {
             return Err(Error::LibraryLoad(hint));
+        }
+
+        if is_musl_host() && !musl_compat::fcntl64_resolvable() {
+            return Err(Error::LibraryLoad(format!(
+                "fcntl64 is still not visible to the dynamic linker on musl. \
+                 Rebuild on-device (`cargo build -p cursus-linux`) so the shim is \
+                 not an empty glibc stub, install `apk add gcompat libucontext`, \
+                 and launch the binary from this tree (not a stale copy). ({})",
+                musl_compat::compat_status_line()
+            )));
         }
 
         // SAFETY: we only call C ABI symbols exported by libsimplex.
@@ -289,18 +300,6 @@ fn set_library_path(dir: &Path) {
 #[cfg(target_os = "linux")]
 static MUSL_COMPAT_LIBS: OnceLock<Vec<libloading::os::unix::Library>> = OnceLock::new();
 
-#[cfg(target_os = "linux")]
-fn is_musl_host() -> bool {
-    [
-        "/lib/ld-musl-aarch64.so.1",
-        "/usr/lib/ld-musl-aarch64.so.1",
-        "/lib/ld-musl-x86_64.so.1",
-        "/usr/lib/ld-musl-x86_64.so.1",
-    ]
-    .iter()
-    .any(|p| Path::new(p).exists())
-}
-
 /// Preload gcompat, libucontext, and our fcntl64/stat64/... shim so musl can
 /// relocate official glibc-built libHS*.so objects.
 #[cfg(target_os = "linux")]
@@ -308,28 +307,20 @@ fn load_musl_glibc_compat() {
     if !is_musl_host() {
         return;
     }
+    // Ensure static shim symbols are referenced from Rust.
+    let _ = musl_compat::fcntl64_resolvable();
+
     let _ = MUSL_COMPAT_LIBS.get_or_init(|| {
         use libloading::os::unix::{Library, RTLD_GLOBAL, RTLD_NOW};
 
         let mut libs = Vec::new();
 
-        // Load our fcntl64/stat64 shim first so it wins symbol lookup over
-        // incomplete gcompat coverage.
-        let mut shim_paths: Vec<PathBuf> = Vec::new();
-        if let Some(shim) = option_env!("CURSUS_MUSL_GLIBC_COMPAT") {
-            shim_paths.push(PathBuf::from(shim));
-        }
-        shim_paths.push(default_libs_dir().join("libcursus_musl_glibc_compat.so"));
-        for path in shim_paths {
-            if !path.exists() {
-                continue;
-            }
+        if let Some(path) = musl_compat::resolve_shim_so() {
             // SAFETY: our build-time shim; RTLD_GLOBAL for later libsimplex relocs.
             if let Ok(lib) = unsafe {
                 Library::open(Some(path.as_os_str()), RTLD_NOW | RTLD_GLOBAL)
             } {
                 libs.push(lib);
-                break;
             }
         }
 
@@ -416,9 +407,10 @@ fn explain_load_error(err: &libloading::Error) -> String {
         || msg.contains("symbol not found")
     {
         format!(
-            "{msg}. Musl is missing a glibc symbol. Install `apk add gcompat libucontext`, \
-             rebuild this Cursus tree (builds libcursus_musl_glibc_compat.so), and relaunch. \
-             If it still fails, report the new missing symbol."
+            "{msg}. ({}) Rebuild on the musl device, delete any empty \
+             third_party/libsimplex/libcursus_musl_glibc_compat.so copied from a \
+             glibc PC, then run `cargo run -p cursus-linux` (re-execs with LD_PRELOAD).",
+            musl_compat::compat_status_line()
         )
     } else {
         msg

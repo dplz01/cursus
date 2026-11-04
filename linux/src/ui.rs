@@ -40,17 +40,12 @@ fn no_bar() -> Scrollbar {
     Scrollbar::new().width(0).scroller_width(0).margin(0)
 }
 
-/// Compact borderless back control for mobile push headers.
+/// Compact round back control for mobile push headers.
 fn mobile_back_btn(on_press: Message, hover: bool) -> Element<'static, Message> {
-    button(icons::back_icon(16.0))
+    button(icons::centered_hit(icons::back_icon(16.0), 32.0))
         .on_press(on_press)
-        .padding(Padding {
-            top: 6.0,
-            right: 4.0,
-            bottom: 6.0,
-            left: 2.0,
-        })
-        .style(theme::back_action(hover))
+        .padding(0)
+        .style(theme::round_icon(hover))
         .into()
 }
 
@@ -69,6 +64,40 @@ fn composer_hit<'a>(
     )
     .on_release(on_release)
     .into()
+}
+
+/// Send control with accent fill when the composer has text.
+fn composer_send_hit<'a>(
+    icon: Element<'a, Message>,
+    size: f32,
+    active: bool,
+    on_release: Message,
+) -> Element<'a, Message> {
+    let face = if active {
+        container(icon)
+            .width(size)
+            .height(size)
+            .center_x(size)
+            .center_y(size)
+            .style(|_| {
+                let c = theme::t();
+                container::Style {
+                    background: Some(iced::Background::Color(c.accent)),
+                    border: iced::Border {
+                        radius: 12.0.into(),
+                        ..Default::default()
+                    },
+                    ..container::Style::default()
+                }
+            })
+    } else {
+        container(icon)
+            .width(size)
+            .height(size)
+            .center_x(size)
+            .center_y(size)
+    };
+    mouse_area(face).on_release(on_release).into()
 }
 
 fn scroll_y<'a>(
@@ -137,9 +166,6 @@ pub fn shell(app: &App) -> Element<'_, Message> {
     let mut stack = Stack::new().width(Length::Fill).height(Length::Fill).push(base);
     if app.chat_menu().is_some() {
         stack = stack.push(chat_menu_overlay(app));
-    }
-    if app.media_viewer().is_some() {
-        stack = stack.push(media_viewer_overlay(app));
     }
     if app.pending_url().is_some() {
         stack = stack.push(open_url_confirm_overlay(app));
@@ -832,7 +858,7 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
             top: d.pad_tight,
             right: d.pad,
             bottom: d.pad_tight,
-            left: 4.0,
+            left: 8.0,
         })
         .into()
     } else {
@@ -1010,9 +1036,10 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     };
 
     let can_send = !app.composer().trim().is_empty();
-    let send = composer_hit(
+    let send = composer_send_hit(
         icons::send_tool(send_size, can_send, hover_ok),
         send_size,
+        can_send,
         Message::Send,
     );
 
@@ -1478,11 +1505,20 @@ fn message_bubble<'a>(
         } else if is_visual && matches!(state, FileTransferState::Complete) {
             if let Some(preview) = visual_media_preview(app, msg, file, state) {
                 media_flush = true;
-                body = body.push(preview);
+                // Shrink-wrap media + footer so a Fill footer can't widen the bubble
+                // past the image (looked like odd right padding beside the preview).
+                body = body.push(
+                    column![
+                        preview,
+                        attachment_status_footer(msg, file, state, d, false),
+                    ]
+                    .spacing(4)
+                    .width(Length::Shrink),
+                );
             } else {
                 body = body.push(file_title_row(app, msg, file, state, d));
+                body = body.push(attachment_status_footer(msg, file, state, d, false));
             }
-            body = body.push(attachment_status_footer(msg, file, state, d, media_flush));
             voice_owns_meta = true;
         } else {
             body = body.push(file_title_row(app, msg, file, state, d));
@@ -2021,50 +2057,73 @@ fn bubble_time_height(d: Density) -> f32 {
     f32::from(d.meta) + 2.0
 }
 
-/// Body + floating time/receipt chip anchored to the bottom-right.
-///
-/// No permanent right gutter (that used to carve empty vertical strips beside
-/// every line). The chip sits over short last lines; a soft fill keeps it
-/// readable when it overlaps longer text.
+/// Estimate whether the last text line has room for the time chip beside it.
+fn last_line_fits_time(text: &str, d: Density, outgoing: bool, content_max: f32) -> bool {
+    let last = text.lines().last().unwrap_or(text).trim_end();
+    // Rough glyph width — good enough to choose overlay vs stack.
+    let col_w = (d.body * 0.55).max(6.0);
+    let last_w = last.chars().count() as f32 * col_w;
+    let time_w = {
+        let text_w = f32::from(d.meta) * 5.2;
+        let ticks = if outgoing {
+            (f32::from(d.meta) * 0.85).clamp(10.0, 13.0) + 4.0
+        } else {
+            0.0
+        };
+        text_w + ticks + 10.0
+    };
+    last_w + time_w < content_max
+}
+
+/// Body + time/receipt: float over short last lines, otherwise sit underneath.
 fn bubble_content_with_time<'a>(
     content: Element<'a, Message>,
     msg: &'a ChatMessage,
     d: Density,
     content_max: f32,
 ) -> Element<'a, Message> {
-    let chip_bg = if msg.outgoing {
-        theme::t().accent_soft
+    let stamp = bubble_time_meta(msg, d);
+    if last_line_fits_time(&msg.text, d, msg.outgoing, content_max) {
+        let chip_bg = if msg.outgoing {
+            theme::t().accent_soft
+        } else {
+            theme::t().bg_elevated
+        };
+        let chip = container(stamp)
+            .padding(Padding {
+                top: 1.0,
+                right: 2.0,
+                bottom: 0.0,
+                left: 6.0,
+            })
+            .style(move |_| container::Style {
+                background: Some(iced::Background::Color(chip_bg)),
+                border: iced::Border {
+                    radius: 8.0.into(),
+                    ..Default::default()
+                },
+                ..container::Style::default()
+            });
+        container(
+            Stack::new()
+                .push(container(content).max_width(content_max))
+                .push(
+                    container(chip)
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .align_x(Alignment::End)
+                        .align_y(Alignment::End),
+                ),
+        )
+        .into()
     } else {
-        theme::t().bg_elevated
-    };
-    let stamp = container(bubble_time_meta(msg, d))
-        .padding(Padding {
-            top: 1.0,
-            right: 2.0,
-            bottom: 0.0,
-            left: 6.0,
-        })
-        .style(move |_| container::Style {
-            background: Some(iced::Background::Color(chip_bg)),
-            border: iced::Border {
-                radius: 8.0.into(),
-                ..Default::default()
-            },
-            ..container::Style::default()
-        });
-
-    container(
-        Stack::new()
-            .push(container(content).max_width(content_max))
-            .push(
-                container(stamp)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_x(Alignment::End)
-                    .align_y(Alignment::End),
-            ),
-    )
-    .into()
+        column![
+            container(content).max_width(content_max),
+            container(stamp).width(Length::Fill).align_x(Alignment::End),
+        ]
+        .spacing(2)
+        .into()
+    }
 }
 
 /// Telegram-style trailing time (+ receipt for outgoing).
@@ -2511,34 +2570,60 @@ fn visual_media_preview<'a>(
         return None;
     }
     let is_video = matches!(file.kind, FileKind::Video) || media::is_video_name(&file.file_name);
-    let source = if is_video {
-        media::video_thumbnail(&path).unwrap_or_else(|_| path.clone())
-    } else {
-        path.clone()
-    };
     // Compact chat-pane previews — keep native aspect.
     const PREVIEW_MAX_W: u32 = 220;
     const PREVIEW_MAX_H: u32 = 280;
     const RADIUS: f32 = 12.0;
-    let (display_path, pw, ph) =
-        match media::rounded_fitted_preview(&source, PREVIEW_MAX_W, PREVIEW_MAX_H, RADIUS) {
-            Ok(v) => v,
-            Err(_) => {
-                let (pw, ph) = (PREVIEW_MAX_W, PREVIEW_MAX_H * 2 / 3);
-                (source, pw, ph)
-            }
-        };
-    let w = pw as f32;
-    let h = ph as f32;
-    let thumb = image(image::Handle::from_path(display_path))
+    // Never run ffmpeg on the UI thread — that blocked scroll when videos
+    // entered the viewport. Use cached posters only; async extract fills later.
+    let source = if is_video {
+        app.video_thumb_for(&path)
+    } else {
+        Some(path.clone())
+    };
+    let has_poster = source.is_some();
+    let (w, h, face): (f32, f32, Element<'a, Message>) = if let Some(source) = source {
+        let (display_path, pw, ph) =
+            match media::rounded_fitted_preview(&source, PREVIEW_MAX_W, PREVIEW_MAX_H, RADIUS) {
+                Ok(v) => v,
+                Err(_) => {
+                    let (pw, ph) = (PREVIEW_MAX_W, PREVIEW_MAX_H * 2 / 3);
+                    (source, pw, ph)
+                }
+            };
+        let w = pw as f32;
+        let h = ph as f32;
+        let thumb = image(image::Handle::from_path(display_path))
+            .width(Length::Fixed(w))
+            .height(Length::Fixed(h))
+            .content_fit(ContentFit::Contain);
+        (w, h, thumb.into())
+    } else {
+        // Poster not ready yet — shrink-wrapped placeholder (no Fill pad).
+        let w = 160.0;
+        let h = 120.0;
+        let face = container(
+            icons::centered_hit(icons::play_icon(28.0, theme::t().text_secondary), 48.0),
+        )
         .width(Length::Fixed(w))
         .height(Length::Fixed(h))
-        .content_fit(ContentFit::Contain);
+        .center_x(Length::Fixed(w))
+        .center_y(Length::Fixed(h))
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().bg_elevated)),
+            border: iced::Border {
+                radius: RADIUS.into(),
+                ..Default::default()
+            },
+            ..container::Style::default()
+        });
+        (w, h, face.into())
+    };
     let mut stack = Stack::new()
         .width(Length::Fixed(w))
         .height(Length::Fixed(h))
-        .push(thumb);
-    if is_video {
+        .push(face);
+    if is_video && has_poster {
         stack = stack.push(
             container(icons::centered_hit(
                 icons::play_icon(26.0, Color::WHITE),
@@ -2554,11 +2639,11 @@ fn visual_media_preview<'a>(
         .width(Length::Fixed(w))
         .height(Length::Fixed(h))
         .clip(true);
+    // Open with the OS handler directly — the embedded reader was too slow.
+    let _ = msg;
     Some(
         mouse_area(framed)
-            .on_release(Message::OpenMedia {
-                item_id: msg.item_id,
-            })
+            .on_release(Message::OpenLocalFile(path))
             .into(),
     )
 }
@@ -2599,130 +2684,6 @@ impl canvas::Program<Message> for Waveform {
         }
         vec![frame.into_geometry()]
     }
-}
-
-fn media_viewer_overlay(app: &App) -> Element<'_, Message> {
-    let Some(viewer) = app.media_viewer() else {
-        return horizontal().width(0).into();
-    };
-    let Some(item) = viewer.items.get(viewer.index) else {
-        return horizontal().width(0).into();
-    };
-    // `thumb` is prepared in `ensure_media_thumb` (poster / downscale) — never decode here.
-    let show_path = item
-        .thumb
-        .clone()
-        .unwrap_or_else(|| item.path.clone());
-    let media = image(image::Handle::from_path(show_path))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .content_fit(ContentFit::Contain);
-
-    let mut stage: Element<'_, Message> = container(media)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .into();
-
-    if item.is_video {
-        stage = Stack::new()
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .push(stage)
-            .push(
-                container(
-                    button(icons::centered_hit(
-                        icons::play_icon(36.0, Color::from_rgb(0.043, 0.063, 0.125)),
-                        72.0,
-                    ))
-                    .on_press(Message::MediaPlayVideo)
-                    .padding(0)
-                    .style(theme::primary_action(true)),
-                )
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill),
-            )
-            .into();
-    }
-
-    let counter = text(format!(
-        "{} / {}  ·  {}",
-        viewer.index + 1,
-        viewer.items.len(),
-        item.file_name
-    ))
-    .size(14)
-    .color(Color::from_rgba(1.0, 1.0, 1.0, 0.85));
-
-    // Drag to swipe; a short tap opens the file outside (second press after the bubble).
-    let stage = mouse_area(stage)
-        .on_press(Message::MediaDragStart(0.0))
-        .on_move(|p| Message::MediaDragMove(p.x))
-        .on_release(Message::MediaDragEnd);
-
-    let hit = 40.0;
-    let panel = column![
-        row![
-            button(icons::centered_hit(
-                icons::cancel_icon(20.0, Color::WHITE),
-                hit,
-            ))
-            .on_press(Message::CloseMediaViewer)
-            .padding(0)
-            .style(theme::secondary_action(true)),
-            horizontal().width(Length::Fill),
-            counter,
-            horizontal().width(8),
-            button(icons::centered_hit(
-                icons::download_icon(20.0, Color::WHITE),
-                hit,
-            ))
-            .on_press(Message::MediaSaveAs)
-            .padding(0)
-            .style(theme::secondary_action(true)),
-        ]
-        .align_y(Alignment::Center)
-        .padding(Padding::from([12, 16])),
-        container(stage)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .clip(true),
-        row![
-            button(icons::centered_hit(
-                icons::previous_icon(22.0, Color::WHITE),
-                hit,
-            ))
-            .on_press(Message::MediaPrev)
-            .padding(0)
-            .style(theme::secondary_action(true)),
-            horizontal().width(Length::Fill),
-            button(icons::centered_hit(
-                icons::next_icon(22.0, Color::WHITE),
-                hit,
-            ))
-            .on_press(Message::MediaNext)
-            .padding(0)
-            .style(theme::secondary_action(true)),
-        ]
-        .padding(Padding::from([12, 16])),
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill);
-
-    iced::widget::opaque(
-        container(panel)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|_| container::Style {
-                background: Some(iced::Background::Color(Color::from_rgba(
-                    0.02, 0.02, 0.04, 0.94,
-                ))),
-                ..container::Style::default()
-            }),
-    )
 }
 
 fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
@@ -2998,6 +2959,7 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 .color(theme::t().text_muted),
             text_input("Display name", &draft.fields.display_name)
                 .on_input(Message::OwnProfileDisplayName)
+                .on_submit(Message::SaveOwnProfile)
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
@@ -3007,6 +2969,7 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 .color(theme::t().text_muted),
             text_input("Short bio", &draft.fields.short_descr)
                 .on_input(Message::OwnProfileBio)
+                .on_submit(Message::SaveOwnProfile)
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
@@ -3016,18 +2979,11 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 .color(theme::t().text_muted),
             text_input("Longer description", &draft.fields.description)
                 .on_input(Message::OwnProfileDescription)
+                .on_submit(Message::SaveOwnProfile)
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
                 .style(theme::composer_input()),
-            button(text("Save profile").size(d.meta))
-                .on_press_maybe(if draft.dirty {
-                    Some(Message::SaveOwnProfile)
-                } else {
-                    None
-                })
-                .padding(Padding::from([8, 12]))
-                .style(theme::primary_action(app.hover_ok())),
             vertical().height(6),
             text("Address")
                 .size(d.meta)
@@ -3754,7 +3710,7 @@ fn round_header_icon_btn(
         .into()
 }
 
-/// Title on the left (~75%), round actions at the 75% mark, empty trailing quarter.
+/// Title on the left; round actions flush to the right edge.
 fn profile_header_bar<'a>(
     leading: Element<'a, Message>,
     actions: Element<'a, Message>,
@@ -3766,17 +3722,16 @@ fn profile_header_bar<'a>(
             top: d.pad_tight,
             right: d.pad,
             bottom: d.pad_tight,
-            left: 4.0,
+            left: 8.0,
         }
     } else {
         Padding::from([d.pad_tight, 0.0])
     };
     row![
         container(leading)
-            .width(Length::FillPortion(3))
+            .width(Length::Fill)
             .align_y(Alignment::Center),
         actions,
-        horizontal().width(Length::FillPortion(1)),
     ]
     .spacing(10)
     .align_y(Alignment::Center)
@@ -3807,7 +3762,13 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
     } else {
         theme::t().text_secondary
     };
+    // Order: call, favorite, mute — flush right.
     let header_actions = row![
+        round_header_icon_btn(
+            icons::phone_icon(18.0, theme::t().text_secondary),
+            Message::StartAudioCall(p.contact_id),
+            hover,
+        ),
         round_header_icon_btn(
             icons::star_icon(18.0, fav_tint),
             Message::ContactProfileFavorite,
@@ -3852,6 +3813,13 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
                         .size(d.title)
                         .color(theme::t().text_primary),
                 );
+                names = names.push(alias_inline_field(
+                    &p.alias,
+                    "Local name",
+                    Message::ContactAliasChanged,
+                    Message::SaveContactAlias,
+                    d,
+                ));
                 if !p.fields.full_name.is_empty() {
                     names = names.push(
                         text(p.fields.full_name.clone())
@@ -3880,20 +3848,6 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
         );
     }
     let narrow = matches!(app.layout(), LayoutMode::Mobile) || app.window_width() < 720.0;
-    body = body.push(
-        text("Local name")
-            .size(d.meta)
-            .color(theme::t().text_muted),
-    );
-    body = body.push(alias_save_row(
-        &p.alias,
-        "Name shown only to you",
-        Message::ContactAliasChanged,
-        Message::SaveContactAlias,
-        p.alias_dirty,
-        d,
-        hover,
-    ));
     body = body.push(vertical().height(6));
     body = body.push(
         text("Chat features")
@@ -4211,17 +4165,6 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
         );
     }
 
-    col = col.push(
-        text("Start a call")
-            .size(d.body)
-            .color(theme::t().text_primary),
-    );
-    col = col.push(
-        text("Audio call invite via /_call. Full in-app WebRTC media bridge is next.")
-            .size(d.meta)
-            .color(theme::t().text_secondary),
-    );
-
     let contacts = app.direct_contacts();
     if contacts.is_empty() {
         col = col.push(placeholder(
@@ -4239,10 +4182,11 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
                         .size(d.body)
                         .color(theme::t().text_primary)
                         .width(Length::Fill),
-                    button(text("Call").size(d.meta))
-                        .on_press(Message::StartAudioCall(contact_id))
-                        .padding(Padding::from([8, 12]))
-                        .style(theme::secondary_action(hover)),
+                    round_header_icon_btn(
+                        icons::phone_icon(18.0, theme::t().text_secondary),
+                        Message::StartAudioCall(contact_id),
+                        hover,
+                    ),
                 ]
                 .spacing(10)
                 .align_y(Alignment::Center)
@@ -4530,53 +4474,51 @@ fn group_overview_pane(
 ) -> Element<'_, Message> {
     let owner = can_edit_group_profile(&g.my_role);
     let admin = can_manage_members(&g.my_role);
-    let photo_label = if g.is_channel {
-        "Channel photo"
-    } else {
-        "Group photo"
-    };
     let mut col = Column::new().spacing(8).width(Length::Fill);
+    // Match contact profile: avatar + name + local alias under the name.
     col = col.push(
         row![
-            profile_avatar(g.image.as_deref(), &g.name, 64.0),
-            column![
-                text(photo_label)
-                    .size(d.meta)
-                    .color(theme::t().text_muted),
+            profile_avatar(g.image.as_deref(), &g.name, 72.0),
+            {
+                let mut names = Column::new().spacing(2).width(Length::Fill);
                 if owner {
-                    profile_photo_actions(
+                    names = names.push(
+                        text_input("Name", &g.name)
+                            .on_input(Message::GroupSettingsNameChanged)
+                            .on_submit(Message::SaveGroupProfile)
+                            .padding(Padding::from([2, 0]))
+                            .size(d.title)
+                            .width(Length::Fill)
+                            .style(theme::composer_input()),
+                    );
+                } else {
+                    names = names.push(
+                        text(g.name.clone())
+                            .size(d.title)
+                            .color(theme::t().text_primary),
+                    );
+                }
+                names = names.push(alias_inline_field(
+                    &g.alias,
+                    "Local name",
+                    Message::GroupSettingsAliasChanged,
+                    Message::SaveGroupAlias,
+                    d,
+                ));
+                if owner {
+                    names = names.push(profile_photo_actions(
                         g.image.is_some(),
                         Message::PickGroupProfileImage,
                         Message::ClearGroupProfileImage,
                         hover,
-                    )
-                } else {
-                    vertical().height(0).into()
-                },
-            ]
-            .spacing(6),
+                    ));
+                }
+                names
+            },
         ]
-        .spacing(12)
+        .spacing(14)
         .align_y(Alignment::Center),
     );
-
-    col = col.push(text("Name").size(d.meta).color(theme::t().text_muted));
-    if owner {
-        col = col.push(
-            text_input("Display name", &g.name)
-                .on_input(Message::GroupSettingsNameChanged)
-                .padding(d.composer)
-                .size(d.body)
-                .width(Length::Fill)
-                .style(theme::composer_input()),
-        );
-    } else {
-        col = col.push(
-            text(g.name.clone())
-                .size(d.body)
-                .color(theme::t().text_primary),
-        );
-    }
 
     col = col.push(
         text("Short description")
@@ -4587,6 +4529,7 @@ fn group_overview_pane(
         col = col.push(
             text_input("Optional short description", &g.short_descr)
                 .on_input(Message::GroupSettingsShortDescrChanged)
+                .on_submit(Message::SaveGroupProfile)
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
@@ -4609,6 +4552,7 @@ fn group_overview_pane(
         col = col.push(
             text_input("Message shown to new members", &g.welcome_message)
                 .on_input(Message::GroupSettingsWelcomeChanged)
+                .on_submit(Message::SaveGroupProfile)
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
@@ -4621,35 +4565,6 @@ fn group_overview_pane(
                 .color(theme::t().text_secondary),
         );
     }
-
-    if owner {
-        col = col.push(
-            button(text("Save profile").size(d.meta))
-                .on_press_maybe(if g.dirty {
-                    Some(Message::SaveGroupProfile)
-                } else {
-                    None
-                })
-                .padding(Padding::from([8, 12]))
-                .style(theme::primary_action(hover)),
-        );
-    }
-
-    col = col.push(vertical().height(4));
-    col = col.push(
-        text("Local name")
-            .size(d.meta)
-            .color(theme::t().text_muted),
-    );
-    col = col.push(alias_save_row(
-        &g.alias,
-        "Name shown only to you",
-        Message::GroupSettingsAliasChanged,
-        Message::SaveGroupAlias,
-        g.alias_dirty,
-        d,
-        hover,
-    ));
 
     if !g.is_channel {
         let support_ok = group_support_allowed(g.group_preferences.as_ref());
@@ -4872,39 +4787,22 @@ channel links after they’re gone — create a new channel to invite people."
     col.into()
 }
 
-/// Alias field + inline check save (contact / group / channel).
-fn alias_save_row<'a>(
+/// Local alias under the peer name — same title size, commits on Enter.
+fn alias_inline_field<'a>(
     value: &'a str,
     placeholder: &'a str,
     on_changed: impl Fn(String) -> Message + 'a,
-    save: Message,
-    dirty: bool,
+    on_submit: Message,
     d: Density,
-    hover: bool,
 ) -> Element<'a, Message> {
-    let check_color = if dirty {
-        theme::t().accent
-    } else {
-        theme::t().text_muted
-    };
-    row![
-        text_input(placeholder, value)
-            .on_input(on_changed)
-            .padding(d.composer)
-            .size(d.body)
-            .width(Length::Fill)
-            .style(theme::composer_input()),
-        button(icons::centered_hit(
-            icons::check_sent(20.0, check_color),
-            40.0,
-        ))
-        .on_press_maybe(if dirty { Some(save) } else { None })
-        .padding(0)
-        .style(theme::quiet_tile(hover)),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center)
-    .into()
+    text_input(placeholder, value)
+        .on_input(on_changed)
+        .on_submit(on_submit)
+        .padding(Padding::from([2, 0]))
+        .size(d.title)
+        .width(Length::Fill)
+        .style(theme::composer_input())
+        .into()
 }
 
 fn action_tile_row(

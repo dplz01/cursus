@@ -1015,12 +1015,18 @@ fn parse_one_chat(chat: &Value) -> Option<ChatPreview> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let name = contact
-                .get("localDisplayName")
-                .or_else(|| contact.pointer("/profile/displayName"))
+            let peer_name = contact
+                .pointer("/profile/displayName")
+                .or_else(|| contact.get("localDisplayName"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("Contact")
                 .to_string();
+            // Prefer the local alias for the list title when set.
+            let name = if local_alias.is_empty() {
+                peer_name
+            } else {
+                local_alias.clone()
+            };
             // Match official clients' `nextAcceptContactRequest`: contactRequestId
             // stays set after Accept until the request row is deleted, so only
             // treat as pending when there is no usable connection yet.
@@ -1064,12 +1070,17 @@ fn parse_one_chat(chat: &Value) -> Option<ChatPreview> {
             group_preferences = gp.and_then(|p| p.get("groupPreferences").cloned());
             member_admission = gp.and_then(|p| p.get("memberAdmission").cloned());
             public_group = gp.and_then(|p| p.get("publicGroup").cloned());
-            let name = group
-                .get("localDisplayName")
-                .or_else(|| group.pointer("/groupProfile/displayName"))
+            let peer_name = group
+                .pointer("/groupProfile/displayName")
+                .or_else(|| group.get("localDisplayName"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("Group")
                 .to_string();
+            let name = if local_alias.is_empty() {
+                peer_name
+            } else {
+                local_alias.clone()
+            };
             settings = parse_chat_settings(group.get("chatSettings"));
             tag_ids = parse_tag_ids(group.get("chatTags"));
             is_channel = group

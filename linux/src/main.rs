@@ -625,6 +625,7 @@ pub enum Message {
     /// Contact profile overlay.
     OpenContactProfile,
     CloseContactProfile,
+    CloseContactProfileAfterSave,
     ContactAliasChanged(String),
     SaveContactAlias,
     ContactAliasSaved(Result<(), String>),
@@ -652,6 +653,7 @@ pub enum Message {
     /// Group settings + members / prefs / link.
     OpenGroupSettings,
     CloseGroupSettings,
+    CloseGroupSettingsAfterSave,
     /// Member support (“Chat with admins”).
     OpenSupportChatList,
     OpenUserSupportChat,
@@ -747,11 +749,13 @@ pub enum Message {
     StopVoicePlayback,
     VoiceTick,
     WaveformReady { path: PathBuf, peaks: Result<Vec<f32>, String> },
+    /// Async video poster for chat-bubble previews.
+    VideoThumbReady { path: PathBuf, thumb: Option<PathBuf> },
     OpenMedia { item_id: i64 },
     CloseMediaViewer,
     MediaPrev,
     MediaNext,
-    /// Background poster / still ready for a gallery path.
+    /// Background poster / still ready for a gallery path (legacy viewer).
     MediaThumbReady {
         path: PathBuf,
         thumb: Option<PathBuf>,
@@ -870,7 +874,11 @@ struct App {
     voice_playback: Option<VoicePlayback>,
     /// Cached waveform peaks keyed by absolute path.
     waveforms: std::collections::HashMap<PathBuf, Vec<f32>>,
-    /// Full-screen photo/video reader for the open chat.
+    /// Cached video poster frames keyed by absolute media path.
+    video_thumbs: std::collections::HashMap<PathBuf, PathBuf>,
+    /// In-flight video thumb extractions (avoid duplicate ffmpeg jobs).
+    video_thumbs_pending: HashSet<PathBuf>,
+    /// Full-screen photo/video reader (legacy — open externally instead).
     media_viewer: Option<MediaViewer>,
     /// After opening a chat, pin history to the newest message once it loads.
     pin_history_end: bool,
@@ -1039,6 +1047,8 @@ impl App {
                 voice_draft: None,
                 voice_playback: None,
                 waveforms: std::collections::HashMap::new(),
+                video_thumbs: std::collections::HashMap::new(),
+                video_thumbs_pending: HashSet::new(),
                 media_viewer: None,
                 pin_history_end: false,
                 pending_url: None,
@@ -1183,6 +1193,9 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Navigate(section) => {
+                // Commit dirty settings/profile drafts when leaving Settings.
+                let leaving_settings =
+                    self.nav == NavSection::Settings && section != NavSection::Settings;
                 self.nav = section;
                 self.compose_open = false;
                 // Keep an open conversation when moving Chats ↔ Channels if it
@@ -1198,6 +1211,9 @@ impl App {
                     self.selected = None;
                     self.selected_id = None;
                     self.messages.clear();
+                }
+                if leaving_settings && self.own_profile.dirty {
+                    return self.update(Message::SaveOwnProfile);
                 }
                 Task::none()
             }
@@ -1422,7 +1438,12 @@ impl App {
                 let quoted = self.reply_to.as_ref().map(|r| r.item_id);
                 self.clear_composer();
                 self.reply_to = None;
-                Task::perform(send_text(session, chat, text, quoted), Message::Sent)
+                // Keep OSK up on touch: re-focus after send (release-only hit
+                // already avoids the first unfocus on many devices).
+                Task::batch([
+                    Task::perform(send_text(session, chat, text, quoted), Message::Sent),
+                    iced::widget::operation::focus(iced::widget::Id::new("composer-input")),
+                ])
             }
             Message::Sent(Ok(())) => {
                 self.status = "Message accepted by SimpleX core.".into();
@@ -1900,6 +1921,21 @@ impl App {
                 self.open_contact_profile()
             }
             Message::CloseContactProfile => {
+                let dirty = self
+                    .contact_profile
+                    .as_ref()
+                    .is_some_and(|p| p.alias_dirty);
+                if dirty {
+                    // Save first (needs overlay), then dismiss.
+                    return Task::batch([
+                        self.update(Message::SaveContactAlias),
+                        Task::done(Message::CloseContactProfileAfterSave),
+                    ]);
+                }
+                self.contact_profile = None;
+                Task::none()
+            }
+            Message::CloseContactProfileAfterSave => {
                 self.contact_profile = None;
                 Task::none()
             }
@@ -1929,11 +1965,18 @@ impl App {
                     p.alias_dirty = false;
                     let idx = p.chat_index;
                     let alias = p.alias.clone();
+                    let peer = p.fields.display_name.clone();
                     if let Some(chat) = self.chats.get_mut(idx) {
                         chat.local_alias = alias.clone();
-                        if !alias.is_empty() {
-                            chat.title = alias;
-                        }
+                        chat.title = if alias.is_empty() {
+                            if peer.is_empty() {
+                                chat.title.clone()
+                            } else {
+                                peer
+                            }
+                        } else {
+                            alias
+                        };
                     }
                 }
                 self.status = "Alias saved.".into();
@@ -1944,6 +1987,9 @@ impl App {
                 Task::none()
             }
             Message::ContactProfileMute => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
@@ -1966,6 +2012,9 @@ impl App {
                 )
             }
             Message::ContactProfileFavorite => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
@@ -1999,6 +2048,9 @@ impl App {
                 Task::none()
             }
             Message::CycleContactTimedMessages => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 if let Some(p) = self.contact_profile.as_mut() {
                     p.timed_allow = p.timed_allow.cycle();
                     if p.timed_allow.is_on() && p.timed_ttl_secs <= 0 {
@@ -2008,6 +2060,9 @@ impl App {
                 self.save_contact_feature_prefs()
             }
             Message::SetContactTimedTtl(secs) => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 if let Some(p) = self.contact_profile.as_mut() {
                     if !p.timed_allow.is_on() {
                         return Task::none();
@@ -2017,24 +2072,36 @@ impl App {
                 self.save_contact_feature_prefs()
             }
             Message::CycleContactFullDelete => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 if let Some(p) = self.contact_profile.as_mut() {
                     p.full_delete_allow = p.full_delete_allow.cycle();
                 }
                 self.save_contact_feature_prefs()
             }
             Message::CycleContactReactions => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 if let Some(p) = self.contact_profile.as_mut() {
                     p.reactions_allow = p.reactions_allow.cycle();
                 }
                 self.save_contact_feature_prefs()
             }
             Message::CycleContactVoice => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 if let Some(p) = self.contact_profile.as_mut() {
                     p.voice_allow = p.voice_allow.cycle();
                 }
                 self.save_contact_feature_prefs()
             }
             Message::CycleContactCalls => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 if let Some(p) = self.contact_profile.as_mut() {
                     p.calls_allow = p.calls_allow.cycle();
                 }
@@ -2185,6 +2252,28 @@ impl App {
                 self.open_group_settings()
             }
             Message::CloseGroupSettings => {
+                let dirty = self
+                    .group_settings
+                    .as_ref()
+                    .is_some_and(|g| g.alias_dirty);
+                if dirty {
+                    return Task::batch([
+                        self.update(Message::SaveGroupAlias),
+                        Task::done(Message::CloseGroupSettingsAfterSave),
+                    ]);
+                }
+                // Also commit dirty group profile fields on leave.
+                let profile_dirty = self.group_settings.as_ref().is_some_and(|g| g.dirty);
+                if profile_dirty {
+                    return Task::batch([
+                        self.update(Message::SaveGroupProfile),
+                        Task::done(Message::CloseGroupSettingsAfterSave),
+                    ]);
+                }
+                self.group_settings = None;
+                Task::none()
+            }
+            Message::CloseGroupSettingsAfterSave => {
                 self.group_settings = None;
                 Task::none()
             }
@@ -2309,20 +2398,33 @@ impl App {
                     g.alias_dirty = false;
                     let gid = g.group_id;
                     let alias = g.alias.clone();
+                    let peer = g.name.clone();
                     if let Some(chat) = self.chats.iter_mut().find(|c| {
                         matches!(c.id.chat_type, ChatType::Group) && c.id.api_id == gid
                     }) {
-                        chat.local_alias = alias;
+                        chat.local_alias = alias.clone();
+                        chat.title = if alias.is_empty() {
+                            if peer.is_empty() {
+                                chat.title.clone()
+                            } else {
+                                peer
+                            }
+                        } else {
+                            alias
+                        };
                     }
                 }
                 self.status = "Local alias saved.".into();
-                Task::none()
+                self.reload_chats()
             }
             Message::GroupAliasSaved(Err(err)) => {
                 self.status = err;
                 Task::none()
             }
             Message::GroupSettingsMute => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 let Some(g) = self.group_settings.as_ref() else {
                     return Task::none();
                 };
@@ -2362,6 +2464,9 @@ impl App {
                 )
             }
             Message::GroupSettingsFavorite => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
                 let Some(g) = self.group_settings.as_ref() else {
                     return Task::none();
                 };
@@ -3492,27 +3597,27 @@ impl App {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
-                // First tap → in-app viewer. Tap again on the same item → open outside.
-                let viewing_same = self.media_viewer.as_ref().is_some_and(|v| {
-                    v.items
-                        .get(v.index)
-                        .is_some_and(|item| item.item_id == item_id)
-                });
-                if viewing_same {
-                    let path = self
-                        .media_viewer
-                        .as_ref()
-                        .and_then(|v| v.items.get(v.index))
-                        .map(|i| i.path.clone());
-                    self.media_viewer = None;
-                    if let Some(path) = path {
-                        return Task::perform(open_media_external(path), Message::FileReceived);
-                    }
-                    Task::none()
-                } else {
-                    self.open_media_viewer(item_id);
-                    self.prefetch_adjacent_media()
+                // Embedded reader removed (too slow) — open with the OS handler.
+                self.media_viewer = None;
+                let path = self
+                    .messages
+                    .iter()
+                    .find(|m| m.item_id == item_id)
+                    .and_then(|m| m.file.as_ref())
+                    .and_then(|f| self.plaintext_path_for(f));
+                if let Some(path) = path.filter(|p| p.is_file()) {
+                    self.status = format!("Opening {}…", path.display());
+                    return Task::perform(open_local_file(path), Message::FileReceived);
                 }
+                self.status = "Media file not available yet.".into();
+                Task::none()
+            }
+            Message::VideoThumbReady { path, thumb } => {
+                self.video_thumbs_pending.remove(&path);
+                if let Some(thumb) = thumb {
+                    self.video_thumbs.insert(path, thumb);
+                }
+                Task::none()
             }
             Message::CloseMediaViewer => {
                 self.media_viewer = None;
@@ -3678,6 +3783,7 @@ impl App {
             Message::MessagesLoaded(Ok(messages)) => {
                 let auto = auto_receive_from_messages(&messages);
                 let wave_tasks = self.enqueue_missing_waveforms(&messages);
+                let thumb_tasks = self.enqueue_missing_video_thumbs(&messages);
                 let decrypt_tasks = self.enqueue_decrypts(&messages);
                 self.messages = messages;
                 // With Anchor::End, relative y=0 is the newest (visual bottom).
@@ -3693,6 +3799,7 @@ impl App {
                 Task::batch([
                     self.enqueue_receives(auto),
                     wave_tasks,
+                    thumb_tasks,
                     decrypt_tasks,
                     pin,
                 ])
@@ -4673,6 +4780,14 @@ impl App {
         self.media_viewer.as_ref()
     }
 
+    /// Poster for a video path: in-memory cache or on-disk `.thumb.jpg`.
+    pub(crate) fn video_thumb_for(&self, path: &std::path::Path) -> Option<PathBuf> {
+        self.video_thumbs
+            .get(path)
+            .cloned()
+            .or_else(|| media::cached_video_thumbnail(path))
+    }
+
     pub(crate) fn auth(&self) -> Option<&AuthScreen> {
         self.auth.as_ref()
     }
@@ -4899,6 +5014,56 @@ impl App {
             },
             |m| m,
         )
+    }
+
+    fn enqueue_missing_video_thumbs(&mut self, messages: &[ChatMessage]) -> Task<Message> {
+        let mut tasks = Vec::new();
+        for msg in messages {
+            let Some(file) = msg.file.as_ref() else {
+                continue;
+            };
+            if !matches!(
+                effective_complete(file.state, msg.outgoing, msg.delivery),
+                FileTransferState::Complete
+            ) {
+                continue;
+            }
+            let is_video = matches!(file.kind, cursus_core::FileKind::Video)
+                || media::is_video_name(&file.file_name);
+            if !is_video {
+                continue;
+            }
+            let Some(path) = self.plaintext_path_for(file) else {
+                continue;
+            };
+            if !path.is_file() {
+                continue;
+            }
+            if let Some(cached) = media::cached_video_thumbnail(&path) {
+                self.video_thumbs.insert(path.clone(), cached);
+                continue;
+            }
+            if self.video_thumbs.contains_key(&path) || self.video_thumbs_pending.contains(&path)
+            {
+                continue;
+            }
+            self.video_thumbs_pending.insert(path.clone());
+            tasks.push(Task::perform(
+                async move {
+                    let path_for_work = path.clone();
+                    let thumb = tokio::task::spawn_blocking(move || {
+                        media::cached_video_thumbnail(&path_for_work)
+                            .or_else(|| media::video_thumbnail(&path_for_work).ok())
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                    Message::VideoThumbReady { path, thumb }
+                },
+                |msg| msg,
+            ));
+        }
+        Task::batch(tasks)
     }
 
     fn enqueue_missing_waveforms(&self, messages: &[ChatMessage]) -> Task<Message> {
@@ -6889,67 +7054,129 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
     let path = dir.join(format!("voice-{stamp}.m4a"));
 
     // Pulse first (desktop), then PipeWire / ALSA — ARM images often lack Pulse.
+    // Prefer AAC when available; fall back to PCM WAV in the same m4a path
+    // extension only when AAC encode works — otherwise write `.wav` and rename.
     let backends: &[&[&str]] = &[
         &["-f", "pulse", "-i", "default"],
         &["-f", "pipewire", "-i", "default"],
         &["-f", "alsa", "-i", "default"],
         &["-f", "alsa", "-i", "plughw:0,0"],
+        &["-f", "alsa", "-i", "hw:0,0"],
+        &["-f", "alsa", "-i", "sysdefault"],
     ];
-    let encode = ["-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "32k", "-y"];
+    let encodes: &[&[&str]] = &[
+        &["-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "32k", "-y"],
+        // musl/ARM builds sometimes ship ffmpeg without libfdk/aac — PCM WAV.
+        &["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", "-y"],
+    ];
     let mut last_err = String::from("no audio capture backend worked");
 
     for input in backends {
-        let mut args = vec!["-hide_banner", "-loglevel", "error"];
-        args.extend_from_slice(input);
-        args.extend_from_slice(&encode);
-        match Command::new("ffmpeg")
-            .args(&args)
-            .arg(&path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            Ok(mut child) => {
-                // Give ffmpeg a moment — device-open failures exit immediately.
-                std::thread::sleep(std::time::Duration::from_millis(120));
-                match child.try_wait() {
-                    Ok(None) => {
-                        return Ok(VoiceRec {
-                            path,
-                            child,
-                            started: Instant::now(),
-                        });
-                    }
-                    Ok(Some(status)) => {
-                        let stderr = child.stderr.as_mut().and_then(|s| {
-                            let mut buf = String::new();
-                            use std::io::Read;
-                            let _ = s.read_to_string(&mut buf);
-                            Some(buf)
-                        });
-                        last_err = format!(
-                            "ffmpeg {:?} exited ({status}): {}",
-                            input,
-                            stderr.unwrap_or_default().trim()
-                        );
-                        let _ = std::fs::remove_file(&path);
-                    }
-                    Err(e) => {
-                        last_err = format!("ffmpeg {:?} wait failed: {e}", input);
-                        let _ = child.kill();
-                        let _ = std::fs::remove_file(&path);
+        for encode in encodes {
+            let out = if encode.contains(&"-f") && encode.contains(&"wav") {
+                path.with_extension("wav")
+            } else {
+                path.clone()
+            };
+            let mut args = vec!["-hide_banner", "-loglevel", "error"];
+            args.extend_from_slice(input);
+            args.extend_from_slice(encode);
+            match Command::new("ffmpeg")
+                .args(&args)
+                .arg(&out)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+            {
+                Ok(mut child) => {
+                    // Give ffmpeg a moment — device-open failures exit immediately.
+                    std::thread::sleep(std::time::Duration::from_millis(180));
+                    match child.try_wait() {
+                        Ok(None) => {
+                            return Ok(VoiceRec {
+                                path: out,
+                                child,
+                                started: Instant::now(),
+                            });
+                        }
+                        Ok(Some(status)) => {
+                            let stderr = child.stderr.as_mut().and_then(|s| {
+                                let mut buf = String::new();
+                                use std::io::Read;
+                                let _ = s.read_to_string(&mut buf);
+                                Some(buf)
+                            });
+                            last_err = format!(
+                                "ffmpeg {:?} {:?} exited ({status}): {}",
+                                input,
+                                encode,
+                                stderr.unwrap_or_default().trim()
+                            );
+                            let _ = std::fs::remove_file(&out);
+                        }
+                        Err(e) => {
+                            last_err = format!("ffmpeg {:?} wait failed: {e}", input);
+                            let _ = child.kill();
+                            let _ = std::fs::remove_file(&out);
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                last_err = format!("ffmpeg {:?} spawn failed: {e}", input);
+                Err(e) => {
+                    last_err = format!("ffmpeg {:?} spawn failed: {e}", input);
+                }
             }
         }
     }
 
+    // Last resort: arecord → wav (common on Alpine/ARM images without ffmpeg demux).
+    let wav = path.with_extension("wav");
+    match Command::new("arecord")
+        .args([
+            "-q",
+            "-f",
+            "S16_LE",
+            "-c",
+            "1",
+            "-r",
+            "16000",
+            "-t",
+            "wav",
+            wav.to_str().unwrap_or("voice.wav"),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(mut child) => {
+            std::thread::sleep(std::time::Duration::from_millis(180));
+            match child.try_wait() {
+                Ok(None) => {
+                    return Ok(VoiceRec {
+                        path: wav,
+                        child,
+                        started: Instant::now(),
+                    });
+                }
+                Ok(Some(status)) => {
+                    last_err = format!("arecord exited ({status})");
+                    let _ = std::fs::remove_file(&wav);
+                }
+                Err(e) => {
+                    last_err = format!("arecord wait failed: {e}");
+                    let _ = child.kill();
+                    let _ = std::fs::remove_file(&wav);
+                }
+            }
+        }
+        Err(e) => {
+            last_err = format!("{last_err}; arecord spawn failed: {e}");
+        }
+    }
+
     Err(format!(
-        "{last_err}. Install ffmpeg with PulseAudio/PipeWire/ALSA capture support."
+        "{last_err}. Install ffmpeg (with ALSA/Pulse) or arecord for mic capture."
     ))
 }
 

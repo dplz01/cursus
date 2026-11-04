@@ -877,10 +877,12 @@ fn composer_key_binding(
 }
 
 fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
+    // Hit target / field height — a bit tighter than before. Glyphs stay at
+    // `composer_glyph` (same visual size as the previous larger buttons).
     let send_size = if app.layout() == LayoutMode::Mobile {
-        44.0
+        36.0
     } else {
-        40.0
+        32.0
     };
     let icon_size = if app.layout() == LayoutMode::Mobile {
         20.0

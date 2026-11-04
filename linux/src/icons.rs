@@ -402,12 +402,9 @@ fn tinted<'a>(handle: svg::Handle, color: Color, size: f32) -> Element<'a, Messa
 }
 
 /// Composer chrome icon: fills `hit` for hover hit-testing, draws the SVG at
-/// its intrinsic size (~24px) **centered** in that box, and tints via
-/// [`svg::Status`].
-///
-/// `ContentFit::None` pins the glyph to the top-left of the hit box — use
-/// [`ContentFit::ScaleDown`] so iced takes the centering draw path without
-/// upscaling past the intrinsic size.
+/// its intrinsic size (~24px) **centered** via [`ContentFit::ScaleDown`] (no
+/// upscale), and tints via [`svg::Status`]. Shrinking `hit` does not change
+/// the glyph as long as `hit` ≥ intrinsic size.
 pub fn composer_tool_icon<'a>(
     handle: svg::Handle,
     hit: f32,

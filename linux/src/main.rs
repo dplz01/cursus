@@ -7270,12 +7270,18 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
 }
 
 fn stop_ffmpeg(child: &mut Child) {
+    // ffmpeg: 'q' on stdin. arecord ignores stdin — send SIGINT via kill(1).
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write;
         let _ = stdin.write_all(b"q");
         let _ = stdin.flush();
     }
-    // Give ffmpeg a moment to finalize the m4a; then force-kill if needed.
+    let _ = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    // Give the recorder a moment to finalize; then force-kill if needed.
     for _ in 0..50 {
         match child.try_wait() {
             Ok(Some(_)) => return,

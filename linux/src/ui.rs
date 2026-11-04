@@ -904,6 +904,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
 
     let editor = touch_as_mouse(
         text_editor(app.composer_content())
+            .id(iced::widget::Id::new("composer-input"))
             .placeholder(placeholder)
             .on_action(Message::ComposerEdit)
             .padding(editor_padding)
@@ -964,8 +965,12 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     // Keep top tight — empty suggest/reply used to leave phantom column spacing.
     let bar_pad_top = 2.0;
 
-    let mut body = Column::new().spacing(0).width(Length::Fill);
-    if !suggestions.is_empty() {
+    // Keep a fixed 3-slot column ([suggest][reply][input]) so showing the
+    // `:shortcode` list doesn't shift the editor's tree index and steal focus.
+    // Empty slots stay typed as Column (same tag) rather than Space.
+    let suggest_slot: Element<'_, Message> = if suggestions.is_empty() {
+        Column::new().width(Length::Fill).into()
+    } else {
         let mut list = Column::new().spacing(2).width(Length::Fill);
         for (i, hit) in suggestions.iter().enumerate() {
             let selected = i == suggest_idx;
@@ -1003,9 +1008,12 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
                 },
                 ..container::Style::default()
             });
-        body = body.push(suggest_panel).push(vertical().height(6));
-    }
-    if let Some(reply) = app.reply_to() {
+        column![suggest_panel, vertical().height(6)]
+            .width(Length::Fill)
+            .into()
+    };
+
+    let reply_slot: Element<'_, Message> = if let Some(reply) = app.reply_to() {
         let preview: Element<'_, Message> = if cursus_core::is_short_emoji(&reply.preview) {
             emoji_glyph(reply.preview.clone())
                 .size(d.body)
@@ -1046,9 +1054,16 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             },
             ..container::Style::default()
         });
-        body = body.push(reply_bar).push(vertical().height(6));
-    }
-    body = body.push(input_row);
+        column![reply_bar, vertical().height(6)]
+            .width(Length::Fill)
+            .into()
+    } else {
+        Column::new().width(Length::Fill).into()
+    };
+
+    let body = column![suggest_slot, reply_slot, input_row]
+        .spacing(0)
+        .width(Length::Fill);
 
     container(body)
         .padding(Padding {

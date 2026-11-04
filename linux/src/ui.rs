@@ -915,41 +915,65 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             .max_height(max_content)
             .wrapping(Wrapping::WordOrGlyph)
             .style(theme::composer_editor())
-            .key_binding(|key_press| {
-                // Enter sends (Shift+Enter = newline via default Binding::Enter).
-                if matches!(
-                    key_press.key.as_ref(),
-                    keyboard::Key::Named(key::Named::Enter)
-                ) && !key_press.modifiers.shift()
-                {
-                    return Some(EditorBinding::Custom(Message::Send));
-                }
-
-                // Keep Ctrl/Cmd chords (SelectAll, Copy, Cut, Paste) on the
-                // default path — never intercept Character while modifiers are set.
-                // iced 0.14 IME handles composed accents / preedit natively.
-                if key_press.modifiers.command() || key_press.modifiers.control() {
-                    return EditorBinding::from_key_press(key_press);
-                }
-
-                // OSK: multi-codepoint `text` (emoji / composed graphemes) when
-                // unmodified. Single chars fall through to defaults + IME.
-                if matches!(
-                    key_press.status,
-                    iced::widget::text_editor::Status::Focused { .. }
-                ) {
-                    if let Some(raw) = key_press.text.as_ref() {
-                        let cleaned: String =
-                            raw.chars().filter(|c| !c.is_control()).collect();
-                        if cleaned.chars().count() > 1 {
-                            return Some(EditorBinding::Custom(Message::ComposerInsert(
-                                cleaned,
-                            )));
+            .key_binding({
+                let has_suggestions = !suggestions.is_empty();
+                move |key_press| {
+                    // `:shortcode` list: Tab / Shift+Tab cycle, Enter accepts.
+                    if has_suggestions {
+                        if matches!(
+                            key_press.key.as_ref(),
+                            keyboard::Key::Named(key::Named::Tab)
+                        ) {
+                            return Some(EditorBinding::Custom(if key_press.modifiers.shift() {
+                                Message::EmojiSuggestPrev
+                            } else {
+                                Message::EmojiSuggestNext
+                            }));
+                        }
+                        if matches!(
+                            key_press.key.as_ref(),
+                            keyboard::Key::Named(key::Named::Enter)
+                        ) && !key_press.modifiers.shift()
+                        {
+                            return Some(EditorBinding::Custom(Message::EmojiSuggestAccept));
                         }
                     }
-                }
 
-                EditorBinding::from_key_press(key_press)
+                    // Enter sends (Shift+Enter = newline via default Binding::Enter).
+                    if matches!(
+                        key_press.key.as_ref(),
+                        keyboard::Key::Named(key::Named::Enter)
+                    ) && !key_press.modifiers.shift()
+                    {
+                        return Some(EditorBinding::Custom(Message::Send));
+                    }
+
+                    // Keep Ctrl/Cmd chords (SelectAll, Copy, Cut, Paste) on the
+                    // default path — never intercept Character while modifiers are set.
+                    // iced 0.14 IME handles composed accents / preedit natively.
+                    if key_press.modifiers.command() || key_press.modifiers.control() {
+                        return EditorBinding::from_key_press(key_press);
+                    }
+
+                    // OSK: multi-codepoint `text` (emoji / composed graphemes) when
+                    // unmodified. Single chars fall through to defaults + IME.
+                    if matches!(
+                        key_press.status,
+                        iced::widget::text_editor::Status::Focused { .. }
+                    ) {
+                        if let Some(raw) = key_press.text.as_ref() {
+                            let cleaned: String =
+                                raw.chars().filter(|c| !c.is_control()).collect();
+                            if cleaned.chars().count() > 1 {
+                                return Some(EditorBinding::Custom(Message::ComposerInsert(
+                                    cleaned,
+                                )));
+                            }
+                        }
+                    }
+
+                    EditorBinding::from_key_press(key_press)
+                }
             }),
     );
 

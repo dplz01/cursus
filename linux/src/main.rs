@@ -1127,12 +1127,11 @@ impl App {
                 use iced::keyboard::key::Named;
                 match key {
                     // Handlers no-op when the matching overlay is closed.
+                    // Emoji suggest Tab/Shift+Tab/Enter are handled in the
+                    // composer key_binding so they don't fight the editor.
                     iced::keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
                     iced::keyboard::Key::Named(Named::ArrowLeft) => Some(Message::MediaPrev),
                     iced::keyboard::Key::Named(Named::ArrowRight) => Some(Message::MediaNext),
-                    iced::keyboard::Key::Named(Named::ArrowUp) => Some(Message::EmojiSuggestPrev),
-                    iced::keyboard::Key::Named(Named::ArrowDown) => Some(Message::EmojiSuggestNext),
-                    iced::keyboard::Key::Named(Named::Tab) => Some(Message::EmojiSuggestAccept),
                     _ => None,
                 }
             }
@@ -1329,24 +1328,32 @@ impl App {
             }
             Message::ComposerChanged(value) => {
                 // Expand completed `:shortcode:` as you type (GitHub / gemoji names).
+                let before = cursus_core::pending_shortcode_query(&self.composer_text())
+                    .map(str::to_owned);
                 self.set_composer_text(cursus_core::expand_emoji_shortcodes(&value));
-                self.emoji_suggest_index = 0;
+                self.sync_emoji_suggest_index(before.as_deref());
                 Task::none()
             }
             Message::ComposerEdit(action) => {
+                let before = cursus_core::pending_shortcode_query(&self.composer_text())
+                    .map(str::to_owned);
                 self.composer.perform(action);
                 let raw = self.composer_text();
                 let expanded = cursus_core::expand_emoji_shortcodes(&raw);
                 if expanded != raw {
                     self.set_composer_text(expanded);
                 }
-                self.emoji_suggest_index = 0;
+                // Only reset highlight when the `:prefix` changes — never on
+                // cursor motion / every keystroke (that broke Tab cycling).
+                self.sync_emoji_suggest_index(before.as_deref());
                 Task::none()
             }
             Message::ComposerInsert(text) => {
                 // Paste full Unicode strings from OSK / composed accents.
                 // `Binding::Insert` only takes one char and ignores Key::Character
                 // when the event has no `text` payload (common on mobile VK).
+                let before = cursus_core::pending_shortcode_query(&self.composer_text())
+                    .map(str::to_owned);
                 self.composer
                     .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
                         std::sync::Arc::new(text),
@@ -1356,7 +1363,7 @@ impl App {
                 if expanded != raw {
                     self.set_composer_text(expanded);
                 }
-                self.emoji_suggest_index = 0;
+                self.sync_emoji_suggest_index(before.as_deref());
                 Task::none()
             }
             Message::EmojiSuggestNext => {
@@ -4564,10 +4571,42 @@ impl App {
 
     fn set_composer_text(&mut self, text: impl AsRef<str>) {
         self.composer = text_editor::Content::with_text(text.as_ref());
+        self.move_composer_cursor_to_end();
+    }
+
+    fn move_composer_cursor_to_end(&mut self) {
+        let line = self.composer.line_count().saturating_sub(1);
+        // cosmic_text cursor index is a byte offset into the line.
+        let column = self
+            .composer
+            .line(line)
+            .map(|l| l.text.len())
+            .unwrap_or(0);
+        self.composer.move_to(text_editor::Cursor {
+            position: text_editor::Position { line, column },
+            selection: None,
+        });
     }
 
     fn clear_composer(&mut self) {
         self.composer = text_editor::Content::new();
+    }
+
+    /// Reset suggestion highlight when the pending `:prefix` changes; otherwise
+    /// keep the index and clamp it to the current list.
+    fn sync_emoji_suggest_index(&mut self, before_prefix: Option<&str>) {
+        let text = self.composer_text();
+        let after = cursus_core::pending_shortcode_query(&text);
+        if before_prefix != after {
+            self.emoji_suggest_index = 0;
+            return;
+        }
+        let n = self.emoji_suggestions().len();
+        if n == 0 {
+            self.emoji_suggest_index = 0;
+        } else {
+            self.emoji_suggest_index = self.emoji_suggest_index.min(n - 1);
+        }
     }
 
     pub(crate) fn voice_recording(&self) -> bool {
@@ -5657,6 +5696,7 @@ impl App {
         };
         text.truncate(start);
         text.push_str(glyph);
+        // Recreates content and parks the caret after the inserted emoji.
         self.set_composer_text(text);
         self.emoji_suggest_index = 0;
     }

@@ -12,6 +12,7 @@ mod theme;
 mod touch_mouse;
 mod ui;
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -52,6 +53,12 @@ struct PointerGate {
     anchor: Mutex<Option<(f32, f32)>>,
     moved: AtomicBool,
     hover_ok: AtomicBool,
+    /// True between FingerPressed and FingerLifted (touch scroll session).
+    touch_down: AtomicBool,
+    /// Last gesture involved a finger (so release handlers honor `moved`).
+    touch_gesture: AtomicBool,
+    /// Subscription published `PointerPressed` (long-press timer may be live).
+    long_press_msg: AtomicBool,
 }
 
 impl PointerGate {
@@ -61,6 +68,9 @@ impl PointerGate {
             anchor: Mutex::new(None),
             moved: AtomicBool::new(false),
             hover_ok: AtomicBool::new(true),
+            touch_down: AtomicBool::new(false),
+            touch_gesture: AtomicBool::new(false),
+            long_press_msg: AtomicBool::new(false),
         }
     }
 
@@ -80,18 +90,37 @@ impl PointerGate {
             *a = Some((x, y));
         }
         self.moved.store(false, Ordering::Relaxed);
+        self.touch_down.store(true, Ordering::Relaxed);
+        self.touch_gesture.store(true, Ordering::Relaxed);
     }
 
     fn clear_press(&self) {
         if let Ok(mut a) = self.anchor.lock() {
             *a = None;
         }
-        self.moved.store(false, Ordering::Relaxed);
+        self.touch_down.store(false, Ordering::Relaxed);
     }
 
     fn touch_ended(&self) {
         self.hover_ok.store(false, Ordering::Relaxed);
         self.clear_press();
+        // Keep `moved` + `touch_gesture` until the next press / mouse click so
+        // release handlers in the same frame can still call `tap_allowed`.
+    }
+
+    /// Mouse click — not a touch gesture; don't inherit the last scroll's `moved`.
+    fn mouse_click_reset(&self) {
+        self.moved.store(false, Ordering::Relaxed);
+        self.touch_gesture.store(false, Ordering::Relaxed);
+        self.hover_ok.store(true, Ordering::Relaxed);
+    }
+
+    fn tap_ok(&self) -> bool {
+        if self.touch_gesture.load(Ordering::Relaxed) {
+            !self.moved.load(Ordering::Relaxed)
+        } else {
+            true
+        }
     }
 
     /// Update tracking; return a Message only when App must react.
@@ -108,6 +137,9 @@ impl PointerGate {
                 let dy = y - ay;
                 if dx * dx + dy * dy > PRESS_MOVE_SLOP * PRESS_MOVE_SLOP {
                     self.moved.store(true, Ordering::Relaxed);
+                    // Only wake App when a long-press timer might need cancel,
+                    // or history FAB away-state must flip — always publish the
+                    // first move-past-slop so press_moved / timers stay in sync.
                     publish = true;
                 }
             }
@@ -121,6 +153,26 @@ impl PointerGate {
 }
 
 static POINTER_GATE: PointerGate = PointerGate::new();
+
+/// Hover targets for the event subscription (long-press only when a row/bubble
+/// is hot — otherwise FingerPressed must not rebuild the whole UI, or every
+/// scroll gesture starts with a one-frame stall on ARM).
+///
+/// `thread_local` — iced delivers window events on the UI thread; HoverSlots
+/// uses `Rc`/`Cell` and is not `Sync`.
+thread_local! {
+    static HOVER_FOR_GATE: RefCell<Option<hover::HoverSlots>> = const { RefCell::new(None) };
+}
+
+fn hover_target_hot() -> bool {
+    HOVER_FOR_GATE.with(|g| {
+        g.borrow().as_ref().is_some_and(|slots| {
+            slots.chat.get().is_some()
+                || slots.msg.get().is_some()
+                || slots.reaction.borrow().is_some()
+        })
+    })
+}
 
 /// Jump-to-latest FAB gate — only publishes when “away” flips, so scroll does not
 /// rebuild the chat on every wheel tick (that was the original lag).
@@ -1038,7 +1090,13 @@ impl App {
                 chat_menu: None,
                 long_press_generation: 0,
                 long_press_index: None,
-                hover: hover::HoverSlots::default(),
+                hover: {
+                    let slots = hover::HoverSlots::default();
+                    HOVER_FOR_GATE.with(|g| {
+                        *g.borrow_mut() = Some(slots.clone());
+                    });
+                    slots
+                },
                 press_anchor: None,
                 press_moved: false,
                 last_pointer: (0.0, 0.0),
@@ -1118,20 +1176,48 @@ impl App {
             iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
                 POINTER_GATE.filter_move(position.x, position.y)
             }
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
+                // Mouse clicks must not inherit `moved` from a prior touch scroll.
+                POINTER_GATE.mouse_click_reset();
+                None
+            }
             // Long-press is touch-only; mouse uses right-click for menus so
             // left-clicks on buttons/composer are never mistaken for holds.
+            // Critical: only publish PointerPressed when a hover target is hot.
+            // Publishing on every finger-down rebuilds the whole view and is
+            // the “tap vs swipe” stall on ARM scrollables.
             iced::Event::Touch(iced::touch::Event::FingerPressed { position, .. }) => {
-                Some(Message::PointerPressed {
-                    x: position.x,
-                    y: position.y,
-                })
+                POINTER_GATE.begin_press(position.x, position.y);
+                if hover_target_hot() {
+                    POINTER_GATE
+                        .long_press_msg
+                        .store(true, Ordering::Relaxed);
+                    Some(Message::PointerPressed {
+                        x: position.x,
+                        y: position.y,
+                    })
+                } else {
+                    POINTER_GATE
+                        .long_press_msg
+                        .store(false, Ordering::Relaxed);
+                    None
+                }
             }
             iced::Event::Touch(iced::touch::Event::FingerMoved { position, .. }) => {
                 POINTER_GATE.filter_move(position.x, position.y)
             }
             iced::Event::Touch(iced::touch::Event::FingerLifted { .. })
             | iced::Event::Touch(iced::touch::Event::FingerLost { .. }) => {
-                Some(Message::PointerTouchEnded)
+                let cancel_long_press = POINTER_GATE
+                    .long_press_msg
+                    .swap(false, Ordering::Relaxed);
+                POINTER_GATE.touch_ended();
+                if cancel_long_press {
+                    Some(Message::PointerTouchEnded)
+                } else {
+                    // Sticky hover cleared via gate; view reads hover_ok() live.
+                    None
+                }
             }
             iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, .. }) => {
                 use iced::keyboard::key::Named;
@@ -3972,7 +4058,7 @@ impl App {
                 self.press_anchor = Some((px, py));
                 self.press_moved = false;
                 self.last_pointer = (px, py);
-                POINTER_GATE.begin_press(px, py);
+                // Gate already began the press in the subscription.
 
                 // Do not capture press in mouse_area — scrollable needs FingerPressed.
                 // Long-press is armed against one target only (same as right-click).
@@ -5222,7 +5308,8 @@ impl App {
             .with_text_scale(self.desktop_prefs.text_size.scale())
     }
     pub(crate) fn hover_ok(&self) -> bool {
-        self.hover_ok
+        // Gate clears on finger-up without always publishing a Message.
+        self.hover_ok && POINTER_GATE.hover_ok.load(Ordering::Relaxed)
     }
     pub(crate) fn window_width(&self) -> f32 {
         self.width
@@ -5387,13 +5474,10 @@ impl App {
 
     /// True when a release should count as a tap (not a scroll gesture).
     ///
-    /// Touch presses set `press_anchor`; if the finger moved, activation is
-    /// suppressed. Mouse clicks (no touch press) always count as taps.
+    /// Touch presses track movement in [`POINTER_GATE`]; mouse clicks reset
+    /// that state so they always count as taps.
     pub(crate) fn tap_allowed(&self) -> bool {
-        match self.press_anchor {
-            None => true,
-            Some(_) => !self.press_moved,
-        }
+        POINTER_GATE.tap_ok() && !self.press_moved
     }
 
     fn cancel_press_timers(&mut self) {

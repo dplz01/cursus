@@ -490,6 +490,16 @@ pub struct MessageSender {
     pub role: String,
 }
 
+/// Group invitation embedded in a direct-chat item (`rcvGroupInvitation` / `sndGroupInvitation`).
+#[derive(Debug, Clone)]
+pub struct GroupInvitationInfo {
+    pub group_id: i64,
+    pub group_name: String,
+    pub member_role: String,
+    /// `pending` / `accepted` / `rejected` / `expired`.
+    pub status: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
     pub item_id: i64,
@@ -512,15 +522,24 @@ pub struct ChatMessage {
     pub sender: Option<MessageSender>,
     /// Protocol / group event — render as centered mid-text, not a bubble.
     pub is_announcement: bool,
+    /// Group invite card (direct chat with the inviter).
+    pub group_invitation: Option<GroupInvitationInfo>,
 }
 
 impl ChatMessage {
     /// Short emoji-only text message (no file) → large emoji bubble.
     pub fn is_emoji_only(&self) -> bool {
         !self.is_announcement
+            && self.group_invitation.is_none()
             && self.deleted.is_none()
             && self.file.is_none()
             && crate::rich_text::is_short_emoji(&self.text)
+    }
+
+    pub fn group_invite_pending(&self) -> bool {
+        self.group_invitation
+            .as_ref()
+            .is_some_and(|g| !self.outgoing && g.status.eq_ignore_ascii_case("pending"))
     }
 
     pub fn is_deleted(&self) -> bool {

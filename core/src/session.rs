@@ -714,6 +714,11 @@ impl Session {
         self.send(&Commands::leave_group(group_id))
     }
 
+    /// Accept a group invitation received in a direct chat (`/_join #id`).
+    pub fn join_group(&self, group_id: i64) -> Result<Value> {
+        self.send(&Commands::join_group(group_id))
+    }
+
     pub fn set_member_show_messages(
         &self,
         group_id: i64,
@@ -1432,10 +1437,17 @@ fn parse_one_message(item: &Value) -> Option<ChatMessage> {
             DeliveryStatus::Delivered
         });
     let file = parse_file_info(item);
+    let group_invitation = parse_group_invitation(item);
     // File-only items often have empty itemText — synthesize a label.
     if text.is_empty() {
         if deleted.is_some() {
             // Keep the row so the UI can show “marked deleted” / “deleted”.
+        } else if let Some(inv) = group_invitation.as_ref() {
+            text = if outgoing {
+                format!("You invited them to join {}", inv.group_name)
+            } else {
+                format!("Invited to join {} as {}", inv.group_name, inv.member_role)
+            };
         } else if let Some(f) = file.as_ref() {
             text = f.file_name.clone();
         } else {
@@ -1488,6 +1500,39 @@ fn parse_one_message(item: &Value) -> Option<ChatMessage> {
         deleted,
         sender,
         is_announcement,
+        group_invitation,
+    })
+}
+
+fn parse_group_invitation(item: &Value) -> Option<crate::models::GroupInvitationInfo> {
+    let content = item.get("content")?;
+    let ty = content.get("type")?.as_str()?;
+    if ty != "rcvGroupInvitation" && ty != "sndGroupInvitation" {
+        return None;
+    }
+    let inv = content.get("groupInvitation")?;
+    let group_id = inv.get("groupId")?.as_i64()?;
+    let group_name = inv
+        .pointer("/groupProfile/displayName")
+        .or_else(|| inv.get("localDisplayName"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Group")
+        .to_string();
+    let member_role = content
+        .get("memberRole")
+        .and_then(|v| v.as_str())
+        .unwrap_or("member")
+        .to_string();
+    let status = inv
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("pending")
+        .to_string();
+    Some(crate::models::GroupInvitationInfo {
+        group_id,
+        group_name,
+        member_role,
+        status,
     })
 }
 

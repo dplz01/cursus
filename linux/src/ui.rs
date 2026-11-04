@@ -535,29 +535,30 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
     let d = app.density();
     let show_compose = matches!(app.nav(), NavSection::Chats | NavSection::Channels)
         && app.connected();
-    let header: Element<'_, Message> = if show_compose {
-        row![
-            text(app.nav().label())
-                .size(d.title)
-                .color(theme::t().text_primary)
-                .width(Length::Fill),
-            button(icons::centered_hit(
-                icons::plus_icon(20.0, theme::t().accent),
-                36.0,
-            ))
-            .on_press(Message::OpenCompose)
-            .padding(0)
-            .style(theme::secondary_action(app.hover_ok())),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
+    // Same header chrome for every section: title + trailing 36px slot so
+    // Calls/Settings match the Chats/Channels "title row with button" box.
+    let trailing: Element<'_, Message> = if show_compose {
+        button(icons::centered_hit(
+            icons::plus_icon(20.0, theme::t().accent),
+            36.0,
+        ))
+        .on_press(Message::OpenCompose)
+        .padding(0)
+        .style(theme::secondary_action(app.hover_ok()))
         .into()
     } else {
+        horizontal().width(36.0).height(36.0).into()
+    };
+    let header: Element<'_, Message> = row![
         text(app.nav().label())
             .size(d.title)
             .color(theme::t().text_primary)
-            .into()
-    };
+            .width(Length::Fill),
+        trailing,
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into();
 
     let body: Element<'_, Message> = match app.nav() {
         NavSection::Chats => chat_list(app),
@@ -1342,6 +1343,12 @@ fn message_history<'a>(app: &'a App, d: Density) -> Element<'a, Message> {
     let mut prev_sender: Option<i64> = None;
     let mut prev_channel_block = false;
     for msg in messages {
+        if msg.group_invitation.is_some() {
+            prev_sender = None;
+            prev_channel_block = false;
+            col = col.push(group_invitation_card(app, msg, d));
+            continue;
+        }
         if msg.is_announcement {
             prev_sender = None;
             prev_channel_block = false;
@@ -1428,6 +1435,67 @@ fn message_history<'a>(app: &'a App, d: Density) -> Element<'a, Message> {
     .height(Length::Fill)
     .clip(true)
     .into()
+}
+
+/// Group invitation in a direct chat — log-style copy + Accept / Reject when pending.
+fn group_invitation_card<'a>(
+    app: &'a App,
+    msg: &'a ChatMessage,
+    d: Density,
+) -> Element<'a, Message> {
+    let Some(inv) = msg.group_invitation.as_ref() else {
+        return announcement_row(msg, d);
+    };
+    let hover = app.hover_ok();
+    let status = inv.status.to_ascii_lowercase();
+    let detail = match status.as_str() {
+        "accepted" => "Joined".to_string(),
+        "rejected" => "Rejected".to_string(),
+        "expired" => "Expired".to_string(),
+        _ if msg.outgoing => format!("Invited as {}", inv.member_role),
+        _ => format!("Invited as {}", inv.member_role),
+    };
+    let mut body = Column::new()
+        .spacing(6)
+        .width(Length::Fill)
+        .push(
+            text(inv.group_name.clone())
+                .size(d.body)
+                .color(theme::t().text_primary),
+        )
+        .push(
+            text(detail)
+                .size(d.meta)
+                .color(theme::t().text_muted),
+        );
+    if msg.group_invite_pending() {
+        body = body.push(
+            row![
+                button(text("Accept").size(d.meta))
+                    .on_press(Message::AcceptGroupInvitation(inv.group_id))
+                    .padding(Padding::from([8, 12]))
+                    .style(theme::primary_action(hover)),
+                button(text("Reject").size(d.meta))
+                    .on_press(Message::RejectGroupInvitation(inv.group_id))
+                    .padding(Padding::from([8, 12]))
+                    .style(theme::secondary_action(hover)),
+            ]
+            .spacing(8),
+        );
+    }
+    container(body)
+        .padding(Padding::from([10, 12]))
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().bg_elevated)),
+            border: iced::Border {
+                color: theme::t().border,
+                width: 1.0,
+                radius: 12.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// Telegram / SimpleX-style centered protocol line (left group, profile update, …).
@@ -1671,8 +1739,8 @@ fn message_bubble<'a>(
         .align_x(align)
         .push(bubble_with_sender);
 
-    // No on_press — keeps history scrollable under touch. Long-press is armed
-    // from PointerPressed via hover slots (no Message on enter/exit).
+    // Long-press is detected inside HoverArea (hold→lift) so touch works even
+    // when FingerPressed skips App::PointerPressed for scroll performance.
     let bubble_area = hover::track_msg(
         stack,
         msg.item_id,
@@ -2060,25 +2128,48 @@ fn bubble_time_height(d: Density) -> f32 {
     f32::from(d.meta) + 2.0
 }
 
-/// Estimate whether the last text line has room for the time chip beside it.
-fn last_line_fits_time(text: &str, d: Density, outgoing: bool, content_max: f32) -> bool {
-    let last = text.lines().last().unwrap_or(text).trim_end();
-    // Rough glyph width — good enough to choose overlay vs stack.
-    let col_w = (d.body * 0.55).max(6.0);
-    let last_w = last.chars().count() as f32 * col_w;
-    let time_w = {
-        let text_w = f32::from(d.meta) * 5.2;
-        let ticks = if outgoing {
-            (f32::from(d.meta) * 0.85).clamp(10.0, 13.0) + 4.0
-        } else {
-            0.0
-        };
-        text_w + ticks + 10.0
+fn estimate_time_width(d: Density, outgoing: bool) -> f32 {
+    let text_w = f32::from(d.meta) * 5.2;
+    let ticks = if outgoing {
+        (f32::from(d.meta) * 0.85).clamp(10.0, 13.0) + 4.0
+    } else {
+        0.0
     };
-    last_w + time_w < content_max
+    text_w + ticks + 10.0
 }
 
-/// Body + time/receipt: float over short last lines, otherwise sit underneath.
+fn estimate_last_line_width(text: &str, d: Density) -> f32 {
+    let last = text.lines().last().unwrap_or(text).trim_end();
+    let col_w = (d.body * 0.55).max(6.0);
+    last.chars().count() as f32 * col_w
+}
+
+fn count_visual_lines(text: &str, d: Density, content_max: f32) -> usize {
+    let col_w = (d.body * 0.55).max(6.0);
+    let hard = text.lines().count().max(1);
+    let soft: usize = text
+        .lines()
+        .map(|line| {
+            let w = line.chars().count() as f32 * col_w;
+            ((w / content_max).ceil() as usize).max(1)
+        })
+        .sum();
+    hard.max(soft).max(1)
+}
+
+/// Overlay vs stack for the time chip (see .bugs.txt).
+fn should_overlay_timestamp(text: &str, d: Density, outgoing: bool, content_max: f32) -> bool {
+    let time_w = estimate_time_width(d, outgoing);
+    let last_w = estimate_last_line_width(text, d);
+    if last_w + time_w >= content_max {
+        return false;
+    }
+    // Multi-line: float over the last line. Single-line: keep near the text
+    // (still overlay corner, not a full underneath stack).
+    true
+}
+
+/// Body + time/receipt: float when last line has room; otherwise sit underneath.
 fn bubble_content_with_time<'a>(
     content: Element<'a, Message>,
     msg: &'a ChatMessage,
@@ -2086,7 +2177,9 @@ fn bubble_content_with_time<'a>(
     content_max: f32,
 ) -> Element<'a, Message> {
     let stamp = bubble_time_meta(msg, d);
-    if last_line_fits_time(&msg.text, d, msg.outgoing, content_max) {
+    let overlay = should_overlay_timestamp(&msg.text, d, msg.outgoing, content_max);
+    let multi = count_visual_lines(&msg.text, d, content_max) > 1;
+    if overlay {
         let chip_bg = if msg.outgoing {
             theme::t().accent_soft
         } else {
@@ -2107,18 +2200,30 @@ fn bubble_content_with_time<'a>(
                 },
                 ..container::Style::default()
             });
-        container(
-            Stack::new()
-                .push(container(content).max_width(content_max))
-                .push(
-                    container(chip)
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .align_x(Alignment::End)
-                        .align_y(Alignment::End),
-                ),
-        )
-        .into()
+        if multi {
+            // Float over the last line of a multi-line bubble.
+            container(
+                Stack::new()
+                    .push(container(content).max_width(content_max))
+                    .push(
+                        container(chip)
+                            .width(Length::Fill)
+                            .height(Length::Fill)
+                            .align_x(Alignment::End)
+                            .align_y(Alignment::End),
+                    ),
+            )
+            .into()
+        } else {
+            // Single line with room: time sits on the same row, near the text.
+            row![
+                container(content).max_width((content_max - estimate_time_width(d, msg.outgoing)).max(40.0)),
+                chip,
+            ]
+            .spacing(4)
+            .align_y(Alignment::End)
+            .into()
+        }
     } else {
         column![
             container(content).max_width(content_max),

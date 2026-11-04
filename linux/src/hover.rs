@@ -40,6 +40,11 @@ impl HoverSlots {
 #[derive(Debug, Clone, Copy, Default)]
 struct HoverState {
     is_hovered: bool,
+    /// Finger/button down tracking for long-press (touch menus without App rebuild).
+    press_at: Option<std::time::Instant>,
+    press_x: f32,
+    press_y: f32,
+    press_moved: bool,
 }
 
 /// Mouse/touch area: release / right-press publish Messages; enter/exit only
@@ -48,6 +53,7 @@ pub struct HoverArea<'a, Message, Theme, Renderer> {
     content: Element<'a, Message, Theme, Renderer>,
     on_release: Option<Message>,
     on_right_press: Option<Message>,
+    on_long_press: Option<Message>,
     set_enter: Option<Rc<dyn Fn()>>,
     set_exit: Option<Rc<dyn Fn()>>,
     hover_bg: Option<Background>,
@@ -57,6 +63,8 @@ pub struct HoverArea<'a, Message, Theme, Renderer> {
     /// without an App Message.
     redraw_on_hover: bool,
     radius: f32,
+    /// Hold duration before lift counts as a long-press (touch message menus).
+    long_press_ms: u64,
 }
 
 impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
@@ -65,6 +73,7 @@ impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
             content: content.into(),
             on_release: None,
             on_right_press: None,
+            on_long_press: None,
             set_enter: None,
             set_exit: None,
             hover_bg: None,
@@ -72,6 +81,7 @@ impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
             idle_bg: None,
             redraw_on_hover: false,
             radius: 10.0,
+            long_press_ms: 480,
         }
     }
 
@@ -82,6 +92,11 @@ impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
 
     pub fn on_right_press(mut self, msg: Message) -> Self {
         self.on_right_press = Some(msg);
+        self
+    }
+
+    pub fn on_long_press(mut self, msg: Message) -> Self {
+        self.on_long_press = Some(msg);
         self
     }
 
@@ -196,21 +211,72 @@ where
         }
 
         if !cursor.is_over(layout.bounds()) {
-            return;
+            // Still track move/lift if a press started here (finger may leave bounds).
+            if state.press_at.is_none() {
+                return;
+            }
         }
 
+        const SLOP: f32 = 14.0;
         match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+            | Event::Touch(touch::Event::FingerPressed { .. }) => {
+                if cursor.is_over(layout.bounds()) {
+                    state.press_at = Some(std::time::Instant::now());
+                    if let Some(p) = cursor.position() {
+                        state.press_x = p.x;
+                        state.press_y = p.y;
+                    }
+                    state.press_moved = false;
+                }
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. })
+            | Event::Touch(touch::Event::FingerMoved { .. }) => {
+                if state.press_at.is_some() {
+                    if let Some(p) = cursor.position() {
+                        let dx = p.x - state.press_x;
+                        let dy = p.y - state.press_y;
+                        if dx * dx + dy * dy > SLOP * SLOP {
+                            state.press_moved = true;
+                        }
+                    }
+                }
+            }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-            | Event::Touch(touch::Event::FingerLifted { .. }) => {
+            | Event::Touch(touch::Event::FingerLifted { .. })
+            | Event::Touch(touch::Event::FingerLost { .. }) => {
+                let held = state
+                    .press_at
+                    .take()
+                    .map(|t| t.elapsed().as_millis() as u64)
+                    .unwrap_or(0);
+                let moved = state.press_moved;
+                state.press_moved = false;
+                if moved {
+                    return;
+                }
+                if held >= self.long_press_ms {
+                    if let Some(msg) = self.on_long_press.as_ref() {
+                        shell.publish(msg.clone());
+                        shell.capture_event();
+                        return;
+                    }
+                    // Long hold without a local handler: swallow the release so
+                    // App-level long-press menus (chat rows) are not followed by
+                    // an accidental open/select.
+                    return;
+                }
                 if let Some(msg) = self.on_release.as_ref() {
                     shell.publish(msg.clone());
                     shell.capture_event();
                 }
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
-                if let Some(msg) = self.on_right_press.as_ref() {
-                    shell.publish(msg.clone());
-                    shell.capture_event();
+                if cursor.is_over(layout.bounds()) {
+                    if let Some(msg) = self.on_right_press.as_ref() {
+                        shell.publish(msg.clone());
+                        shell.capture_event();
+                    }
                 }
             }
             _ => {}
@@ -342,18 +408,22 @@ pub fn chat_row<'a, Message: Clone + 'a>(
 }
 
 /// Message bubble probe — slot only (no local paint).
+///
+/// Long-press is detected inside the widget (hold then lift) so touchscreens
+/// get the message menu without an App rebuild on every FingerPressed.
 pub fn track_msg<'a, Message: Clone + 'a>(
     content: impl Into<Element<'a, Message, iced::Theme, iced::Renderer>>,
     item_id: i64,
     slots: &HoverSlots,
     on_release: Message,
-    on_right_press: Message,
+    on_long_press: Message,
 ) -> Element<'a, Message> {
     let enter = Rc::clone(&slots.msg);
     let exit = Rc::clone(&slots.msg);
     HoverArea::new(content)
         .on_release(on_release)
-        .on_right_press(on_right_press)
+        .on_right_press(on_long_press.clone())
+        .on_long_press(on_long_press)
         .on_hover_slots(
             move || enter.set(Some(item_id)),
             move || {

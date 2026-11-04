@@ -403,8 +403,8 @@ pub fn round_icon(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
             background,
             text_color: c.text_primary,
             border: Border {
-                color: c.border,
-                width: 1.0,
+                color: iced::Color::TRANSPARENT,
+                width: 0.0,
                 radius: 999.0.into(),
             },
             ..button::Style::default()

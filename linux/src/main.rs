@@ -730,6 +730,10 @@ pub enum Message {
     GroupSettingsAliasChanged(String),
     SaveGroupAlias,
     GroupAliasSaved(Result<(), String>),
+    /// Accept / reject a group invite card in a direct chat (`/_join` / `/_leave`).
+    AcceptGroupInvitation(i64),
+    RejectGroupInvitation(i64),
+    GroupInvitationHandled(Result<String, String>),
     GroupSettingsMute,
     GroupSettingsFavorite,
     PickGroupProfileImage,
@@ -813,6 +817,8 @@ pub enum Message {
     WaveformReady { path: PathBuf, peaks: Result<Vec<f32>, String> },
     /// Async video poster for chat-bubble previews.
     VideoThumbReady { path: PathBuf, thumb: Option<PathBuf> },
+    /// Deferred media warm-up after the chat view has painted once.
+    WarmChatMedia,
     OpenMedia { item_id: i64 },
     CloseMediaViewer,
     MediaPrev,
@@ -1707,7 +1713,55 @@ impl App {
                 Task::none()
             }
             Message::OpenMessageMenu(item_id) => {
+                // Touch long-press arrives here from HoverArea; don't require
+                // tap_allowed (press_moved may still be set from the hold).
                 self.open_message_menu(item_id);
+                Task::none()
+            }
+            Message::AcceptGroupInvitation(group_id) => {
+                let Some(session) = self.session.clone() else {
+                    return Task::none();
+                };
+                self.status = "Joining group…".into();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            session
+                                .join_group(group_id)
+                                .map(|_| "Joined group.".to_string())
+                                .map_err(|e| e.to_string())
+                        })
+                        .await
+                        .map_err(|e| e.to_string())?
+                    },
+                    Message::GroupInvitationHandled,
+                )
+            }
+            Message::RejectGroupInvitation(group_id) => {
+                let Some(session) = self.session.clone() else {
+                    return Task::none();
+                };
+                self.status = "Rejecting invitation…".into();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            session
+                                .leave_group(group_id)
+                                .map(|_| "Group invitation rejected.".to_string())
+                                .map_err(|e| e.to_string())
+                        })
+                        .await
+                        .map_err(|e| e.to_string())?
+                    },
+                    Message::GroupInvitationHandled,
+                )
+            }
+            Message::GroupInvitationHandled(Ok(msg)) => {
+                self.status = msg;
+                Task::batch([self.reload_chats(), self.reload_messages()])
+            }
+            Message::GroupInvitationHandled(Err(err)) => {
+                self.status = err;
                 Task::none()
             }
             Message::CloseMessageMenu => {
@@ -3882,9 +3936,6 @@ impl App {
             }
             Message::MessagesLoaded(Ok(messages)) => {
                 let auto = auto_receive_from_messages(&messages);
-                let wave_tasks = self.enqueue_missing_waveforms(&messages);
-                let thumb_tasks = self.enqueue_missing_video_thumbs(&messages);
-                let decrypt_tasks = self.enqueue_decrypts(&messages);
                 self.messages = messages;
                 // With Anchor::End, relative y=0 is the newest (visual bottom).
                 let pin = if self.pin_history_end {
@@ -3896,12 +3947,23 @@ impl App {
                 } else {
                     Task::none()
                 };
+                // Paint the chat first, then kick media decrypt/thumbs so opening
+                // a heavy history does not trip "app is not responding".
+                let defer_media = Task::perform(
+                    async {
+                        tokio::time::sleep(std::time::Duration::from_millis(32)).await;
+                        Message::WarmChatMedia
+                    },
+                    |m| m,
+                );
+                Task::batch([self.enqueue_receives(auto), pin, defer_media])
+            }
+            Message::WarmChatMedia => {
+                let messages = self.messages.clone();
                 Task::batch([
-                    self.enqueue_receives(auto),
-                    wave_tasks,
-                    thumb_tasks,
-                    decrypt_tasks,
-                    pin,
+                    self.enqueue_missing_waveforms(&messages),
+                    self.enqueue_missing_video_thumbs(&messages),
+                    self.enqueue_decrypts(&messages),
                 ])
             }
             Message::MessagesLoaded(Err(err)) => {
@@ -4221,10 +4283,23 @@ impl App {
                     }
                     Task::none()
                 } else if self.group_settings.is_some() {
+                    // Esc: discard dirty group profile / alias, don't save.
                     self.group_settings = None;
                     Task::none()
                 } else if self.contact_profile.is_some() {
+                    // Esc: leave without committing alias.
                     self.contact_profile = None;
+                    Task::none()
+                } else if self.nav == NavSection::Settings && self.own_profile.dirty {
+                    // Esc: discard settings edits (do not submit).
+                    if let Some(user) = self.session.as_ref().and_then(|s| s.active_profile()) {
+                        self.own_profile = OwnProfileDraft {
+                            fields: user.profile,
+                            dirty: false,
+                        };
+                    } else {
+                        self.own_profile.dirty = false;
+                    }
                     Task::none()
                 } else if self.compose_open {
                     self.compose_open = false;

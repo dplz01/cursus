@@ -403,6 +403,11 @@ impl Commands {
         format!("/_leave #{group_id}")
     }
 
+    /// Accept a pending group invitation (`/_join #{groupId}`).
+    pub fn join_group(group_id: i64) -> String {
+        format!("/_join #{group_id}")
+    }
+
     /// Local hide / show member messages (`/_member settings #{gid} {mid} {json}`).
     pub fn set_member_settings(group_id: i64, member_id: i64, show_messages: bool) -> String {
         let payload = serde_json::json!({ "showMessages": show_messages });

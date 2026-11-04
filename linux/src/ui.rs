@@ -331,15 +331,28 @@ fn stacked_shell(app: &App) -> Element<'_, Message> {
 }
 
 fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
-    let mut col = Column::new()
-        .spacing(8)
-        .padding(Padding::from([12, 8]))
-        .align_x(Alignment::Center)
-        .width(Length::Fill);
+    // Primary destinations stay stacked from the top (where Chats already
+    // sat). Settings drops to the bottom-left corner instead of sharing the
+    // even vertical spacing.
+    let primary = column![
+        nav_destination(app, NavSection::Chats, true, d),
+        nav_destination(app, NavSection::Channels, true, d),
+        nav_destination(app, NavSection::Calls, true, d),
+    ]
+    .spacing(8)
+    .align_x(Alignment::Center)
+    .width(Length::Fill);
 
-    for section in NavSection::all() {
-        col = col.push(nav_destination(app, section, true, d));
-    }
+    let col = column![
+        primary,
+        vertical().height(Length::Fill),
+        nav_destination(app, NavSection::Settings, true, d),
+    ]
+    .spacing(8)
+    .padding(Padding::from([12, 8]))
+    .align_x(Alignment::Center)
+    .width(Length::Fill)
+    .height(Length::Fill);
 
     container(col)
         .width(d.rail_width)
@@ -351,7 +364,7 @@ fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
 fn bottom_nav(app: &App) -> Element<'_, Message> {
     let d = app.density();
     // Equal vertical inset so the bar height hugs the destination buttons.
-    let pad_v = 6.0;
+    let pad_v = 4.0;
     let pad_h = 8.0;
     let mut r = Row::new()
         .spacing(6)
@@ -1033,11 +1046,11 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             Alignment::End
         });
 
-    // Mobile keeps even inset; desktop sits flush on the pane bottom.
+    // Even inset above and below the text field on every layout.
     let (bar_pad_top, bar_pad_bottom) = if app.layout() == LayoutMode::Mobile {
         (6.0, 6.0)
     } else {
-        (8.0, 0.0)
+        (8.0, 8.0)
     };
 
     // Keep a fixed 3-slot column ([suggest][reply][input]) so showing the

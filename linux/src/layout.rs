@@ -65,7 +65,7 @@ impl Density {
             LayoutMode::Mobile => {
                 let scale = (logical_width / 390.0).clamp(1.0, 1.45);
                 let icon = (26.0 * scale).round().clamp(26.0, 34.0);
-                let bar = (60.0 * scale).round().clamp(60.0, 76.0);
+                let bar = (54.0 * scale).round().clamp(54.0, 70.0);
                 Self {
                     title: 17.0,
                     body: 16.0,
@@ -84,7 +84,7 @@ impl Density {
             LayoutMode::Compact => {
                 let scale = (logical_width / 800.0).clamp(1.0, 1.25);
                 let icon = (24.0 * scale).round().clamp(24.0, 30.0);
-                let bar = (56.0 * scale).round().clamp(56.0, 68.0);
+                let bar = (50.0 * scale).round().clamp(50.0, 62.0);
                 Self {
                     title: 16.0,
                     body: 14.0,

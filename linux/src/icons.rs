@@ -401,11 +401,13 @@ fn tinted<'a>(handle: svg::Handle, color: Color, size: f32) -> Element<'a, Messa
         .into()
 }
 
-/// Composer chrome icon: fills `hit` for hover hit-testing, draws at the SVG's
-/// intrinsic size (~24px) centered, and tints idle → hot via [`svg::Status`].
+/// Composer chrome icon: fills `hit` for hover hit-testing, draws the SVG at
+/// its intrinsic size (~24px) **centered** in that box, and tints via
+/// [`svg::Status`].
 ///
-/// Prefer this over baking a color into the view tree — `request_redraw` alone
-/// does not rebuild the app view, so Cell-based tints never appear.
+/// `ContentFit::None` pins the glyph to the top-left of the hit box — use
+/// [`ContentFit::ScaleDown`] so iced takes the centering draw path without
+/// upscaling past the intrinsic size.
 pub fn composer_tool_icon<'a>(
     handle: svg::Handle,
     hit: f32,
@@ -416,7 +418,7 @@ pub fn composer_tool_icon<'a>(
     let icon: Svg<'a, iced::Theme> = svg(handle)
         .width(Length::Fixed(hit))
         .height(Length::Fixed(hit))
-        .content_fit(ContentFit::None)
+        .content_fit(ContentFit::ScaleDown)
         .style(move |_, status| svg::Style {
             color: Some(match status {
                 svg::Status::Hovered if hover_ok => hot,

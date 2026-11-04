@@ -122,6 +122,7 @@ impl Tokens {
             text: self.text_primary,
             primary: self.accent,
             success: self.success,
+            warning: Color::from_rgb(0.90, 0.70, 0.20),
             danger: self.danger,
         }
     }
@@ -561,7 +562,7 @@ pub fn composer_input() -> impl Fn(&iced::Theme, text_input::Status) -> text_inp
     |_, status| {
         let c = t();
         let border_color = match status {
-            text_input::Status::Focused => c.accent,
+            text_input::Status::Focused { .. } => c.accent,
             _ => c.border,
         };
         text_input::Style {
@@ -583,7 +584,7 @@ pub fn composer_editor() -> impl Fn(&iced::Theme, text_editor::Status) -> text_e
     |_, status| {
         let c = t();
         let border_color = match status {
-            text_editor::Status::Focused => c.accent,
+            text_editor::Status::Focused { .. } => c.accent,
             text_editor::Status::Hovered => c.text_muted,
             _ => c.border,
         };
@@ -594,7 +595,6 @@ pub fn composer_editor() -> impl Fn(&iced::Theme, text_editor::Status) -> text_e
                 width: 1.0,
                 radius: 10.0.into(),
             },
-            icon: c.text_muted,
             placeholder: c.text_muted,
             value: c.text_primary,
             selection: c.accent_soft,

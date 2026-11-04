@@ -19,7 +19,6 @@ use iced::advanced::widget::Widget;
 use iced::advanced::{Clipboard, Shell};
 use iced::mouse;
 use iced::touch;
-use iced::window;
 use iced::{Background, Border, Element, Event, Length, Rectangle, Size, Vector};
 
 /// Shared hover targets read from [`crate::App`] on pointer press.
@@ -138,39 +137,37 @@ where
     }
 
     fn layout(
-        &self,
+        &mut self,
         tree: &mut Tree,
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
         self.content
-            .as_widget()
+            .as_widget_mut()
             .layout(&mut tree.children[0], renderer, limits)
     }
 
-    fn on_event(
+    fn update(
         &mut self,
         tree: &mut Tree,
-        event: Event,
+        event: &Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
-    ) -> iced::event::Status {
-        if let iced::event::Status::Captured = self.content.as_widget_mut().on_event(
+    ) {
+        self.content.as_widget_mut().update(
             &mut tree.children[0],
-            event.clone(),
+            event,
             layout,
             cursor,
             renderer,
             clipboard,
             shell,
             viewport,
-        ) {
-            return iced::event::Status::Captured;
-        }
+        );
 
         let state = tree.state.downcast_mut::<HoverState>();
         let was = state.is_hovered;
@@ -181,19 +178,19 @@ where
                 f();
             }
             if self.redraw_on_hover {
-                shell.request_redraw(window::RedrawRequest::NextFrame);
+                shell.request_redraw();
             }
         } else if !state.is_hovered && was {
             if let Some(f) = self.set_exit.as_ref() {
                 f();
             }
             if self.redraw_on_hover {
-                shell.request_redraw(window::RedrawRequest::NextFrame);
+                shell.request_redraw();
             }
         }
 
         if !cursor.is_over(layout.bounds()) {
-            return iced::event::Status::Ignored;
+            return;
         }
 
         match event {
@@ -201,19 +198,17 @@ where
             | Event::Touch(touch::Event::FingerLifted { .. }) => {
                 if let Some(msg) = self.on_release.as_ref() {
                     shell.publish(msg.clone());
-                    return iced::event::Status::Captured;
+                    shell.capture_event();
                 }
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
                 if let Some(msg) = self.on_right_press.as_ref() {
                     shell.publish(msg.clone());
-                    return iced::event::Status::Captured;
+                    shell.capture_event();
                 }
             }
             _ => {}
         }
-
-        iced::event::Status::Ignored
     }
 
     fn mouse_interaction(
@@ -281,13 +276,18 @@ where
     fn overlay<'b>(
         &'b mut self,
         tree: &'b mut Tree,
-        layout: Layout<'_>,
+        layout: Layout<'b>,
         renderer: &Renderer,
+        viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
-        self.content
-            .as_widget_mut()
-            .overlay(&mut tree.children[0], layout, renderer, translation)
+        self.content.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
     }
 }
 

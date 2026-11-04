@@ -22,7 +22,7 @@ use std::time::Instant;
 use iced::futures::{sink::SinkExt, stream};
 use iced::font::Font;
 use iced::widget::container;
-use iced::widget::scrollable::{self, RelativeOffset};
+use iced::widget::scrollable::RelativeOffset;
 use iced::widget::text_editor;
 use iced::{Element, Length, Subscription, Task, Theme};
 use tracing_subscriber::EnvFilter;
@@ -495,8 +495,9 @@ pub fn main() -> iced::Result {
     // `daemon` (not `application`) so hide-to-tray can close the window on
     // Wayland — Mode::Hidden / set_visible(false) is a no-op there — and keep
     // the process alive until Quit.
-    let mut app = iced::daemon(App::title, App::update, App::view)
-        .theme(|app, _| app.iced_theme())
+    let mut app = iced::daemon(App::new, App::update, App::view)
+        .title(App::title)
+        .theme(|app: &App, _| app.iced_theme())
         .default_font(Font::with_name("Noto Sans"))
         .subscription(App::subscription);
     for path in [
@@ -511,7 +512,7 @@ pub fn main() -> iced::Result {
         }
     }
 
-    app.run_with(App::new)
+    app.run()
 }
 
 #[derive(Debug, Clone)]
@@ -1153,9 +1154,8 @@ impl App {
 
         let events = match self.session.clone() {
             Some(session) => {
-                // Restart only when the session pointer identity changes.
-                let id = Arc::as_ptr(&session) as usize;
-                Subscription::run_with_id(id, core_event_stream(session))
+                // Restart only when the session Arc identity changes.
+                Subscription::run_with(SessionSub(session), core_event_stream)
             }
             None => Subscription::none(),
         };
@@ -1170,9 +1170,9 @@ impl App {
             let show = tray.show_id.clone();
             let hide = tray.hide_id.clone();
             let quit = tray.quit_id.clone();
-            Subscription::run_with_id(
-                "tray-poll",
-                tray_action_stream(show, hide, quit),
+            Subscription::run_with(
+                (show, hide, quit),
+                tray_action_stream,
             )
         } else {
             Subscription::none()
@@ -1636,8 +1636,8 @@ impl App {
             Message::ScrollToLatest => {
                 self.history_away_from_end = false;
                 HISTORY_AWAY_GATE.reset();
-                scrollable::snap_to(
-                    scrollable::Id::new("chat-history"),
+                iced::widget::operation::snap_to(
+                    iced::widget::Id::new("chat-history"),
                     RelativeOffset { x: 0.0, y: 0.0 },
                 )
             }
@@ -3247,7 +3247,7 @@ impl App {
                 if let Some(id) = self.main_window {
                     return Task::batch([
                         iced::window::gain_focus(id),
-                        iced::window::change_mode(id, iced::window::Mode::Windowed),
+                        iced::window::set_mode(id, iced::window::Mode::Windowed),
                     ]);
                 }
                 let (id, open) = open_main_window();
@@ -3640,8 +3640,8 @@ impl App {
                 // With Anchor::End, relative y=0 is the newest (visual bottom).
                 let pin = if self.pin_history_end {
                     self.pin_history_end = false;
-                    scrollable::snap_to(
-                        scrollable::Id::new("chat-history"),
+                    iced::widget::operation::snap_to(
+                        iced::widget::Id::new("chat-history"),
                         RelativeOffset { x: 0.0, y: 0.0 },
                     )
                 } else {
@@ -5630,8 +5630,8 @@ impl App {
             (n - 1 - index) as f32 / (n - 1) as f32
         };
         Task::batch([
-            scrollable::snap_to(
-                scrollable::Id::new("chat-history"),
+            iced::widget::operation::snap_to(
+                iced::widget::Id::new("chat-history"),
                 RelativeOffset { x: 0.0, y },
             ),
             Task::perform(
@@ -5683,22 +5683,41 @@ fn open_main_window() -> (iced::window::Id, Task<Message>) {
 
 fn refresh_window_metrics_for(id: iced::window::Id) -> Task<Message> {
     Task::batch([
-        iced::window::get_size(id).map(Message::WindowResized),
-        iced::window::get_scale_factor(id).map(Message::ScaleFactor),
+        iced::window::size(id).map(Message::WindowResized),
+        iced::window::scale_factor(id).map(Message::ScaleFactor),
     ])
 }
 
 fn refresh_scale_factor() -> Task<Message> {
-    iced::window::get_latest().then(|id| match id {
-        Some(id) => iced::window::get_scale_factor(id).map(Message::ScaleFactor),
+    iced::window::latest().then(|id| match id {
+        Some(id) => iced::window::scale_factor(id).map(Message::ScaleFactor),
         None => Task::none(),
     })
 }
 
+/// Hash/Eq by Arc pointer so `Subscription::run_with` restarts only on reconnect.
+#[derive(Clone)]
+struct SessionSub(Arc<Session>);
+
+impl PartialEq for SessionSub {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for SessionSub {}
+
+impl std::hash::Hash for SessionSub {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (Arc::as_ptr(&self.0) as usize).hash(state);
+    }
+}
+
 fn core_event_stream(
-    session: Arc<Session>,
+    session: &SessionSub,
 ) -> impl stream::Stream<Item = Message> + Send + 'static {
-    iced::stream::channel(64, move |mut output| async move {
+    let session = session.0.clone();
+    iced::stream::channel(64, move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
         let mut rx = session.spawn_receiver();
         while let Some(event) = rx.recv().await {
             if output.send(Message::CoreEvent(event)).await.is_err() {
@@ -5710,11 +5729,10 @@ fn core_event_stream(
 
 /// Poll tray/menu channels; only emit when there is work (avoids a 5 Hz full UI rebuild).
 fn tray_action_stream(
-    show_id: tray_icon::menu::MenuId,
-    hide_id: tray_icon::menu::MenuId,
-    quit_id: tray_icon::menu::MenuId,
+    ids: &(tray_icon::menu::MenuId, tray_icon::menu::MenuId, tray_icon::menu::MenuId),
 ) -> impl stream::Stream<Item = Message> + Send + 'static {
-    iced::stream::channel(8, move |mut output| async move {
+    let (show_id, hide_id, quit_id) = ids.clone();
+    iced::stream::channel(8, move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             let mut actions = Vec::new();

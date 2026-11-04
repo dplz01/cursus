@@ -356,7 +356,7 @@ pub fn avatar_initial<'a>(label: &str, size: f32) -> Element<'a, Message> {
         .next()
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_else(|| "?".into());
-    container(text(ch).size((size * 0.42) as u16).color(theme::t().text_primary))
+    container(text(ch).size(size * 0.42).color(theme::t().text_primary))
         .width(size)
         .height(size)
         .center_x(size)

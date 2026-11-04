@@ -1,12 +1,9 @@
 //! Make widgets that only listen for mouse clicks also receive touch.
 //!
-//! iced 0.13 `text_editor` focuses on `Mouse::ButtonPressed` only, while
-//! `text_input` also handles `Touch::FingerPressed`. On phones the compositor
-//! delivers touch events, so the composer never focused. This wrapper
-//! rewrites finger press/move/lift into the equivalent mouse events; the
-//! runtime already places the cursor at the touch position.
+//! iced's `text_editor` focuses on mouse button events; on phones the
+//! compositor delivers touch. This wrapper rewrites finger press/move/lift
+//! into the equivalent mouse events (cursor is already at the touch point).
 
-use iced::advanced::graphics::core::event;
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::overlay;
 use iced::advanced::renderer;
@@ -63,54 +60,59 @@ where
     }
 
     fn layout(
-        &self,
+        &mut self,
         tree: &mut Tree,
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        self.content.as_widget().layout(tree, renderer, limits)
+        self.content.as_widget_mut().layout(tree, renderer, limits)
     }
 
     fn operate(
-        &self,
+        &mut self,
         tree: &mut Tree,
         layout: Layout<'_>,
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
         self.content
-            .as_widget()
+            .as_widget_mut()
             .operate(tree, layout, renderer, operation);
     }
 
-    fn on_event(
+    fn update(
         &mut self,
         tree: &mut Tree,
-        event: Event,
+        event: &Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
-    ) -> event::Status {
-        let event = match event {
+    ) {
+        let mapped = match event {
             Event::Touch(touch::Event::FingerPressed { .. }) => {
-                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                Some(Event::Mouse(mouse::Event::ButtonPressed(
+                    mouse::Button::Left,
+                )))
             }
             Event::Touch(touch::Event::FingerLifted { .. })
-            | Event::Touch(touch::Event::FingerLost { .. }) => {
-                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-            }
+            | Event::Touch(touch::Event::FingerLost { .. }) => Some(Event::Mouse(
+                mouse::Event::ButtonReleased(mouse::Button::Left),
+            )),
             Event::Touch(touch::Event::FingerMoved { position, .. }) => {
-                Event::Mouse(mouse::Event::CursorMoved { position })
+                Some(Event::Mouse(mouse::Event::CursorMoved {
+                    position: *position,
+                }))
             }
-            other => other,
+            _ => None,
         };
 
-        self.content.as_widget_mut().on_event(
+        let event = mapped.as_ref().unwrap_or(event);
+        self.content.as_widget_mut().update(
             tree, event, layout, cursor, renderer, clipboard, shell, viewport,
-        )
+        );
     }
 
     fn mouse_interaction(
@@ -144,12 +146,13 @@ where
     fn overlay<'b>(
         &'b mut self,
         tree: &'b mut Tree,
-        layout: Layout<'_>,
+        layout: Layout<'b>,
         renderer: &Renderer,
+        viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         self.content
             .as_widget_mut()
-            .overlay(tree, layout, renderer, translation)
+            .overlay(tree, layout, renderer, viewport, translation)
     }
 }

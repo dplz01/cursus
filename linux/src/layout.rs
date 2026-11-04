@@ -44,9 +44,9 @@ impl LayoutMode {
 /// Density tokens derived from layout mode + window size.
 #[derive(Debug, Clone, Copy)]
 pub struct Density {
-    pub title: u16,
-    pub body: u16,
-    pub meta: u16,
+    pub title: f32,
+    pub body: f32,
+    pub meta: f32,
     pub pad: f32,
     pub pad_tight: f32,
     pub list_row: f32,
@@ -67,9 +67,9 @@ impl Density {
                 let icon = (26.0 * scale).round().clamp(26.0, 34.0);
                 let bar = (60.0 * scale).round().clamp(60.0, 76.0);
                 Self {
-                    title: 17,
-                    body: 16,
-                    meta: 13,
+                    title: 17.0,
+                    body: 16.0,
+                    meta: 13.0,
                     pad: 16.0,
                     pad_tight: 10.0,
                     list_row: 14.0,
@@ -86,9 +86,9 @@ impl Density {
                 let icon = (24.0 * scale).round().clamp(24.0, 30.0);
                 let bar = (56.0 * scale).round().clamp(56.0, 68.0);
                 Self {
-                    title: 16,
-                    body: 14,
-                    meta: 12,
+                    title: 16.0,
+                    body: 14.0,
+                    meta: 12.0,
                     pad: 14.0,
                     pad_tight: 8.0,
                     list_row: 12.0,
@@ -106,9 +106,9 @@ impl Density {
                 let icon = (26.0 * scale).round().clamp(24.0, 34.0);
                 let hit = (rail - 16.0).max(icon + 20.0);
                 Self {
-                    title: 18,
-                    body: 14,
-                    meta: 12,
+                    title: 18.0,
+                    body: 14.0,
+                    meta: 12.0,
                     pad: 16.0,
                     pad_tight: 8.0,
                     list_row: 12.0,
@@ -139,8 +139,8 @@ impl Density {
     }
 }
 
-fn scale_font(px: u16, scale: f32) -> u16 {
-    ((f32::from(px) * scale).round() as u16).clamp(10, 36)
+fn scale_font(px: f32, scale: f32) -> f32 {
+    (px * scale).round().clamp(10.0, 36.0)
 }
 
 /// Resolve layout from **logical** window dimensions.

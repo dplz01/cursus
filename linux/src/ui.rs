@@ -332,7 +332,7 @@ fn stacked_shell(app: &App) -> Element<'_, Message> {
 
 fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
     // Primary destinations stay stacked from the top (where Chats already
-    // sat). Settings is pinned flush to the bottom-left corner.
+    // sat). Settings is a compact square pinned to the bottom-left corner.
     let primary = column![
         nav_destination(app, NavSection::Chats, true, d.nav_hit, d),
         nav_destination(app, NavSection::Channels, true, d.nav_hit, d),
@@ -348,26 +348,12 @@ fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
     .align_x(Alignment::Center)
     .width(Length::Fill);
 
-    // Compact square hit so the gear itself sits in the corner — the tall
-    // rail hit was centering the icon well above the bottom edge.
-    let corner_hit = (d.icon + 16.0).max(40.0);
-    let settings = container(nav_destination(
-        app,
-        NavSection::Settings,
-        true,
-        corner_hit,
-        d,
-    ))
-    .padding(Padding {
-        top: 0.0,
-        right: 8.0,
-        bottom: 8.0,
-        left: 8.0,
-    })
-    .width(Length::Fill);
+    let corner = (d.icon + 8.0).max(32.0);
+    let settings = container(nav_corner(app, NavSection::Settings, corner, d)).padding(2.0);
 
     let col = column![primary, vertical().height(Length::Fill), settings]
         .spacing(0)
+        .align_x(Alignment::Start)
         .width(Length::Fill)
         .height(Length::Fill);
 
@@ -420,6 +406,35 @@ fn bottom_nav(app: &App) -> Element<'_, Message> {
         .into()
 }
 
+fn nav_corner(app: &App, section: NavSection, hit: f32, d: Density) -> Element<'_, Message> {
+    let active = app.nav() == section;
+    let icon = icons::nav_icon(section.icon(), active, d.icon);
+    let hover_ok = app.hover_ok();
+
+    let content = container(icon)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill);
+
+    let btn = button(content)
+        .on_press(Message::Navigate(section))
+        .padding(0)
+        .width(hit)
+        .height(hit);
+
+    let styled = if active {
+        btn.style(theme::nav_active(hover_ok))
+    } else {
+        btn.style(theme::nav_idle(hover_ok))
+    };
+
+    container(styled)
+        .width(Length::Shrink)
+        .height(Length::Shrink)
+        .into()
+}
+
 fn nav_destination(
     app: &App,
     section: NavSection,
@@ -457,16 +472,23 @@ fn nav_destination(
         btn.style(theme::nav_idle(hover_ok))
     };
 
-    container(styled)
-        .width(Length::Fill)
-        .height(if vertical {
-            Length::Shrink
-        } else {
-            Length::Fill
-        })
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .into()
+    // Rail items must stay Shrink. `center_y(Fill)` also sets height to Fill,
+    // which made Settings share leftover space with the spacer and float the
+    // gear in the middle of that band instead of sitting in the corner.
+    if vertical {
+        container(styled)
+            .width(Length::Fill)
+            .height(Length::Shrink)
+            .center_x(Length::Fill)
+            .into()
+    } else {
+        container(styled)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into()
+    }
 }
 
 fn list_pane(app: &App, width: Length) -> Element<'_, Message> {

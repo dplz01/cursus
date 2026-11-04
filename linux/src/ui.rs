@@ -4891,24 +4891,38 @@ fn contact_feature_prefs(
                 .width(Length::Fill),
         );
         // Two rows so every TTL is visible at once (no cycle).
+        // Release-only chips — `button.on_press` steals the scroll gesture.
+        let _ = hover;
         let mut ttl_col = Column::new().spacing(6).width(Length::Fill);
         for chunk in crate::TIMED_TTL_STEPS.chunks(3) {
             let mut ttl_row = Row::new().spacing(6).width(Length::Fill);
             for &secs in chunk {
                 let selected = p.timed_ttl_secs == secs;
+                let label = text(crate::format_timed_ttl(secs))
+                    .size(d.meta)
+                    .color(if selected {
+                        theme::t().accent
+                    } else {
+                        theme::t().text_primary
+                    });
+                let chip = container(label).padding(Padding::from([8, 10])).style(move |_| {
+                    let c = theme::t();
+                    container::Style {
+                        background: Some(iced::Background::Color(if selected {
+                            c.accent_soft
+                        } else {
+                            c.bg_elevated
+                        })),
+                        border: iced::Border {
+                            color: if selected { c.accent } else { c.border },
+                            width: 1.0,
+                            radius: 10.0.into(),
+                        },
+                        ..container::Style::default()
+                    }
+                });
                 ttl_row = ttl_row.push(
-                    button(
-                        text(crate::format_timed_ttl(secs))
-                            .size(d.meta)
-                            .color(if selected {
-                                theme::t().accent
-                            } else {
-                                theme::t().text_primary
-                            }),
-                    )
-                    .on_press(Message::SetContactTimedTtl(secs))
-                    .padding(Padding::from([8, 10]))
-                    .style(theme::choice_chip(selected, hover)),
+                    mouse_area(chip).on_release(Message::SetContactTimedTtl(secs)),
                 );
             }
             ttl_col = ttl_col.push(ttl_row);

@@ -49,11 +49,12 @@ fn mobile_back_btn(on_press: Message, hover: bool) -> Element<'static, Message> 
         .into()
 }
 
-/// Composer tool / send hit — release-only so the editor keeps focus (OSK stays up).
+/// Composer tool hit — press fires immediately (before OSK dismiss steals the
+/// gesture on some ARM compositors). mouse_area avoids `button`'s focus steal.
 fn composer_hit<'a>(
     icon: Element<'a, Message>,
     size: f32,
-    on_release: Message,
+    on_press: Message,
 ) -> Element<'a, Message> {
     mouse_area(
         container(icon)
@@ -62,7 +63,7 @@ fn composer_hit<'a>(
             .center_x(size)
             .center_y(size),
     )
-    .on_release(on_release)
+    .on_press(on_press)
     .into()
 }
 
@@ -71,7 +72,7 @@ fn composer_send_hit<'a>(
     icon: Element<'a, Message>,
     size: f32,
     active: bool,
-    on_release: Message,
+    on_press: Message,
 ) -> Element<'a, Message> {
     let face = if active {
         container(icon)
@@ -97,7 +98,9 @@ fn composer_send_hit<'a>(
             .center_x(size)
             .center_y(size)
     };
-    mouse_area(face).on_release(on_release).into()
+    // on_press (not release): Wayland/OSK often eats the first outside-tap as
+    // “dismiss keyboard”, so waiting for release never sees a send gesture.
+    mouse_area(face).on_press(on_press).into()
 }
 
 fn scroll_y<'a>(
@@ -1005,8 +1008,8 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     };
     let hover_ok = app.hover_ok();
 
-    // Release-only hits: `button.on_press` steals focus from the editor on
-    // touch (OSK retracts) and often drops the first tap. mouse_area does not.
+    // mouse_area + on_press: fires before OSK dismiss consumes the gesture;
+    // avoids `button`'s focus-steal on the editor.
     let attach = composer_hit(
         icons::plus_tool(send_size, hover_ok),
         send_size,

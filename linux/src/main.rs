@@ -3618,7 +3618,12 @@ impl App {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
-                self.toggle_voice_record()
+                let task = self.toggle_voice_record();
+                // Keep OSK / composer focus when possible after mic press.
+                Task::batch([
+                    task,
+                    iced::widget::operation::focus(iced::widget::Id::new("composer-input")),
+                ])
             }
             Message::VoiceDraftReady(Ok(draft)) => {
                 self.waveforms

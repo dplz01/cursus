@@ -6,6 +6,12 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+# Load official glibc-built libsimplex on musl (Alpine / postmarketOS) via
+# fcntl64/stat64 shim, LD_PRELOAD re-exec, and gcompat. Off by default.
+musl-glibc-compat = ["dep:cc"]
+
 [dependencies]
 anyhow.workspace = true
 directories.workspace = true
@@ -19,4 +25,4 @@ tracing.workspace = true
 unicode-segmentation.workspace = true
 
 [build-dependencies]
-cc = "1"
+cc = { version = "1", optional = true }

@@ -51,23 +51,26 @@ Or build from [simplex-chat](https://github.com/simplex-chat/simplex-chat) with 
 
 ## Build and run (Linux)
 
+Default build (glibc hosts — no musl compat layer):
+
 ```bash
 ./scripts/fetch-libs.sh
 cargo run -p cursus-linux
+cargo install --path linux
 ```
 
 Works on **x86_64 and aarch64** Linux hosts (PinePhone, ARM laptops, Asahi, etc.) once the matching libs zip is installed.
 
-**Musl (Alpine / musl postmarketOS):** prebuilt `libsimplex` is glibc-linked. Build **on the device**:
+**Musl (Alpine / musl postmarketOS):** prebuilt `libsimplex` is glibc-linked. Opt in with the `musl-glibc-compat` feature (off by default) and build **on the device**:
 
 ```bash
 apk add gcompat libucontext build-base
-./scripts/build-musl-compat.sh   # → third_party/libsimplex/libcursus_musl_glibc_compat.so
-cargo build -p cursus-linux      # also embeds + auto-writes the shim on launch
-cargo run -p cursus-linux
+./scripts/build-musl-compat.sh
+cargo run -p cursus-linux --features musl-glibc-compat
+cargo install --path linux --features musl-glibc-compat
 ```
 
-`build-musl-compat.sh` must print `ok: exports fcntl64`. A glibc PC must not supply that `.so`.
+`build-musl-compat.sh` must print `ok: exports fcntl64`. Do not copy that `.so` from a glibc PC.
 
 Data is stored under `$XDG_DATA_HOME/cursus` (or `~/.local/share/cursus`), separate from the official SimpleX desktop app.
 

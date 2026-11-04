@@ -1,5 +1,7 @@
 //! Make official glibc-built `libsimplex` loadable on musl (Alpine / pmOS).
 //!
+//! Enabled only with `--features musl-glibc-compat` (off by default).
+//!
 //! `dlopen(RTLD_GLOBAL)` alone is not enough: musl relocates `libHS*.so`
 //! before those globals are reliably visible. We therefore:
 //! 1. Link shim symbols into the cursus binary (`-rdynamic` / `-u fcntl64`).

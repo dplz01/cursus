@@ -10,6 +10,11 @@ rust-version.workspace = true
 name = "cursus"
 path = "src/main.rs"
 
+[features]
+default = []
+# Enable musl→glibc compat for Alpine / musl postmarketOS (see cursus-core).
+musl-glibc-compat = ["cursus-core/musl-glibc-compat"]
+
 [dependencies]
 cursus-core.workspace = true
 anyhow.workspace = true

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build libcursus_musl_glibc_compat.so into third_party/libsimplex/.
-# Run on the musl device (Alpine / postmarketOS). No-op-ish on glibc hosts
+# Used with: cargo run/build/install -p cursus-linux --features musl-glibc-compat
+# Run on the musl device (Alpine / postmarketOS). Do not run on glibc hosts
 # (produces a stub without fcntl64 — do not copy that to the phone).
 set -euo pipefail
 

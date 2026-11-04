@@ -7,12 +7,13 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::sync::{Once, OnceLock};
+use std::sync::Once;
+#[cfg(feature = "musl-glibc-compat")]
+use std::sync::OnceLock;
 
 use libloading::{Library, Symbol};
 
 use crate::error::{Error, Result};
-use crate::musl_compat::{self, is_musl_host};
 use crate::paths::{default_libs_dir, lib_filename};
 
 type HsInit = unsafe extern "C" fn(*mut c_int, *mut *mut *mut c_char);
@@ -70,22 +71,23 @@ impl LibSimplex {
         // Ensure dependent libHS*.so resolve from the same directory.
         set_library_path(&dir);
 
-        // On musl: RTLD_GLOBAL + statically linked fcntl64 (see musl_compat /
-        // build.rs). Prefer starting via ensure_ld_preload_reexec() in main.
-        load_musl_glibc_compat();
+        #[cfg(feature = "musl-glibc-compat")]
+        {
+            // RTLD_GLOBAL + statically linked fcntl64. Prefer
+            // ensure_ld_preload_reexec() in main when the feature is on.
+            load_musl_glibc_compat();
+            if is_musl_host() && !crate::musl_compat::fcntl64_resolvable() {
+                return Err(Error::LibraryLoad(format!(
+                    "fcntl64 is still not visible to the dynamic linker on musl. \
+                     Rebuild with `--features musl-glibc-compat` on-device, install \
+                     `apk add gcompat libucontext`. ({})",
+                    crate::musl_compat::compat_status_line()
+                )));
+            }
+        }
 
         if let Some(hint) = glibc_loader_hint() {
             return Err(Error::LibraryLoad(hint));
-        }
-
-        if is_musl_host() && !musl_compat::fcntl64_resolvable() {
-            return Err(Error::LibraryLoad(format!(
-                "fcntl64 is still not visible to the dynamic linker on musl. \
-                 Rebuild on-device (`cargo build -p cursus-linux`) so the shim is \
-                 not an empty glibc stub, install `apk add gcompat libucontext`, \
-                 and launch the binary from this tree (not a stale copy). ({})",
-                musl_compat::compat_status_line()
-            )));
         }
 
         // SAFETY: we only call C ABI symbols exported by libsimplex.
@@ -296,26 +298,43 @@ fn set_library_path(dir: &Path) {
     }
 }
 
+fn is_musl_host() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        [
+            "/lib/ld-musl-aarch64.so.1",
+            "/usr/lib/ld-musl-aarch64.so.1",
+            "/lib/ld-musl-x86_64.so.1",
+            "/usr/lib/ld-musl-x86_64.so.1",
+        ]
+        .iter()
+        .any(|p| Path::new(p).exists())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
 /// Kept alive so RTLD_GLOBAL symbols from gcompat / our shim stay mapped.
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "musl-glibc-compat", target_os = "linux"))]
 static MUSL_COMPAT_LIBS: OnceLock<Vec<libloading::os::unix::Library>> = OnceLock::new();
 
 /// Preload gcompat, libucontext, and our fcntl64/stat64/... shim so musl can
 /// relocate official glibc-built libHS*.so objects.
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "musl-glibc-compat", target_os = "linux"))]
 fn load_musl_glibc_compat() {
     if !is_musl_host() {
         return;
     }
-    // Ensure static shim symbols are referenced from Rust.
-    let _ = musl_compat::fcntl64_resolvable();
+    let _ = crate::musl_compat::fcntl64_resolvable();
 
     let _ = MUSL_COMPAT_LIBS.get_or_init(|| {
         use libloading::os::unix::{Library, RTLD_GLOBAL, RTLD_NOW};
 
         let mut libs = Vec::new();
 
-        if let Some(path) = musl_compat::resolve_shim_so() {
+        if let Some(path) = crate::musl_compat::resolve_shim_so() {
             // SAFETY: our build-time shim; RTLD_GLOBAL for later libsimplex relocs.
             if let Ok(lib) = unsafe {
                 Library::open(Some(path.as_os_str()), RTLD_NOW | RTLD_GLOBAL)
@@ -346,9 +365,6 @@ fn load_musl_glibc_compat() {
     });
 }
 
-#[cfg(not(target_os = "linux"))]
-fn load_musl_glibc_compat() {}
-
 /// Official linux-aarch64/x86_64 libsimplex is a **glibc** build. On musl
 /// (Alpine, many postmarketOS images) `ld-linux-*.so.1` is missing unless
 /// `gcompat` is installed.
@@ -366,8 +382,8 @@ fn glibc_loader_hint() -> Option<String> {
     }
     Some(format!(
         "missing {LOADER} (glibc dynamic linker). This looks like musl \
-         (Alpine / musl postmarketOS). Install: `apk add gcompat libucontext`, \
-         rebuild Cursus (ships an fcntl64/stat64 shim), then retry."
+         (Alpine / musl postmarketOS). Install `apk add gcompat libucontext`, then \
+         build with `--features musl-glibc-compat`."
     ))
 }
 
@@ -384,8 +400,8 @@ fn glibc_loader_hint() -> Option<String> {
         ));
     }
     Some(format!(
-        "missing {LOADER} (glibc dynamic linker). Install `apk add gcompat libucontext` \
-         and rebuild Cursus (ships a musl glibc-compat shim)."
+        "missing {LOADER} (glibc dynamic linker). On musl: `apk add gcompat libucontext` \
+         and build with `--features musl-glibc-compat`."
     ))
 }
 
@@ -399,19 +415,30 @@ fn explain_load_error(err: &libloading::Error) -> String {
     if msg.contains("ld-linux-aarch64.so.1") || msg.contains("ld-linux-x86-64.so.2") {
         format!(
             "{msg}. Official libsimplex needs the glibc loader. On musl: \
-             `apk add gcompat libucontext`, then rebuild Cursus."
+             `apk add gcompat libucontext`, then \
+             `cargo run -p cursus-linux --features musl-glibc-compat`."
         )
     } else if msg.contains("fcntl64")
         || msg.contains("stat64")
         || msg.contains("Error relocating")
         || msg.contains("symbol not found")
     {
-        format!(
-            "{msg}. ({}) Rebuild on the musl device, delete any empty \
-             third_party/libsimplex/libcursus_musl_glibc_compat.so copied from a \
-             glibc PC, then run `cargo run -p cursus-linux` (re-execs with LD_PRELOAD).",
-            musl_compat::compat_status_line()
-        )
+        #[cfg(feature = "musl-glibc-compat")]
+        {
+            format!(
+                "{msg}. ({}). Rebuild on the musl device with \
+                 `--features musl-glibc-compat`.",
+                crate::musl_compat::compat_status_line()
+            )
+        }
+        #[cfg(not(feature = "musl-glibc-compat"))]
+        {
+            format!(
+                "{msg}. Musl cannot relocate glibc libsimplex without the compat \
+                 layer. Rebuild with `--features musl-glibc-compat` \
+                 (see README) after `apk add gcompat libucontext`."
+            )
+        }
     } else {
         msg
     }

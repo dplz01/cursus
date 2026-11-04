@@ -8,6 +8,7 @@ mod commands;
 mod error;
 mod ffi;
 mod models;
+#[cfg(feature = "musl-glibc-compat")]
 mod musl_compat;
 mod paths;
 mod rich_text;
@@ -32,6 +33,7 @@ pub use rich_text::{
     expand_emoji_shortcodes, is_short_emoji, parse_formatted_text, pending_shortcode_query,
     suggest_emoji_shortcodes, EmojiSuggestion, FormatColor, TextSegment, TextStyle, LARGE_EMOJI_MAX,
 };
+#[cfg(feature = "musl-glibc-compat")]
 pub use musl_compat::{compat_status_line, ensure_ld_preload_reexec, is_musl_host};
 pub use paths::{
     data_dir, db_prefix, default_libs_dir, files_dir, plaintext_cache_path, resolve_local_file,

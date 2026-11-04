@@ -26,12 +26,11 @@ use iced::{Element, Length, Subscription, Task, Theme};
 use tracing_subscriber::EnvFilter;
 
 use cursus_core::{
-    auto_receive_candidates, data_dir, ensure_ld_preload_reexec, files_dir, group_role_rank,
-    is_channel_short_link, load_account, merge_seeded_channels, prune_resolved_seeds, save_account,
-    setup_complete, AccountMeta, CallInfo, CallMedia, ChatId, ChatMessage, ChatPreview,
-    ChatSettings, ChatTag, ChatType, ConnLink, DeliveryStatus, Event, FileTransferState,
-    GroupMemberInfo, GroupProfileUpdate, ProfileFields, Session, SessionConfig, UserProfile,
-    GROUP_ROLES,
+    auto_receive_candidates, data_dir, files_dir, group_role_rank, is_channel_short_link,
+    load_account, merge_seeded_channels, prune_resolved_seeds, save_account, setup_complete,
+    AccountMeta, CallInfo, CallMedia, ChatId, ChatMessage, ChatPreview, ChatSettings, ChatTag,
+    ChatType, ConnLink, DeliveryStatus, Event, FileTransferState, GroupMemberInfo,
+    GroupProfileUpdate, ProfileFields, Session, SessionConfig, UserProfile, GROUP_ROLES,
 };
 
 use crate::layout::{resolve, Density, LayoutMode};
@@ -482,9 +481,9 @@ fn init_file_logging() {
 }
 
 pub fn main() -> iced::Result {
-    // Musl (Alpine/pmOS): re-exec with LD_PRELOAD of our glibc symbol shim
-    // before any libsimplex dlopen. No-op on glibc.
-    ensure_ld_preload_reexec();
+    // Behind `--features musl-glibc-compat`: re-exec with LD_PRELOAD shim.
+    #[cfg(feature = "musl-glibc-compat")]
+    cursus_core::ensure_ld_preload_reexec();
 
     init_file_logging();
 

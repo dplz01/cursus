@@ -1,6 +1,9 @@
 use std::env;
 
 fn main() {
+    if env::var_os("CARGO_FEATURE_MUSL_GLIBC_COMPAT").is_none() {
+        return;
+    }
     if env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() != "linux" {
         return;
     }

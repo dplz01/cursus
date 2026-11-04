@@ -948,7 +948,8 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     let hard_lines = app.composer_content().line_count().max(1);
     // Soft-wrap estimate only gates "single-line vs growing"; Shrink then
     // sizes multi-line from real layout.
-    let editor_width = (app.window_width() - d.pad * 2.0 - send_size * 3.0).max(80.0);
+    // No horizontal bar padding — attach/send sit on the box edges.
+    let editor_width = (app.window_width() - send_size * 3.0).max(80.0);
     let col_w = (d.body * 0.55).max(6.0);
     let wrap_lines = composer_text
         .lines()
@@ -1140,9 +1141,9 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     container(body)
         .padding(Padding {
             top: bar_pad,
-            right: d.pad,
+            right: 0.0,
             bottom: bar_pad,
-            left: d.pad,
+            left: 0.0,
         })
         .width(Length::Fill)
         .style(|_| container::Style {

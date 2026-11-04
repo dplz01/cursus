@@ -191,6 +191,11 @@ where
             shell,
             viewport,
         );
+        // Nested HoverArea / mouse_area (e.g. image open) may already own this
+        // gesture — don't also fire the bubble double-tap menu.
+        if shell.is_event_captured() {
+            return;
+        }
 
         let state = tree.state.downcast_mut::<HoverState>();
         let was = state.is_hovered;

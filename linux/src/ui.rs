@@ -1574,14 +1574,13 @@ fn message_bubble<'a>(
             voice_owns_meta = true;
             body = body.push(voice_waveform_row(app, msg, file, state, d));
         } else if is_visual && matches!(state, FileTransferState::Complete) {
-            if let Some(preview) = visual_media_preview(app, msg, file, state) {
+            if let Some(preview) = visual_media_preview(app, msg, file, state, d) {
                 media_flush = true;
-                // Shrink-wrap media + footer so a Fill footer can't widen the bubble
-                // past the image (looked like odd right padding beside the preview).
+                // Stamp floats on the preview; footer is size-only (no second time).
                 body = body.push(
                     column![
                         preview,
-                        attachment_status_footer(msg, file, state, d, false),
+                        attachment_size_line(file, state, msg.outgoing, d),
                     ]
                     .spacing(4)
                     .width(Length::Shrink),
@@ -2432,6 +2431,24 @@ fn transfer_progress_bar(file: &cursus_core::FileInfo) -> Element<'static, Messa
         .into()
 }
 
+fn attachment_size_line<'a>(
+    file: &'a cursus_core::FileInfo,
+    state: FileTransferState,
+    outgoing: bool,
+    d: Density,
+) -> Element<'a, Message> {
+    let line = transfer_status_line(file, state, outgoing);
+    if line.is_empty() {
+        return vertical().height(0).into();
+    }
+    let color = if matches!(state, FileTransferState::Failed) {
+        theme::t().danger
+    } else {
+        theme::t().text_muted
+    };
+    text(line).size(d.meta).color(color).into()
+}
+
 fn attachment_status_footer<'a>(
     msg: &'a ChatMessage,
     file: &'a cursus_core::FileInfo,
@@ -2694,6 +2711,7 @@ fn visual_media_preview<'a>(
     msg: &ChatMessage,
     file: &cursus_core::FileInfo,
     state: FileTransferState,
+    d: Density,
 ) -> Option<Element<'a, Message>> {
     if !matches!(state, FileTransferState::Complete) {
         return None;
@@ -2770,15 +2788,31 @@ fn visual_media_preview<'a>(
             .center_y(Length::Fill),
         );
     }
+    // Floating time + receipt on the image (bare — no chip).
+    stack = stack.push(
+        container(bubble_time_meta(msg, d))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::End)
+            .align_y(Alignment::End)
+            .padding(Padding {
+                top: 0.0,
+                right: 6.0,
+                bottom: 4.0,
+                left: 0.0,
+            }),
+    );
     let framed = container(stack)
         .width(Length::Fixed(w))
         .height(Length::Fixed(h))
         .clip(true);
-    // Open with the OS handler directly — the embedded reader was too slow.
-    let _ = msg;
+    // Image hit opens the file; capture so the bubble HoverArea does not treat
+    // double-taps here as “open message menu”. Padding / footer stay menu-able.
+    let open = Message::OpenLocalFile(path);
     Some(
-        mouse_area(framed)
-            .on_release(Message::OpenLocalFile(path))
+        hover::HoverArea::new(framed)
+            .on_release(open.clone())
+            .on_double_tap(open)
             .into(),
     )
 }
@@ -3093,6 +3127,10 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 .size(d.meta)
                 .color(theme::t().text_muted),
             text_input("Display name", &draft.fields.display_name)
+                .id(iced::widget::Id::from(format!(
+                    "settings-name-{}",
+                    app.settings_input_gen()
+                )))
                 .on_input(Message::OwnProfileDisplayName)
                 .on_submit(Message::SaveOwnProfile)
                 .padding(d.composer)
@@ -3103,6 +3141,10 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 .size(d.meta)
                 .color(theme::t().text_muted),
             text_input("Short bio", &draft.fields.short_descr)
+                .id(iced::widget::Id::from(format!(
+                    "settings-bio-{}",
+                    app.settings_input_gen()
+                )))
                 .on_input(Message::OwnProfileBio)
                 .on_submit(Message::SaveOwnProfile)
                 .padding(d.composer)
@@ -3113,6 +3155,10 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 .size(d.meta)
                 .color(theme::t().text_muted),
             text_input("Longer description", &draft.fields.description)
+                .id(iced::widget::Id::from(format!(
+                    "settings-desc-{}",
+                    app.settings_input_gen()
+                )))
                 .on_input(Message::OwnProfileDescription)
                 .on_submit(Message::SaveOwnProfile)
                 .padding(d.composer)
@@ -5446,6 +5492,31 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
     .into()
 }
 
+fn pref_yes_no_chip(on: bool, d: Density, on_press: Option<Message>) -> Element<'static, Message> {
+    let chip = container(
+        text(if on { "yes" } else { "no" })
+            .size(d.meta)
+            .color(theme::t().text_primary),
+    )
+    .padding(Padding::from([6, 10]))
+    .style(|_| {
+        let c = theme::t();
+        container::Style {
+            background: Some(iced::Background::Color(c.bg_elevated)),
+            border: iced::Border {
+                color: c.border,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..container::Style::default()
+        }
+    });
+    match on_press {
+        Some(msg) => mouse_area(chip).on_release(msg).into(),
+        None => chip.into(),
+    }
+}
+
 fn group_preferences_pane(
     g: &crate::GroupSettingsOverlay,
     d: Density,
@@ -5484,29 +5555,28 @@ fn group_preferences_pane(
         } else {
             group_pref_on(prefs, key)
         };
-        let row = row![
-            group_pref_icon(key),
-            text(label)
-                .size(d.body)
-                .color(theme::t().text_primary)
-                .width(Length::Fill),
-            text(if on { "yes" } else { "no" })
-                .size(d.meta)
-                .color(theme::t().text_muted),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center);
-        if owner {
-            col = col.push(
-                button(row)
-                    .on_press(Message::GroupPrefToggle(key))
-                    .padding(Padding::from([10, 8]))
-                    .width(Length::Fill)
-                    .style(theme::menu_item(hover)),
-            );
-        } else {
-            col = col.push(row.padding(Padding::from([10, 8])));
-        }
+        // Only the yes/no chip is a hit target so the rest of the row scrolls.
+        let cycle = pref_yes_no_chip(
+            on,
+            d,
+            owner.then_some(Message::GroupPrefToggle(key)),
+        );
+        col = col.push(
+            container(
+                row![
+                    group_pref_icon(key),
+                    text(label)
+                        .size(d.body)
+                        .color(theme::t().text_primary)
+                        .width(Length::Fill),
+                    cycle,
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center)
+                .padding(Padding::from([10, 8])),
+            )
+            .width(Length::Fill),
+        );
         if key == "timedMessages" && on {
             let current = prefs
                 .and_then(|p| p.get("timedMessages"))
@@ -5519,12 +5589,14 @@ fn group_preferences_pane(
                     .color(theme::t().text_muted)
                     .width(Length::Fill),
             );
+            // Release-only chips — button.on_press steals the scroll gesture.
+            let _ = hover;
             let mut ttl_col = Column::new().spacing(6).width(Length::Fill);
             for chunk in crate::TIMED_TTL_STEPS.chunks(3) {
                 let mut ttl_row = Row::new().spacing(6).width(Length::Fill);
                 for &secs in chunk {
                     let selected = current == secs;
-                    let chip = button(
+                    let label = container(
                         text(crate::format_timed_ttl(secs))
                             .size(d.meta)
                             .color(if selected {
@@ -5534,11 +5606,26 @@ fn group_preferences_pane(
                             }),
                     )
                     .padding(Padding::from([8, 10]))
-                    .style(theme::choice_chip(selected, hover));
+                    .style(move |_| {
+                        let c = theme::t();
+                        container::Style {
+                            background: Some(iced::Background::Color(if selected {
+                                c.accent_soft
+                            } else {
+                                c.bg_elevated
+                            })),
+                            border: iced::Border {
+                                color: c.border,
+                                width: 1.0,
+                                radius: 8.0.into(),
+                            },
+                            ..container::Style::default()
+                        }
+                    });
                     ttl_row = ttl_row.push(if owner {
-                        chip.on_press(Message::SetGroupTimedTtl(secs))
+                        mouse_area(label).on_release(Message::SetGroupTimedTtl(secs))
                     } else {
-                        chip
+                        mouse_area(label)
                     });
                 }
                 ttl_col = ttl_col.push(ttl_row);
@@ -5551,26 +5638,28 @@ fn group_preferences_pane(
         .as_ref()
         .and_then(|v| v.get("review"))
         .is_some();
-    let admission = row![
-        icons::review_file_icon(20.0, theme::t().text_secondary),
-        text("Review members before join")
-            .size(d.body)
-            .color(theme::t().text_primary)
-            .width(Length::Fill),
-        text(if review_on { "yes" } else { "no" })
-            .size(d.meta)
-            .color(theme::t().text_muted),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
+    let admission_cycle = pref_yes_no_chip(
+        review_on,
+        d,
+        owner.then_some(Message::GroupAdmissionToggle),
+    );
+    col = col.push(
+        container(
+            row![
+                icons::review_file_icon(20.0, theme::t().text_secondary),
+                text("Review members before join")
+                    .size(d.body)
+                    .color(theme::t().text_primary)
+                    .width(Length::Fill),
+                admission_cycle,
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .padding(Padding::from([10, 8])),
+        )
+        .width(Length::Fill),
+    );
     if owner {
-        col = col.push(
-            button(admission)
-                .on_press(Message::GroupAdmissionToggle)
-                .padding(Padding::from([10, 8]))
-                .width(Length::Fill)
-                .style(theme::menu_item(hover)),
-        );
         col = col.push(
             button(text("Save preferences").size(d.meta))
                 .on_press_maybe(if g.dirty {
@@ -5581,8 +5670,6 @@ fn group_preferences_pane(
                 .padding(Padding::from([10, 14]))
                 .style(theme::primary_action(hover)),
         );
-    } else {
-        col = col.push(admission.padding(Padding::from([10, 8])));
     }
     col.into()
 }

@@ -851,7 +851,10 @@ Create a new channel — private-group style links won’t join."
         let env: ApiEnvelope = serde_json::from_str(&raw)?;
         env.into_result().map_err(|err| match err {
             Error::Command(message) => {
-                tracing::warn!(cmd, %message, "chat command failed");
+                // SimpleX error payloads embed full group/contact JSON — keep a
+                // short summary so opening chats/settings does not flood the log.
+                let brief = truncate_chars(message.as_str(), 160);
+                tracing::warn!(cmd, error = %brief, "chat command failed");
                 Error::Command(message)
             }
             other => other,
@@ -1257,6 +1260,18 @@ fn parse_group_members(value: &Value) -> Vec<GroupMemberInfo> {
                 out.push(info);
             }
         }
+    }
+    out
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i >= max {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
     }
     out
 }

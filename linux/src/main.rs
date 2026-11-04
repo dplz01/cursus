@@ -997,6 +997,8 @@ struct App {
     core_connect_launched: bool,
     /// Settings → My profile draft.
     own_profile: OwnProfileDraft,
+    /// Bumped on profile save so settings text_inputs remount unfocused.
+    settings_input_gen: u64,
     /// Direct-contact profile overlay.
     contact_profile: Option<ContactProfileOverlay>,
     /// Create group / channel dialog.
@@ -1156,6 +1158,7 @@ impl App {
                 window_focused: true,
                 main_window: Some(main_window),
                 core_connect_launched: false,
+                settings_input_gen: 0,
                 own_profile: OwnProfileDraft {
                     fields: ProfileFields {
                         display_name: "Cursus".into(),
@@ -2047,12 +2050,10 @@ impl App {
                 self.own_profile.fields.display_name = name;
                 let fields = self.own_profile.fields.clone();
                 self.status = "Saving profile…".into();
-                // Enter submitted — focus a non-existent id to unfocus every
-                // text_input (iced has no public unfocus Task wrapper).
-                Task::batch([
-                    Task::perform(save_own_profile(session, fields), Message::OwnProfileSaved),
-                    iced::widget::operation::focus(iced::widget::Id::new("settings-unfocus")),
-                ])
+                // Remount settings text_inputs under a new Id so Enter leaves
+                // them unfocused (iced has no public unfocus Task).
+                self.settings_input_gen = self.settings_input_gen.wrapping_add(1);
+                Task::perform(save_own_profile(session, fields), Message::OwnProfileSaved)
             }
             Message::OwnProfileSaved(Ok(user)) => {
                 self.own_profile = OwnProfileDraft {
@@ -3805,11 +3806,25 @@ impl App {
             }
             Message::VideoThumbReady { path, thumb } => {
                 self.video_thumbs_pending.remove(&path);
+                let mut tasks = Vec::new();
                 if let Some(thumb) = thumb {
+                    // Round the poster off the UI thread so ARM chat open stays light.
+                    let thumb_for_round = thumb.clone();
                     self.video_thumbs.insert(path, thumb);
+                    tasks.push(Task::perform(
+                        async move {
+                            let _ = tokio::task::spawn_blocking(move || {
+                                media::rounded_fitted_preview(&thumb_for_round, 220, 280, 12.0)
+                            })
+                            .await;
+                            Message::WarmChatMedia
+                        },
+                        |m| m,
+                    ));
                 }
                 let more = self.messages.clone();
-                self.enqueue_missing_video_thumbs(&more)
+                tasks.push(self.enqueue_missing_video_thumbs(&more));
+                Task::batch(tasks)
             }
             Message::CloseMediaViewer => {
                 self.media_viewer = None;
@@ -5595,6 +5610,9 @@ impl App {
         self.reaction_members.as_ref()
     }
 
+    pub(crate) fn settings_input_gen(&self) -> u64 {
+        self.settings_input_gen
+    }
     pub(crate) fn own_profile(&self) -> &OwnProfileDraft {
         &self.own_profile
     }
@@ -5831,7 +5849,7 @@ impl App {
             link: None,
             link_member_role: "member".into(),
             invite_role: "member".into(),
-            my_role,
+            my_role: my_role.clone(),
             alias: chat.local_alias.clone(),
             alias_dirty: false,
             muted: chat.settings.enable_ntfs.is_muted(),
@@ -5847,11 +5865,17 @@ impl App {
             return Task::none();
         };
         let members = load_group_members(Arc::clone(&session), group_id);
-        let link = ensure_group_link(session, group_id, "member".into());
-        Task::batch([
-            Task::perform(members, Message::GroupMembersLoaded),
-            Task::perform(link, Message::GroupLinkReady),
-        ])
+        // Only owners/admins can get or create invite links — members hit
+        // groupUserRole / groupLinkNotFound and dumped huge WARN payloads.
+        if can_manage_members(&my_role) {
+            let link = ensure_group_link(session, group_id, "member".into());
+            Task::batch([
+                Task::perform(members, Message::GroupMembersLoaded),
+                Task::perform(link, Message::GroupLinkReady),
+            ])
+        } else {
+            Task::perform(members, Message::GroupMembersLoaded)
+        }
     }
 
     fn reload_group_members(&mut self) -> Task<Message> {
@@ -7369,9 +7393,17 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
         .unwrap_or(0);
     let path = dir.join(format!("voice-{stamp}.m4a"));
 
-    // Pulse first (desktop), then PipeWire / ALSA — ARM images often lack Pulse.
-    // Prefer AAC when available; fall back to PCM WAV in the same m4a path
-    // extension only when AAC encode works — otherwise write `.wav` and rename.
+    // Prefer AAC when available; fall back to PCM WAV.
+    // On musl/ARM, Pulse/PipeWire often hang instead of failing — ALSA first.
+    #[cfg(target_env = "musl")]
+    let backends: &[&[&str]] = &[
+        &["-f", "alsa", "-i", "default"],
+        &["-f", "alsa", "-i", "plughw:0,0"],
+        &["-f", "alsa", "-i", "hw:0,0"],
+        &["-f", "alsa", "-i", "sysdefault"],
+        &["-f", "pulse", "-i", "default"],
+    ];
+    #[cfg(not(target_env = "musl"))]
     let backends: &[&[&str]] = &[
         &["-f", "pulse", "-i", "default"],
         &["-f", "pipewire", "-i", "default"],
@@ -7407,14 +7439,29 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
             {
                 Ok(mut child) => {
                     // Give ffmpeg a moment — device-open failures exit immediately.
-                    std::thread::sleep(std::time::Duration::from_millis(180));
+                    // Also require the output file to grow so a hung Pulse open
+                    // (common on ARM) is not treated as a live recorder.
+                    std::thread::sleep(std::time::Duration::from_millis(220));
                     match child.try_wait() {
                         Ok(None) => {
-                            return Ok(VoiceRec {
-                                path: out,
-                                child,
-                                started: Instant::now(),
-                            });
+                            let grew = std::fs::metadata(&out)
+                                .map(|m| m.len() > 0)
+                                .unwrap_or(false);
+                            if grew || input.iter().any(|s| *s == "alsa") {
+                                return Ok(VoiceRec {
+                                    path: out,
+                                    child,
+                                    started: Instant::now(),
+                                });
+                            }
+                            // Likely stuck on pulse/pipewire — kill and try next.
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            last_err = format!(
+                                "ffmpeg {:?} produced no audio (device hung?)",
+                                input
+                            );
+                            let _ = std::fs::remove_file(&out);
                         }
                         Ok(Some(status)) => {
                             let stderr = child.stderr.as_mut().and_then(|s| {

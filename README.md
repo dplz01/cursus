@@ -58,6 +58,16 @@ cargo run -p cursus-linux
 
 Works on **x86_64 and aarch64** Linux hosts (PinePhone, ARM laptops, Asahi, etc.) once the matching libs zip is installed.
 
+**Musl (Alpine / musl postmarketOS):** prebuilt `libsimplex` is glibc-linked. Cursus builds a small `libcursus_musl_glibc_compat.so` shim (fcntl64, stat64, fortify wrappers) and preloads it with `gcompat` before `dlopen`. Install:
+
+```bash
+apk add gcompat libucontext
+cargo build -p cursus-linux   # rebuilds the shim
+cargo run -p cursus-linux
+```
+
+Still best-effort — if a new `symbol not found` appears, report it so the shim can grow.
+
 Data is stored under `$XDG_DATA_HOME/cursus` (or `~/.local/share/cursus`), separate from the official SimpleX desktop app.
 
 ## Documentation

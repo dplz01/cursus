@@ -8,7 +8,7 @@ pub enum Error {
     LibraryNotFound { searched: String },
 
     #[error("failed to load libsimplex: {0}")]
-    LibraryLoad(#[from] libloading::Error),
+    LibraryLoad(String),
 
     #[error("missing symbol {0} in libsimplex")]
     MissingSymbol(String),

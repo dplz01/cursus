@@ -7,7 +7,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 
 use libloading::{Library, Symbol};
 
@@ -69,8 +69,18 @@ impl LibSimplex {
         // Ensure dependent libHS*.so resolve from the same directory.
         set_library_path(&dir);
 
+        // On musl (Alpine / musl pmOS), preload gcompat + our glibc symbol shim
+        // before dlopening the official glibc-built libsimplex.
+        load_musl_glibc_compat();
+
+        if let Some(hint) = glibc_loader_hint() {
+            return Err(Error::LibraryLoad(hint));
+        }
+
         // SAFETY: we only call C ABI symbols exported by libsimplex.
-        let library = unsafe { Library::new(&path)? };
+        let library = unsafe {
+            Library::new(&path).map_err(|err| Error::LibraryLoad(explain_load_error(&err)))?
+        };
         let hs_init: Symbol<HsInit> = unsafe { library.get(b"hs_init_with_rtsopts\0") }
             .map_err(|_| Error::MissingSymbol("hs_init_with_rtsopts".into()))?;
         let chat_migrate_init: Symbol<ChatMigrateInit> =
@@ -272,6 +282,146 @@ fn set_library_path(dir: &Path) {
             }
             None => std::env::set_var(key, &dir),
         }
+    }
+}
+
+/// Kept alive so RTLD_GLOBAL symbols from gcompat / our shim stay mapped.
+#[cfg(target_os = "linux")]
+static MUSL_COMPAT_LIBS: OnceLock<Vec<libloading::os::unix::Library>> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+fn is_musl_host() -> bool {
+    [
+        "/lib/ld-musl-aarch64.so.1",
+        "/usr/lib/ld-musl-aarch64.so.1",
+        "/lib/ld-musl-x86_64.so.1",
+        "/usr/lib/ld-musl-x86_64.so.1",
+    ]
+    .iter()
+    .any(|p| Path::new(p).exists())
+}
+
+/// Preload gcompat, libucontext, and our fcntl64/stat64/... shim so musl can
+/// relocate official glibc-built libHS*.so objects.
+#[cfg(target_os = "linux")]
+fn load_musl_glibc_compat() {
+    if !is_musl_host() {
+        return;
+    }
+    let _ = MUSL_COMPAT_LIBS.get_or_init(|| {
+        use libloading::os::unix::{Library, RTLD_GLOBAL, RTLD_NOW};
+
+        let mut libs = Vec::new();
+
+        // Load our fcntl64/stat64 shim first so it wins symbol lookup over
+        // incomplete gcompat coverage.
+        let mut shim_paths: Vec<PathBuf> = Vec::new();
+        if let Some(shim) = option_env!("CURSUS_MUSL_GLIBC_COMPAT") {
+            shim_paths.push(PathBuf::from(shim));
+        }
+        shim_paths.push(default_libs_dir().join("libcursus_musl_glibc_compat.so"));
+        for path in shim_paths {
+            if !path.exists() {
+                continue;
+            }
+            // SAFETY: our build-time shim; RTLD_GLOBAL for later libsimplex relocs.
+            if let Ok(lib) = unsafe {
+                Library::open(Some(path.as_os_str()), RTLD_NOW | RTLD_GLOBAL)
+            } {
+                libs.push(lib);
+                break;
+            }
+        }
+
+        let candidates = [
+            "/lib/libgcompat.so.0",
+            "/usr/lib/libgcompat.so.0",
+            "/lib/libucontext.so.1",
+            "/usr/lib/libucontext.so.1",
+            "/lib/libucontext.so.0",
+            "/usr/lib/libucontext.so.0",
+        ];
+        for path in candidates {
+            if !Path::new(path).exists() {
+                continue;
+            }
+            // SAFETY: system libs; RTLD_GLOBAL so later libsimplex relocations see them.
+            if let Ok(lib) = unsafe { Library::open(Some(path), RTLD_NOW | RTLD_GLOBAL) } {
+                libs.push(lib);
+            }
+        }
+
+        libs
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn load_musl_glibc_compat() {}
+
+/// Official linux-aarch64/x86_64 libsimplex is a **glibc** build. On musl
+/// (Alpine, many postmarketOS images) `ld-linux-*.so.1` is missing unless
+/// `gcompat` is installed.
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+fn glibc_loader_hint() -> Option<String> {
+    const LOADER: &str = "/lib/ld-linux-aarch64.so.1";
+    const LOADER_USR: &str = "/lib64/ld-linux-aarch64.so.1";
+    if Path::new(LOADER).exists() || Path::new(LOADER_USR).exists() {
+        return None;
+    }
+    if !is_musl_host() {
+        return Some(format!(
+            "missing {LOADER} (glibc dynamic linker needed by libsimplex)."
+        ));
+    }
+    Some(format!(
+        "missing {LOADER} (glibc dynamic linker). This looks like musl \
+         (Alpine / musl postmarketOS). Install: `apk add gcompat libucontext`, \
+         rebuild Cursus (ships an fcntl64/stat64 shim), then retry."
+    ))
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn glibc_loader_hint() -> Option<String> {
+    const LOADER: &str = "/lib64/ld-linux-x86-64.so.2";
+    const LOADER_ALT: &str = "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2";
+    if Path::new(LOADER).exists() || Path::new(LOADER_ALT).exists() {
+        return None;
+    }
+    if !is_musl_host() {
+        return Some(format!(
+            "missing {LOADER} (glibc dynamic linker needed by libsimplex)."
+        ));
+    }
+    Some(format!(
+        "missing {LOADER} (glibc dynamic linker). Install `apk add gcompat libucontext` \
+         and rebuild Cursus (ships a musl glibc-compat shim)."
+    ))
+}
+
+#[cfg(not(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "x86_64"))))]
+fn glibc_loader_hint() -> Option<String> {
+    None
+}
+
+fn explain_load_error(err: &libloading::Error) -> String {
+    let msg = err.to_string();
+    if msg.contains("ld-linux-aarch64.so.1") || msg.contains("ld-linux-x86-64.so.2") {
+        format!(
+            "{msg}. Official libsimplex needs the glibc loader. On musl: \
+             `apk add gcompat libucontext`, then rebuild Cursus."
+        )
+    } else if msg.contains("fcntl64")
+        || msg.contains("stat64")
+        || msg.contains("Error relocating")
+        || msg.contains("symbol not found")
+    {
+        format!(
+            "{msg}. Musl is missing a glibc symbol. Install `apk add gcompat libucontext`, \
+             rebuild this Cursus tree (builds libcursus_musl_glibc_compat.so), and relaunch. \
+             If it still fails, report the new missing symbol."
+        )
+    } else {
+        msg
     }
 }
 

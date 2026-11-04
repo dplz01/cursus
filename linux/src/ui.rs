@@ -817,6 +817,65 @@ fn selection_bar(app: &App, d: Density) -> Element<'_, Message> {
     .into()
 }
 
+fn composer_key_binding(
+    has_suggestions: bool,
+) -> impl Fn(iced::widget::text_editor::KeyPress) -> Option<EditorBinding<Message>> {
+    move |key_press| {
+        // `:shortcode` list: Tab / Shift+Tab cycle, Enter accepts.
+        if has_suggestions {
+            if matches!(
+                key_press.key.as_ref(),
+                keyboard::Key::Named(key::Named::Tab)
+            ) {
+                return Some(EditorBinding::Custom(if key_press.modifiers.shift() {
+                    Message::EmojiSuggestPrev
+                } else {
+                    Message::EmojiSuggestNext
+                }));
+            }
+            if matches!(
+                key_press.key.as_ref(),
+                keyboard::Key::Named(key::Named::Enter)
+            ) && !key_press.modifiers.shift()
+            {
+                return Some(EditorBinding::Custom(Message::EmojiSuggestAccept));
+            }
+        }
+
+        // Enter sends (Shift+Enter = newline via default Binding::Enter).
+        if matches!(
+            key_press.key.as_ref(),
+            keyboard::Key::Named(key::Named::Enter)
+        ) && !key_press.modifiers.shift()
+        {
+            return Some(EditorBinding::Custom(Message::Send));
+        }
+
+        // Keep Ctrl/Cmd chords (SelectAll, Copy, Cut, Paste) on the
+        // default path — never intercept Character while modifiers are set.
+        // iced 0.14 IME handles composed accents / preedit natively.
+        if key_press.modifiers.command() || key_press.modifiers.control() {
+            return EditorBinding::from_key_press(key_press);
+        }
+
+        // OSK: multi-codepoint `text` (emoji / composed graphemes) when
+        // unmodified. Single chars fall through to defaults + IME.
+        if matches!(
+            key_press.status,
+            iced::widget::text_editor::Status::Focused { .. }
+        ) {
+            if let Some(raw) = key_press.text.as_ref() {
+                let cleaned: String = raw.chars().filter(|c| !c.is_control()).collect();
+                if cleaned.chars().count() > 1 {
+                    return Some(EditorBinding::Custom(Message::ComposerInsert(cleaned)));
+                }
+            }
+        }
+
+        EditorBinding::from_key_press(key_press)
+    }
+}
+
 fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     let send_size = if app.layout() == LayoutMode::Mobile {
         44.0
@@ -878,101 +937,81 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     let suggestions = app.emoji_suggestions();
     let suggest_idx = app.emoji_suggest_index();
 
-    // Auto-growing field: Shrink uses the editor's real wrapped layout
-    // (no char-count heuristics that wrap too early/late). WordOrGlyph
-    // breaks long tokens like Telegram/WhatsApp.
+    // Match the icon button height when collapsed. Shrink + vertical padding
+    // was producing a different height than `send_size`, and with End-align
+    // the placeholder sat visibly lower than the glyphs.
     let line_px = d.body * 1.3;
     let h_pad = 10.0;
-    let v_pad = ((send_size - line_px) / 2.0).max(6.0);
-    let editor_padding = Padding {
-        top: v_pad,
-        right: h_pad,
-        bottom: v_pad,
-        left: h_pad,
-    };
-    let min_content = (send_size - editor_padding.y()).max(line_px);
-    let max_content = line_px * 6.0;
+    let composer_text = app.composer();
+    let hard_lines = composer_text.lines().count().max(1);
+    // Soft-wrap estimate only gates "single-line vs growing"; Shrink then
+    // sizes multi-line from real layout.
+    let editor_width = (app.window_width() - d.pad * 2.0 - send_size * 3.0).max(80.0);
+    let col_w = (d.body * 0.55).max(6.0);
+    let wrap_lines = composer_text
+        .lines()
+        .map(|line| {
+            ((line.chars().count() as f32 * col_w / editor_width).ceil()).max(1.0)
+        })
+        .sum::<f32>()
+        .max(1.0);
+    let lines = (hard_lines as f32).max(wrap_lines);
+    let single_line = lines <= 1.0;
+    let max_content = line_px * 6.0 + 16.0;
 
     use crate::touch_mouse::touch_as_mouse;
 
-    let editor = touch_as_mouse(
-        text_editor(app.composer_content())
-            .id(iced::widget::Id::new("composer-input"))
-            .placeholder(placeholder)
-            .on_action(Message::ComposerEdit)
-            .padding(editor_padding)
-            .size(d.body)
-            .line_height(1.3)
-            .height(Length::Shrink)
-            .min_height(min_content)
-            .max_height(max_content)
-            .wrapping(Wrapping::WordOrGlyph)
-            .style(theme::composer_editor())
-            .key_binding({
-                let has_suggestions = !suggestions.is_empty();
-                move |key_press| {
-                    // `:shortcode` list: Tab / Shift+Tab cycle, Enter accepts.
-                    if has_suggestions {
-                        if matches!(
-                            key_press.key.as_ref(),
-                            keyboard::Key::Named(key::Named::Tab)
-                        ) {
-                            return Some(EditorBinding::Custom(if key_press.modifiers.shift() {
-                                Message::EmojiSuggestPrev
-                            } else {
-                                Message::EmojiSuggestNext
-                            }));
-                        }
-                        if matches!(
-                            key_press.key.as_ref(),
-                            keyboard::Key::Named(key::Named::Enter)
-                        ) && !key_press.modifiers.shift()
-                        {
-                            return Some(EditorBinding::Custom(Message::EmojiSuggestAccept));
-                        }
-                    }
-
-                    // Enter sends (Shift+Enter = newline via default Binding::Enter).
-                    if matches!(
-                        key_press.key.as_ref(),
-                        keyboard::Key::Named(key::Named::Enter)
-                    ) && !key_press.modifiers.shift()
-                    {
-                        return Some(EditorBinding::Custom(Message::Send));
-                    }
-
-                    // Keep Ctrl/Cmd chords (SelectAll, Copy, Cut, Paste) on the
-                    // default path — never intercept Character while modifiers are set.
-                    // iced 0.14 IME handles composed accents / preedit natively.
-                    if key_press.modifiers.command() || key_press.modifiers.control() {
-                        return EditorBinding::from_key_press(key_press);
-                    }
-
-                    // OSK: multi-codepoint `text` (emoji / composed graphemes) when
-                    // unmodified. Single chars fall through to defaults + IME.
-                    if matches!(
-                        key_press.status,
-                        iced::widget::text_editor::Status::Focused { .. }
-                    ) {
-                        if let Some(raw) = key_press.text.as_ref() {
-                            let cleaned: String =
-                                raw.chars().filter(|c| !c.is_control()).collect();
-                            if cleaned.chars().count() > 1 {
-                                return Some(EditorBinding::Custom(Message::ComposerInsert(
-                                    cleaned,
-                                )));
-                            }
-                        }
-                    }
-
-                    EditorBinding::from_key_press(key_press)
-                }
-            }),
-    );
+    let editor = if single_line {
+        let v_pad = ((send_size - d.body) / 2.0).max(0.0);
+        touch_as_mouse(
+            text_editor(app.composer_content())
+                .id(iced::widget::Id::new("composer-input"))
+                .placeholder(placeholder)
+                .on_action(Message::ComposerEdit)
+                .padding(Padding {
+                    top: v_pad,
+                    right: h_pad,
+                    bottom: v_pad,
+                    left: h_pad,
+                })
+                .size(d.body)
+                .line_height(1.3)
+                .height(Length::Fixed(send_size))
+                .wrapping(Wrapping::WordOrGlyph)
+                .style(theme::composer_editor())
+                .key_binding(composer_key_binding(!suggestions.is_empty())),
+        )
+    } else {
+        // Growing: let layout decide height; keep icons on the bottom edge.
+        touch_as_mouse(
+            text_editor(app.composer_content())
+                .id(iced::widget::Id::new("composer-input"))
+                .placeholder(placeholder)
+                .on_action(Message::ComposerEdit)
+                .padding(Padding {
+                    top: 8.0,
+                    right: h_pad,
+                    bottom: 8.0,
+                    left: h_pad,
+                })
+                .size(d.body)
+                .line_height(1.3)
+                .height(Length::Shrink)
+                .min_height((send_size - 16.0).max(line_px))
+                .max_height(max_content)
+                .wrapping(Wrapping::WordOrGlyph)
+                .style(theme::composer_editor())
+                .key_binding(composer_key_binding(!suggestions.is_empty())),
+        )
+    };
 
     let input_row = row![attach, mic, editor, send]
         .spacing(0)
-        .align_y(Alignment::End);
+        .align_y(if single_line {
+            Alignment::Center
+        } else {
+            Alignment::End
+        });
 
     // Match top/bottom so the stack isn't visually top-heavy.
     let bar_pad = if app.layout() == LayoutMode::Mobile {

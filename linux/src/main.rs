@@ -1324,7 +1324,11 @@ impl App {
                 self.focus_item = None;
                 self.history_away_from_end = false;
                 HISTORY_AWAY_GATE.reset();
-                Task::batch([self.mark_selected_read(), self.reload_messages()])
+                Task::batch([
+                    self.mark_selected_read(),
+                    self.reload_messages(),
+                    iced::widget::operation::focus(iced::widget::Id::new("composer-input")),
+                ])
             }
             Message::ComposerChanged(value) => {
                 // Expand completed `:shortcode:` as you type (GitHub / gemoji names).

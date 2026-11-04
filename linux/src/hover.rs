@@ -27,6 +27,10 @@ pub struct HoverSlots {
     pub chat: Rc<Cell<Option<usize>>>,
     pub msg: Rc<Cell<Option<i64>>>,
     pub reaction: Rc<RefCell<Option<(i64, String)>>>,
+    /// Composer tool icons (SVG tint can't read button Status).
+    pub composer_attach: Rc<Cell<bool>>,
+    pub composer_mic: Rc<Cell<bool>>,
+    pub composer_send: Rc<Cell<bool>>,
 }
 
 impl HoverSlots {
@@ -34,6 +38,9 @@ impl HoverSlots {
         self.chat.set(None);
         self.msg.set(None);
         *self.reaction.borrow_mut() = None;
+        self.composer_attach.set(false);
+        self.composer_mic.set(false);
+        self.composer_send.set(false);
     }
 }
 
@@ -106,6 +113,12 @@ impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
         self.hover_bg = hover_ok.then_some(Background::Color(hover_bg));
         self.idle_bg = Some(Background::Color(iced::Color::TRANSPARENT));
         self.redraw_on_hover = hover_ok && !selected;
+        self
+    }
+
+    /// Redraw on enter/exit without painting a hover fill (e.g. SVG tint swaps).
+    pub fn redraw_on_hover(mut self, enabled: bool) -> Self {
+        self.redraw_on_hover = enabled;
         self
     }
 }

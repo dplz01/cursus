@@ -558,6 +558,37 @@ pub fn icon_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> b
     }
 }
 
+/// Borderless composer tool (+ / mic) — fill stays clear; SVG carries the color.
+pub fn composer_tool() -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    |_, _| {
+        let c = t();
+        button::Style {
+            background: Some(Background::Color(Color::TRANSPARENT)),
+            text_color: c.text_secondary,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 12.0.into(),
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
+/// Send control: accent when the composer has text, otherwise a quiet tool.
+pub fn composer_send(
+    active: bool,
+    hover_ok: bool,
+) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        if active {
+            icon_action(hover_ok)(theme, status)
+        } else {
+            composer_tool()(theme, status)
+        }
+    }
+}
+
 pub fn composer_input() -> impl Fn(&iced::Theme, text_input::Status) -> text_input::Style {
     |_, status| {
         let c = t();
@@ -581,18 +612,13 @@ pub fn composer_input() -> impl Fn(&iced::Theme, text_input::Status) -> text_inp
 }
 
 pub fn composer_editor() -> impl Fn(&iced::Theme, text_editor::Status) -> text_editor::Style {
-    |_, status| {
+    |_, _| {
         let c = t();
-        let border_color = match status {
-            text_editor::Status::Focused { .. } => c.accent,
-            text_editor::Status::Hovered => c.text_muted,
-            _ => c.border,
-        };
         text_editor::Style {
             background: Background::Color(c.bg_sidebar),
             border: Border {
-                color: border_color,
-                width: 1.0,
+                color: Color::TRANSPARENT,
+                width: 0.0,
                 radius: 10.0.into(),
             },
             placeholder: c.text_muted,

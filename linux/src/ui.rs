@@ -40,6 +40,20 @@ fn no_bar() -> Scrollbar {
     Scrollbar::new().width(0).scroller_width(0).margin(0)
 }
 
+/// Compact borderless back control for mobile push headers.
+fn mobile_back_btn(on_press: Message, hover: bool) -> Element<'static, Message> {
+    button(icons::back_icon(16.0))
+        .on_press(on_press)
+        .padding(Padding {
+            top: 6.0,
+            right: 4.0,
+            bottom: 6.0,
+            left: 2.0,
+        })
+        .style(theme::back_action(hover))
+        .into()
+}
+
 fn scroll_y<'a>(
     content: impl Into<Element<'a, Message>>,
 ) -> iced::widget::Scrollable<'a, Message> {
@@ -543,7 +557,7 @@ fn chat_list(app: &App) -> Element<'_, Message> {
         );
     }
 
-    let mut col = Column::new().spacing(8).padding(Padding {
+    let mut col = Column::new().spacing(0).padding(Padding {
         top: 0.0,
         right: d.pad_tight,
         bottom: d.pad_tight,
@@ -791,20 +805,17 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
 
     let title_row: Element<'_, Message> = if with_back || in_support {
         row![
-            button(icons::back_icon(18.0))
-                .on_press(Message::Back)
-                .padding(Padding::from([8, 12]))
-                .style(theme::secondary_action(app.hover_ok())),
+            mobile_back_btn(Message::Back, app.hover_ok()),
             identity,
             support_action,
         ]
-        .spacing(10)
+        .spacing(6)
         .align_y(Alignment::Center)
         .padding(Padding {
             top: d.pad_tight,
             right: d.pad,
             bottom: d.pad_tight,
-            left: d.pad_tight,
+            left: 4.0,
         })
         .into()
     } else {
@@ -1988,56 +1999,57 @@ fn voice_draft_bar(
     .into()
 }
 
-/// Max width for bubble body (including reserved trailing time slot).
+/// Max width for bubble body text.
 const BUBBLE_TEXT_MAX: f32 = 420.0;
 
-/// Compact height for time + ticks (fits inside the last text line box).
+/// Compact height for time + ticks.
 fn bubble_time_height(d: Density) -> f32 {
     f32::from(d.meta) + 2.0
 }
 
-/// Trailing gutter so glyphs never run under the floating time / receipts.
-fn bubble_time_slot(d: Density, outgoing: bool) -> f32 {
-    let text_w = f32::from(d.meta) * 5.2;
-    let ticks = if outgoing {
-        (f32::from(d.meta) * 0.85).clamp(10.0, 13.0) + 4.0
-    } else {
-        0.0
-    };
-    (text_w + ticks + 6.0).clamp(56.0, 120.0)
-}
-
-/// Body + Telegram-style time: text keeps a right gutter; time sits in that
-/// gutter on the last line (no cover-up, no extra footer row).
+/// Body + floating time/receipt chip anchored to the bottom-right.
+///
+/// No permanent right gutter (that used to carve empty vertical strips beside
+/// every line). The chip sits over short last lines; a soft fill keeps it
+/// readable when it overlaps longer text.
 fn bubble_content_with_time<'a>(
     content: Element<'a, Message>,
     msg: &'a ChatMessage,
     d: Density,
     content_max: f32,
 ) -> Element<'a, Message> {
-    let slot = bubble_time_slot(d, msg.outgoing);
+    let chip_bg = if msg.outgoing {
+        theme::t().accent_soft
+    } else {
+        theme::t().bg_elevated
+    };
+    let stamp = container(bubble_time_meta(msg, d))
+        .padding(Padding {
+            top: 1.0,
+            right: 2.0,
+            bottom: 0.0,
+            left: 6.0,
+        })
+        .style(move |_| container::Style {
+            background: Some(iced::Background::Color(chip_bg)),
+            border: iced::Border {
+                radius: 8.0.into(),
+                ..Default::default()
+            },
+            ..container::Style::default()
+        });
+
     container(
         Stack::new()
+            .push(container(content).max_width(content_max))
             .push(
-                container(content)
-                    .padding(Padding {
-                        top: 0.0,
-                        right: slot,
-                        bottom: 0.0,
-                        left: 0.0,
-                    })
-                    .max_width(content_max),
-            )
-            .push(
-                container(bubble_time_meta(msg, d))
+                container(stamp)
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .align_x(Alignment::End)
                     .align_y(Alignment::End),
             ),
     )
-    // Keep time/receipts inside the bubble bounds (no floating green checks).
-    .clip(true)
     .into()
 }
 
@@ -2490,10 +2502,10 @@ fn visual_media_preview<'a>(
     } else {
         path.clone()
     };
-    // Cap for mobile chat panes — keep native aspect (no fixed 360×220 stretch).
-    const PREVIEW_MAX_W: u32 = 300;
-    const PREVIEW_MAX_H: u32 = 400;
-    const RADIUS: f32 = 14.0;
+    // Compact chat-pane previews — keep native aspect.
+    const PREVIEW_MAX_W: u32 = 220;
+    const PREVIEW_MAX_H: u32 = 280;
+    const RADIUS: f32 = 12.0;
     let (display_path, pw, ph) =
         match media::rounded_fitted_preview(&source, PREVIEW_MAX_W, PREVIEW_MAX_H, RADIUS) {
             Ok(v) => v,
@@ -2708,22 +2720,19 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
 
     let header: Element<'_, Message> = if with_back {
         row![
-            button(icons::back_icon(18.0))
-                .on_press(Message::CloseCompose)
-                .padding(Padding::from([8, 12]))
-                .style(theme::secondary_action(hover)),
+            mobile_back_btn(Message::CloseCompose, hover),
             text("New")
                 .size(d.title)
                 .color(theme::t().text_primary)
                 .width(Length::Fill),
         ]
-        .spacing(10)
+        .spacing(6)
         .align_y(Alignment::Center)
         .padding(Padding {
             top: d.pad_tight,
             right: d.pad,
             bottom: d.pad_tight,
-            left: d.pad_tight,
+            left: 4.0,
         })
         .into()
     } else {
@@ -3055,7 +3064,7 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 app.hover_ok(),
             ),
         ]
-        .spacing(12)
+        .spacing(0)
         .padding(d.pad),
     )
     .height(Length::Fill)
@@ -3738,7 +3747,7 @@ fn profile_header_bar<'a>(
             top: d.pad_tight,
             right: d.pad,
             bottom: d.pad_tight,
-            left: d.pad_tight,
+            left: 4.0,
         }
     } else {
         Padding::from([d.pad_tight, 0.0])
@@ -3796,16 +3805,13 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
 
     let leading: Element<'_, Message> = if with_back {
         row![
-            button(icons::back_icon(18.0))
-                .on_press(Message::CloseContactProfile)
-                .padding(Padding::from([8, 12]))
-                .style(theme::secondary_action(hover)),
+            mobile_back_btn(Message::CloseContactProfile, hover),
             text("Contact")
                 .size(d.title)
                 .color(theme::t().text_primary)
                 .width(Length::Fill),
         ]
-        .spacing(10)
+        .spacing(6)
         .align_y(Alignment::Center)
         .into()
     } else {
@@ -3816,12 +3822,12 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
     };
     let header = profile_header_bar(leading, header_actions.into(), d, with_back);
 
-    let mut body = Column::new().spacing(12).width(Length::Fill);
+    let mut body = Column::new().spacing(8).width(Length::Fill);
     body = body.push(
         row![
             profile_avatar(p.fields.image.as_deref(), &display, 72.0),
             {
-                let mut names = Column::new().spacing(4).width(Length::Fill);
+                let mut names = Column::new().spacing(2).width(Length::Fill);
                 names = names.push(
                     text(display)
                         .size(d.title)
@@ -4103,7 +4109,7 @@ fn channel_list(app: &App) -> Element<'_, Message> {
 fn calls_panel(app: &App) -> Element<'_, Message> {
     let d = app.density();
     let hover = app.hover_ok();
-    let mut col = Column::new().spacing(8).padding(Padding {
+    let mut col = Column::new().spacing(0).padding(Padding {
         top: 0.0,
         right: d.pad_tight,
         bottom: d.pad_tight,
@@ -4343,34 +4349,31 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
 
     let leading: Element<'_, Message> = if with_back {
         row![
-            button(icons::back_icon(18.0))
-                .on_press(if nested {
+            mobile_back_btn(
+                if nested {
                     Message::Back
                 } else {
                     close_msg.clone()
-                })
-                .padding(Padding::from([8, 12]))
-                .style(theme::secondary_action(hover)),
+                },
+                hover,
+            ),
             text(heading)
                 .size(d.title)
                 .color(theme::t().text_primary)
                 .width(Length::Fill),
         ]
-        .spacing(10)
+        .spacing(6)
         .align_y(Alignment::Center)
         .into()
     } else if nested {
         row![
-            button(icons::back_icon(18.0))
-                .on_press(Message::Back)
-                .padding(Padding::from([8, 12]))
-                .style(theme::secondary_action(hover)),
+            mobile_back_btn(Message::Back, hover),
             text(heading)
                 .size(d.title)
                 .color(theme::t().text_primary)
                 .width(Length::Fill),
         ]
-        .spacing(10)
+        .spacing(6)
         .align_y(Alignment::Center)
         .into()
     } else {
@@ -4388,7 +4391,7 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
                 top: d.pad_tight,
                 right: d.pad,
                 bottom: d.pad_tight,
-                left: d.pad_tight,
+                left: 4.0,
             }
         } else {
             Padding::from([d.pad_tight, 0.0])
@@ -4513,7 +4516,7 @@ fn group_overview_pane(
     } else {
         "Group photo"
     };
-    let mut col = Column::new().spacing(10).width(Length::Fill);
+    let mut col = Column::new().spacing(8).width(Length::Fill);
     col = col.push(
         row![
             profile_avatar(g.image.as_deref(), &g.name, 64.0),
@@ -4955,7 +4958,7 @@ fn contact_feature_prefs(
     hover: bool,
 ) -> Element<'static, Message> {
     let icon_tint = theme::t().text_secondary;
-    let mut col = Column::new().spacing(4).width(Length::Fill);
+    let mut col = Column::new().spacing(0).width(Length::Fill);
 
     col = col.push(contact_feature_row(
         icons::timer_icon(20.0, icon_tint),
@@ -5263,16 +5266,13 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
 
     let leading: Element<'_, Message> = if with_back {
         row![
-            button(icons::back_icon(18.0))
-                .on_press(Message::CloseSupportOverlay)
-                .padding(Padding::from([8, 12]))
-                .style(theme::secondary_action(hover)),
+            mobile_back_btn(Message::CloseSupportOverlay, hover),
             text("Chats with members")
                 .size(d.title)
                 .color(theme::t().text_primary)
                 .width(Length::Fill),
         ]
-        .spacing(10)
+        .spacing(6)
         .align_y(Alignment::Center)
         .into()
     } else {
@@ -5371,7 +5371,7 @@ fn group_preferences_pane(
 ) -> Element<'_, Message> {
     let owner = can_edit_group_profile(&g.my_role);
     let prefs = g.group_preferences.as_ref();
-    let mut col = Column::new().spacing(4).width(Length::Fill);
+    let mut col = Column::new().spacing(0).width(Length::Fill);
     col = col.push(
         text("Chat features")
             .size(d.meta)

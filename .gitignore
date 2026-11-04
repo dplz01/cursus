@@ -10,3 +10,7 @@
 .env
 .idea/
 .vscode/
+
+# Local bug / layout checklist (not tracked)
+.bugs.txt
+.bug.txt

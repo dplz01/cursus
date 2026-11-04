@@ -142,7 +142,13 @@ pub fn t() -> Tokens {
 }
 
 /// Detect whether the desktop prefers a dark color scheme.
+///
+/// Order: xdg-desktop-portal (Hyprland / non-GNOME) → gsettings color-scheme →
+/// gtk-theme name → dark fallback only when nothing reports a preference.
 pub fn system_prefers_dark() -> bool {
+    if let Some(dark) = portal_prefers_dark() {
+        return dark;
+    }
     if let Ok(output) = std::process::Command::new("gsettings")
         .args(["get", "org.gnome.desktop.interface", "color-scheme"])
         .output()
@@ -152,7 +158,8 @@ pub fn system_prefers_dark() -> bool {
             if s.contains("prefer-dark") {
                 return true;
             }
-            if s.contains("prefer-light") {
+            if s.contains("prefer-light") || s.contains("default") {
+                // GNOME "default" follows light chrome on modern desktops.
                 return false;
             }
         }
@@ -166,10 +173,46 @@ pub fn system_prefers_dark() -> bool {
             if s.contains("dark") {
                 return true;
             }
+            if !s.trim().is_empty() && s.contains('\'') {
+                // Named light theme (no "dark" in the name).
+                return false;
+            }
         }
     }
-    // Prefer dark when unset — matches the original Cursus default.
+    // Last resort when no desktop setting is readable.
     true
+}
+
+/// Read `org.freedesktop.appearance color-scheme` via the settings portal.
+/// `0` = no preference, `1` = prefer dark, `2` = prefer light.
+fn portal_prefers_dark() -> Option<bool> {
+    let output = std::process::Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.freedesktop.portal.Desktop",
+            "--object-path",
+            "/org/freedesktop/portal/desktop",
+            "--method",
+            "org.freedesktop.portal.Settings.ReadOne",
+            "org.freedesktop.appearance",
+            "color-scheme",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout);
+    // Typical: `(<uint32 1>,)` or `(uint32 2,)`.
+    if s.contains("uint32 1") || s.contains("uint32 1>") {
+        return Some(true);
+    }
+    if s.contains("uint32 2") || s.contains("uint32 2>") {
+        return Some(false);
+    }
+    None
 }
 
 pub fn panel_style() -> impl Fn(&iced::Theme) -> container::Style {
@@ -319,6 +362,28 @@ pub fn secondary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status)
                 color: c.border,
                 width: 1.0,
                 radius: 10.0.into(),
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
+/// Mobile back control — borderless, quiet hover.
+pub fn back_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let c = t();
+        let background = match status {
+            button::Status::Hovered if hover_ok => Some(Background::Color(c.bg_hover)),
+            button::Status::Pressed => Some(Background::Color(c.accent_soft)),
+            _ => None,
+        };
+        button::Style {
+            background,
+            text_color: c.text_primary,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 8.0.into(),
             },
             ..button::Style::default()
         }

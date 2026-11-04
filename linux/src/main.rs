@@ -4419,6 +4419,9 @@ impl App {
                                 self.receiving_files.remove(&id);
                             }
                             self.status = format!("Saved {name} to {}", files_dir().display());
+                            // Accept only starts the transfer — refresh when bytes land
+                            // so previews / open / decrypt see Complete + local_path.
+                            tasks.push(self.reload_messages());
                         }
                         "rcvFileError" | "rcvFileWarning" => {
                             if let Some(id) = body

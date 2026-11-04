@@ -42,7 +42,7 @@ Commands are the same text language documented in SimpleX [`bots/api/COMMANDS.md
 └─────────────────────────────┘
 ```
 
-**Trust model for `libsimplex`:** the Cursus repo does not vendor Haskell sources. `scripts/fetch-libs.sh` downloads a version-pinned zip from [simplex-chat-libs](https://github.com/simplex-chat/simplex-chat-libs/releases) (currently the `core-*` tags that ship raw `libsimplex`). Anyone can instead build from SimpleX source with `scripts/desktop/build-lib-linux.sh` and copy `libs/linux-x86_64/` into `third_party/libsimplex/`. The pinned tag file `third_party/libsimplex/INSTALLED_TAG` is the verification path—not “trust a binary we uploaded once.”
+**Trust model for `libsimplex`:** the Cursus repo does not vendor Haskell sources. `scripts/fetch-libs.sh` downloads a version-pinned zip from [simplex-chat-libs](https://github.com/simplex-chat/simplex-chat-libs/releases) (currently the `core-*` tags that ship raw `libsimplex` for `linux-x86_64`, `linux-aarch64`, macOS, Windows). Anyone can instead build from SimpleX source with `scripts/desktop/build-lib-linux.sh` and copy `libs/linux-x86_64/` or `libs/linux-aarch64/` into `third_party/libsimplex/`. The pinned tag files `third_party/libsimplex/INSTALLED_TAG` and `INSTALLED_PLAT` are the verification path—not “trust a binary we uploaded once.”
 
 Default servers and default chat options are used; no custom relay UI in milestone 1.
 

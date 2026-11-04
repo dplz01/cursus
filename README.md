@@ -40,13 +40,14 @@ Each platform directory is meant to be extractable into its own GitHub repositor
 - Rust stable (1.88+ recommended)
 - Official SimpleX native library for your OS/arch
 
-Fetch prebuilt libraries (same source as the official Python package):
+Fetch prebuilt libraries (same source as the official Python package). The script picks the zip from `uname -m` (`x86_64` or `aarch64` / `arm64`):
 
 ```bash
 ./scripts/fetch-libs.sh
+# ARM example: uname -m → aarch64 → simplex-chat-libs-linux-aarch64.zip
 ```
 
-Or build from [simplex-chat](https://github.com/simplex-chat/simplex-chat) with `scripts/desktop/build-lib-linux.sh` and copy `libs/linux-x86_64/` into `third_party/libsimplex/`.
+Or build from [simplex-chat](https://github.com/simplex-chat/simplex-chat) with `scripts/desktop/build-lib-linux.sh` and copy `libs/linux-x86_64/` or `libs/linux-aarch64/` into `third_party/libsimplex/`. Do not copy an x86_64 `third_party/libsimplex` tree onto an ARM device.
 
 ## Build and run (Linux)
 
@@ -54,6 +55,8 @@ Or build from [simplex-chat](https://github.com/simplex-chat/simplex-chat) with 
 ./scripts/fetch-libs.sh
 cargo run -p cursus-linux
 ```
+
+Works on **x86_64 and aarch64** Linux hosts (PinePhone, ARM laptops, Asahi, etc.) once the matching libs zip is installed.
 
 Data is stored under `$XDG_DATA_HOME/cursus` (or `~/.local/share/cursus`), separate from the official SimpleX desktop app.
 

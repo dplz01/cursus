@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Download official prebuilt libsimplex (same channel as simplex-chat Python package).
+#
+# Supports linux/macos × x86_64/aarch64. Override with:
+#   SIMPLEX_LIBS_TAG=core-… ./scripts/fetch-libs.sh
+#   SIMPLEX_LIBS_PLAT=linux-aarch64 ./scripts/fetch-libs.sh
 set -euo pipefail
 
 # Release tag on https://github.com/simplex-chat/simplex-chat-libs/releases
-# Prefer `core-*` builds (raw libsimplex). Override with SIMPLEX_LIBS_TAG=...
+# Prefer `core-*` builds (raw libsimplex).
 SIMPLEX_LIBS_TAG="${SIMPLEX_LIBS_TAG:-core-7.1.0.17}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,21 +16,44 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+# Match SimpleX desktop scripts: ARCH="$(uname -m)" (aarch64 / x86_64 / arm64).
 arch="$(uname -m)"
-case "$os-$arch" in
-  linux-x86_64|linux-amd64) plat="linux-x86_64" ;;
-  linux-aarch64|linux-arm64) plat="linux-aarch64" ;;
-  darwin-x86_64) plat="macos-x86_64" ;;
-  darwin-arm64) plat="macos-aarch64" ;;
-  *)
-    echo "Unsupported platform: $os $arch" >&2
-    exit 1
-    ;;
-esac
 
+normalize_arch() {
+  case "$1" in
+    x86_64|amd64) printf 'x86_64' ;;
+    aarch64|arm64|armv8l|armv8b|aarch64_be) printf 'aarch64' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+arch_norm="$(normalize_arch "$arch")"
+
+if [[ -n "${SIMPLEX_LIBS_PLAT:-}" ]]; then
+  plat="$SIMPLEX_LIBS_PLAT"
+else
+  case "$os-$arch_norm" in
+    linux-x86_64) plat="linux-x86_64" ;;
+    linux-aarch64) plat="linux-aarch64" ;;
+    darwin-x86_64) plat="macos-x86_64" ;;
+    darwin-aarch64) plat="macos-aarch64" ;;
+    *)
+      echo "Unsupported platform: uname -s=$(uname -s) uname -m=$arch (normalized=$arch_norm)" >&2
+      echo "Supported: linux/macos × x86_64|aarch64 (also: amd64, arm64, armv8l)." >&2
+      echo "Override with SIMPLEX_LIBS_PLAT=linux-aarch64 if needed." >&2
+      exit 1
+      ;;
+  esac
+fi
+
+echo "Host: uname -m=$arch → $arch_norm; platform zip=$plat"
 url="https://github.com/simplex-chat/simplex-chat-libs/releases/download/${SIMPLEX_LIBS_TAG}/simplex-chat-libs-${plat}.zip"
 echo "Fetching $url"
-curl -fL "$url" -o "$TMP/libs.zip"
+if ! curl -fL "$url" -o "$TMP/libs.zip"; then
+  echo "Download failed for $plat (tag ${SIMPLEX_LIBS_TAG})." >&2
+  echo "Check assets at https://github.com/simplex-chat/simplex-chat-libs/releases/tag/${SIMPLEX_LIBS_TAG}" >&2
+  exit 1
+fi
 unzip -q "$TMP/libs.zip" -d "$TMP/extract"
 
 rm -rf "$OUT"
@@ -37,8 +64,8 @@ if [[ -d "$TMP/extract/libs" ]]; then
 elif [[ -f "$TMP/extract/libsimplex.so" || -f "$TMP/extract/libsimplex.dylib" ]]; then
   cp -a "$TMP/extract/." "$OUT/"
 else
-  # Nested single directory
-  inner="$(find "$TMP/extract" -maxdepth 2 -name 'libsimplex.so' -o -name 'libsimplex.dylib' | head -n1)"
+  # Nested single directory (parentheses required for find -o precedence).
+  inner="$(find "$TMP/extract" -maxdepth 3 \( -name 'libsimplex.so' -o -name 'libsimplex.dylib' \) | head -n1)"
   if [[ -n "$inner" ]]; then
     cp -a "$(dirname "$inner")/." "$OUT/"
   else
@@ -48,9 +75,45 @@ else
   fi
 fi
 
+lib=
+if [[ -f "$OUT/libsimplex.so" ]]; then
+  lib="$OUT/libsimplex.so"
+elif [[ -f "$OUT/libsimplex.dylib" ]]; then
+  lib="$OUT/libsimplex.dylib"
+else
+  echo "Install incomplete: no libsimplex shared library under $OUT" >&2
+  ls -la "$OUT" | head -n 30 >&2
+  exit 1
+fi
+
+# Refuse a wrong-arch binary (common when copying third_party from another machine).
+if command -v file >/dev/null 2>&1; then
+  info="$(file -b "$lib" || true)"
+  echo "Installed binary: $info"
+  case "$arch_norm" in
+    aarch64)
+      if ! grep -qiE 'aarch64|arm64|arm aarch64' <<<"$info"; then
+        echo "ERROR: expected an aarch64 libsimplex but got:" >&2
+        echo "  $info" >&2
+        echo "Re-run on the ARM device (do not copy x86_64 third_party/libsimplex)." >&2
+        exit 1
+      fi
+      ;;
+    x86_64)
+      if ! grep -qiE 'x86-64|x86_64|Intel 80386|X86-64' <<<"$info"; then
+        echo "ERROR: expected an x86_64 libsimplex but got:" >&2
+        echo "  $info" >&2
+        exit 1
+      fi
+      ;;
+  esac
+fi
+
+printf '%s\n' "$SIMPLEX_LIBS_TAG" > "$OUT/INSTALLED_TAG"
+printf '%s\n' "$plat" > "$OUT/INSTALLED_PLAT"
+
 echo "Installed libsimplex into $OUT"
 ls -la "$OUT" | head -n 20
 echo
-echo "Pinned SimpleX libs tag: ${SIMPLEX_LIBS_TAG}"
+echo "Pinned SimpleX libs tag: ${SIMPLEX_LIBS_TAG} ($plat)"
 echo "Source correspondence: https://github.com/simplex-chat/simplex-chat (matching this libs release)"
-printf '%s\n' "$SIMPLEX_LIBS_TAG" > "$OUT/INSTALLED_TAG"

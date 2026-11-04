@@ -9,6 +9,7 @@ mod icons;
 mod layout;
 mod media;
 mod theme;
+mod touch_mouse;
 mod ui;
 
 use std::collections::{HashMap, HashSet};
@@ -527,6 +528,8 @@ pub enum Message {
     ComposerChanged(String),
     /// Multi-line composer (`text_editor`) edit action.
     ComposerEdit(text_editor::Action),
+    /// Insert a string into the composer (OSK / multi-codepoint text).
+    ComposerInsert(String),
     /// Accept highlighted / clicked emoji shortcode suggestion.
     EmojiSuggestAccept,
     EmojiSuggestSelect(usize),
@@ -1332,6 +1335,22 @@ impl App {
             }
             Message::ComposerEdit(action) => {
                 self.composer.perform(action);
+                let raw = self.composer_text();
+                let expanded = cursus_core::expand_emoji_shortcodes(&raw);
+                if expanded != raw {
+                    self.set_composer_text(expanded);
+                }
+                self.emoji_suggest_index = 0;
+                Task::none()
+            }
+            Message::ComposerInsert(text) => {
+                // Paste full Unicode strings from OSK / composed accents.
+                // `Binding::Insert` only takes one char and ignores Key::Character
+                // when the event has no `text` payload (common on mobile VK).
+                self.composer
+                    .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
+                        std::sync::Arc::new(text),
+                    )));
                 let raw = self.composer_text();
                 let expanded = cursus_core::expand_emoji_shortcodes(&raw);
                 if expanded != raw {

@@ -303,19 +303,31 @@ fn stacked_shell(app: &App) -> Element<'_, Message> {
             || app.group_settings().is_some()
             || app.support().is_some()
             || app.compose_open());
-    let body: Element<'_, Message> = if show_detail {
-        content_pane(app, true)
-    } else {
-        list_pane(app, Length::Fill)
-    };
 
-    // Open chat / detail covers the list on mobile/compact — hide bottom nav
-    // so the conversation feels like a full push over the shell.
-    let mut col = column![container(body).height(Length::Fill)];
-    if !show_detail {
-        col = col.push(bottom_nav(app));
+    // Always keep list + bottom nav mounted (iOS-style). An open chat is an
+    // opaque full-screen layer stacked on top — the tab bar stays underneath
+    // rather than disappearing.
+    let shell_base = column![
+        container(list_pane(app, Length::Fill)).height(Length::Fill),
+        bottom_nav(app),
+    ]
+    .height(Length::Fill);
+
+    if show_detail {
+        Stack::new()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .push(shell_base)
+            .push(
+                container(content_pane(app, true))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(theme::panel_style()),
+            )
+            .into()
+    } else {
+        shell_base.into()
     }
-    col.height(Length::Fill).into()
 }
 
 fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
@@ -871,9 +883,93 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
 
     let suggestions = app.emoji_suggestions();
     let suggest_idx = app.emoji_suggest_index();
-    let suggest_panel: Element<'_, Message> = if suggestions.is_empty() {
-        Space::with_height(0).into()
+
+    // Auto-growing multi-line field (Enter sends, Shift+Enter newline).
+    // Height follows hard newlines + a rough wrap estimate, capped for history space.
+    let line_px = f32::from(d.body) * 1.35;
+    let editor_pad = 8.0;
+    let min_h = send_size.max(line_px + editor_pad * 2.0);
+    let max_h = line_px * 6.0 + editor_pad * 2.0;
+    let hard_lines = app.composer_content().line_count().max(1) as f32;
+    let composer_text = app.composer();
+    let editor_width = (app.window_width() - d.pad * 2.0 - send_size * 3.0 - 24.0).max(80.0);
+    let col_w = (f32::from(d.body) * 0.55).max(6.0);
+    let wrap_lines = (composer_text.chars().count() as f32 * col_w / editor_width)
+        .ceil()
+        .max(1.0);
+    let lines = hard_lines.max(wrap_lines);
+    let editor_h = (lines * line_px + editor_pad * 2.0).clamp(min_h, max_h);
+
+    use crate::touch_mouse::touch_as_mouse;
+    use iced::widget::text_editor::Status as EditorStatus;
+
+    let editor = touch_as_mouse(
+        text_editor(app.composer_content())
+            .placeholder(placeholder)
+            .on_action(Message::ComposerEdit)
+            .padding(editor_pad)
+            .size(d.body)
+            .height(Length::Fixed(editor_h))
+            .wrapping(Wrapping::Word)
+            .style(theme::composer_editor())
+            .key_binding(|key_press| {
+                // Enter sends (Shift+Enter = newline via default Binding::Enter).
+                if matches!(
+                    key_press.key.as_ref(),
+                    keyboard::Key::Named(key::Named::Enter)
+                ) && !key_press.modifiers.shift()
+                {
+                    return Some(EditorBinding::Custom(Message::Send));
+                }
+
+                // OSK / composed accents: iced's default path only Inserts one
+                // char from `text`, and ignores Key::Character when `text` is
+                // None (common for virtual-keyboard Unicode keys).
+                if key_press.status == EditorStatus::Focused {
+                    if let Some(raw) = key_press.text.as_ref() {
+                        let cleaned: String =
+                            raw.chars().filter(|c| !c.is_control()).collect();
+                        if cleaned.chars().count() > 1 {
+                            return Some(EditorBinding::Custom(Message::ComposerInsert(
+                                cleaned,
+                            )));
+                        }
+                    }
+                    if let keyboard::Key::Character(s) = key_press.key.as_ref() {
+                        let cleaned: String =
+                            s.chars().filter(|c| !c.is_control()).collect();
+                        if !cleaned.is_empty() {
+                            // Prefer full string so multi-codepoint graphemes survive.
+                            if cleaned.chars().count() == 1 {
+                                return Some(EditorBinding::Insert(
+                                    cleaned.chars().next().unwrap(),
+                                ));
+                            }
+                            return Some(EditorBinding::Custom(Message::ComposerInsert(
+                                cleaned,
+                            )));
+                        }
+                    }
+                }
+
+                EditorBinding::from_key_press(key_press)
+            }),
+    );
+
+    let input_row = row![attach, mic, editor, send]
+        .spacing(8)
+        .align_y(Alignment::End);
+
+    let bar_pad_bottom = if app.layout() == LayoutMode::Mobile {
+        6.0
     } else {
+        8.0
+    };
+    // Keep top tight — empty suggest/reply used to leave phantom column spacing.
+    let bar_pad_top = 2.0;
+
+    let mut body = Column::new().spacing(0).width(Length::Fill);
+    if !suggestions.is_empty() {
         let mut list = Column::new().spacing(2).width(Length::Fill);
         for (i, hit) in suggestions.iter().enumerate() {
             let selected = i == suggest_idx;
@@ -899,7 +995,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
                 .style(theme::emoji_suggest_row(selected, app.hover_ok()));
             list = list.push(row);
         }
-        container(list)
+        let suggest_panel = container(list)
             .padding(6)
             .width(Length::Fill)
             .style(|_| container::Style {
@@ -910,11 +1006,10 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
                     radius: 12.0.into(),
                 },
                 ..container::Style::default()
-            })
-            .into()
-    };
-
-    let reply_bar: Element<'_, Message> = if let Some(reply) = app.reply_to() {
+            });
+        body = body.push(suggest_panel).push(Space::with_height(6));
+    }
+    if let Some(reply) = app.reply_to() {
         let preview: Element<'_, Message> = if cursus_core::is_short_emoji(&reply.preview) {
             emoji_glyph(reply.preview.clone())
                 .size(d.body)
@@ -926,7 +1021,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
                 .color(theme::t().text_secondary)
                 .into()
         };
-        container(
+        let reply_bar = container(
             row![
                 column![
                     text("Replying")
@@ -954,75 +1049,29 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
                 radius: 10.0.into(),
             },
             ..container::Style::default()
+        });
+        body = body.push(reply_bar).push(Space::with_height(6));
+    }
+    body = body.push(input_row);
+
+    container(body)
+        .padding(Padding {
+            top: bar_pad_top,
+            right: d.pad,
+            bottom: bar_pad_bottom,
+            left: d.pad,
+        })
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().bg_sidebar)),
+            border: iced::Border {
+                color: theme::t().border,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
         })
         .into()
-    } else {
-        Space::with_height(0).into()
-    };
-
-    // Auto-growing multi-line field (Enter sends, Shift+Enter newline).
-    // Height follows hard newlines + a rough wrap estimate, capped for history space.
-    let line_px = f32::from(d.body) * 1.35;
-    let editor_pad = 8.0;
-    let min_h = send_size.max(line_px + editor_pad * 2.0);
-    let max_h = line_px * 6.0 + editor_pad * 2.0;
-    let hard_lines = app.composer_content().line_count().max(1) as f32;
-    let composer_text = app.composer();
-    let editor_width = (app.window_width() - d.pad * 2.0 - send_size * 3.0 - 24.0).max(80.0);
-    let col_w = (f32::from(d.body) * 0.55).max(6.0);
-    let wrap_lines = (composer_text.chars().count() as f32 * col_w / editor_width)
-        .ceil()
-        .max(1.0);
-    let lines = hard_lines.max(wrap_lines);
-    let editor_h = (lines * line_px + editor_pad * 2.0).clamp(min_h, max_h);
-
-    let editor = text_editor(app.composer_content())
-        .placeholder(placeholder)
-        .on_action(Message::ComposerEdit)
-        .padding(editor_pad)
-        .size(d.body)
-        .height(Length::Fixed(editor_h))
-        .wrapping(Wrapping::Word)
-        .style(theme::composer_editor())
-        .key_binding(|key_press| match key_press.key.as_ref() {
-            keyboard::Key::Named(key::Named::Enter) if !key_press.modifiers.shift() => {
-                Some(EditorBinding::Custom(Message::Send))
-            }
-            _ => EditorBinding::from_key_press(key_press),
-        });
-
-    let input_row = row![attach, mic, editor, send]
-        .spacing(8)
-        .align_y(Alignment::End);
-
-    let bar_pad_v = if app.layout() == LayoutMode::Mobile {
-        6.0
-    } else {
-        8.0
-    };
-
-    container(
-        column![suggest_panel, reply_bar, input_row]
-            .spacing(6)
-            .width(Length::Fill),
-    )
-    .padding(Padding {
-        top: bar_pad_v,
-        right: d.pad,
-        bottom: bar_pad_v,
-        left: d.pad,
-    })
-    .width(Length::Fill)
-    .style(|_| container::Style {
-        background: Some(iced::Background::Color(theme::t().bg_sidebar)),
-        border: iced::Border {
-            color: theme::t().border,
-            width: 1.0,
-            radius: 0.0.into(),
-        },
-        ..container::Style::default()
-    })
-    .into()
 }
 
 fn contact_request_bar(app: &App, req_id: i64, d: Density) -> Element<'_, Message> {

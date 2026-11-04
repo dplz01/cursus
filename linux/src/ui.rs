@@ -2715,26 +2715,19 @@ fn visual_media_preview<'a>(
         return None;
     }
     // Prefer decrypted plaintext; skip preview until CryptoFile decrypt finishes.
+    // No fs::metadata / image_dimensions here — view runs on every fling tick.
     let path = app.plaintext_path_for(file)?;
-    let meta = std::fs::metadata(&path).ok()?;
-    if !meta.is_file() || meta.len() == 0 {
-        return None;
-    }
     let is_video = matches!(file.kind, FileKind::Video) || media::is_video_name(&file.file_name);
     // Compact chat-pane previews — keep native aspect.
     const PREVIEW_MAX_W: u32 = 220;
     const PREVIEW_MAX_H: u32 = 280;
     const RADIUS: f32 = 12.0;
-    // Never decode / run ffmpeg on the UI thread — first-open hangs came from
-    // rounded_fitted_preview decoding every image during view(). Cache only.
-    // Videos land in image_previews once the poster is rounded (keyed by video path).
+    // Memory caches only. Disk/ffmpeg warm happens in WarmChatMedia / Visuals.
     let prepared = if is_video {
         app.image_preview_for(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)
             .or_else(|| {
-                app.video_thumb_for(&path).and_then(|src| {
-                    media::cached_rounded_fitted_preview(&src, PREVIEW_MAX_W, PREVIEW_MAX_H)
-                        .or_else(|| Some((src, PREVIEW_MAX_W, PREVIEW_MAX_H * 2 / 3)))
-                })
+                app.video_thumb_for(&path)
+                    .map(|src| (src, PREVIEW_MAX_W, PREVIEW_MAX_H * 2 / 3))
             })
     } else {
         app.image_preview_for(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)

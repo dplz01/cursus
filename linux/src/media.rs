@@ -206,50 +206,6 @@ pub fn cached_video_thumbnail(path: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Downscaled still for the in-app media reader (avoids decoding multi‑MB originals on the UI thread).
-pub fn viewer_still_preview(path: &Path, max_side: u32) -> Result<PathBuf, String> {
-    let max_side = max_side.max(320);
-    let (sw, sh) = image::image_dimensions(path).map_err(|e| format!("viewer size: {e}"))?;
-    if sw == 0 || sh == 0 {
-        return Err("empty image".into());
-    }
-    let (w, h) = fit_within(sw, sh, max_side, max_side);
-    if w == sw && h == sh {
-        return Ok(path.to_path_buf());
-    }
-    let out = viewer_preview_path(path, max_side);
-    if out.is_file() {
-        if let (Ok(src), Ok(dst)) = (std::fs::metadata(path), std::fs::metadata(&out)) {
-            if dst.len() > 0 && dst.modified().ok() >= src.modified().ok() {
-                return Ok(out);
-            }
-        }
-    }
-    if let Some(parent) = out.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let img = image::open(path).map_err(|e| format!("viewer decode: {e}"))?;
-    let rgba = img.to_rgba8();
-    let resized =
-        image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Triangle);
-    let mut bytes = Vec::new();
-    let mut cursor = Cursor::new(&mut bytes);
-    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 85);
-    image::DynamicImage::ImageRgba8(resized)
-        .write_with_encoder(enc)
-        .map_err(|e| format!("viewer jpeg: {e}"))?;
-    std::fs::write(&out, bytes).map_err(|e| e.to_string())?;
-    Ok(out)
-}
-
-fn viewer_preview_path(path: &Path, max_side: u32) -> PathBuf {
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("media");
-    path.with_file_name(format!("{stem}.view{max_side}.jpg"))
-}
-
 pub fn is_video_name(name: &str) -> bool {
     matches!(
         Path::new(name)
@@ -463,20 +419,6 @@ pub fn round_profile_avatar_rgba(
         }
     }
     Ok((size, size, cropped.into_raw()))
-}
-
-/// Decode a profile data-URL into a circular PNG (legacy helper; UI uses RGBA cache).
-#[allow(dead_code)]
-pub fn round_profile_avatar_png(data_url: &str, size_px: u32) -> Result<Vec<u8>, String> {
-    let (w, h, pixels) = round_profile_avatar_rgba(data_url, size_px)?;
-    let cropped = image::RgbaImage::from_raw(w, h, pixels)
-        .ok_or_else(|| "avatar rgba buffer mismatch".to_string())?;
-    let mut out = Vec::new();
-    let mut cursor = Cursor::new(&mut out);
-    image::DynamicImage::ImageRgba8(cropped)
-        .write_with_encoder(image::codecs::png::PngEncoder::new(&mut cursor))
-        .map_err(|e| format!("png encode avatar: {e}"))?;
-    Ok(out)
 }
 
 /// Truncate a bio to at most [`MAX_BIO_BYTES`] UTF-8 bytes (official client rule).

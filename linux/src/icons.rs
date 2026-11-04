@@ -26,11 +26,6 @@ pub fn nav_icon<'a>(kind: NavIcon, active: bool, size: f32) -> Element<'a, Messa
     tinted(handle_for(kind), color, size)
 }
 
-/// Chat bubbles — nav Chats glyph (also usable as a generic chats mark).
-pub fn chats_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(handle_for(NavIcon::Chats), color, size)
-}
-
 /// Admin / “Chat with admins” — Instructure UI Line Icons (MIT via SVG Repo).
 pub fn admin_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
@@ -74,15 +69,6 @@ pub fn centered_hit<'a>(icon: Element<'a, Message>, hit: f32) -> Element<'a, Mes
         .center_x(hit)
         .center_y(hit)
         .into()
-}
-
-/// Collapse control (Zest Interface Icons / MIT).
-pub fn chevron_up<'a>(size: f32) -> Element<'a, Message> {
-    tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/chevron-up.svg").as_slice()),
-        theme::t().text_secondary,
-        size,
-    )
 }
 
 /// Expand control (Zest Interface Icons / MIT).
@@ -189,17 +175,6 @@ pub fn copy_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     )
 }
 
-/// Refresh / rotate — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
-pub fn refresh_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg::Handle::from_memory(
-            include_bytes!("../assets/icons/refresh-ccw-alt.svg").as_slice(),
-        ),
-        color,
-        size,
-    )
-}
-
 /// Leave / exit session — Gitlab Interface Icons / Gitlab (MIT via SVG Repo).
 pub fn leave_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
@@ -233,24 +208,6 @@ pub fn mute_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 pub fn preferences_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
         svg::Handle::from_memory(include_bytes!("../assets/icons/preferences.svg").as_slice()),
-        color,
-        size,
-    )
-}
-
-/// Next media — Uxaspects Sharp Cornered Icons (Apache-2.0 via SVG Repo).
-pub fn next_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/next.svg").as_slice()),
-        color,
-        size,
-    )
-}
-
-/// Previous media — Uxaspects Sharp Cornered Icons (Apache-2.0 via SVG Repo).
-pub fn previous_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/previous.svg").as_slice()),
         color,
         size,
     )

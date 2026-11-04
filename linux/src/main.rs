@@ -166,12 +166,10 @@ impl PointerGate {
 
 static POINTER_GATE: PointerGate = PointerGate::new();
 
-/// Hover targets for the event subscription (long-press only when a row/bubble
-/// is hot — otherwise FingerPressed must not rebuild the whole UI, or every
-/// scroll gesture starts with a one-frame stall on ARM).
-///
-/// `thread_local` — iced delivers window events on the UI thread; HoverSlots
-/// uses `Rc`/`Cell` and is not `Sync`.
+// Hover targets for the event subscription (long-press only when a row/bubble
+// is hot — otherwise FingerPressed must not rebuild the whole UI, or every
+// scroll gesture starts with a one-frame stall on ARM).
+// iced delivers window events on the UI thread; HoverSlots uses Rc/Cell (not Sync).
 thread_local! {
     static HOVER_FOR_GATE: RefCell<Option<hover::HoverSlots>> = const { RefCell::new(None) };
 }
@@ -592,7 +590,6 @@ pub enum Message {
     Connect,
     Connected(Result<String, String>),
     SelectChat(usize),
-    ComposerChanged(String),
     /// Multi-line composer (`text_editor`) edit action.
     ComposerEdit(text_editor::Action),
     /// Insert a string into the composer (OSK / multi-codepoint text).
@@ -831,24 +828,18 @@ pub enum Message {
         path: PathBuf,
         preview: Option<(PathBuf, u32, u32)>,
     },
-    OpenMedia { item_id: i64 },
-    CloseMediaViewer,
-    MediaPrev,
-    MediaNext,
-    /// Background poster / still ready for a gallery path (legacy viewer).
-    MediaThumbReady {
-        path: PathBuf,
-        thumb: Option<PathBuf>,
-    },
-    MediaPlayVideo,
-    MediaSaveAs,
     MediaSaved(Result<String, String>),
-    MediaDragStart(f32),
-    MediaDragMove(f32),
-    MediaDragEnd,
     RefreshChats,
+    /// Coalesced chat-list refresh after high-frequency core events.
+    RefreshChatsDebounced(u64),
     ChatsLoaded(Result<Vec<ChatPreview>, String>),
-    MessagesLoaded(Result<Vec<ChatMessage>, String>),
+    /// `gen` discards stale loads when the user switches chats quickly.
+    MessagesLoaded {
+        gen: u64,
+        result: Result<Vec<ChatMessage>, String>,
+    },
+    /// Second-phase media warm (posters) after decrypt/waveforms start.
+    WarmChatVisuals,
     ChatMarkedRead(Result<ChatId, String>),
     AcceptContactRequest(i64),
     RejectContactRequest(i64),
@@ -946,6 +937,8 @@ struct App {
     last_pointer: (f32, f32),
     /// File ids already auto-/manually receiving this session (dedupe freceive).
     receiving_files: HashSet<i64>,
+    /// Auto-receive queue deferred until after the first chat paint.
+    pending_auto_receives: Vec<(i64, String)>,
     /// Active ffmpeg voice capture, if any.
     voice_rec: Option<VoiceRec>,
     /// Recorded voice waiting for send/cancel.
@@ -961,8 +954,6 @@ struct App {
     /// Cached rounded still-image previews (UI thread must not decode).
     image_previews: std::collections::HashMap<PathBuf, (PathBuf, u32, u32)>,
     image_previews_pending: HashSet<PathBuf>,
-    /// Full-screen photo/video reader (legacy — open externally instead).
-    media_viewer: Option<MediaViewer>,
     /// After opening a chat, pin history to the newest message once it loads.
     pin_history_end: bool,
     /// Link waiting for “Open link?” confirmation.
@@ -1006,6 +997,10 @@ struct App {
     own_profile: OwnProfileDraft,
     /// Active inertial fling after a touch scroll (GTK-style kinetic feel).
     scroll_fling: Option<ScrollFling>,
+    /// Bumps on each message history request; stale `MessagesLoaded` are ignored.
+    messages_load_gen: u64,
+    /// Bumps on each scheduled chat-list refresh; only the latest debounce fires.
+    chats_refresh_gen: u64,
     /// Direct-contact profile overlay.
     contact_profile: Option<ContactProfileOverlay>,
     /// Create group / channel dialog.
@@ -1047,25 +1042,6 @@ struct ScrollFling {
     id: String,
     /// Pixels per second along iced AbsoluteOffset.y.
     velocity_y: f32,
-}
-
-#[derive(Debug, Clone)]
-pub struct MediaViewer {
-    pub items: Vec<MediaItem>,
-    pub index: usize,
-    pub drag_armed: bool,
-    pub drag_origin_x: Option<f32>,
-    pub drag_x: f32,
-}
-
-#[derive(Debug, Clone)]
-pub struct MediaItem {
-    pub item_id: i64,
-    pub path: PathBuf,
-    pub file_name: String,
-    pub is_video: bool,
-    /// Video poster, or downscaled still for photo viewer (never the multi‑MB original).
-    pub thumb: Option<PathBuf>,
 }
 
 impl App {
@@ -1141,6 +1117,7 @@ impl App {
                 press_moved: false,
                 last_pointer: (0.0, 0.0),
                 receiving_files: HashSet::new(),
+                pending_auto_receives: Vec::new(),
                 voice_rec: None,
                 voice_draft: None,
                 voice_playback: None,
@@ -1149,8 +1126,9 @@ impl App {
                 video_thumbs_pending: HashSet::new(),
                 image_previews: HashMap::new(),
                 image_previews_pending: HashSet::new(),
-                media_viewer: None,
                 pin_history_end: false,
+                messages_load_gen: 0,
+                chats_refresh_gen: 0,
                 pending_url: None,
                 emoji_suggest_index: 0,
                 message_menu: None,
@@ -1286,8 +1264,6 @@ impl App {
                     // Emoji suggest Tab/Shift+Tab/Enter are handled in the
                     // composer key_binding so they don't fight the editor.
                     iced::keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
-                    iced::keyboard::Key::Named(Named::ArrowLeft) => Some(Message::MediaPrev),
-                    iced::keyboard::Key::Named(Named::ArrowRight) => Some(Message::MediaNext),
                     _ => None,
                 }
             }
@@ -1315,8 +1291,10 @@ impl App {
             None => Subscription::none(),
         };
 
+        // 100ms is enough for the playhead; 50ms forced a full chat view rebuild
+        // twenty times a second on ARM.
         let voice_tick = if self.voice_playback.is_some() {
-            iced::time::every(std::time::Duration::from_millis(50)).map(|_| Message::VoiceTick)
+            iced::time::every(std::time::Duration::from_millis(100)).map(|_| Message::VoiceTick)
         } else {
             Subscription::none()
         };
@@ -1501,14 +1479,6 @@ impl App {
                     self.reload_messages(),
                     iced::widget::operation::focus(iced::widget::Id::new("composer-input")),
                 ])
-            }
-            Message::ComposerChanged(value) => {
-                // Expand completed `:shortcode:` as you type (GitHub / gemoji names).
-                let before = cursus_core::pending_shortcode_query(&self.composer_text())
-                    .map(str::to_owned);
-                self.set_composer_text(cursus_core::expand_emoji_shortcodes(&value));
-                self.sync_emoji_suggest_index(before.as_deref());
-                Task::none()
             }
             Message::ComposerEdit(action) => {
                 let before = cursus_core::pending_shortcode_query(&self.composer_text())
@@ -1884,12 +1854,8 @@ impl App {
                 )
             }
             Message::HistoryAwayChanged(away) => {
-                // Ignore while media viewer / empty thread — wheel still fires globally.
-                if away
-                    && (self.media_viewer.is_some()
-                        || self.selected.is_none()
-                        || self.messages.len() < 8)
-                {
+                // Ignore on empty/short threads — wheel still fires globally.
+                if away && (self.selected.is_none() || self.messages.len() < 8) {
                     HISTORY_AWAY_GATE.reset();
                     return Task::none();
                 }
@@ -1954,6 +1920,7 @@ impl App {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                theme::invalidate_system_theme_cache();
                 self.desktop_prefs.theme = self.desktop_prefs.theme.cycle();
                 desktop::save_prefs(&self.desktop_prefs);
                 self.apply_appearance();
@@ -3585,9 +3552,8 @@ impl App {
                     }
                 }
                 // Keep the decrypt queue moving without blasting the thread pool.
-                let more = self.messages.clone();
-                tasks.push(self.enqueue_decrypts(&more));
-                tasks.push(self.enqueue_missing_video_thumbs(&more));
+                tasks.push(self.enqueue_decrypts());
+                tasks.push(self.enqueue_missing_video_thumbs());
                 Task::batch(tasks)
             }
             Message::ShowFromTray => {
@@ -3836,25 +3802,6 @@ impl App {
                 }
                 Task::none()
             }
-            Message::OpenMedia { item_id } => {
-                if !self.tap_allowed() {
-                    return Task::none();
-                }
-                // Embedded reader removed (too slow) — open with the OS handler.
-                self.media_viewer = None;
-                let path = self
-                    .messages
-                    .iter()
-                    .find(|m| m.item_id == item_id)
-                    .and_then(|m| m.file.as_ref())
-                    .and_then(|f| self.plaintext_path_for(f));
-                if let Some(path) = path.filter(|p| p.is_file()) {
-                    self.status = format!("Opening {}…", path.display());
-                    return Task::perform(open_local_file(path), Message::FileReceived);
-                }
-                self.status = "Media file not available yet.".into();
-                Task::none()
-            }
             Message::VideoThumbReady { path, thumb } => {
                 self.video_thumbs_pending.remove(&path);
                 let mut tasks = Vec::new();
@@ -3896,70 +3843,8 @@ impl App {
                         "video poster extraction failed"
                     );
                 }
-                let more = self.messages.clone();
-                tasks.push(self.enqueue_missing_video_thumbs(&more));
+                tasks.push(self.enqueue_missing_video_thumbs());
                 Task::batch(tasks)
-            }
-            Message::CloseMediaViewer => {
-                self.media_viewer = None;
-                Task::none()
-            }
-            Message::MediaPrev => {
-                if let Some(v) = self.media_viewer.as_mut() {
-                    if v.index > 0 {
-                        v.index -= 1;
-                    }
-                }
-                self.ensure_media_thumb();
-                self.prefetch_adjacent_media()
-            }
-            Message::MediaNext => {
-                if let Some(v) = self.media_viewer.as_mut() {
-                    if v.index + 1 < v.items.len() {
-                        v.index += 1;
-                    }
-                }
-                self.ensure_media_thumb();
-                self.prefetch_adjacent_media()
-            }
-            Message::MediaThumbReady { path, thumb } => {
-                if let Some(v) = self.media_viewer.as_mut() {
-                    if let Some(item) = v
-                        .items
-                        .iter_mut()
-                        .find(|item| item.path == path && item.thumb.is_none())
-                    {
-                        item.thumb = thumb;
-                    }
-                }
-                Task::none()
-            }
-            Message::MediaPlayVideo => {
-                if let Some(v) = self.media_viewer.as_ref() {
-                    if let Some(item) = v.items.get(v.index) {
-                        if item.is_video {
-                            return Task::perform(
-                                play_video(item.path.clone()),
-                                |r| match r {
-                                    Ok(s) => Message::FileReceived(Ok(s)),
-                                    Err(e) => Message::FileReceived(Err(e)),
-                                },
-                            );
-                        }
-                    }
-                }
-                Task::none()
-            }
-            Message::MediaSaveAs => {
-                let Some(v) = self.media_viewer.as_ref() else {
-                    return Task::none();
-                };
-                let Some(item) = v.items.get(v.index) else {
-                    return Task::none();
-                };
-                let src = item.path.clone();
-                let name = item.file_name.clone();
-                Task::perform(save_media_as(src, name), Message::MediaSaved)
             }
             Message::MediaSaved(Ok(summary)) => {
                 self.status = summary;
@@ -3969,61 +3854,13 @@ impl App {
                 self.status = err;
                 Task::none()
             }
-            Message::MediaDragStart(_) => {
-                if let Some(v) = self.media_viewer.as_mut() {
-                    v.drag_armed = true;
-                    v.drag_origin_x = None;
-                    v.drag_x = 0.0;
-                }
-                Task::none()
-            }
-            Message::MediaDragMove(x) => {
-                if let Some(v) = self.media_viewer.as_mut() {
-                    if v.drag_armed {
-                        if v.drag_origin_x.is_none() {
-                            v.drag_origin_x = Some(x);
-                        }
-                        v.drag_x = x;
-                    }
-                }
-                Task::none()
-            }
-            Message::MediaDragEnd => {
-                let mut open_external: Option<PathBuf> = None;
-                let mut swiped = false;
-                if let Some(v) = self.media_viewer.as_mut() {
-                    if v.drag_armed {
-                        if let Some(origin) = v.drag_origin_x.take() {
-                            let delta = v.drag_x - origin;
-                            if delta.abs() < 24.0 {
-                                // Tap inside the viewer → open with the system / mpv.
-                                open_external =
-                                    v.items.get(v.index).map(|item| item.path.clone());
-                            } else if delta > 80.0 && v.index > 0 {
-                                v.index -= 1;
-                                swiped = true;
-                            } else if delta < -80.0 && v.index + 1 < v.items.len() {
-                                v.index += 1;
-                                swiped = true;
-                            }
-                        }
-                        // Press without move: ignore — play/close buttons handle
-                        // intentional actions; accidental press must not dismiss.
-                    }
-                    v.drag_armed = false;
-                    v.drag_x = 0.0;
-                }
-                if let Some(path) = open_external {
-                    self.media_viewer = None;
-                    return Task::perform(open_media_external(path), Message::FileReceived);
-                }
-                if swiped {
-                    self.ensure_media_thumb();
-                    return self.prefetch_adjacent_media();
-                }
-                Task::none()
-            }
             Message::RefreshChats => self.reload_chats(),
+            Message::RefreshChatsDebounced(gen) => {
+                if gen != self.chats_refresh_gen {
+                    return Task::none();
+                }
+                self.reload_chats()
+            }
             Message::ChatsLoaded(Ok(mut chats)) => {
                 for chat in &mut chats {
                     if let Some(req_id) = chat.pending_request_id {
@@ -4061,50 +3898,71 @@ impl App {
                 self.status = err;
                 Task::none()
             }
-            Message::MessagesLoaded(Ok(messages)) => {
-                let auto = auto_receive_from_messages(&messages);
-                self.messages = messages;
-                // With Anchor::End, relative y=0 is the newest (visual bottom).
-                let pin = if self.pin_history_end {
-                    self.pin_history_end = false;
-                    iced::widget::operation::snap_to(
-                        iced::widget::Id::new("chat-history"),
-                        RelativeOffset { x: 0.0, y: 0.0 },
-                    )
-                } else {
-                    Task::none()
-                };
-                // Paint the chat first, then kick media decrypt/thumbs so opening
-                // a heavy history does not trip "app is not responding".
-                let defer_media = Task::perform(
+            Message::MessagesLoaded { gen, result } => {
+                if gen != self.messages_load_gen {
+                    return Task::none();
+                }
+                match result {
+                    Ok(messages) => {
+                        // Defer auto-receive until WarmChatMedia so first paint /
+                        // scroll aren't competing with a burst of XFTP starts.
+                        self.pending_auto_receives = auto_receive_from_messages(&messages);
+                        self.messages = messages;
+                        // With Anchor::End, relative y=0 is the newest (visual bottom).
+                        let pin = if self.pin_history_end {
+                            self.pin_history_end = false;
+                            iced::widget::operation::snap_to(
+                                iced::widget::Id::new("chat-history"),
+                                RelativeOffset { x: 0.0, y: 0.0 },
+                            )
+                        } else {
+                            Task::none()
+                        };
+                        // Paint first; media warm starts after a frame so open-chat
+                        // never competes with the first scrollable layout.
+                        let defer_media = Task::perform(
+                            async {
+                                tokio::time::sleep(std::time::Duration::from_millis(32)).await;
+                                Message::WarmChatMedia
+                            },
+                            |m| m,
+                        );
+                        Task::batch([pin, defer_media])
+                    }
+                    Err(err) => {
+                        self.status = err;
+                        Task::none()
+                    }
+                }
+            }
+            Message::WarmChatMedia => {
+                // Decrypt + waveforms first (unlocks plaintext paths). Posters
+                // follow on WarmChatVisuals so ffmpeg does not fight decrypt.
+                let auto = std::mem::take(&mut self.pending_auto_receives);
+                let defer_visuals = Task::perform(
                     async {
-                        tokio::time::sleep(std::time::Duration::from_millis(32)).await;
-                        Message::WarmChatMedia
+                        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+                        Message::WarmChatVisuals
                     },
                     |m| m,
                 );
-                Task::batch([self.enqueue_receives(auto), pin, defer_media])
-            }
-            Message::WarmChatMedia => {
-                let messages = self.messages.clone();
                 Task::batch([
-                    self.enqueue_missing_waveforms(&messages),
-                    self.enqueue_missing_video_thumbs(&messages),
-                    self.enqueue_missing_image_previews(&messages),
-                    self.enqueue_decrypts(&messages),
+                    self.enqueue_receives(auto),
+                    self.enqueue_decrypts(),
+                    self.enqueue_missing_waveforms(),
+                    defer_visuals,
                 ])
             }
+            Message::WarmChatVisuals => Task::batch([
+                self.enqueue_missing_video_thumbs(),
+                self.enqueue_missing_image_previews(),
+            ]),
             Message::ImagePreviewReady { path, preview } => {
                 self.image_previews_pending.remove(&path);
                 if let Some(preview) = preview {
                     self.image_previews.insert(path, preview);
                 }
-                let more = self.messages.clone();
-                self.enqueue_missing_image_previews(&more)
-            }
-            Message::MessagesLoaded(Err(err)) => {
-                self.status = err;
-                Task::none()
+                self.enqueue_missing_image_previews()
             }
             Message::ChatMarkedRead(Ok(chat_id)) => {
                 if let Some(chat) = self.chats.iter_mut().find(|c| c.id == chat_id) {
@@ -4243,10 +4101,8 @@ impl App {
                         self.press_moved = true;
                         self.cancel_press_timers();
                         // Touch/drag: finger down → older history; finger up → toward latest.
-                        if self.selected.is_some()
-                            && self.media_viewer.is_none()
-                            && self.messages.len() >= 8
-                        {
+                        if self.selected.is_some() && self.messages.len() >= 8 {
+
                             if dy > 2.0 {
                                 if let Some(away) = HISTORY_AWAY_GATE.mark_away() {
                                     self.history_away_from_end = away;
@@ -4447,9 +4303,6 @@ impl App {
                         self.set_composer_text(text);
                     }
                     self.emoji_suggest_index = 0;
-                    Task::none()
-                } else if self.media_viewer.is_some() {
-                    self.media_viewer = None;
                     Task::none()
                 } else {
                     self.chat_menu = None;
@@ -4720,6 +4573,9 @@ impl App {
 
     fn handle_core_event(&mut self, event: Event) -> Task<Message> {
         let mut tasks = Vec::new();
+        // Avoid double `reload_messages` when NewChatItems also matches
+        // `refreshes_messages()` (busy groups used to schedule 2× get_chat).
+        let mut messages_reload_queued = false;
 
         // Official clients auto-accept image/voice/video offers on newChatItems.
         let auto = auto_receive_candidates(&event);
@@ -4732,6 +4588,7 @@ impl App {
             if let Some(hint) = event.chat_id_hint() {
                 if self.selected_id.as_ref() == Some(&hint) {
                     tasks.push(self.reload_messages());
+                    messages_reload_queued = true;
                     // Viewing this chat — don't leave an unread badge hanging.
                     tasks.push(self.mark_selected_read());
                     if let Some(chat) = self.chats.iter_mut().find(|c| c.id == hint) {
@@ -4741,6 +4598,7 @@ impl App {
             } else if self.selected_id.is_some() {
                 // Unknown chat targeting — refresh open conversation just in case.
                 tasks.push(self.reload_messages());
+                messages_reload_queued = true;
                 tasks.push(self.mark_selected_read());
             }
         }
@@ -4768,7 +4626,7 @@ impl App {
                             }
                         }
                         touched_open = true;
-                    } else {
+                    } else if !messages_reload_queued {
                         touched_open = false;
                         tasks.push(self.reload_messages());
                         break;
@@ -4794,16 +4652,21 @@ impl App {
                     }
                 }
             }
-            if !touched && self.selected_id.is_some() {
+            if !touched && self.selected_id.is_some() && !messages_reload_queued {
                 tasks.push(self.reload_messages());
             }
-        } else if event.refreshes_messages() && self.selected_id.is_some() {
+        } else if event.refreshes_messages()
+            && self.selected_id.is_some()
+            && !messages_reload_queued
+        {
             // File complete / delete / reaction events carry updated rows.
             tasks.push(self.reload_messages());
         }
 
         if event.refreshes_chats() {
-            tasks.push(self.reload_chats());
+            // Debounce list_chats — NewChatItems / reactions can arrive in bursts
+            // and each full reload blocks a worker + rebuilds the chat list UI.
+            tasks.push(self.schedule_reload_chats());
             match &event {
                 Event::ContactConnected(body) => {
                     self.status = "Contact connected.".into();
@@ -4929,14 +4792,35 @@ impl App {
         }
     }
 
-    fn reload_messages(&self) -> Task<Message> {
+    /// Coalesce rapid `list_chats` requests from the event stream.
+    fn schedule_reload_chats(&mut self) -> Task<Message> {
+        self.chats_refresh_gen = self.chats_refresh_gen.wrapping_add(1);
+        let gen = self.chats_refresh_gen;
+        Task::perform(
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(180)).await;
+                gen
+            },
+            Message::RefreshChatsDebounced,
+        )
+    }
+
+    fn reload_messages(&mut self) -> Task<Message> {
         let Some(session) = self.session.clone() else {
             return Task::none();
         };
         let Some(id) = self.selected_id.clone() else {
             return Task::none();
         };
-        Task::perform(load_messages(session, id), Message::MessagesLoaded)
+        self.messages_load_gen = self.messages_load_gen.wrapping_add(1);
+        let gen = self.messages_load_gen;
+        Task::perform(
+            async move {
+                let result = load_messages(session, id).await;
+                Message::MessagesLoaded { gen, result }
+            },
+            |m| m,
+        )
     }
 
     fn mark_selected_read(&self) -> Task<Message> {
@@ -5078,29 +4962,21 @@ impl App {
         self.waveforms.get(path).map(|v| v.as_slice())
     }
 
-    pub(crate) fn media_viewer(&self) -> Option<&MediaViewer> {
-        self.media_viewer.as_ref()
-    }
-
-    /// Poster for a video path: in-memory cache or on-disk `.thumb.jpg`.
+    /// Poster for a video path — **memory only** on the view path.
+    /// Disk thumbs are loaded asynchronously via [`Self::enqueue_missing_video_thumbs`].
     pub(crate) fn video_thumb_for(&self, path: &std::path::Path) -> Option<PathBuf> {
-        self.video_thumbs
-            .get(path)
-            .cloned()
-            .or_else(|| media::cached_video_thumbnail(path))
+        self.video_thumbs.get(path).cloned()
     }
 
-    /// Rounded still preview — memory/disk cache only (never decodes here).
+    /// Rounded still preview — **memory only** (never probes disk / image headers
+    /// during `view()`, which ran on every fling tick).
     pub(crate) fn image_preview_for(
         &self,
         path: &std::path::Path,
-        max_w: u32,
-        max_h: u32,
+        _max_w: u32,
+        _max_h: u32,
     ) -> Option<(PathBuf, u32, u32)> {
-        self.image_previews
-            .get(path)
-            .cloned()
-            .or_else(|| media::cached_rounded_fitted_preview(path, max_w, max_h))
+        self.image_previews.get(path).cloned()
     }
 
     pub(crate) fn auth(&self) -> Option<&AuthScreen> {
@@ -5130,16 +5006,16 @@ impl App {
         Task::perform(connect_session(slot, req), Message::Connected)
     }
 
-    fn enqueue_decrypts(&self, messages: &[ChatMessage]) -> Task<Message> {
+    fn enqueue_decrypts(&self) -> Task<Message> {
         let Some(session) = self.session.clone() else {
             return Task::none();
         };
         // Newest media first, limited parallelism — decrypting every CryptoFile
         // in a 100-message history blocked the UI when opening a chat.
         const MAX_DECRYPTS: usize = 8;
-        let mut tasks = Vec::new();
-        for msg in messages.iter().rev() {
-            if tasks.len() >= MAX_DECRYPTS {
+        let mut jobs = Vec::new();
+        for msg in self.messages.iter().rev() {
+            if jobs.len() >= MAX_DECRYPTS {
                 break;
             }
             let Some(file) = msg.file.as_ref() else {
@@ -5160,23 +5036,29 @@ impl App {
             let Some(nonce) = file.crypto_nonce.clone() else {
                 continue;
             };
-            let session = session.clone();
-            tasks.push(Task::perform(
-                async move {
-                    let encrypted = path.clone();
-                    let result = tokio::task::spawn_blocking(move || {
-                        session
-                            .ensure_plaintext_file(&path, &key, &nonce)
-                            .map_err(|e| e.to_string())
-                    })
-                    .await
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| r);
-                    Message::DecryptFileDone { encrypted, result }
-                },
-                |msg| msg,
-            ));
+            jobs.push((path, key, nonce));
         }
+        let tasks = jobs
+            .into_iter()
+            .map(|(path, key, nonce)| {
+                let session = session.clone();
+                Task::perform(
+                    async move {
+                        let encrypted = path.clone();
+                        let result = tokio::task::spawn_blocking(move || {
+                            session
+                                .ensure_plaintext_file(&path, &key, &nonce)
+                                .map_err(|e| e.to_string())
+                        })
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r);
+                        Message::DecryptFileDone { encrypted, result }
+                    },
+                    |msg| msg,
+                )
+            })
+            .collect::<Vec<_>>();
         Task::batch(tasks)
     }
 
@@ -5337,14 +5219,15 @@ impl App {
         )
     }
 
-    fn enqueue_missing_image_previews(&mut self, messages: &[ChatMessage]) -> Task<Message> {
+    fn enqueue_missing_image_previews(&mut self) -> Task<Message> {
         const MAX: usize = 4;
         const PREVIEW_MAX_W: u32 = 220;
         const PREVIEW_MAX_H: u32 = 280;
         const RADIUS: f32 = 12.0;
-        let mut tasks = Vec::new();
-        for msg in messages.iter().rev() {
-            if tasks.len() >= MAX {
+        // Snapshot paths first — avoids cloning ChatMessage rows and borrow fights.
+        let mut candidates = Vec::new();
+        for msg in self.messages.iter().rev() {
+            if candidates.len() >= MAX * 2 {
                 break;
             }
             let Some(file) = msg.file.as_ref() else {
@@ -5366,13 +5249,20 @@ impl App {
             let Some(path) = self.plaintext_path_for(file) else {
                 continue;
             };
+            candidates.push(path);
+        }
+        let mut tasks = Vec::new();
+        for path in candidates {
+            if tasks.len() >= MAX {
+                break;
+            }
             if !path.is_file() {
                 continue;
             }
             if let Some(cached) =
                 media::cached_rounded_fitted_preview(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)
             {
-                self.image_previews.insert(path.clone(), cached);
+                self.image_previews.insert(path, cached);
                 continue;
             }
             if self.image_previews.contains_key(&path)
@@ -5404,13 +5294,13 @@ impl App {
         Task::batch(tasks)
     }
 
-    fn enqueue_missing_video_thumbs(&mut self, messages: &[ChatMessage]) -> Task<Message> {
+    fn enqueue_missing_video_thumbs(&mut self) -> Task<Message> {
         // Newest first, hard cap — spawning ffmpeg for every video in history
         // made opening a media-heavy chat hang for seconds.
         const MAX_THUMBS: usize = 4;
-        let mut tasks = Vec::new();
-        for msg in messages.iter().rev() {
-            if tasks.len() >= MAX_THUMBS {
+        let mut candidates = Vec::new();
+        for msg in self.messages.iter().rev() {
+            if candidates.len() >= MAX_THUMBS * 2 {
                 break;
             }
             let Some(file) = msg.file.as_ref() else {
@@ -5430,6 +5320,13 @@ impl App {
             let Some(path) = self.plaintext_path_for(file) else {
                 continue;
             };
+            candidates.push(path);
+        }
+        let mut tasks = Vec::new();
+        for path in candidates {
+            if tasks.len() >= MAX_THUMBS {
+                break;
+            }
             if !path.is_file() {
                 continue;
             }
@@ -5444,14 +5341,14 @@ impl App {
                 if let Some(rounded) =
                     media::cached_rounded_fitted_preview(&cached, 220, 280)
                 {
-                    self.image_previews.insert(path.clone(), rounded);
+                    self.image_previews.insert(path, rounded);
                     continue;
                 }
                 if self.image_previews_pending.contains(&path) {
                     continue;
                 }
                 self.image_previews_pending.insert(path.clone());
-                let video_path = path.clone();
+                let video_path = path;
                 tasks.push(Task::perform(
                     async move {
                         let preview = tokio::task::spawn_blocking(move || {
@@ -5491,12 +5388,12 @@ impl App {
         Task::batch(tasks)
     }
 
-    fn enqueue_missing_waveforms(&self, messages: &[ChatMessage]) -> Task<Message> {
+    fn enqueue_missing_waveforms(&self) -> Task<Message> {
         // Cap like video thumbs — waveform extract is also spawn_blocking/ffmpeg.
         const MAX_WAVES: usize = 6;
-        let mut tasks = Vec::new();
-        for msg in messages.iter().rev() {
-            if tasks.len() >= MAX_WAVES {
+        let mut paths = Vec::new();
+        for msg in self.messages.iter().rev() {
+            if paths.len() >= MAX_WAVES {
                 break;
             }
             let Some(file) = msg.file.as_ref() else {
@@ -5511,124 +5408,11 @@ impl App {
             if !path.is_file() || self.waveforms.contains_key(&path) {
                 continue;
             }
-            tasks.push(self.load_waveform(path));
+            paths.push(path);
         }
-        Task::batch(tasks)
+        Task::batch(paths.into_iter().map(|p| self.load_waveform(p)).collect::<Vec<_>>())
     }
 
-    fn open_media_viewer(&mut self, item_id: i64) {
-        // Build the gallery index only — never run ffmpeg for every video here
-        // (that blocked the UI for seconds on media-heavy chats).
-        // Prefer decrypted plaintext paths when CryptoFile encryption is on.
-        let items: Vec<MediaItem> = self
-            .messages
-            .iter()
-            .filter_map(|m| {
-                let file = m.file.as_ref()?;
-                if !matches!(
-                    effective_complete(file.state, m.outgoing, m.delivery),
-                    FileTransferState::Complete
-                ) {
-                    return None;
-                }
-                let path = self.plaintext_path_for(file)?;
-                if !path.is_file() {
-                    return None;
-                }
-                let is_video = matches!(file.kind, cursus_core::FileKind::Video)
-                    || media::is_video_name(&file.file_name);
-                let is_image = matches!(file.kind, cursus_core::FileKind::Image)
-                    || media::is_image_name(&file.file_name);
-                // Core may tag mobile video as a generic "file" — still include by extension.
-                if !is_video && !is_image {
-                    return None;
-                }
-                let thumb = if is_video {
-                    media::cached_video_thumbnail(&path)
-                } else {
-                    None
-                };
-                Some(MediaItem {
-                    item_id: m.item_id,
-                    path,
-                    file_name: file.file_name.clone(),
-                    is_video,
-                    thumb,
-                })
-            })
-            .collect();
-        let index = items.iter().position(|i| i.item_id == item_id).unwrap_or(0);
-        if items.is_empty() {
-            self.status = "No local photos/videos in this chat.".into();
-            return;
-        }
-        self.media_viewer = Some(MediaViewer {
-            items,
-            index,
-            drag_armed: false,
-            drag_origin_x: None,
-            drag_x: 0.0,
-        });
-        self.ensure_media_thumb();
-    }
-
-    /// Lazy poster / downscaled still for the current media-viewer item only.
-    pub(crate) fn ensure_media_thumb(&mut self) {
-        const VIEW_MAX: u32 = 1600;
-        let Some(v) = self.media_viewer.as_mut() else {
-            return;
-        };
-        let Some(item) = v.items.get_mut(v.index) else {
-            return;
-        };
-        if item.thumb.is_some() {
-            return;
-        }
-        item.thumb = if item.is_video {
-            media::cached_video_thumbnail(&item.path)
-                .or_else(|| media::video_thumbnail(&item.path).ok())
-        } else {
-            media::viewer_still_preview(&item.path, VIEW_MAX).ok()
-        };
-    }
-
-    /// Warm neighbors off the UI-critical path so swipe feels instant.
-    fn prefetch_adjacent_media(&self) -> Task<Message> {
-        const VIEW_MAX: u32 = 1600;
-        let Some(v) = self.media_viewer.as_ref() else {
-            return Task::none();
-        };
-        let mut tasks = Vec::new();
-        for idx in [v.index.wrapping_sub(1), v.index + 1] {
-            let Some(item) = v.items.get(idx) else {
-                continue;
-            };
-            if item.thumb.is_some() {
-                continue;
-            }
-            let path = item.path.clone();
-            let is_video = item.is_video;
-            tasks.push(Task::perform(
-                async move {
-                    let path_for_work = path.clone();
-                    let thumb = tokio::task::spawn_blocking(move || {
-                        if is_video {
-                            media::cached_video_thumbnail(&path_for_work)
-                                .or_else(|| media::video_thumbnail(&path_for_work).ok())
-                        } else {
-                            media::viewer_still_preview(&path_for_work, VIEW_MAX).ok()
-                        }
-                    })
-                    .await
-                    .ok()
-                    .flatten();
-                    Message::MediaThumbReady { path, thumb }
-                },
-                |msg| msg,
-            ));
-        }
-        Task::batch(tasks)
-    }
     pub(crate) fn connected(&self) -> bool {
         self.session.is_some()
     }
@@ -5657,12 +5441,6 @@ impl App {
     }
     pub(crate) fn window_width(&self) -> f32 {
         self.width
-    }
-    pub(crate) fn window_height(&self) -> f32 {
-        self.height
-    }
-    pub(crate) fn scale_factor(&self) -> f32 {
-        self.scale_factor
     }
     pub(crate) fn chat_menu(&self) -> Option<&ChatContextMenu> {
         self.chat_menu.as_ref()
@@ -6754,17 +6532,18 @@ fn auto_receive_from_messages(messages: &[ChatMessage]) -> Vec<(i64, String)> {
         .collect()
 }
 
-async fn open_media_external(path: PathBuf) -> Result<String, String> {
+async fn open_local_file(path: PathBuf) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         if !path.is_file() {
-            return Err(format!("Media missing: {}", path.display()));
+            return Err(format!("File missing: {}", path.display()));
         }
+        // Prefer mpv for video — xdg-open often picks a sluggish default player.
         if media::is_video_name(
             path.file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or_default(),
         ) {
-            Command::new("mpv")
+            if Command::new("mpv")
                 .args([
                     "--force-window=immediate",
                     "--keep-open=no",
@@ -6776,26 +6555,10 @@ async fn open_media_external(path: PathBuf) -> Result<String, String> {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .map_err(|e| format!("mpv failed: {e}"))?;
-            return Ok(format!("Opened externally {}", path.display()));
-        }
-        Command::new("xdg-open")
-            .arg(&path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("xdg-open failed: {e}"))?;
-        Ok(format!("Opened externally {}", path.display()))
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-async fn open_local_file(path: PathBuf) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        if !path.is_file() {
-            return Err(format!("File missing: {}", path.display()));
+                .is_ok()
+            {
+                return Ok(format!("Opened {}", path.display()));
+            }
         }
         Command::new("xdg-open")
             .arg(&path)
@@ -7805,31 +7568,6 @@ async fn save_media_as(src: PathBuf, file_name: String) -> Result<String, String
             .ok_or_else(|| "Save cancelled.".to_string())?;
         std::fs::copy(&src, &dest).map_err(|e| e.to_string())?;
         Ok(format!("Saved to {}", dest.display()))
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-async fn play_video(path: PathBuf) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        if !path.is_file() {
-            return Err(format!("Video missing: {}", path.display()));
-        }
-        // Keep the desktop light: mpv is the player; Cursus only hosts the gallery UI.
-        Command::new("mpv")
-            .args([
-                "--force-window=immediate",
-                "--keep-open=no",
-                "--really-quiet",
-                "--",
-            ])
-            .arg(&path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("mpv failed: {e}"))?;
-        Ok(format!("Playing video {}", path.display()))
     })
     .await
     .map_err(|e| e.to_string())?

@@ -1,6 +1,8 @@
 //! Color tokens from `docs/DESIGN_SYSTEM.md` (light + dark).
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use iced::theme::Palette;
 use iced::widget::{button, container, text_editor, text_input};
@@ -141,11 +143,40 @@ pub fn t() -> Tokens {
     Tokens::for_light(is_light_active())
 }
 
+const SYSTEM_THEME_TTL: Duration = Duration::from_secs(30);
+static SYSTEM_THEME_CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+
 /// Detect whether the desktop prefers a dark color scheme.
 ///
 /// Order: xdg-desktop-portal (Hyprland / non-GNOME) → gsettings color-scheme →
 /// gtk-theme name → dark fallback only when nothing reports a preference.
+///
+/// Results are cached briefly — `view()` / `iced_theme()` resolve appearance on
+/// every rebuild, and spawning `gdbus`/`gsettings` each time stalls scroll/fling.
 pub fn system_prefers_dark() -> bool {
+    if let Ok(guard) = SYSTEM_THEME_CACHE.lock() {
+        if let Some((at, dark)) = *guard {
+            if at.elapsed() < SYSTEM_THEME_TTL {
+                return dark;
+            }
+        }
+    }
+
+    let dark = system_prefers_dark_uncached();
+    if let Ok(mut guard) = SYSTEM_THEME_CACHE.lock() {
+        *guard = Some((Instant::now(), dark));
+    }
+    dark
+}
+
+/// Drop the cached system preference (call after the user cycles theme).
+pub fn invalidate_system_theme_cache() {
+    if let Ok(mut guard) = SYSTEM_THEME_CACHE.lock() {
+        *guard = None;
+    }
+}
+
+fn system_prefers_dark_uncached() -> bool {
     if let Some(dark) = portal_prefers_dark() {
         return dark;
     }
@@ -368,28 +399,6 @@ pub fn secondary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status)
     }
 }
 
-/// Mobile back control — borderless, quiet hover.
-pub fn back_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
-    move |_, status| {
-        let c = t();
-        let background = match status {
-            button::Status::Hovered if hover_ok => Some(Background::Color(c.bg_hover)),
-            button::Status::Pressed => Some(Background::Color(c.accent_soft)),
-            _ => None,
-        };
-        button::Style {
-            background,
-            text_color: c.text_primary,
-            border: Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: 8.0.into(),
-            },
-            ..button::Style::default()
-        }
-    }
-}
-
 /// Round icon-only control — idle is icon-only (no fill / border); hover tint only.
 pub fn round_icon(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
@@ -406,38 +415,6 @@ pub fn round_icon(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
                 color: iced::Color::TRANSPARENT,
                 width: 0.0,
                 radius: 999.0.into(),
-            },
-            ..button::Style::default()
-        }
-    }
-}
-
-/// Selectable TTL / preference chip.
-pub fn choice_chip(
-    selected: bool,
-    hover_ok: bool,
-) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
-    move |_, status| {
-        let c = t();
-        let background = if selected {
-            Some(Background::Color(match status {
-                button::Status::Pressed => c.accent_soft_press,
-                _ => c.accent_soft,
-            }))
-        } else {
-            match status {
-                button::Status::Hovered if hover_ok => Some(Background::Color(c.bg_hover)),
-                button::Status::Pressed => Some(Background::Color(c.accent_soft)),
-                _ => Some(Background::Color(c.bg_elevated)),
-            }
-        };
-        button::Style {
-            background,
-            text_color: if selected { c.accent } else { c.text_primary },
-            border: Border {
-                color: if selected { c.accent } else { c.border },
-                width: 1.0,
-                radius: 10.0.into(),
             },
             ..button::Style::default()
         }
@@ -641,37 +618,6 @@ pub fn icon_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> b
                 radius: 12.0.into(),
             },
             ..button::Style::default()
-        }
-    }
-}
-
-/// Borderless composer tool (+ / mic) — fill stays clear; SVG carries the color.
-pub fn composer_tool() -> impl Fn(&iced::Theme, button::Status) -> button::Style {
-    |_, _| {
-        let c = t();
-        button::Style {
-            background: Some(Background::Color(Color::TRANSPARENT)),
-            text_color: c.text_secondary,
-            border: Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: 12.0.into(),
-            },
-            ..button::Style::default()
-        }
-    }
-}
-
-/// Send control: accent when the composer has text, otherwise a quiet tool.
-pub fn composer_send(
-    active: bool,
-    hover_ok: bool,
-) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
-    move |theme, status| {
-        if active {
-            icon_action(hover_ok)(theme, status)
-        } else {
-            composer_tool()(theme, status)
         }
     }
 }

@@ -606,9 +606,8 @@ impl Event {
                     | "sentInvitation"
                     | "newChatItems"
                     | "sndFileCompleteXFTP"
-                    | "sndFileProgressXFTP"
+                    // Progress ticks patch in-place — do NOT list_chats every chunk.
                     | "rcvFileComplete"
-                    | "rcvFileProgressXFTP"
                     | "rcvFileAccepted"
                     | "rcvFileStart"
                     | "rcvFileError"
@@ -845,4 +844,30 @@ pub(crate) fn parse_conn_link(value: &Value, full_path: &str, short_path: &str) 
         full,
         short,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn xftp_progress_does_not_refresh_chat_list() {
+        let rcv = Event::Other {
+            type_name: "rcvFileProgressXFTP".into(),
+            body: json!({}),
+        };
+        let snd = Event::Other {
+            type_name: "sndFileProgressXFTP".into(),
+            body: json!({}),
+        };
+        assert!(!rcv.refreshes_chats());
+        assert!(!snd.refreshes_chats());
+        // Completions still refresh so list previews update.
+        let done = Event::Other {
+            type_name: "rcvFileComplete".into(),
+            body: json!({}),
+        };
+        assert!(done.refreshes_chats());
+    }
 }

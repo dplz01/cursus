@@ -31,16 +31,6 @@ pub enum LayoutMode {
     Desktop,
 }
 
-impl LayoutMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Mobile => "mobile",
-            Self::Compact => "compact",
-            Self::Desktop => "desktop",
-        }
-    }
-}
-
 /// Density tokens derived from layout mode + window size.
 #[derive(Debug, Clone, Copy)]
 pub struct Density {

@@ -112,8 +112,11 @@ impl Session {
         ensure_private_dir(&files_dir())?;
         let tmp = temp_dir();
         // Drop stale XFTP staging trees left after crashes (architecture.md).
-        wipe_dir_contents(&tmp);
+        // Keep `tmp/plain/` — wiping it forced re-decrypt of every CryptoFile
+        // on unlock and made media-heavy chats feel stuck after every relaunch.
+        wipe_tmp_staging(&tmp);
         ensure_private_dir(&tmp)?;
+        ensure_private_dir(&tmp.join("plain"))?;
         // Agent XFTP decrypts under getTemporaryDirectory(); pin TMPDIR so the
         // subsequent rename into files_dir stays on one filesystem (see temp_dir
         // + docs/architecture.md).
@@ -2040,11 +2043,18 @@ fn ensure_private_dir(path: &std::path::Path) -> Result<()> {
 }
 
 /// Best-effort wipe of XFTP decrypt staging under [`temp_dir`].
-fn wipe_dir_contents(path: &std::path::Path) {
+///
+/// Preserves the `plain/` decrypt cache so unlock does not re-decrypt every
+/// attachment (see `plaintext_cache_path`).
+fn wipe_tmp_staging(path: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(path) else {
         return;
     };
     for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name == "plain" {
+            continue;
+        }
         let p = entry.path();
         if p.is_dir() {
             let _ = std::fs::remove_dir_all(&p);

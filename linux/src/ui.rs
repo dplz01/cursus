@@ -649,11 +649,25 @@ fn chat_list(app: &App) -> Element<'_, Message> {
             .color(theme::t().text_primary)
             .wrapping(Wrapping::WordOrGlyph);
         // Word wrap alone won't break invite/URLs (no spaces); WordOrGlyph keeps
-        // the preview inside the Fill column beside badges.
-        let preview = txt(truncate(&chat.preview, 72))
-            .size(d.meta)
-            .color(theme::t().text_secondary)
-            .wrapping(Wrapping::WordOrGlyph);
+        // the preview inside the Fill column beside badges. Cap at two lines.
+        let preview_line_px = f32::from(d.meta) * 1.25;
+        let preview: Element<'_, Message> = if chat.preview.is_empty() {
+            Space::new().height(0).into()
+        } else {
+            container(
+                txt(truncate(&chat.preview, 72))
+                    .size(d.meta)
+                    .color(theme::t().text_secondary)
+                    .line_height(iced::widget::text::LineHeight::Absolute(
+                        preview_line_px.into(),
+                    ))
+                    .wrapping(Wrapping::WordOrGlyph),
+            )
+            .width(Length::Fill)
+            .max_height(preview_line_px * 2.0)
+            .clip(true)
+            .into()
+        };
 
         let mut badges = Row::new().spacing(6).align_y(Alignment::Center);
         if chat.settings.favorite {

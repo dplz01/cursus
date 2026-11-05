@@ -1126,14 +1126,7 @@ fn parse_one_chat(chat: &Value) -> Option<ChatPreview> {
         _ => return None,
     };
 
-    let mut preview = chat
-        .pointer("/chatItems/0/meta/itemText")
-        .or_else(|| chat.pointer("/chatItems/0/content/msgContent/text"))
-        .or_else(|| chat.pointer("/chatItems/0/content/text"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    preview = crate::rich_text::expand_emoji_shortcodes(&preview);
+    let mut preview = chat_list_item_preview(chat.get("chatItems").and_then(|v| v.as_array()));
     if pending_request_id.is_some() && preview.is_empty() {
         preview = "Incoming contact request — accept to chat.".into();
     }
@@ -1695,6 +1688,33 @@ fn parse_deleted_state(item: &Value) -> Option<crate::models::DeletedState> {
     }
 }
 
+/// List-row preview for the latest chat item.
+///
+/// Deleted / marked-deleted items must not leak `itemText` (invite links etc.);
+/// match official clients with a short tombstone label instead.
+fn chat_list_item_preview(items: Option<&Vec<Value>>) -> String {
+    use crate::models::DeletedState;
+    let Some(items) = items else {
+        return String::new();
+    };
+    let Some(item) = items.first() else {
+        return String::new();
+    };
+    match parse_deleted_state(item) {
+        Some(DeletedState::Content) => return "deleted".into(),
+        Some(DeletedState::Marked) => return "marked deleted".into(),
+        None => {}
+    }
+    let preview = item
+        .pointer("/meta/itemText")
+        .or_else(|| item.pointer("/content/msgContent/text"))
+        .or_else(|| item.pointer("/content/text"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    crate::rich_text::expand_emoji_shortcodes(&preview)
+}
+
 fn parse_quote(value: Option<&Value>) -> Option<crate::models::MessageQuote> {
     let value = value?;
     if value.is_null() {
@@ -2080,9 +2100,42 @@ fn wipe_tmp_staging(path: &std::path::Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_file_info, parse_one_message, pending_accept_request_id};
+    use super::{
+        chat_list_item_preview, parse_file_info, parse_one_message, pending_accept_request_id,
+    };
     use crate::models::FileTransferState;
     use serde_json::json;
+
+    #[test]
+    fn chat_list_preview_hides_marked_deleted_content() {
+        let items = vec![json!({
+            "meta": {
+                "itemId": 1,
+                "itemText": "https://smp12.simplex.im/i#secret",
+                "itemDeleted": { "type": "deleted", "deletedTs": "2026-11-05T10:00:00Z" }
+            },
+            "content": { "type": "sndMsgContent", "msgContent": { "type": "text", "text": "https://smp12.simplex.im/i#secret" } }
+        })];
+        assert_eq!(chat_list_item_preview(Some(&items)), "marked deleted");
+    }
+
+    #[test]
+    fn chat_list_preview_hides_full_deleted_content() {
+        let items = vec![json!({
+            "meta": { "itemId": 2, "itemText": "still here" },
+            "content": { "type": "sndDeleted", "deleted": { "type": "deleted" } }
+        })];
+        assert_eq!(chat_list_item_preview(Some(&items)), "deleted");
+    }
+
+    #[test]
+    fn chat_list_preview_keeps_live_text() {
+        let items = vec![json!({
+            "meta": { "itemId": 3, "itemText": "hello" },
+            "content": { "type": "sndMsgContent", "msgContent": { "type": "text", "text": "hello" } }
+        })];
+        assert_eq!(chat_list_item_preview(Some(&items)), "hello");
+    }
 
     #[test]
     fn pending_when_request_has_no_connection() {

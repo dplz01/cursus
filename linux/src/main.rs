@@ -5308,7 +5308,11 @@ impl App {
     }
 
     pub(crate) fn voice_recording(&self) -> bool {
-        self.voice_rec.is_some() || self.voice_arming
+        self.voice_rec.is_some()
+    }
+
+    pub(crate) fn voice_arming(&self) -> bool {
+        self.voice_arming
     }
 
     pub(crate) fn voice_draft(&self) -> Option<&VoiceDraft> {
@@ -5482,17 +5486,22 @@ impl App {
             async move {
                 tokio::task::spawn_blocking(move || {
                     stop_ffmpeg(&mut rec.child);
-                    let secs = rec.started.elapsed().as_secs().max(1).min(300) as u32;
+                    let elapsed = rec.started.elapsed();
                     let meta = std::fs::metadata(&rec.path).map_err(|e| e.to_string())?;
                     if meta.len() < 64 {
                         let _ = std::fs::remove_file(&rec.path);
                         return Err("Recording was empty — check microphone / PulseAudio.".into());
                     }
-                    let peaks = media::extract_waveform_peaks(&rec.path, media::WAVEFORM_BARS)
-                        .unwrap_or_else(|_| vec![0.35; media::WAVEFORM_BARS]);
+                    let (peaks, decoded) =
+                        match media::analyze_audio(&rec.path, media::WAVEFORM_BARS) {
+                            Ok(w) => (w.peaks, Some(w.duration_secs)),
+                            Err(_) => (vec![0.35; media::WAVEFORM_BARS], None),
+                        };
+                    let duration_secs =
+                        media::voice_duration_secs(&rec.path, elapsed, decoded);
                     Ok(VoiceDraft {
                         path: rec.path,
-                        duration_secs: secs,
+                        duration_secs,
                         peaks,
                     })
                 })
@@ -7861,6 +7870,7 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
                 .spawn()
             {
                 Ok(mut child) => {
+                    let started = Instant::now();
                     std::thread::sleep(std::time::Duration::from_millis(350));
                     match child.try_wait() {
                         Ok(None) => {
@@ -7870,7 +7880,7 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
                                 return Ok(VoiceRec {
                                     path: out,
                                     child,
-                                    started: Instant::now(),
+                                    started,
                                 });
                             }
                             let _ = child.kill();
@@ -7942,6 +7952,7 @@ fn try_arecord_voice(wav: PathBuf, last_err: &mut String) -> Result<VoiceRec, ()
         .spawn()
     {
         Ok(mut child) => {
+            let started = Instant::now();
             std::thread::sleep(std::time::Duration::from_millis(250));
             match child.try_wait() {
                 Ok(None) => {
@@ -7950,7 +7961,7 @@ fn try_arecord_voice(wav: PathBuf, last_err: &mut String) -> Result<VoiceRec, ()
                         return Ok(VoiceRec {
                             path: wav,
                             child,
-                            started: Instant::now(),
+                            started,
                         });
                     }
                     let _ = child.kill();

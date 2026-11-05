@@ -64,6 +64,15 @@ fn composer_hit<'a>(
     .into()
 }
 
+fn composer_inert_hit<'a>(icon: Element<'a, Message>, size: f32) -> Element<'a, Message> {
+    container(icon)
+        .width(size)
+        .height(size)
+        .center_x(size)
+        .center_y(size)
+        .into()
+}
+
 /// Send control with accent fill when the composer has text.
 fn composer_send_hit<'a>(
     icon: Element<'a, Message>,
@@ -1102,6 +1111,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     }
 
     let recording = app.voice_recording();
+    let arming = app.voice_arming();
     let mic = if recording {
         composer_hit(
             icons::centered_hit(
@@ -1111,6 +1121,10 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             send_size,
             Message::ToggleVoiceRecord,
         )
+    } else if arming {
+        // Capture is still probing — keep the mic, ignore presses so the
+        // start tap cannot also stop a recorder that has not attached yet.
+        composer_inert_hit(icons::mic_tool(send_size, hover_ok), send_size)
     } else {
         composer_hit(
             icons::mic_tool(send_size, hover_ok),
@@ -1129,6 +1143,8 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
 
     let placeholder = if recording {
         "Recording…"
+    } else if arming {
+        "Starting microphone…"
     } else {
         "Message"
     };

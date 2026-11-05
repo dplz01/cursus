@@ -12,8 +12,18 @@ pub const MAX_PROFILE_IMAGE_CHARS: usize = 12_500;
 /// Official bio cap (`MAX_BIO_LENGTH_BYTES`).
 pub const MAX_BIO_BYTES: usize = 160;
 
+pub struct WaveformInfo {
+    pub peaks: Vec<f32>,
+    /// Decoded length at 8 kHz mono (seconds).
+    pub duration_secs: f32,
+}
+
 /// Downsample mono float PCM into normalized peak bars for chat waveforms.
 pub fn extract_waveform_peaks(path: &Path, bars: usize) -> Result<Vec<f32>, String> {
+    Ok(analyze_audio(path, bars)?.peaks)
+}
+
+pub fn analyze_audio(path: &Path, bars: usize) -> Result<WaveformInfo, String> {
     let bars = bars.max(8);
     let raw = path.with_extension("peaks.f32");
     let status = Command::new("ffmpeg")
@@ -42,6 +52,7 @@ pub fn extract_waveform_peaks(path: &Path, bars: usize) -> Result<Vec<f32>, Stri
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
+    let duration_secs = samples.len() as f32 / 8000.0;
     let chunk = (samples.len() / bars).max(1);
     let mut peaks = Vec::with_capacity(bars);
     for i in 0..bars {
@@ -54,7 +65,80 @@ pub fn extract_waveform_peaks(path: &Path, bars: usize) -> Result<Vec<f32>, Stri
         peaks.push(peak);
     }
     let max = peaks.iter().copied().fold(0.0_f32, f32::max).max(1e-6);
-    Ok(peaks.into_iter().map(|p| (p / max).clamp(0.05, 1.0)).collect())
+    Ok(WaveformInfo {
+        peaks: peaks.into_iter().map(|p| (p / max).clamp(0.05, 1.0)).collect(),
+        duration_secs,
+    })
+}
+
+/// Duration of a captured voice file. Prefers WAV PCM size, then ffprobe.
+pub fn audio_file_duration_secs(path: &Path) -> Option<f32> {
+    wav_pcm_duration_secs(path).or_else(|| ffprobe_duration_secs(path))
+}
+
+fn wav_pcm_duration_secs(path: &Path) -> Option<f32> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    let channels = u16::from_le_bytes(bytes[22..24].try_into().ok()?) as f32;
+    let sample_rate = u32::from_le_bytes(bytes[24..28].try_into().ok()?) as f32;
+    let bits = u16::from_le_bytes(bytes[34..36].try_into().ok()?) as f32;
+    if sample_rate <= 0.0 || channels <= 0.0 || bits <= 0.0 {
+        return None;
+    }
+    let mut i = 12usize;
+    let mut data_len = None;
+    while i + 8 <= bytes.len() {
+        let id = &bytes[i..i + 4];
+        let sz = u32::from_le_bytes(bytes[i + 4..i + 8].try_into().ok()?) as usize;
+        if id == b"data" {
+            data_len = Some(sz.min(bytes.len().saturating_sub(i + 8)));
+            break;
+        }
+        i = i.saturating_add(8).saturating_add(sz);
+        if sz % 2 == 1 {
+            i = i.saturating_add(1);
+        }
+    }
+    let data_len = data_len.unwrap_or(bytes.len().saturating_sub(44)) as f32;
+    let bytes_per_sec = sample_rate * channels * (bits / 8.0);
+    if bytes_per_sec <= 0.0 {
+        return None;
+    }
+    Some(data_len / bytes_per_sec)
+}
+
+fn ffprobe_duration_secs(path: &Path) -> Option<f32> {
+    let out = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+        ])
+        .arg(path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+/// Prefer decoded/file length; fall back to wall-clock capture time.
+pub fn voice_duration_secs(
+    path: &Path,
+    elapsed: std::time::Duration,
+    decoded_secs: Option<f32>,
+) -> u32 {
+    let from_file = decoded_secs
+        .filter(|d| *d >= 0.45)
+        .or_else(|| audio_file_duration_secs(path).filter(|d| *d >= 0.45));
+    let secs = from_file.unwrap_or(elapsed.as_secs_f32());
+    secs.round().clamp(1.0, 300.0) as u32
 }
 
 /// Poster frame for a video (PNG next to the file, reused if fresh).
@@ -470,5 +554,52 @@ mod tests {
             .file_name()
             .and_then(|s| s.to_str())
             .is_some_and(|s| s.contains("view1600")));
+    }
+
+    fn write_pcm_wav(path: &Path, samples: usize, sample_rate: u32) {
+        let data_len = (samples * 2) as u32;
+        let mut bytes = Vec::with_capacity(44 + data_len as usize);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // mono
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        bytes.resize(44 + data_len as usize, 0);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn wav_duration_from_pcm_size() {
+        let dir = std::env::temp_dir().join(format!(
+            "cursus-wav-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("voice.wav");
+        write_pcm_wav(&path, 16_000 * 7, 16_000);
+        let d = wav_pcm_duration_secs(&path).unwrap();
+        assert!((d - 7.0).abs() < 0.01);
+        // Header-only / truncated files must not override a longer capture clock.
+        write_pcm_wav(&path, 200, 16_000);
+        assert_eq!(
+            voice_duration_secs(&path, std::time::Duration::from_secs(8), None),
+            8
+        );
+        write_pcm_wav(&path, 16_000 * 5, 16_000);
+        assert_eq!(
+            voice_duration_secs(&path, std::time::Duration::from_millis(900), None),
+            5
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

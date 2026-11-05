@@ -646,10 +646,14 @@ fn chat_list(app: &App) -> Element<'_, Message> {
         let selected = app.selected() == Some(index);
         let title = txt(&chat.title)
             .size(d.body)
-            .color(theme::t().text_primary);
+            .color(theme::t().text_primary)
+            .wrapping(Wrapping::WordOrGlyph);
+        // Word wrap alone won't break invite/URLs (no spaces); WordOrGlyph keeps
+        // the preview inside the Fill column beside badges.
         let preview = txt(truncate(&chat.preview, 72))
             .size(d.meta)
-            .color(theme::t().text_secondary);
+            .color(theme::t().text_secondary)
+            .wrapping(Wrapping::WordOrGlyph);
 
         let mut badges = Row::new().spacing(6).align_y(Alignment::Center);
         if chat.settings.favorite {
@@ -674,7 +678,9 @@ fn chat_list(app: &App) -> Element<'_, Message> {
         let content = container(
             row![
                 chat_list_avatar(chat, 48.0),
-                column![title, preview].spacing(4).width(Length::Fill),
+                container(column![title, preview].spacing(4))
+                    .width(Length::Fill)
+                    .clip(true),
                 badges,
             ]
             .align_y(Alignment::Center)
@@ -2160,9 +2166,11 @@ fn bubble_time_height(d: Density) -> f32 {
 }
 
 /// Gap between last text glyphs and the time row.
-const STAMP_GAP: f32 = 8.0;
-/// Extra inset so the stamp stays inside the bubble padding.
-const STAMP_EDGE_PAD: f32 = 4.0;
+const STAMP_GAP: f32 = 6.0;
+/// Extra inset so a floating stamp stays inside the bubble padding.
+const STAMP_EDGE_PAD: f32 = 2.0;
+/// Matches `bubble_time_meta` row spacing.
+const STAMP_INNER_GAP: f32 = 3.0;
 
 /// Actual text column width for the current window (not the desktop soft-cap).
 ///
@@ -2174,38 +2182,38 @@ fn bubble_text_content_max(app: &App) -> f32 {
     let win = app.window_width().max(1.0);
     let history_pad = d.pad * 2.0;
     let bubble_chrome = BUBBLE_PAD_X * 2.0;
-    let slack = 8.0;
+    // Small slack only — previous 8px stacked with padded stamp estimates and
+    // forced short lines like "sei un coglione" onto two rows.
+    let slack = 2.0;
     (win - history_pad - bubble_chrome - slack)
         .min(BUBBLE_TEXT_MAX)
         .max(96.0)
 }
 
-/// Full reserved width for time + receipt + gaps (no chip chrome — stamp is bare).
-///
-/// Includes the row gap and the right edge inset so fit checks match layout.
-fn estimate_time_width(d: Density, outgoing: bool, edited: bool) -> f32 {
-    // Conservative: "12:00 PM" (~8 glyphs) at ~0.62×meta advance.
-    let text_w = f32::from(d.meta) * 6.2;
+/// Intrinsic width of the stamp row (edit + time + receipt), no outer gap.
+fn estimate_stamp_width(d: Density, outgoing: bool, edited: bool) -> f32 {
+    // ~8 glyphs ("11:15 AM") at ~0.55×meta — was 6.2×meta (~0.78em) and far too wide.
+    let time_w = f32::from(d.meta) * 4.4;
     let icon = (f32::from(d.meta) * 0.85).clamp(10.0, 13.0);
-    let mut extras = 0.0;
+    let mut w = time_w;
     if edited {
-        extras += icon + 3.0;
+        w += icon + STAMP_INNER_GAP;
     }
     if outgoing {
-        // receipt icon + spacing inside the stamp row
-        extras += icon + 6.0;
+        w += STAMP_INNER_GAP + icon;
     }
-    text_w + extras + STAMP_GAP + STAMP_EDGE_PAD
+    w
 }
 
 fn estimate_last_line_width(text: &str, d: Density) -> f32 {
     let last = text.lines().last().unwrap_or(text).trim_end();
-    let col_w = (d.body * 0.55).max(6.0);
+    // ~0.5em average Latin advance; 0.55 was stacking pessimism with the stamp.
+    let col_w = (d.body * 0.5).max(6.0);
     last.chars().count() as f32 * col_w
 }
 
 fn count_visual_lines(text: &str, d: Density, content_max: f32) -> usize {
-    let col_w = (d.body * 0.55).max(6.0);
+    let col_w = (d.body * 0.5).max(6.0);
     let hard = text.lines().count().max(1);
     let soft: usize = text
         .lines()
@@ -2217,7 +2225,7 @@ fn count_visual_lines(text: &str, d: Density, content_max: f32) -> usize {
     hard.max(soft).max(1)
 }
 
-/// `last_line_width < max_line_width - (timestamps_width + paddings)`.
+/// True when the last line plus stamp still fits in the text column.
 fn should_keep_timestamp_inline(
     text: &str,
     d: Density,
@@ -2225,9 +2233,10 @@ fn should_keep_timestamp_inline(
     edited: bool,
     content_max: f32,
 ) -> bool {
-    let time_w = estimate_time_width(d, outgoing, edited);
+    let stamp_w = estimate_stamp_width(d, outgoing, edited);
     let last_w = estimate_last_line_width(text, d);
-    last_w + time_w < content_max
+    // Add the row gap once (not baked into stamp_w). Tiny epsilon for rounding.
+    last_w + STAMP_GAP + stamp_w <= content_max + 2.0
 }
 
 /// Body + time/receipt: no chip background — stamp sits on the bubble face.
@@ -2241,7 +2250,7 @@ fn bubble_content_with_time<'a>(
     content_max: f32,
 ) -> Element<'a, Message> {
     let stamp = bubble_time_meta(msg, d);
-    let stamp_w = estimate_time_width(d, msg.outgoing, msg.edited);
+    let stamp_w = estimate_stamp_width(d, msg.outgoing, msg.edited);
     let inline = should_keep_timestamp_inline(&msg.text, d, msg.outgoing, msg.edited, content_max);
     let multi = count_visual_lines(&msg.text, d, content_max) > 1;
     if inline {
@@ -2266,9 +2275,9 @@ fn bubble_content_with_time<'a>(
             )
             .into()
         } else {
-            // Single line: reserve stamp width so text cannot shove it past the
+            // Single line: reserve stamp + gap so text cannot shove it past the
             // bubble edge (max_width on the row alone does not shrink children).
-            let text_max = (content_max - stamp_w).max(40.0);
+            let text_max = (content_max - stamp_w - STAMP_GAP).max(40.0);
             container(
                 row![container(content).max_width(text_max), stamp]
                     .spacing(STAMP_GAP)

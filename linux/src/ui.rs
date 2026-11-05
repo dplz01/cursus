@@ -8,7 +8,7 @@ use iced::widget::text_editor::Binding as EditorBinding;
 use iced::widget::space::{horizontal, vertical};
 use iced::widget::{
     button, column, container, image, mouse_area, progress_bar, rich_text, row, scrollable, span,
-    text, text_editor, text_input, Column, Row, Space, Stack,
+    text, text_editor, text_input, toggler, Column, Row, Space, Stack,
 };
 use iced::{
     mouse, Alignment, Color, ContentFit, Element, Length, Padding, Point, Rectangle, Renderer, Size,
@@ -28,8 +28,9 @@ use crate::media;
 use crate::theme;
 use crate::{
     can_edit_group_profile, can_manage_members, can_moderate, group_pref_on, group_support_allowed,
-    member_status_is_invited, App, AuthScreen, ChatMenuAction, ChatMenuPane, CreateKind,
-    GroupSettingsPane, Message, MsgMenuAction, MsgMenuPane, SupportPane,
+    member_status_is_pending, member_status_shows_pending_icon, App, AuthScreen, ChatMenuAction,
+    ChatMenuPane, CreateKind, FeatureAllow, GroupSettingsPane, Message, MsgMenuAction, MsgMenuPane,
+    PrefMenu, SupportPane,
 };
 
 /// Color-emoji family — use for glyph chips so ❤ becomes the red ❤️.
@@ -192,6 +193,9 @@ pub fn shell(app: &App) -> Element<'_, Message> {
     }
     if app.create_chat().is_some() {
         stack = stack.push(create_chat_overlay(app));
+    }
+    if app.pref_menu().is_some() {
+        stack = stack.push(pref_menu_overlay(app));
     }
     stack.into()
 }
@@ -615,12 +619,7 @@ fn chat_list(app: &App) -> Element<'_, Message> {
         );
     }
 
-    let mut col = Column::new().spacing(0).padding(Padding {
-        top: 0.0,
-        right: d.pad_tight,
-        bottom: d.pad_tight,
-        left: d.pad_tight,
-    });
+    let mut col = Column::new().spacing(0).padding(Padding::ZERO);
 
     let rows = app.chats_for_nav();
     if rows.is_empty() {
@@ -687,17 +686,22 @@ fn chat_list(app: &App) -> Element<'_, Message> {
 
         let content = container(
             row![
-                chat_list_avatar(chat, 48.0),
-                container(column![title, preview].spacing(4))
+                chat_list_avatar(chat, 44.0),
+                container(column![title, preview].spacing(1))
                     .width(Length::Fill)
                     .clip(true),
                 badges,
             ]
             .align_y(Alignment::Center)
-            .spacing(12),
+            .spacing(10),
         )
         .width(Length::Fill)
-        .padding(Padding::from([d.list_row + 4.0, d.pad_tight + 4.0]));
+        .padding(Padding {
+            top: d.list_row,
+            right: 12.0,
+            bottom: d.list_row,
+            left: 12.0,
+        });
 
         // Hover paint + long-press slots without App Messages (avoids full view rebuild).
         let row = hover::chat_row(
@@ -908,6 +912,12 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
         contact_request_bar(app, req_id, d)
     } else if app.selection_mode() {
         selection_bar(app, d)
+    } else if let Some(m) = app.pending_support_member() {
+        column![
+            pending_member_actions_bar(m.group_member_id, d, app.hover_ok()),
+            composer_bar(app, d),
+        ]
+        .into()
     } else {
         composer_bar(app, d)
     };
@@ -953,6 +963,46 @@ fn selection_bar(app: &App, d: Density) -> Element<'_, Message> {
         },
         ..container::Style::default()
     })
+    .into()
+}
+
+fn pending_member_actions_bar(
+    member_id: i64,
+    d: Density,
+    hover: bool,
+) -> Element<'static, Message> {
+    container(
+        row![
+            icons::pending_status_icon(16.0, theme::t().text_muted),
+            text("Pending review")
+                .size(d.meta)
+                .color(theme::t().text_muted)
+                .width(Length::Fill),
+            button(text("Accept").size(d.meta))
+                .on_press(Message::GroupMemberAccept {
+                    member_id,
+                    role: "member".into(),
+                })
+                .padding(Padding::from([8, 12]))
+                .style(theme::primary_action(hover)),
+            button(text("Reject").size(d.meta).color(theme::t().danger))
+                .on_press(Message::GroupMemberRemove {
+                    member_id,
+                    with_messages: false,
+                })
+                .padding(Padding::from([8, 12]))
+                .style(theme::secondary_action(hover)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .padding(Padding {
+        top: d.pad_tight,
+        right: d.pad,
+        bottom: 0.0,
+        left: d.pad,
+    })
+    .width(Length::Fill)
     .into()
 }
 
@@ -1713,8 +1763,9 @@ fn message_bubble<'a>(
     let channel_incoming = !msg.outgoing && app.selected_is_channel();
     let bubble_with_sender: Element<'_, Message> = if group_incoming {
         let sender = msg.sender.as_ref().unwrap();
+        let sender_name = app.member_display_name(sender);
         let avatar: Element<'_, Message> = if show_member_header {
-            profile_avatar(sender.image.as_deref(), &sender.display_name, MEMBER_AVATAR)
+            profile_avatar(sender.image.as_deref(), &sender_name, MEMBER_AVATAR)
         } else {
             horizontal().width(MEMBER_AVATAR).height(MEMBER_AVATAR).into()
         };
@@ -1722,7 +1773,7 @@ fn message_bubble<'a>(
         if show_member_header {
             let mut name_row = Row::new().spacing(6).align_y(Alignment::Center);
             name_row = name_row.push(
-                text(sender.display_name.clone())
+                text(sender_name)
                     .size(d.meta)
                     .color(theme::t().accent),
             );
@@ -3169,50 +3220,57 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
             text("Address")
                 .size(d.meta)
                 .color(theme::t().text_muted),
-            settings_toggle(
+            settings_toggle_row(
                 "Share address on profile",
                 shares,
-                Message::ToggleProfileAddress,
+                Message::SetProfileAddress,
                 d,
-                app.hover_ok(),
             ),
-            settings_toggle(
+            settings_toggle_row(
                 "Auto-accept address requests",
                 app.desktop_prefs().auto_accept_address,
-                Message::ToggleAddressAutoAccept,
+                Message::SetAddressAutoAccept,
                 d,
-                app.hover_ok(),
             ),
             vertical().height(6),
             text("Appearance")
                 .size(d.meta)
                 .color(theme::t().text_muted),
-            settings_theme_cycle(app, d),
-            settings_text_size_cycle(app, d),
+            settings_choice_row(
+                "Theme",
+                app.desktop_prefs().theme.label(),
+                Message::OpenPrefMenu(PrefMenu::Theme),
+                d,
+                app.hover_ok(),
+            ),
+            settings_choice_row(
+                "Text size",
+                app.desktop_prefs().text_size.label(),
+                Message::OpenPrefMenu(PrefMenu::TextSize),
+                d,
+                app.hover_ok(),
+            ),
             vertical().height(6),
             text("Desktop")
                 .size(d.meta)
                 .color(theme::t().text_muted),
-            settings_toggle(
+            settings_toggle_row(
                 "Desktop notifications",
                 app.desktop_prefs().notifications,
-                Message::ToggleDesktopNotifications,
+                Message::SetDesktopNotifications,
                 d,
-                app.hover_ok(),
             ),
-            settings_toggle(
+            settings_toggle_row(
                 "System tray icon",
                 app.desktop_prefs().tray,
-                Message::ToggleTray,
+                Message::SetTray,
                 d,
-                app.hover_ok(),
             ),
-            settings_toggle(
+            settings_toggle_row(
                 "Close window hides to tray",
                 app.desktop_prefs().close_to_tray,
-                Message::ToggleCloseToTray,
+                Message::SetCloseToTray,
                 d,
-                app.hover_ok(),
             ),
         ]
         .spacing(0)
@@ -3221,81 +3279,63 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
     .into()
 }
 
-fn settings_theme_cycle(app: &App, d: Density) -> Element<'_, Message> {
-    let label = format!("Theme: {}", app.desktop_prefs().theme.label());
-    let light = app.desktop_prefs().theme.resolve_light();
-    settings_release_row(
-        row![
-            text(label)
-                .size(d.body)
-                .color(theme::t().text_primary)
-                .width(Length::Fill),
-            text(if light { "Light" } else { "Dark" })
-                .size(d.meta)
-                .color(theme::t().text_muted),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center)
-        .into(),
-        Message::CycleThemePreference,
-    )
-}
-
-fn settings_text_size_cycle(app: &App, d: Density) -> Element<'_, Message> {
-    let pref = app.desktop_prefs().text_size;
-    settings_release_row(
-        row![
-            text(format!("Text size: {}", pref.label()))
-                .size(d.body)
-                .color(theme::t().text_primary)
-                .width(Length::Fill),
-            text(pref.label())
-                .size(d.meta)
-                .color(theme::t().text_muted),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center)
-        .into(),
-        Message::CycleTextSize,
-    )
-}
-
-fn settings_toggle<'a>(
+/// Label + toggler — only the switch is interactive.
+fn settings_toggle_row<'a>(
     label: &'a str,
     on: bool,
-    msg: Message,
+    to_msg: fn(bool) -> Message,
     d: Density,
-    _hover: bool,
 ) -> Element<'a, Message> {
-    settings_release_row(
+    container(
         row![
             text(label)
                 .size(d.body)
                 .color(theme::t().text_primary)
                 .width(Length::Fill),
-            text(if on { "yes" } else { "no" })
-                .size(d.meta)
-                .color(theme::t().text_muted),
+            toggler(on).on_toggle(to_msg).size(18.0),
         ]
         .spacing(10)
         .align_y(Alignment::Center)
-        .into(),
-        msg,
+        .padding(Padding::from([10, 8])),
     )
+    .width(Length::Fill)
+    .into()
 }
 
-/// Settings row that activates on release so a drag can scroll the page.
-fn settings_release_row<'a>(
-    content: Element<'a, Message>,
-    on_release: Message,
+fn settings_choice_row<'a>(
+    label: &'a str,
+    value: &'a str,
+    open: Message,
+    d: Density,
+    hover: bool,
 ) -> Element<'a, Message> {
-    mouse_area(
-        container(content)
-            .padding(Padding::from([10, 8]))
-            .width(Length::Fill),
+    container(
+        row![
+            text(label)
+                .size(d.body)
+                .color(theme::t().text_primary)
+                .width(Length::Fill),
+            choice_chip(value, open, d, hover),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .padding(Padding::from([10, 8])),
     )
-    .on_release(on_release)
+    .width(Length::Fill)
     .into()
+}
+
+fn choice_chip<'a>(
+    value: impl Into<String>,
+    open: Message,
+    d: Density,
+    hover: bool,
+) -> Element<'a, Message> {
+    button(text(value.into()).size(d.meta).color(theme::t().text_primary))
+        .on_press(open)
+        .padding(Padding::from([6, 10]))
+        .style(theme::secondary_action(hover))
+        .into()
 }
 
 fn chat_menu_overlay(app: &App) -> Element<'_, Message> {
@@ -3558,6 +3598,191 @@ fn chat_menu_overlay(app: &App) -> Element<'_, Message> {
         .center_y(Length::Fill)
         .padding(Padding::from([24, 20]));
 
+    iced::widget::opaque(
+        Stack::new()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .push(backdrop)
+            .push(sheet),
+    )
+}
+
+fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
+    let d = app.density();
+    let hover = app.hover_ok();
+    let Some(kind) = app.pref_menu() else {
+        return vertical().height(0).into();
+    };
+    let (title, items): (&str, Vec<(String, bool, Message)>) = match kind {
+        PrefMenu::Theme => {
+            let cur = app.desktop_prefs().theme;
+            (
+                "Theme",
+                crate::desktop::ThemePreference::ALL
+                    .into_iter()
+                    .map(|t| (t.label().to_string(), t == cur, Message::SetThemePreference(t)))
+                    .collect(),
+            )
+        }
+        PrefMenu::TextSize => {
+            let cur = app.desktop_prefs().text_size;
+            (
+                "Text size",
+                crate::desktop::TextSizePreference::ALL
+                    .into_iter()
+                    .map(|t| (t.label().to_string(), t == cur, Message::SetTextSize(t)))
+                    .collect(),
+            )
+        }
+        PrefMenu::ContactTimed => {
+            let cur = app
+                .contact_profile()
+                .map(|p| TimedAllowChoice::from_allow(p.timed_allow));
+            (
+                "Disappearing messages",
+                TimedAllowChoice::OPTIONS
+                    .into_iter()
+                    .map(|c| {
+                        (
+                            c.to_string(),
+                            Some(c) == cur,
+                            Message::SetContactTimedAllow(c.to_allow()),
+                        )
+                    })
+                    .collect(),
+            )
+        }
+        PrefMenu::ContactTtl | PrefMenu::ContactChatItemTtl | PrefMenu::GroupTtl => {
+            let current = match kind {
+                PrefMenu::ContactChatItemTtl => app
+                    .contact_profile()
+                    .map(|p| TtlChoice::from_secs(p.chat_item_ttl)),
+                PrefMenu::ContactTtl => app.contact_profile().map(|p| {
+                    TtlChoice::from_secs(Some(p.timed_ttl_secs).filter(|s| *s > 0))
+                }),
+                _ => app.group_settings().map(|g| {
+                    let secs = g
+                        .group_preferences
+                        .as_ref()
+                        .and_then(|p| p.get("timedMessages"))
+                        .and_then(|v| v.get("ttl"))
+                        .and_then(|v| v.as_i64());
+                    TtlChoice::from_secs(secs)
+                }),
+            };
+            let title = match kind {
+                PrefMenu::ContactChatItemTtl => "Delete after (this device only)",
+                _ => "Delete after",
+            };
+            (
+                title,
+                TtlChoice::OPTIONS
+                    .into_iter()
+                    .map(|c| {
+                        let msg = match kind {
+                            PrefMenu::ContactChatItemTtl => Message::SetContactChatItemTtl(c.secs()),
+                            PrefMenu::ContactTtl => Message::SetContactTimedTtl(c.secs()),
+                            _ => Message::SetGroupTimedTtl(c.secs()),
+                        };
+                        (c.to_string(), Some(c) == current, msg)
+                    })
+                    .collect(),
+            )
+        }
+        PrefMenu::ContactRcpts => {
+            let cur = app
+                .contact_profile()
+                .map(|p| RcptChoice::from_opt(p.send_rcpts));
+            (
+                "Send receipts",
+                RcptChoice::OPTIONS
+                    .into_iter()
+                    .map(|c| {
+                        (
+                            c.to_string(),
+                            Some(c) == cur,
+                            Message::SetContactSendRcpts(c.to_opt()),
+                        )
+                    })
+                    .collect(),
+            )
+        }
+        PrefMenu::ContactFullDelete
+        | PrefMenu::ContactReactions
+        | PrefMenu::ContactVoice
+        | PrefMenu::ContactCalls => {
+            let (title, cur, to_msg): (&str, Option<FeatureAllow>, fn(FeatureAllow) -> Message) =
+                match kind {
+                    PrefMenu::ContactFullDelete => (
+                        "Delete for everyone",
+                        app.contact_profile().map(|p| p.full_delete_allow),
+                        Message::SetContactFullDelete,
+                    ),
+                    PrefMenu::ContactReactions => (
+                        "Message reactions",
+                        app.contact_profile().map(|p| p.reactions_allow),
+                        Message::SetContactReactions,
+                    ),
+                    PrefMenu::ContactVoice => (
+                        "Voice messages",
+                        app.contact_profile().map(|p| p.voice_allow),
+                        Message::SetContactVoice,
+                    ),
+                    _ => (
+                        "Audio/video calls",
+                        app.contact_profile().map(|p| p.calls_allow),
+                        Message::SetContactCalls,
+                    ),
+                };
+            (
+                title,
+                FeatureAllow::FULL_OPTIONS
+                    .into_iter()
+                    .map(|a| (a.label().to_string(), Some(a) == cur, to_msg(a)))
+                    .collect(),
+            )
+        }
+    };
+
+    let mut body = Column::new().spacing(4).width(Length::Fill);
+    body = body.push(
+        text(title)
+            .size(d.meta)
+            .color(theme::t().text_muted),
+    );
+    for (label, selected, msg) in items {
+        let color = if selected {
+            theme::t().accent
+        } else {
+            theme::t().text_primary
+        };
+        body = body.push(
+            button(text(label).size(d.body).color(color))
+                .on_press(msg)
+                .padding(Padding::from([10, 12]))
+                .width(Length::Fill)
+                .style(theme::menu_item(hover)),
+        );
+    }
+    let card = menu_card(body.into(), d);
+    let backdrop = mouse_area(
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(
+                    0.0, 0.0, 0.0, 0.45,
+                ))),
+                ..container::Style::default()
+            }),
+    )
+    .on_press(Message::ClosePrefMenu);
+    let sheet = container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .padding(Padding::from([24, 20]));
     iced::widget::opaque(
         Stack::new()
             .width(Length::Fill)
@@ -4244,11 +4469,6 @@ fn contact_preferences_page<'a>(
     };
     let header = profile_header_bar(leading, Space::new().width(0).into(), d, true);
 
-    let rcpt_label = match p.send_rcpts {
-        None => "default",
-        Some(true) => "on",
-        Some(false) => "off",
-    };
     let mut body = Column::new().spacing(8).width(Length::Fill);
     body = body.push(
         text("Chat features")
@@ -4256,7 +4476,7 @@ fn contact_preferences_page<'a>(
             .color(theme::t().text_muted),
     );
     body = body.push(
-        text("Tap chips to cycle. Peer icon: red / green / gold.")
+        text("Peer icon: red / green / gold. Changes save immediately.")
             .size(d.meta)
             .color(theme::t().text_secondary),
     );
@@ -4268,27 +4488,12 @@ fn contact_preferences_page<'a>(
                     .size(d.body)
                     .color(theme::t().text_primary)
                     .width(Length::Fill),
-                mouse_area(
-                    container(
-                        text(rcpt_label)
-                            .size(d.meta)
-                            .color(theme::t().text_primary),
-                    )
-                    .padding(Padding::from([6, 10]))
-                    .style(|_| {
-                        let c = theme::t();
-                        container::Style {
-                            background: Some(iced::Background::Color(c.bg_elevated)),
-                            border: iced::Border {
-                                color: c.border,
-                                width: 1.0,
-                                radius: 8.0.into(),
-                            },
-                            ..container::Style::default()
-                        }
-                    }),
-                )
-                .on_release(Message::CycleContactSendRcpts),
+                choice_chip(
+                    RcptChoice::from_opt(p.send_rcpts).to_string(),
+                    Message::OpenPrefMenu(PrefMenu::ContactRcpts),
+                    d,
+                    hover,
+                ),
             ]
             .spacing(10)
             .align_y(Alignment::Center)
@@ -4987,6 +5192,64 @@ fn member_dropdown_overlay(
         crate::MemberDropdown::Actions => {
             let mod_plus = can_moderate(&g.my_role);
             let admin = can_manage_members(&g.my_role);
+            let pending = member_status_is_pending(&m.status);
+            if pending && mod_plus {
+                items = items.push(
+                    button(
+                        row![
+                            icons::member_role_icon(18.0, theme::t().success),
+                            text("Accept as member")
+                                .size(d.body)
+                                .color(theme::t().text_primary),
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press(Message::GroupMemberAccept {
+                        member_id,
+                        role: "member".into(),
+                    })
+                    .padding(Padding::from([10, 12]))
+                    .width(Length::Fill)
+                    .style(theme::menu_item(hover)),
+                );
+                items = items.push(
+                    button(
+                        row![
+                            icons::observer_role_icon(18.0, tint),
+                            text("Accept as observer")
+                                .size(d.body)
+                                .color(theme::t().text_primary),
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press(Message::GroupMemberAccept {
+                        member_id,
+                        role: "observer".into(),
+                    })
+                    .padding(Padding::from([10, 12]))
+                    .width(Length::Fill)
+                    .style(theme::menu_item(hover)),
+                );
+                items = items.push(
+                    button(
+                        row![
+                            icons::remove_profile_icon(18.0, danger),
+                            text("Reject").size(d.body).color(danger),
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press(Message::GroupMemberRemove {
+                        member_id,
+                        with_messages: false,
+                    })
+                    .padding(Padding::from([10, 12]))
+                    .width(Length::Fill)
+                    .style(theme::menu_item(hover)),
+                );
+            }
             if mod_plus
                 && !g.is_channel
                 && (m.support_chat.is_some()
@@ -5043,6 +5306,7 @@ fn member_dropdown_overlay(
                         .align_y(Alignment::Center),
                     )
                     .on_press(Message::GroupMemberRemove {
+                        member_id,
                         with_messages: false,
                     })
                     .padding(Padding::from([10, 12]))
@@ -5280,12 +5544,12 @@ fn group_overview_pane(
         let mod_plus = can_moderate(&g.my_role);
         for m in &g.members {
             let mid = m.group_member_id;
-            let invited = member_status_is_invited(&m.status);
+            let show_pending = member_status_shows_pending_icon(&m.status);
             let mut leading = Row::new()
                 .spacing(6)
                 .align_y(Alignment::Center)
                 .width(Length::Fill);
-            if invited {
+            if show_pending {
                 leading = leading.push(icons::pending_status_icon(
                     16.0,
                     theme::t().text_muted,
@@ -5491,49 +5755,13 @@ fn peer_allow_icon(allow: crate::FeatureAllow) -> Element<'static, Message> {
     icons::user_alt_icon(16.0, color)
 }
 
-fn contact_feature_row(
-    icon: Element<'static, Message>,
+fn contact_feature_pick_row<'a>(
+    icon: Element<'a, Message>,
     label: &'static str,
-    you: crate::FeatureAllow,
-    peer: crate::FeatureAllow,
-    on_press: Message,
+    picker: Element<'a, Message>,
+    peer: FeatureAllow,
     d: Density,
-    _hover: bool,
-) -> Element<'static, Message> {
-    contact_feature_row_labeled(icon, label, you.label(), peer, on_press, d)
-}
-
-fn contact_feature_row_labeled(
-    icon: Element<'static, Message>,
-    label: &'static str,
-    you_label: &'static str,
-    peer: crate::FeatureAllow,
-    on_press: Message,
-    d: Density,
-) -> Element<'static, Message> {
-    // Only the chip value is a hit target so the rest of the row scrolls freely.
-    let cycle = mouse_area(
-        container(
-            text(you_label)
-                .size(d.meta)
-                .color(theme::t().text_primary),
-        )
-        .padding(Padding::from([6, 10]))
-        .style(|_| {
-            let c = theme::t();
-            container::Style {
-                background: Some(iced::Background::Color(c.bg_elevated)),
-                border: iced::Border {
-                    color: c.border,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..container::Style::default()
-            }
-        }),
-    )
-    .on_release(on_press);
-
+) -> Element<'a, Message> {
     container(
         row![
             icon,
@@ -5541,7 +5769,7 @@ fn contact_feature_row_labeled(
                 .size(d.body)
                 .color(theme::t().text_primary)
                 .width(Length::Fill),
-            cycle,
+            picker,
             peer_allow_icon(peer),
         ]
         .spacing(10)
@@ -5560,110 +5788,101 @@ fn contact_feature_prefs(
     let icon_tint = theme::t().text_secondary;
     let mut col = Column::new().spacing(0).width(Length::Fill);
 
-    // Timed chip uses timed_label (“for me” instead of “always”).
-    col = col.push(contact_feature_row_labeled(
+    col = col.push(contact_feature_pick_row(
         icons::timer_icon(20.0, icon_tint),
         "Disappearing messages",
-        p.timed_allow.timed_label(),
+        choice_chip(
+            TimedAllowChoice::from_allow(p.timed_allow).to_string(),
+            Message::OpenPrefMenu(PrefMenu::ContactTimed),
+            d,
+            hover,
+        ),
         p.timed_contact_allows,
-        Message::CycleContactTimedMessages,
         d,
     ));
 
-    let show_negotiated_ttl = matches!(p.timed_allow, crate::FeatureAllow::Yes);
-    let show_for_me_ttl = matches!(p.timed_allow, crate::FeatureAllow::Always);
+    let show_negotiated_ttl = matches!(p.timed_allow, FeatureAllow::Yes);
+    let show_for_me_ttl = matches!(p.timed_allow, FeatureAllow::Always);
     if show_negotiated_ttl || show_for_me_ttl {
+        let current = if show_for_me_ttl {
+            TtlChoice::from_secs(p.chat_item_ttl)
+        } else {
+            TtlChoice::from_secs(Some(p.timed_ttl_secs).filter(|s| *s > 0))
+        };
+        let open = if show_for_me_ttl {
+            Message::OpenPrefMenu(PrefMenu::ContactChatItemTtl)
+        } else {
+            Message::OpenPrefMenu(PrefMenu::ContactTtl)
+        };
         col = col.push(
-            text(if show_for_me_ttl {
-                "Delete after (this device only)"
-            } else {
-                "Delete after"
-            })
-            .size(d.meta)
-            .color(theme::t().text_muted)
+            container(
+                row![
+                    icons::pending_status_icon(16.0, theme::t().text_muted),
+                    text(if show_for_me_ttl {
+                        "Delete after (this device only)"
+                    } else {
+                        "Delete after"
+                    })
+                    .size(d.body)
+                    .color(theme::t().text_primary)
+                    .width(Length::Fill),
+                    choice_chip(current.to_string(), open, d, hover),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center)
+                .padding(Padding::from([10, 8])),
+            )
             .width(Length::Fill),
         );
-        let _ = hover;
-        let current = if show_for_me_ttl {
-            p.chat_item_ttl.unwrap_or(crate::DEFAULT_TIMED_TTL_SECS)
-        } else {
-            p.timed_ttl_secs
-        };
-        let mut ttl_col = Column::new().spacing(6).width(Length::Fill);
-        for chunk in crate::TIMED_TTL_STEPS.chunks(3) {
-            let mut ttl_row = Row::new().spacing(6).width(Length::Fill);
-            for &secs in chunk {
-                let selected = current == secs;
-                let label = text(crate::format_timed_ttl(secs))
-                    .size(d.meta)
-                    .color(if selected {
-                        theme::t().accent
-                    } else {
-                        theme::t().text_primary
-                    });
-                let chip = container(label).padding(Padding::from([8, 10])).style(move |_| {
-                    let c = theme::t();
-                    container::Style {
-                        background: Some(iced::Background::Color(if selected {
-                            c.accent_soft
-                        } else {
-                            c.bg_elevated
-                        })),
-                        border: iced::Border {
-                            color: if selected { c.accent } else { c.border },
-                            width: 1.0,
-                            radius: 10.0.into(),
-                        },
-                        ..container::Style::default()
-                    }
-                });
-                let msg = if show_for_me_ttl {
-                    Message::SetContactChatItemTtl(secs)
-                } else {
-                    Message::SetContactTimedTtl(secs)
-                };
-                ttl_row = ttl_row.push(mouse_area(chip).on_release(msg));
-            }
-            ttl_col = ttl_col.push(ttl_row);
-        }
-        col = col.push(ttl_col.padding(Padding::from([0, 4])));
     }
 
-    col = col.push(contact_feature_row(
+    col = col.push(contact_feature_pick_row(
         icons::trash_icon(20.0, icon_tint),
         "Delete for everyone",
-        p.full_delete_allow,
+        choice_chip(
+            p.full_delete_allow.label(),
+            Message::OpenPrefMenu(PrefMenu::ContactFullDelete),
+            d,
+            hover,
+        ),
         p.full_delete_contact_allows,
-        Message::CycleContactFullDelete,
         d,
-        hover,
     ));
-    col = col.push(contact_feature_row(
+    col = col.push(contact_feature_pick_row(
         icons::reaction_icon(20.0, icon_tint),
         "Message reactions",
-        p.reactions_allow,
+        choice_chip(
+            p.reactions_allow.label(),
+            Message::OpenPrefMenu(PrefMenu::ContactReactions),
+            d,
+            hover,
+        ),
         p.reactions_contact_allows,
-        Message::CycleContactReactions,
         d,
-        hover,
     ));
-    col = col.push(contact_feature_row(
+    col = col.push(contact_feature_pick_row(
         icons::mic_icon(20.0, icon_tint),
         "Voice messages",
-        p.voice_allow,
+        choice_chip(
+            p.voice_allow.label(),
+            Message::OpenPrefMenu(PrefMenu::ContactVoice),
+            d,
+            hover,
+        ),
         p.voice_contact_allows,
-        Message::CycleContactVoice,
         d,
-        hover,
     ));
-    col = col.push(contact_feature_row(
+    col = col.push(contact_feature_pick_row(
         icons::phone_icon(20.0, icon_tint),
         "Audio/video calls",
-        p.calls_allow,
+        choice_chip(
+            p.calls_allow.label(),
+            Message::OpenPrefMenu(PrefMenu::ContactCalls),
+            d,
+            hover,
+        ),
         p.calls_contact_allows,
-        Message::CycleContactCalls,
         d,
-        hover,
     ));
 
     col.into()
@@ -5911,7 +6130,7 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
 
     let mut body = Column::new().spacing(8).width(Length::Fill);
     body = body.push(
-        text("Support threads members opened with admins.")
+        text("Pending joiners and support threads with members.")
             .size(d.meta)
             .color(theme::t().text_secondary),
     );
@@ -5923,7 +6142,7 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
         );
     } else if s.members.is_empty() {
         body = body.push(
-            text("No support chats yet.")
+            text("No pending members or support chats.")
                 .size(d.meta)
                 .color(theme::t().text_muted),
         );
@@ -5936,43 +6155,76 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
                 .unwrap_or(0);
             let mid = m.group_member_id;
             let title = m.display_name.clone();
-            body = body.push(
-                row![
-                    button(
-                        row![
-                            text(m.display_name.clone())
-                                .size(d.body)
-                                .color(theme::t().text_primary)
-                                .width(Length::Fill),
-                            if unread > 0 {
-                                text(format!("{unread}"))
-                                    .size(d.meta)
-                                    .color(theme::t().always)
-                            } else {
-                                text("").size(d.meta)
-                            },
-                        ]
-                        .spacing(8)
-                        .align_y(Alignment::Center),
-                    )
-                    .on_press(Message::OpenMemberSupportChat {
-                        member_id: mid,
-                        title,
-                    })
-                    .padding(Padding::from([10, 8]))
-                    .width(Length::Fill)
-                    .style(theme::menu_item(hover)),
-                    button(icons::centered_hit(
-                        icons::trash_icon(16.0, theme::t().danger),
-                        32.0,
-                    ))
-                    .on_press(Message::DeleteMemberSupportChat(mid))
-                    .padding(0)
-                    .style(theme::danger_quiet(hover)),
-                ]
-                .spacing(6)
-                .align_y(Alignment::Center),
+            let pending = member_status_is_pending(&m.status);
+            let mut name = Row::new().spacing(6).align_y(Alignment::Center);
+            if pending {
+                name = name.push(icons::pending_status_icon(16.0, theme::t().text_muted));
+            }
+            name = name.push(
+                text(m.display_name.clone())
+                    .size(d.body)
+                    .color(theme::t().text_primary)
+                    .width(Length::Fill),
             );
+            if unread > 0 {
+                name = name.push(
+                    text(format!("{unread}"))
+                        .size(d.meta)
+                        .color(theme::t().always),
+                );
+            }
+            let mut actions = Row::new().spacing(6).align_y(Alignment::Center);
+            if pending {
+                actions = actions.push(
+                    button(text("Accept").size(d.meta))
+                        .on_press(Message::GroupMemberAccept {
+                            member_id: mid,
+                            role: "member".into(),
+                        })
+                        .padding(Padding::from([8, 10]))
+                        .style(theme::primary_action(hover)),
+                );
+                actions = actions.push(
+                    button(text("Reject").size(d.meta).color(theme::t().danger))
+                        .on_press(Message::GroupMemberRemove {
+                            member_id: mid,
+                            with_messages: false,
+                        })
+                        .padding(Padding::from([8, 10]))
+                        .style(theme::secondary_action(hover)),
+                );
+                body = body.push(
+                    container(
+                        row![name, actions]
+                            .spacing(8)
+                            .align_y(Alignment::Center)
+                            .padding(Padding::from([8, 4])),
+                    )
+                    .width(Length::Fill),
+                );
+            } else {
+                body = body.push(
+                    row![
+                        button(name)
+                            .on_press(Message::OpenMemberSupportChat {
+                                member_id: mid,
+                                title,
+                            })
+                            .padding(Padding::from([10, 8]))
+                            .width(Length::Fill)
+                            .style(theme::menu_item(hover)),
+                        button(icons::centered_hit(
+                            icons::trash_icon(16.0, theme::t().danger),
+                            32.0,
+                        ))
+                        .on_press(Message::DeleteMemberSupportChat(mid))
+                        .padding(0)
+                        .style(theme::danger_quiet(hover)),
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+                );
+            }
         }
     }
 
@@ -5987,31 +6239,6 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
     ]
     .height(Length::Fill)
     .into()
-}
-
-fn pref_yes_no_chip(on: bool, d: Density, on_press: Option<Message>) -> Element<'static, Message> {
-    let chip = container(
-        text(if on { "on" } else { "off" })
-            .size(d.meta)
-            .color(theme::t().text_primary),
-    )
-    .padding(Padding::from([6, 10]))
-    .style(|_| {
-        let c = theme::t();
-        container::Style {
-            background: Some(iced::Background::Color(c.bg_elevated)),
-            border: iced::Border {
-                color: c.border,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..container::Style::default()
-        }
-    });
-    match on_press {
-        Some(msg) => mouse_area(chip).on_release(msg).into(),
-        None => chip.into(),
-    }
 }
 
 fn group_preferences_pane(
@@ -6029,7 +6256,7 @@ fn group_preferences_pane(
     );
     col = col.push(
         text(if owner {
-            "Owners can change these features for everyone."
+            "Owners can change these features for everyone. Changes save immediately."
         } else {
             "View only — only owners can change preferences."
         })
@@ -6052,12 +6279,13 @@ fn group_preferences_pane(
         } else {
             group_pref_on(prefs, key)
         };
-        // Only the yes/no chip is a hit target so the rest of the row scrolls.
-        let cycle = pref_yes_no_chip(
-            on,
-            d,
-            owner.then_some(Message::GroupPrefToggle(key)),
-        );
+        let switch = {
+            let mut t = toggler(on).size(18.0);
+            if owner {
+                t = t.on_toggle(move |v| Message::GroupPrefSet(key, v));
+            }
+            t
+        };
         col = col.push(
             container(
                 row![
@@ -6066,7 +6294,7 @@ fn group_preferences_pane(
                         .size(d.body)
                         .color(theme::t().text_primary)
                         .width(Length::Fill),
-                    cycle,
+                    switch,
                 ]
                 .spacing(10)
                 .align_y(Alignment::Center)
@@ -6080,54 +6308,36 @@ fn group_preferences_pane(
                 .and_then(|v| v.get("ttl"))
                 .and_then(|v| v.as_i64())
                 .unwrap_or(86_400);
-            col = col.push(
-                text("Delete after")
+            let selected = TtlChoice::from_secs(Some(current));
+            let ttl_control: Element<'_, Message> = if owner {
+                choice_chip(
+                    selected.to_string(),
+                    Message::OpenPrefMenu(PrefMenu::GroupTtl),
+                    d,
+                    hover,
+                )
+            } else {
+                text(selected.to_string())
                     .size(d.meta)
                     .color(theme::t().text_muted)
-                    .width(Length::Fill),
+                    .into()
+            };
+            col = col.push(
+                container(
+                    row![
+                        icons::pending_status_icon(16.0, theme::t().text_muted),
+                        text("Delete after")
+                            .size(d.body)
+                            .color(theme::t().text_primary)
+                            .width(Length::Fill),
+                        ttl_control,
+                    ]
+                    .spacing(10)
+                    .align_y(Alignment::Center)
+                    .padding(Padding::from([10, 8])),
+                )
+                .width(Length::Fill),
             );
-            // Release-only chips — button.on_press steals the scroll gesture.
-            let _ = hover;
-            let mut ttl_col = Column::new().spacing(6).width(Length::Fill);
-            for chunk in crate::TIMED_TTL_STEPS.chunks(3) {
-                let mut ttl_row = Row::new().spacing(6).width(Length::Fill);
-                for &secs in chunk {
-                    let selected = current == secs;
-                    let label = container(
-                        text(crate::format_timed_ttl(secs))
-                            .size(d.meta)
-                            .color(if selected {
-                                theme::t().accent
-                            } else {
-                                theme::t().text_primary
-                            }),
-                    )
-                    .padding(Padding::from([8, 10]))
-                    .style(move |_| {
-                        let c = theme::t();
-                        container::Style {
-                            background: Some(iced::Background::Color(if selected {
-                                c.accent_soft
-                            } else {
-                                c.bg_elevated
-                            })),
-                            border: iced::Border {
-                                color: c.border,
-                                width: 1.0,
-                                radius: 8.0.into(),
-                            },
-                            ..container::Style::default()
-                        }
-                    });
-                    ttl_row = ttl_row.push(if owner {
-                        mouse_area(label).on_release(Message::SetGroupTimedTtl(secs))
-                    } else {
-                        mouse_area(label)
-                    });
-                }
-                ttl_col = ttl_col.push(ttl_row);
-            }
-            col = col.push(ttl_col.padding(Padding::from([0, 4])));
         }
     }
     let review_on = g
@@ -6135,11 +6345,10 @@ fn group_preferences_pane(
         .as_ref()
         .and_then(|v| v.get("review"))
         .is_some();
-    let admission_cycle = pref_yes_no_chip(
-        review_on,
-        d,
-        owner.then_some(Message::GroupAdmissionToggle),
-    );
+    let mut admission = toggler(review_on).size(18.0);
+    if owner {
+        admission = admission.on_toggle(Message::GroupAdmissionSet);
+    }
     col = col.push(
         container(
             row![
@@ -6148,7 +6357,7 @@ fn group_preferences_pane(
                     .size(d.body)
                     .color(theme::t().text_primary)
                     .width(Length::Fill),
-                admission_cycle,
+                admission,
             ]
             .spacing(10)
             .align_y(Alignment::Center)
@@ -6156,19 +6365,127 @@ fn group_preferences_pane(
         )
         .width(Length::Fill),
     );
-    if owner {
-        col = col.push(
-            button(text("Save preferences").size(d.meta))
-                .on_press_maybe(if g.dirty {
-                    Some(Message::SaveGroupPreferences)
-                } else {
-                    None
-                })
-                .padding(Padding::from([10, 14]))
-                .style(theme::primary_action(hover)),
-        );
-    }
     col.into()
+}
+
+/// TTL pick_list entry — `Never` clears / disables disappearing messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TtlChoice {
+    Never,
+    Secs(i64),
+}
+
+impl TtlChoice {
+    const OPTIONS: [Self; 7] = [
+        Self::Never,
+        Self::Secs(30),
+        Self::Secs(300),
+        Self::Secs(3_600),
+        Self::Secs(86_400),
+        Self::Secs(604_800),
+        Self::Secs(2_592_000),
+    ];
+
+    fn from_secs(secs: Option<i64>) -> Self {
+        match secs {
+            Some(s) if s > 0 => Self::OPTIONS
+                .iter()
+                .copied()
+                .find(|o| matches!(o, Self::Secs(v) if *v == s))
+                .unwrap_or(Self::Secs(s)),
+            _ => Self::Never,
+        }
+    }
+
+    fn secs(self) -> Option<i64> {
+        match self {
+            Self::Never => None,
+            Self::Secs(s) => Some(s),
+        }
+    }
+}
+
+impl std::fmt::Display for TtlChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Never => f.write_str("Never"),
+            Self::Secs(s) => f.write_str(&crate::format_timed_ttl(*s)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimedAllowChoice {
+    Off,
+    On,
+    ForMe,
+}
+
+impl TimedAllowChoice {
+    const OPTIONS: [Self; 3] = [Self::Off, Self::On, Self::ForMe];
+
+    fn from_allow(a: FeatureAllow) -> Self {
+        match a {
+            FeatureAllow::No => Self::Off,
+            FeatureAllow::Yes => Self::On,
+            FeatureAllow::Always => Self::ForMe,
+        }
+    }
+
+    fn to_allow(self) -> FeatureAllow {
+        match self {
+            Self::Off => FeatureAllow::No,
+            Self::On => FeatureAllow::Yes,
+            Self::ForMe => FeatureAllow::Always,
+        }
+    }
+}
+
+impl std::fmt::Display for TimedAllowChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Off => "off",
+            Self::On => "on",
+            Self::ForMe => "for me",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RcptChoice {
+    Default,
+    On,
+    Off,
+}
+
+impl RcptChoice {
+    const OPTIONS: [Self; 3] = [Self::Default, Self::On, Self::Off];
+
+    fn from_opt(v: Option<bool>) -> Self {
+        match v {
+            None => Self::Default,
+            Some(true) => Self::On,
+            Some(false) => Self::Off,
+        }
+    }
+
+    fn to_opt(self) -> Option<bool> {
+        match self {
+            Self::Default => None,
+            Self::On => Some(true),
+            Self::Off => Some(false),
+        }
+    }
+}
+
+impl std::fmt::Display for RcptChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Default => "default",
+            Self::On => "on",
+            Self::Off => "off",
+        })
+    }
 }
 
 fn group_member_info_pane(
@@ -6239,12 +6556,33 @@ fn group_member_info_pane(
             .style(theme::secondary_action(hover)),
         );
     }
-    if m.status.contains("pending") || m.status.contains("review") {
+    if member_status_is_pending(&m.status) && mod_plus {
         col = col.push(
-            button(text("Accept member").size(d.meta))
-                .on_press(Message::GroupMemberAccept)
+            button(text("Accept as member").size(d.meta))
+                .on_press(Message::GroupMemberAccept {
+                    member_id,
+                    role: "member".into(),
+                })
                 .padding(Padding::from([8, 12]))
                 .style(theme::primary_action(hover)),
+        );
+        col = col.push(
+            button(text("Accept as observer").size(d.meta))
+                .on_press(Message::GroupMemberAccept {
+                    member_id,
+                    role: "observer".into(),
+                })
+                .padding(Padding::from([8, 12]))
+                .style(theme::secondary_action(hover)),
+        );
+        col = col.push(
+            button(text("Reject").size(d.meta).color(theme::t().danger))
+                .on_press(Message::GroupMemberRemove {
+                    member_id,
+                    with_messages: false,
+                })
+                .padding(Padding::from([8, 12]))
+                .style(theme::secondary_action(hover)),
         );
     }
     if admin {
@@ -6273,6 +6611,7 @@ fn group_member_info_pane(
         col = col.push(
             button(text("Remove member").size(d.meta))
                 .on_press(Message::GroupMemberRemove {
+                    member_id,
                     with_messages: false,
                 })
                 .padding(Padding::from([8, 12]))
@@ -6281,6 +6620,7 @@ fn group_member_info_pane(
         col = col.push(
             button(text("Remove + delete messages").size(d.meta))
                 .on_press(Message::GroupMemberRemove {
+                    member_id,
                     with_messages: true,
                 })
                 .padding(Padding::from([8, 12]))

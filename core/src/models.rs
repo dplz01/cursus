@@ -491,6 +491,8 @@ pub struct MessageQuote {
 #[derive(Debug, Clone)]
 pub struct MessageSender {
     pub group_member_id: i64,
+    /// Linked direct contact when known (`memberContactId`).
+    pub contact_id: Option<i64>,
     pub display_name: String,
     pub image: Option<String>,
     pub role: String,

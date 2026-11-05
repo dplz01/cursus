@@ -18,7 +18,15 @@ pub enum ThemePreference {
     Dark,
 }
 
+impl std::fmt::Display for ThemePreference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 impl ThemePreference {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::System => "System",
@@ -58,7 +66,20 @@ pub enum TextSizePreference {
     ExtraLarge,
 }
 
+impl std::fmt::Display for TextSizePreference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 impl TextSizePreference {
+    pub const ALL: [Self; 4] = [
+        Self::ExtraSmall,
+        Self::Small,
+        Self::Large,
+        Self::ExtraLarge,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::ExtraSmall => "Extra small",

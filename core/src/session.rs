@@ -1212,13 +1212,9 @@ fn parse_one_group_member(m: &Value) -> Option<GroupMemberInfo> {
     ) {
         return None;
     }
-    let display_name = m
-        .get("localDisplayName")
-        .or_else(|| m.pointer("/profile/displayName"))
-        .or_else(|| m.pointer("/memberProfile/displayName"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("Member")
-        .to_string();
+    // Official GroupMember.chatViewName: memberProfile.localAlias, else displayName.
+    // Do not prefer localDisplayName — that is the unique contact name, not the alias.
+    let display_name = member_view_name(m);
     let contact_id = m
         .get("memberContactId")
         .and_then(|v| v.as_i64())
@@ -1657,20 +1653,11 @@ fn parse_message_sender(item: &Value) -> Option<crate::models::MessageSender> {
     }
     let member = dir.get("groupMember")?;
     let group_member_id = member.get("groupMemberId")?.as_i64()?;
-    // Official chatViewName: localAlias if set, else displayName.
-    let display_name = member
-        .get("localAlias")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .or_else(|| member.get("localDisplayName").and_then(|v| v.as_str()))
-        .or_else(|| member.pointer("/profile/displayName").and_then(|v| v.as_str()))
-        .or_else(|| {
-            member
-                .pointer("/memberProfile/displayName")
-                .and_then(|v| v.as_str())
-        })
-        .unwrap_or("Member")
-        .to_string();
+    let display_name = member_view_name(member);
+    let contact_id = member
+        .get("memberContactId")
+        .and_then(|v| v.as_i64())
+        .filter(|id| *id > 0);
     let image = member
         .pointer("/profile/image")
         .or_else(|| member.pointer("/memberProfile/image"))
@@ -1685,10 +1672,30 @@ fn parse_message_sender(item: &Value) -> Option<crate::models::MessageSender> {
         .to_string();
     Some(crate::models::MessageSender {
         group_member_id,
+        contact_id,
         display_name,
         image,
         role,
     })
+}
+
+/// Official `chatViewName` for a group member JSON object.
+fn member_view_name(member: &Value) -> String {
+    nonempty_str(member.pointer("/memberProfile/localAlias"))
+        .or_else(|| nonempty_str(member.pointer("/profile/localAlias")))
+        .or_else(|| nonempty_str(member.get("localAlias")))
+        .or_else(|| nonempty_str(member.pointer("/memberProfile/displayName")))
+        .or_else(|| nonempty_str(member.pointer("/profile/displayName")))
+        .or_else(|| nonempty_str(member.get("localDisplayName")))
+        .unwrap_or_else(|| "Member".into())
+}
+
+fn nonempty_str(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn parse_deleted_state(item: &Value) -> Option<crate::models::DeletedState> {
@@ -1844,15 +1851,12 @@ fn parse_reaction_members(value: &Value) -> Vec<ReactionMember> {
     arr.iter()
         .filter_map(|row| {
             let member = row.get("groupMember")?;
-            let name = member
-                .pointer("/memberProfile/displayName")
-                .or_else(|| member.get("localDisplayName"))
-                .or_else(|| member.pointer("/memberProfile/fullName"))
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())?;
+            let name = member_view_name(member);
+            if name == "Member" && nonempty_str(member.get("localDisplayName")).is_none() {
+                return None;
+            }
             Some(ReactionMember {
-                display_name: name.to_string(),
+                display_name: name,
             })
         })
         .collect()
@@ -2195,6 +2199,22 @@ mod tests {
     fn not_pending_without_request_id() {
         let contact = json!({ "activeConn": { "connStatus": { "type": "new" } } });
         assert_eq!(pending_accept_request_id(&contact), None);
+    }
+
+    #[test]
+    fn member_view_name_prefers_local_alias() {
+        let m = json!({
+            "groupMemberId": 9,
+            "memberRole": "member",
+            "memberStatus": "complete",
+            "localDisplayName": "alice",
+            "memberProfile": {
+                "displayName": "alice",
+                "localAlias": "Ali"
+            }
+        });
+        let parsed = super::parse_one_group_member(&m).expect("member");
+        assert_eq!(parsed.display_name, "Ali");
     }
 
     #[test]

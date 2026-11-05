@@ -333,11 +333,17 @@ pub enum FeatureAllow {
     Always,
 }
 
+impl std::fmt::Display for FeatureAllow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 impl FeatureAllow {
     pub fn label(self) -> &'static str {
         match self {
-            Self::No => "no",
-            Self::Yes => "yes",
+            Self::No => "off",
+            Self::Yes => "on",
             Self::Always => "always",
         }
     }
@@ -346,11 +352,15 @@ impl FeatureAllow {
     /// wipe — that third state is local chatItemTTL, shown as “for me”.
     pub fn timed_label(self) -> &'static str {
         match self {
-            Self::No => "no",
-            Self::Yes => "yes",
+            Self::No => "off",
+            Self::Yes => "on",
             Self::Always => "for me",
         }
     }
+
+    pub const TIMED_OPTIONS: [Self; 3] = [Self::No, Self::Yes, Self::Always];
+    pub const BINARY_OPTIONS: [Self; 2] = [Self::No, Self::Yes];
+    pub const FULL_OPTIONS: [Self; 3] = [Self::No, Self::Yes, Self::Always];
 
     pub fn is_on(self) -> bool {
         !matches!(self, Self::No)
@@ -374,7 +384,11 @@ impl FeatureAllow {
     }
 
     pub fn as_api(self) -> &'static str {
-        self.label()
+        match self {
+            Self::No => "no",
+            Self::Yes => "yes",
+            Self::Always => "always",
+        }
     }
 }
 
@@ -507,6 +521,22 @@ pub struct GroupSettingsOverlay {
 pub enum MemberDropdown {
     Role,
     Actions,
+}
+
+/// Overlay menu for settings that used to be iced `pick_list`s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrefMenu {
+    Theme,
+    TextSize,
+    ContactTimed,
+    ContactTtl,
+    ContactChatItemTtl,
+    ContactRcpts,
+    ContactFullDelete,
+    ContactReactions,
+    ContactVoice,
+    ContactCalls,
+    GroupTtl,
 }
 
 #[derive(Debug, Clone)]
@@ -714,14 +744,6 @@ pub enum Message {
     ToggleRevealDeleted(i64),
     /// Reveal / hide a `#secret#` rich-text span.
     ToggleSecretReveal { item_id: i64, index: usize },
-    /// Desktop notification preference toggles (Settings).
-    ToggleDesktopNotifications,
-    ToggleTray,
-    ToggleCloseToTray,
-    /// Cycle System → Light → Dark appearance.
-    CycleThemePreference,
-    /// Cycle Small → Default → Large → Extra large UI text.
-    CycleTextSize,
     /// First-run / unlock gate.
     WelcomeNameChanged(String),
     WelcomeNameNext,
@@ -736,8 +758,6 @@ pub enum Message {
         encrypted: PathBuf,
         result: Result<PathBuf, String>,
     },
-    /// Sync address auto-accept with libsimplex.
-    ToggleAddressAutoAccept,
     AddressAutoAcceptSynced(Result<bool, String>),
     /// Post-unlock SMP activate / resubscribe finished (or failed non-fatally).
     NetworkActivated(Result<(), String>),
@@ -750,7 +770,6 @@ pub enum Message {
     ClearOwnProfileImage,
     SaveOwnProfile,
     OwnProfileSaved(Result<UserProfile, String>),
-    ToggleProfileAddress,
     ProfileAddressToggled(Result<UserProfile, String>),
     /// Contact profile overlay.
     OpenContactProfile,
@@ -765,16 +784,26 @@ pub enum Message {
     ContactProfileFavorite,
     ContactProfileClear,
     ContactProfileDelete,
-    /// Direct-chat feature prefs (contact Chat features) — cycle no/yes/always|for me.
-    CycleContactTimedMessages,
-    SetContactTimedTtl(i64),
-    /// Local “delete messages after” when disappearing is “for me”.
-    SetContactChatItemTtl(i64),
-    CycleContactSendRcpts,
-    CycleContactFullDelete,
-    CycleContactReactions,
-    CycleContactVoice,
-    CycleContactCalls,
+    /// Direct-chat feature prefs (contact Chat features).
+    SetContactTimedAllow(FeatureAllow),
+    /// Negotiated disappearing TTL (`None` = Never → turn feature off).
+    SetContactTimedTtl(Option<i64>),
+    /// Local “delete messages after” when disappearing is “for me” (`None` = Never).
+    SetContactChatItemTtl(Option<i64>),
+    SetContactSendRcpts(Option<bool>),
+    SetContactFullDelete(FeatureAllow),
+    SetContactReactions(FeatureAllow),
+    SetContactVoice(FeatureAllow),
+    SetContactCalls(FeatureAllow),
+    SetThemePreference(crate::desktop::ThemePreference),
+    SetTextSize(crate::desktop::TextSizePreference),
+    SetDesktopNotifications(bool),
+    SetTray(bool),
+    SetCloseToTray(bool),
+    SetAddressAutoAccept(bool),
+    SetProfileAddress(bool),
+    OpenPrefMenu(PrefMenu),
+    ClosePrefMenu,
     ContactPrefsSaved(Result<(), String>),
     /// Create group / channel.
     OpenCreateGroup,
@@ -828,20 +857,25 @@ pub enum Message {
     CloseMemberDropdown,
     GroupMemberSetRole(String),
     GroupMemberRoleDone(Result<(), String>),
-    GroupMemberRemove { with_messages: bool },
+    GroupMemberRemove {
+        member_id: i64,
+        with_messages: bool,
+    },
     GroupMemberRemoved(Result<(), String>),
     GroupMemberToggleBlockSelf,
     GroupMemberBlockSelfDone(Result<(), String>),
     GroupMemberToggleBlockAll,
     GroupMemberBlockAllDone(Result<(), String>),
-    GroupMemberAccept,
+    /// Accept a pending member (`pending_approval` / `pending_review`) as this role.
+    GroupMemberAccept { member_id: i64, role: String },
     GroupMemberAccepted(Result<(), String>),
     OpenGroupPreferences,
     CloseGroupPreferences,
-    GroupPrefToggle(&'static str),
-    /// Set disappearing-message TTL for the group (when timedMessages is on).
-    SetGroupTimedTtl(i64),
-    GroupAdmissionToggle,
+    /// Set a group preference enable flag (toggler).
+    GroupPrefSet(&'static str, bool),
+    /// Set disappearing-message TTL for the group (`None` = Never / disable).
+    SetGroupTimedTtl(Option<i64>),
+    GroupAdmissionSet(bool),
     SaveGroupPreferences,
     EnsureGroupLink,
     GroupLinkReady(Result<String, String>),
@@ -1093,6 +1127,8 @@ struct App {
     create_chat: Option<CreateChatOverlay>,
     /// Group / channel settings overlay.
     group_settings: Option<GroupSettingsOverlay>,
+    /// Choice overlay (theme, TTL, contact feature allow, …).
+    pref_menu: Option<PrefMenu>,
     /// Member support chat overlay (chat with admins).
     support: Option<SupportOverlay>,
     /// Outgoing or accepted active call (signaling).
@@ -1250,6 +1286,7 @@ impl App {
                 contact_profile: None,
                 create_chat: None,
                 group_settings: None,
+                pref_menu: None,
                 support: None,
                 active_call: None,
                 incoming_call: None,
@@ -1417,6 +1454,7 @@ impl App {
                     self.nav == NavSection::Settings && section != NavSection::Settings;
                 self.nav = section;
                 self.compose_open = false;
+                self.pref_menu = None;
                 // Keep an open conversation when moving Chats ↔ Channels if it
                 // still belongs in the destination; otherwise clear.
                 let keep = self.selected.and_then(|i| self.chats.get(i)).is_some_and(|c| {
@@ -1440,6 +1478,9 @@ impl App {
                 // Back is often a button press after scrolling the chat — clear
                 // sticky press_moved or the chat list cannot open another row.
                 self.clear_pointer_gesture();
+                if self.pref_menu.take().is_some() {
+                    return Task::none();
+                }
                 if let Some(support) = self.support.as_ref() {
                     match &support.pane {
                         SupportPane::Thread { from_list: true, .. } => {
@@ -1980,29 +2021,31 @@ impl App {
                 }
                 Task::none()
             }
-            Message::ToggleDesktopNotifications => {
+            Message::SetDesktopNotifications(on) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
-                self.desktop_prefs.notifications = !self.desktop_prefs.notifications;
+                self.desktop_prefs.notifications = on;
                 desktop::save_prefs(&self.desktop_prefs);
-                self.status = if self.desktop_prefs.notifications {
+                self.status = if on {
                     "Desktop notifications on.".into()
                 } else {
                     "Desktop notifications off.".into()
                 };
                 Task::none()
             }
-            Message::ToggleTray => {
+            Message::SetTray(on) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
-                if self.desktop_prefs.tray {
+                if !on {
                     self.tray = None;
                     self.desktop_prefs.tray = false;
                     self.desktop_prefs.close_to_tray = false;
                     desktop::save_prefs(&self.desktop_prefs);
                     self.status = "System tray disabled.".into();
+                } else if self.desktop_prefs.tray {
+                    // already on
                 } else if let Some(tray) = desktop::AppTray::try_new() {
                     self.tray = Some(tray);
                     self.desktop_prefs.tray = true;
@@ -2014,50 +2057,46 @@ impl App {
                 }
                 Task::none()
             }
-            Message::ToggleCloseToTray => {
+            Message::SetCloseToTray(on) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
-                if !self.desktop_prefs.tray {
+                if on && !self.desktop_prefs.tray {
                     self.status = "Enable the tray first.".into();
                     return Task::none();
                 }
-                self.desktop_prefs.close_to_tray = !self.desktop_prefs.close_to_tray;
+                self.desktop_prefs.close_to_tray = on;
                 desktop::save_prefs(&self.desktop_prefs);
-                self.status = if self.desktop_prefs.close_to_tray {
+                self.status = if on {
                     "Close hides to tray.".into()
                 } else {
                     "Close quits Cursus.".into()
                 };
                 Task::none()
             }
-            Message::CycleThemePreference => {
+            Message::SetThemePreference(pref) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                self.pref_menu = None;
                 theme::invalidate_system_theme_cache();
-                self.desktop_prefs.theme = self.desktop_prefs.theme.cycle();
+                self.desktop_prefs.theme = pref;
                 desktop::save_prefs(&self.desktop_prefs);
                 self.apply_appearance();
-                self.status = format!(
-                    "Theme: {}.",
-                    self.desktop_prefs.theme.label()
-                );
+                self.status = format!("Theme: {}.", pref.label());
                 Task::none()
             }
-            Message::CycleTextSize => {
+            Message::SetTextSize(pref) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
-                self.desktop_prefs.text_size = self.desktop_prefs.text_size.cycle();
+                self.pref_menu = None;
+                self.desktop_prefs.text_size = pref;
                 desktop::save_prefs(&self.desktop_prefs);
-                self.status = format!(
-                    "Text size: {}.",
-                    self.desktop_prefs.text_size.label()
-                );
+                self.status = format!("Text size: {}.", pref.label());
                 Task::none()
             }
-            Message::ToggleAddressAutoAccept => {
+            Message::SetAddressAutoAccept(enable) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
@@ -2065,8 +2104,6 @@ impl App {
                     self.status = "Connect first to change address settings.".into();
                     return Task::none();
                 };
-                let enable = !self.desktop_prefs.auto_accept_address;
-                // Optimistic UI; core result reconciles.
                 self.desktop_prefs.auto_accept_address = enable;
                 self.status = if enable {
                     "Enabling auto-accept…".into()
@@ -2166,7 +2203,7 @@ impl App {
                 self.status = err;
                 Task::none()
             }
-            Message::ToggleProfileAddress => {
+            Message::SetProfileAddress(enable) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
@@ -2174,7 +2211,6 @@ impl App {
                     self.status = "Connect first.".into();
                     return Task::none();
                 };
-                let enable = !self.own_profile.fields.contact_link.as_ref().is_some_and(|s| !s.is_empty());
                 self.status = if enable {
                     "Sharing address on profile…".into()
                 } else {
@@ -2198,6 +2234,14 @@ impl App {
             }
             Message::ProfileAddressToggled(Err(err)) => {
                 self.status = err;
+                Task::none()
+            }
+            Message::OpenPrefMenu(kind) => {
+                self.pref_menu = Some(kind);
+                Task::none()
+            }
+            Message::ClosePrefMenu => {
+                self.pref_menu = None;
                 Task::none()
             }
             Message::OpenContactProfile => {
@@ -2345,13 +2389,14 @@ impl App {
                 }
                 Task::none()
             }
-            Message::CycleContactTimedMessages => {
+            Message::SetContactTimedAllow(allow) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                self.pref_menu = None;
                 if let Some(p) = self.contact_profile.as_mut() {
-                    p.timed_allow = p.timed_allow.cycle();
-                    match p.timed_allow {
+                    p.timed_allow = allow;
+                    match allow {
                         FeatureAllow::No => {
                             p.chat_item_ttl = None;
                         }
@@ -2362,7 +2407,6 @@ impl App {
                             }
                         }
                         FeatureAllow::Always => {
-                            // “for me” — local chatItemTTL, not FeatureAllowed::always.
                             if p.chat_item_ttl.unwrap_or(0) <= 0 {
                                 p.chat_item_ttl = Some(DEFAULT_TIMED_TTL_SECS);
                             }
@@ -2378,72 +2422,89 @@ impl App {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
-                if let Some(p) = self.contact_profile.as_mut() {
-                    if !matches!(p.timed_allow, FeatureAllow::Yes) {
-                        return Task::none();
+                self.pref_menu = None;
+                match secs {
+                    None => {
+                        if let Some(p) = self.contact_profile.as_mut() {
+                            p.timed_allow = FeatureAllow::No;
+                            p.chat_item_ttl = None;
+                        }
+                        Task::batch([
+                            self.save_contact_feature_prefs(),
+                            self.save_contact_chat_item_ttl(),
+                        ])
                     }
-                    p.timed_ttl_secs = secs.max(1);
+                    Some(secs) => {
+                        if let Some(p) = self.contact_profile.as_mut() {
+                            if !matches!(p.timed_allow, FeatureAllow::Yes) {
+                                return Task::none();
+                            }
+                            p.timed_ttl_secs = secs.max(1);
+                        }
+                        self.save_contact_feature_prefs()
+                    }
                 }
-                self.save_contact_feature_prefs()
             }
             Message::SetContactChatItemTtl(secs) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                self.pref_menu = None;
                 if let Some(p) = self.contact_profile.as_mut() {
                     if !matches!(p.timed_allow, FeatureAllow::Always) {
                         return Task::none();
                     }
-                    p.chat_item_ttl = Some(secs.max(1));
+                    p.chat_item_ttl = secs.filter(|s| *s > 0);
                 }
                 self.save_contact_chat_item_ttl()
             }
-            Message::CycleContactSendRcpts => {
+            Message::SetContactSendRcpts(value) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                self.pref_menu = None;
                 if let Some(p) = self.contact_profile.as_mut() {
-                    p.send_rcpts = match p.send_rcpts {
-                        None => Some(true),
-                        Some(true) => Some(false),
-                        Some(false) => None,
-                    };
+                    p.send_rcpts = value;
                 }
                 self.save_contact_send_rcpts()
             }
-            Message::CycleContactFullDelete => {
+            Message::SetContactFullDelete(allow) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                self.pref_menu = None;
                 if let Some(p) = self.contact_profile.as_mut() {
-                    p.full_delete_allow = p.full_delete_allow.cycle();
+                    p.full_delete_allow = allow;
                 }
                 self.save_contact_feature_prefs()
             }
-            Message::CycleContactReactions => {
+            Message::SetContactReactions(allow) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                self.pref_menu = None;
                 if let Some(p) = self.contact_profile.as_mut() {
-                    p.reactions_allow = p.reactions_allow.cycle();
+                    p.reactions_allow = allow;
                 }
                 self.save_contact_feature_prefs()
             }
-            Message::CycleContactVoice => {
+            Message::SetContactVoice(allow) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                self.pref_menu = None;
                 if let Some(p) = self.contact_profile.as_mut() {
-                    p.voice_allow = p.voice_allow.cycle();
+                    p.voice_allow = allow;
                 }
                 self.save_contact_feature_prefs()
             }
-            Message::CycleContactCalls => {
+            Message::SetContactCalls(allow) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                self.pref_menu = None;
                 if let Some(p) = self.contact_profile.as_mut() {
-                    p.calls_allow = p.calls_allow.cycle();
+                    p.calls_allow = allow;
                 }
                 self.save_contact_feature_prefs()
             }
@@ -2653,11 +2714,33 @@ impl App {
                 self.open_support_thread(chat.id.api_id, Some(member_id), title, from_list)
             }
             Message::CloseSupportOverlay => self.close_support_overlay(),
-            Message::SupportMembersLoaded(Ok(members)) => {
+            Message::SupportMembersLoaded(Ok(mut members)) => {
+                let aliases: std::collections::HashMap<i64, String> = self
+                    .chats
+                    .iter()
+                    .filter(|c| matches!(c.id.chat_type, ChatType::Direct))
+                    .filter(|c| !c.local_alias.trim().is_empty())
+                    .map(|c| (c.id.api_id, c.local_alias.clone()))
+                    .collect();
+                for m in &mut members {
+                    if let Some(cid) = m.contact_id {
+                        if let Some(alias) = aliases.get(&cid) {
+                            m.display_name = alias.clone();
+                        }
+                    }
+                }
                 if let Some(s) = self.support.as_mut() {
+                    // Official: pending review/approval first, then support threads.
+                    members.sort_by_key(|m| {
+                        (
+                            !member_status_is_pending(&m.status),
+                            m.support_chat.is_none(),
+                            m.display_name.to_ascii_lowercase(),
+                        )
+                    });
                     s.members = members
                         .into_iter()
-                        .filter(|m| m.support_chat.is_some())
+                        .filter(|m| m.support_chat.is_some() || member_status_is_pending(&m.status))
                         .collect();
                     s.members_loading = false;
                 }
@@ -2674,6 +2757,14 @@ impl App {
                 let Some(s) = self.support.as_ref() else {
                     return Task::none();
                 };
+                if s.members
+                    .iter()
+                    .find(|m| m.group_member_id == member_id)
+                    .is_some_and(|m| member_status_is_pending(&m.status))
+                {
+                    self.status = "Accept or reject this member before deleting support chat.".into();
+                    return Task::none();
+                }
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
@@ -2925,7 +3016,22 @@ impl App {
                 self.status = err;
                 Task::none()
             }
-            Message::GroupMembersLoaded(Ok(members)) => {
+            Message::GroupMembersLoaded(Ok(mut members)) => {
+                // Prefer the contact's local alias when this member is linked to a DM.
+                let aliases: std::collections::HashMap<i64, String> = self
+                    .chats
+                    .iter()
+                    .filter(|c| matches!(c.id.chat_type, ChatType::Direct))
+                    .filter(|c| !c.local_alias.trim().is_empty())
+                    .map(|c| (c.id.api_id, c.local_alias.clone()))
+                    .collect();
+                for m in &mut members {
+                    if let Some(cid) = m.contact_id {
+                        if let Some(alias) = aliases.get(&cid) {
+                            m.display_name = alias.clone();
+                        }
+                    }
+                }
                 if let Some(g) = self.group_settings.as_mut() {
                     g.members = members;
                     g.members_loading = false;
@@ -3087,17 +3193,21 @@ impl App {
                 self.status = err;
                 Task::none()
             }
-            Message::GroupMemberRemove { with_messages } => {
-                let Some(g) = self.group_settings.as_ref() else {
-                    return Task::none();
-                };
-                let Some(member_id) = g.selected_member_id else {
+            Message::GroupMemberRemove {
+                member_id,
+                with_messages,
+            } => {
+                let group_id = self
+                    .group_settings
+                    .as_ref()
+                    .map(|g| g.group_id)
+                    .or_else(|| self.support.as_ref().map(|s| s.group_id));
+                let Some(group_id) = group_id else {
                     return Task::none();
                 };
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
-                let group_id = g.group_id;
                 if let Some(g) = self.group_settings.as_mut() {
                     g.member_dropdown = None;
                 }
@@ -3181,18 +3291,24 @@ impl App {
                 self.status = err;
                 Task::none()
             }
-            Message::GroupMemberAccept => {
-                let Some(g) = self.group_settings.as_ref() else {
-                    return Task::none();
-                };
-                let Some(member_id) = g.selected_member_id else {
+            Message::GroupMemberAccept { member_id, role } => {
+                let group_id = self
+                    .group_settings
+                    .as_ref()
+                    .map(|g| g.group_id)
+                    .or_else(|| self.support.as_ref().map(|s| s.group_id));
+                let Some(group_id) = group_id else {
                     return Task::none();
                 };
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
+                if let Some(g) = self.group_settings.as_mut() {
+                    g.member_dropdown = None;
+                }
+                self.status = format!("Accepting as {role}…");
                 Task::perform(
-                    accept_group_member(session, g.group_id, member_id, "member".into()),
+                    accept_group_member(session, group_id, member_id, role),
                     Message::GroupMemberAccepted,
                 )
             }
@@ -3216,50 +3332,53 @@ impl App {
                 }
                 Task::none()
             }
-            Message::GroupPrefToggle(key) => {
+            Message::GroupPrefSet(key, on) => {
                 if let Some(g) = self.group_settings.as_mut() {
-                    toggle_group_pref(&mut g.group_preferences, key);
+                    set_group_pref(&mut g.group_preferences, key, on);
                     g.dirty = true;
                 }
-                // Persist immediately — waiting on “Save preferences” felt broken.
                 self.update(Message::SaveGroupPreferences)
             }
             Message::SetGroupTimedTtl(secs) => {
+                self.pref_menu = None;
                 if let Some(g) = self.group_settings.as_mut() {
-                    if !group_pref_on(g.group_preferences.as_ref(), "timedMessages") {
-                        return Task::none();
-                    }
-                    let obj = g
-                        .group_preferences
-                        .get_or_insert_with(|| serde_json::json!({}))
-                        .as_object_mut();
-                    if let Some(obj) = obj {
-                        let entry = obj
-                            .entry("timedMessages".to_string())
-                            .or_insert_with(|| serde_json::json!({ "enable": "on" }));
-                        if let Some(map) = entry.as_object_mut() {
-                            map.insert("enable".into(), serde_json::Value::String("on".into()));
-                            map.insert(
-                                "ttl".into(),
-                                serde_json::Value::Number(secs.max(1).into()),
-                            );
+                    match secs {
+                        None => {
+                            set_group_pref(&mut g.group_preferences, "timedMessages", false);
+                        }
+                        Some(secs) => {
+                            set_group_pref(&mut g.group_preferences, "timedMessages", true);
+                            let obj = g
+                                .group_preferences
+                                .get_or_insert_with(|| serde_json::json!({}))
+                                .as_object_mut();
+                            if let Some(obj) = obj {
+                                let entry = obj
+                                    .entry("timedMessages".to_string())
+                                    .or_insert_with(|| serde_json::json!({ "enable": "on" }));
+                                if let Some(map) = entry.as_object_mut() {
+                                    map.insert(
+                                        "enable".into(),
+                                        serde_json::Value::String("on".into()),
+                                    );
+                                    map.insert(
+                                        "ttl".into(),
+                                        serde_json::Value::Number(secs.max(1).into()),
+                                    );
+                                }
+                            }
                         }
                     }
                     g.dirty = true;
                 }
                 self.update(Message::SaveGroupPreferences)
             }
-            Message::GroupAdmissionToggle => {
+            Message::GroupAdmissionSet(on) => {
                 if let Some(g) = self.group_settings.as_mut() {
-                    let on = g
-                        .member_admission
-                        .as_ref()
-                        .and_then(|v| v.get("review"))
-                        .is_some();
                     g.member_admission = if on {
-                        None
-                    } else {
                         Some(serde_json::json!({ "review": "all" }))
+                    } else {
+                        None
                     };
                     g.dirty = true;
                 }
@@ -5754,6 +5873,25 @@ impl App {
         self.group_settings.as_ref()
     }
 
+    pub(crate) fn pref_menu(&self) -> Option<PrefMenu> {
+        self.pref_menu
+    }
+
+    /// Pending joiner currently scoped in a member-support thread.
+    pub(crate) fn pending_support_member(&self) -> Option<&GroupMemberInfo> {
+        let s = self.support.as_ref()?;
+        let SupportPane::Thread {
+            member_id: Some(mid),
+            ..
+        } = &s.pane
+        else {
+            return None;
+        };
+        s.members
+            .iter()
+            .find(|m| m.group_member_id == *mid && member_status_is_pending(&m.status))
+    }
+
     pub(crate) fn active_call(&self) -> Option<&CallInfo> {
         self.active_call.as_ref()
     }
@@ -5829,6 +5967,22 @@ impl App {
         self.selected
             .and_then(|i| self.chats.get(i))
             .is_some_and(|c| matches!(c.id.chat_type, ChatType::Group) && !c.is_channel)
+    }
+
+    /// Prefer a linked contact's local alias over the raw member display name.
+    pub(crate) fn member_display_name(&self, sender: &cursus_core::MessageSender) -> String {
+        if let Some(cid) = sender.contact_id {
+            if let Some(alias) = self
+                .chats
+                .iter()
+                .find(|c| matches!(c.id.chat_type, ChatType::Direct) && c.id.api_id == cid)
+                .map(|c| c.local_alias.trim())
+                .filter(|s| !s.is_empty())
+            {
+                return alias.to_string();
+            }
+        }
+        sender.display_name.clone()
     }
 
     pub(crate) fn selected_is_direct(&self) -> bool {
@@ -7244,34 +7398,25 @@ fn cycle_link_joiner_role(current: &str) -> String {
     LINK_ROLES[idx].to_string()
 }
 
-fn toggle_group_pref(prefs: &mut Option<serde_json::Value>, key: &str) {
+fn set_group_pref(prefs: &mut Option<serde_json::Value>, key: &str, turn_on: bool) {
     let obj = prefs
         .get_or_insert_with(|| serde_json::json!({}))
         .as_object_mut();
     let Some(obj) = obj else {
         return;
     };
-    // Support defaults to on in SimpleX when omitted — seed that so the first
-    // toggle turns it off instead of writing a redundant "on".
-    let default_enable = if key == "support" { "on" } else { "off" };
     let role_pref = matches!(
         key,
         "directMessages" | "voice" | "files" | "simplexLinks" | "sessions"
     );
     let entry = obj.entry(key.to_string()).or_insert_with(|| {
         if role_pref {
-            serde_json::json!({ "enable": default_enable, "role": "member" })
+            serde_json::json!({ "enable": "off", "role": "member" })
         } else {
-            serde_json::json!({ "enable": default_enable })
+            serde_json::json!({ "enable": "off" })
         }
     });
-    let on = entry
-        .get("enable")
-        .and_then(|v| v.as_str())
-        .map(|s| s.eq_ignore_ascii_case("on"))
-        .unwrap_or(key == "support");
     if let Some(map) = entry.as_object_mut() {
-        let turn_on = !on;
         map.insert(
             "enable".into(),
             serde_json::Value::String(if turn_on { "on" } else { "off" }.into()),
@@ -7481,12 +7626,24 @@ pub(crate) fn group_support_allowed(prefs: Option<&serde_json::Value>) -> bool {
         .unwrap_or(true)
 }
 
-/// Invited (not yet connected) members get a pending glyph; connected/complete get none.
+/// Invite outstanding / connecting — clock glyph, no Accept yet.
 pub(crate) fn member_status_is_invited(status: &str) -> bool {
     matches!(
         status.to_ascii_lowercase().as_str(),
         "invited" | "intro-inv"
     )
+}
+
+/// Host/moderator must Accept (`/_accept member`) — same clock glyph + Accept/Reject actions.
+pub(crate) fn member_status_is_pending(status: &str) -> bool {
+    matches!(
+        status.to_ascii_lowercase().as_str(),
+        "pending_approval" | "pending_review"
+    )
+}
+
+pub(crate) fn member_status_shows_pending_icon(status: &str) -> bool {
+    member_status_is_pending(status) || member_status_is_invited(status)
 }
 
 pub(crate) fn can_manage_members(my_role: &str) -> bool {
@@ -8191,4 +8348,37 @@ async fn accept_invite(session: Arc<Session>, link: String) -> Result<String, St
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod member_status_tests {
+    use super::{
+        member_status_is_invited, member_status_is_pending, member_status_shows_pending_icon,
+    };
+
+    #[test]
+    fn pending_is_approval_or_review_only() {
+        assert!(member_status_is_pending("pending_approval"));
+        assert!(member_status_is_pending("pending_review"));
+        assert!(!member_status_is_pending("invited"));
+        assert!(!member_status_is_pending("connected"));
+        assert!(!member_status_is_pending("complete"));
+        assert!(!member_status_is_pending("intro-inv"));
+    }
+
+    #[test]
+    fn invited_is_not_accept_member() {
+        assert!(member_status_is_invited("invited"));
+        assert!(member_status_is_invited("intro-inv"));
+        assert!(!member_status_is_invited("pending_approval"));
+        assert!(!member_status_is_invited("connected"));
+    }
+
+    #[test]
+    fn pending_icon_covers_both_states() {
+        assert!(member_status_shows_pending_icon("pending_approval"));
+        assert!(member_status_shows_pending_icon("invited"));
+        assert!(!member_status_shows_pending_icon("connected"));
+        assert!(!member_status_shows_pending_icon("complete"));
+    }
 }

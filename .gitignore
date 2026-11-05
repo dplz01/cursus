@@ -6,6 +6,10 @@
 /third_party/libsimplex/**
 !/third_party/libsimplex/.gitkeep
 
+# Downloaded UI fonts (./scripts/fetch-fonts.sh)
+/linux/assets/fonts/**
+!/linux/assets/fonts/.gitkeep
+
 # Local IDE / env
 .env
 .idea/

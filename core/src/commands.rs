@@ -171,14 +171,23 @@ impl Commands {
         format!("/_unread chat {} {flag}", chat.command_ref())
     }
 
-    /// Update favorite / notification settings (`/_settings {ref} {json}`).
+    /// Update favorite / notification / receipt settings (`/_settings {ref} {json}`).
     pub fn set_chat_settings(chat: &ChatId, settings: &ChatSettings) -> String {
         let payload = serde_json::json!({
             "enableNtfs": settings.enable_ntfs.as_api(),
-            "sendRcpts": null,
+            "sendRcpts": settings.send_rcpts,
             "favorite": settings.favorite,
         });
         format!("/_settings {} {payload}", chat.command_ref())
+    }
+
+    /// Per-chat local message TTL (`/_ttl {userId} {ref} {seconds|default}`).
+    /// `None` restores the user default (not “never”).
+    pub fn set_chat_ttl(user_id: i64, chat: &ChatId, seconds: Option<i64>) -> String {
+        match seconds {
+            Some(secs) => format!("/_ttl {user_id} {} {secs}", chat.command_ref()),
+            None => format!("/_ttl {user_id} {} default", chat.command_ref()),
+        }
     }
 
     /// Clear chat history (`/_clear chat {ref}`).

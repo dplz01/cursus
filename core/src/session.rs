@@ -502,6 +502,11 @@ impl Session {
         self.send(&Commands::set_chat_settings(chat, settings))
     }
 
+    /// Per-chat local wipe TTL (`/_ttl …`). `None` = restore user default.
+    pub fn set_chat_ttl(&self, chat: &ChatId, seconds: Option<i64>) -> Result<Value> {
+        self.send(&Commands::set_chat_ttl(self.user_id()?, chat, seconds))
+    }
+
     pub fn clear_chat(&self, chat: &ChatId) -> Result<Value> {
         self.send(&Commands::clear_chat(chat))
     }
@@ -1138,6 +1143,11 @@ fn parse_one_chat(chat: &Value) -> Option<ChatPreview> {
         .pointer("/chatStats/unreadChat")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let chat_item_ttl = info
+        .pointer("/contact/chatItemTTL")
+        .or_else(|| info.pointer("/groupInfo/chatItemTTL"))
+        .or_else(|| info.get("chatItemTTL"))
+        .and_then(|v| v.as_i64());
 
     Some(ChatPreview {
         id: ChatId::new(chat_type, api_id),
@@ -1147,6 +1157,7 @@ fn parse_one_chat(chat: &Value) -> Option<ChatPreview> {
         unread_chat,
         settings,
         tag_ids,
+        chat_item_ttl,
         pending_request_id,
         peer_profile,
         local_alias,
@@ -1395,9 +1406,17 @@ fn parse_chat_settings(value: Option<&Value>) -> ChatSettings {
         .get("favorite")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let send_rcpts = value.get("sendRcpts").and_then(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_bool()
+        }
+    });
     ChatSettings {
         enable_ntfs,
         favorite,
+        send_rcpts,
     }
 }
 

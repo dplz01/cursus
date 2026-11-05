@@ -52,6 +52,7 @@ mod tests {
             unread_chat: false,
             settings: ChatSettings::default(),
             tag_ids: Vec::new(),
+            chat_item_ttl: None,
             pending_request_id: None,
             peer_profile: ProfileFields::default(),
             local_alias: String::new(),

@@ -90,7 +90,21 @@ Leave / session-leave icon: **Gitlab Interface Icons** by Gitlab (MIT), via [SVG
 
 Clear-all icon: **Keyicons Interface Icons** by Elnodos (CC Attribution), via [SVG Repo](https://www.svgrepo.com/svg/375990/clear-all).
 
-Mute and preferences icons: **Element Plus Line Interface Icons** by element-plus (MIT), mute via [SVG Repo](https://www.svgrepo.com/svg/500636/mute-notification); preferences uses the pack’s Tools glyph.
+Mute icon: outline bell-slash redrawn at 24×24 / stroke 1.5 to match Solar Linear `settings.svg` weight (replaces the heavier Element Plus filled mute). Preferences header actions use the same `settings.svg` as the main nav.
+
+Member role / action menus:
+| File | Source | Pack / author | License |
+|---|---|---|---|
+| `actions-new-window.svg` | [svgrepo/317846](https://www.svgrepo.com/svg/317846/actions-new-window) | Simple UI Line Icons / Petr Bilek | **Public Domain (PD)** |
+| `block-prohibited.svg` | [svgrepo/457013](https://www.svgrepo.com/svg/457013/block-prohibited) | Atlas Variety Line Icons / Vectopus | **MIT** |
+| `remove-profile.svg` | [svgrepo/487730](https://www.svgrepo.com/svg/487730/remove-profile) | Neuicons Oval Line Icons / Neuicons | **MIT** |
+| `eye-observer.svg` | [svgrepo/532493](https://www.svgrepo.com/svg/532493/eye) | Dazzle Line Icons / Dazzle UI | **CC Attribution** |
+| `shield-check.svg` | [svgrepo/532329](https://www.svgrepo.com/svg/532329/shield-check) | Dazzle Line Icons / Dazzle UI | **CC Attribution** |
+| `admin-role.svg` | [svgrepo/346492](https://www.svgrepo.com/svg/346492/admin) | Remix Line Interface Icons / Remix Design | **Apache License** |
+| `owner.svg` | [svgrepo/309813](https://www.svgrepo.com/svg/309813/owner) | Fluent UI Icons Outlined / Microsoft | **MIT** |
+| `user-member.svg` | same as `user-alt-1.svg` | Dazzle Line Icons / Dazzle UI | **CC Attribution** |
+| `user-plus-alt-1.svg` | [svgrepo/532381](https://www.svgrepo.com/svg/532381/user-plus-alt-1) | Dazzle Line Icons / Dazzle UI | **CC Attribution** |
+| `system-pending-line.svg` | [svgrepo/486094](https://www.svgrepo.com/svg/486094/system-pending-line) | Bicons Sharp UI Icons / SVG Repo | **CC0** |
 
 Suggested credit line (also shown in Settings):
 

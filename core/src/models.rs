@@ -148,6 +148,8 @@ impl NtfFilter {
 pub struct ChatSettings {
     pub enable_ntfs: NtfFilter,
     pub favorite: bool,
+    /// Per-chat send receipts override; `None` = user default.
+    pub send_rcpts: Option<bool>,
 }
 
 impl Default for ChatSettings {
@@ -155,6 +157,7 @@ impl Default for ChatSettings {
         Self {
             enable_ntfs: NtfFilter::All,
             favorite: false,
+            send_rcpts: None,
         }
     }
 }
@@ -176,6 +179,9 @@ pub struct ChatPreview {
     pub unread_chat: bool,
     pub settings: ChatSettings,
     pub tag_ids: Vec<i64>,
+    /// Per-chat local “delete messages after” (`chatItemTTL` / APISetChatTTL).
+    /// One-way wipe from this device — not negotiated disappearing messages.
+    pub chat_item_ttl: Option<i64>,
     /// Present when this direct chat is still an inbound address request.
     /// Accept with `/_accept <id>` before sending is allowed.
     pub pending_request_id: Option<i64>,

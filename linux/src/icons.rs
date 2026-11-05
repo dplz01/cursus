@@ -500,6 +500,35 @@ pub fn composer_tool_icon<'a>(
     icon.into()
 }
 
+/// Profile / member chrome — every glyph is the same optical size as
+/// `settings.svg` (24×24, stroke 1.5). `ContentFit::Contain` into a fixed
+/// glyph box so 800px / 1024 viewBox assets cannot look bigger than settings.
+pub fn profile_tool_icon<'a>(
+    handle: svg::Handle,
+    hit: f32,
+    idle: Color,
+    hot: Color,
+    hover_ok: bool,
+) -> Element<'a, Message> {
+    const GLYPH: f32 = 20.0;
+    let icon: Svg<'a, iced::Theme> = svg(handle)
+        .width(Length::Fixed(GLYPH))
+        .height(Length::Fixed(GLYPH))
+        .content_fit(ContentFit::Contain)
+        .style(move |_, status| svg::Style {
+            color: Some(match status {
+                svg::Status::Hovered if hover_ok => hot,
+                _ => idle,
+            }),
+        });
+    container(icon)
+        .width(hit)
+        .height(hit)
+        .center_x(hit)
+        .center_y(hit)
+        .into()
+}
+
 pub fn plus_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     composer_tool_icon(
         svg::Handle::from_memory(include_bytes!("../assets/icons/plus.svg").as_slice()),
@@ -517,6 +546,228 @@ pub fn mic_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
         theme::t().text_secondary,
         theme::t().text_primary,
         hover_ok,
+    )
+}
+
+/// Header chrome tools — same optical size / stroke as the main-page settings gear.
+pub fn back_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
+    profile_tool_icon(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/back.svg").as_slice()),
+        hit,
+        theme::t().text_secondary,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn phone_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
+    profile_tool_icon(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/calls.svg").as_slice()),
+        hit,
+        theme::t().text_secondary,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn star_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Message> {
+    let idle = if active {
+        theme::t().accent
+    } else {
+        theme::t().text_secondary
+    };
+    profile_tool_icon(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/star.svg").as_slice()),
+        hit,
+        idle,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn mute_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Message> {
+    let idle = if active {
+        theme::t().accent
+    } else {
+        theme::t().text_secondary
+    };
+    profile_tool_icon(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/mute-notification.svg").as_slice()),
+        hit,
+        idle,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn preferences_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
+    settings_tool(hit, hover_ok)
+}
+
+pub fn settings_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
+    profile_tool_icon(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/settings.svg").as_slice()),
+        hit,
+        theme::t().text_secondary,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn admin_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Message> {
+    let idle = if active {
+        theme::t().accent
+    } else {
+        theme::t().text_secondary
+    };
+    profile_tool_icon(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/admin.svg").as_slice()),
+        hit,
+        idle,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn receipt_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
+    profile_tool_icon(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/check-read.svg").as_slice()),
+        hit,
+        theme::t().text_secondary,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn user_member_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/user-member.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
+pub fn user_member_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
+    profile_tool_icon(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/user-member.svg").as_slice()),
+        hit,
+        theme::t().text_secondary,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+/// Role-button glyph matching the member's current privilege.
+pub fn role_tool<'a>(role: &str, hit: f32, hover_ok: bool) -> Element<'a, Message> {
+    let bytes: &'static [u8] = match role.to_ascii_lowercase().as_str() {
+        "observer" => include_bytes!("../assets/icons/eye-observer.svg"),
+        "moderator" => include_bytes!("../assets/icons/shield-check.svg"),
+        "admin" => include_bytes!("../assets/icons/admin-role.svg"),
+        "owner" => include_bytes!("../assets/icons/owner.svg"),
+        _ => include_bytes!("../assets/icons/user-member.svg"),
+    };
+    profile_tool_icon(
+        svg::Handle::from_memory(bytes),
+        hit,
+        theme::t().text_secondary,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn actions_menu_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
+    profile_tool_icon(
+        svg::Handle::from_memory(
+            include_bytes!("../assets/icons/actions-new-window.svg").as_slice(),
+        ),
+        hit,
+        theme::t().text_secondary,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn user_plus_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
+    profile_tool_icon(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/user-plus-alt-1.svg").as_slice()),
+        hit,
+        theme::t().text_secondary,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn pending_status_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(
+            include_bytes!("../assets/icons/system-pending-line.svg").as_slice(),
+        ),
+        color,
+        size,
+    )
+}
+
+pub fn observer_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/eye-observer.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
+pub fn member_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    user_member_icon(size, color)
+}
+
+pub fn moderator_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/shield-check.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
+pub fn admin_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/admin-role.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
+pub fn owner_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/owner.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
+pub fn role_icon<'a>(role: &str, size: f32, color: Color) -> Element<'a, Message> {
+    match role {
+        "observer" => observer_role_icon(size, color),
+        "moderator" => moderator_role_icon(size, color),
+        "admin" => admin_role_icon(size, color),
+        "owner" => owner_role_icon(size, color),
+        _ => member_role_icon(size, color),
+    }
+}
+
+pub fn block_prohibited_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(
+            include_bytes!("../assets/icons/block-prohibited.svg").as_slice(),
+        ),
+        color,
+        size,
+    )
+}
+
+pub fn remove_profile_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/remove-profile.svg").as_slice()),
+        color,
+        size,
     )
 }
 

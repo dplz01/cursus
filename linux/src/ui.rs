@@ -28,8 +28,8 @@ use crate::media;
 use crate::theme;
 use crate::{
     can_edit_group_profile, can_manage_members, can_moderate, group_pref_on, group_support_allowed,
-    App, AuthScreen, ChatMenuAction, ChatMenuPane, CreateKind, GroupSettingsPane, Message,
-    MsgMenuAction, MsgMenuPane, SupportPane,
+    member_status_is_invited, App, AuthScreen, ChatMenuAction, ChatMenuPane, CreateKind,
+    GroupSettingsPane, Message, MsgMenuAction, MsgMenuPane, SupportPane,
 };
 
 /// Color-emoji family — use for glyph chips so ❤ becomes the red ❤️.
@@ -40,13 +40,9 @@ fn no_bar() -> Scrollbar {
     Scrollbar::new().width(0).scroller_width(0).margin(0)
 }
 
-/// Compact round back control for mobile push headers.
+/// Header back — same hit language as composer file/rec/send (squarish, icon glow).
 fn mobile_back_btn(on_press: Message, hover: bool) -> Element<'static, Message> {
-    button(icons::centered_hit(icons::back_icon(16.0), 32.0))
-        .on_press(on_press)
-        .padding(0)
-        .style(theme::round_icon(hover))
-        .into()
+    composer_hit(icons::back_tool(32.0, hover), 32.0, on_press)
 }
 
 /// Composer tool hit — press fires immediately (before OSK dismiss steals the
@@ -861,21 +857,16 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
             || app.support_badge_count(chat) > 0)
     {
         let badge = app.support_badge_count(chat);
-        let tint = if badge > 0 {
-            theme::t().always
-        } else {
-            theme::t().text_secondary
-        };
         let open = if can_moderate(chat.membership_role.as_deref().unwrap_or("member")) {
             Message::OpenSupportChatList
         } else {
             Message::OpenUserSupportChat
         };
-        button(icons::centered_hit(icons::admin_icon(18.0, tint), 36.0))
-            .on_press(open)
-            .padding(0)
-            .style(theme::round_icon(app.hover_ok()))
-            .into()
+        composer_hit(
+            icons::admin_tool(36.0, badge > 0, app.hover_ok()),
+            36.0,
+            open,
+        )
     } else {
         horizontal().width(0).into()
     };
@@ -2767,17 +2758,13 @@ fn visual_media_preview<'a>(
     const PREVIEW_MAX_W: u32 = 220;
     const PREVIEW_MAX_H: u32 = 280;
     const RADIUS: f32 = 12.0;
-    // Memory caches only. Disk/ffmpeg warm happens in WarmChatMedia / Visuals.
+    // Videos: placeholder only (ffmpeg posters were unreliable on ARM — do not
+    // regenerate). Stills still use the rounded image preview cache.
     let prepared = if is_video {
-        app.image_preview_for(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)
-            .or_else(|| {
-                app.video_thumb_for(&path)
-                    .map(|src| (src, PREVIEW_MAX_W, PREVIEW_MAX_H * 2 / 3))
-            })
+        None
     } else {
         app.image_preview_for(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)
     };
-    let has_poster = prepared.is_some();
     let (w, h, face): (f32, f32, Element<'a, Message>) = if let Some((display_path, pw, ph)) =
         prepared
     {
@@ -2789,7 +2776,7 @@ fn visual_media_preview<'a>(
             .content_fit(ContentFit::Contain);
         (w, h, thumb.into())
     } else {
-        // Still / poster not ready — shrink-wrapped placeholder.
+        // Still not ready / video placeholder.
         let w = 160.0;
         let h = 120.0;
         let glyph = if is_video {
@@ -2816,18 +2803,6 @@ fn visual_media_preview<'a>(
         .width(Length::Fixed(w))
         .height(Length::Fixed(h))
         .push(face);
-    if is_video && has_poster {
-        stack = stack.push(
-            container(icons::centered_hit(
-                icons::play_icon(26.0, Color::WHITE),
-                48.0,
-            ))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill),
-        );
-    }
     // Floating time + receipt on the image (bare — no chip).
     stack = stack.push(
         container(bubble_time_meta(msg, d))
@@ -4068,17 +4043,16 @@ fn chat_list_avatar<'a>(chat: &cursus_core::ChatPreview, size: f32) -> Element<'
         .into()
 }
 
+/// Squarish header action — same 32px hit as mobile back / member menus.
 fn round_header_icon_btn(
     icon: Element<'static, Message>,
     on_press: Message,
-    hover: bool,
+    _hover: bool,
 ) -> Element<'static, Message> {
-    button(icons::centered_hit(icon, 36.0))
-        .on_press(on_press)
-        .padding(0)
-        .style(theme::round_icon(hover))
-        .into()
+    composer_hit(icon, 32.0, on_press)
 }
+
+const PROFILE_HEADER_ICON: f32 = 32.0;
 
 /// Title on the left; round actions flush to the right edge.
 fn profile_header_bar<'a>(
@@ -4116,37 +4090,36 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
         return vertical().height(0).into();
     };
 
+    if matches!(p.pane, crate::ContactProfilePane::Preferences) {
+        return contact_preferences_page(app, p, with_back);
+    }
+
     let display = if p.fields.display_name.is_empty() {
         p.title.clone()
     } else {
         p.fields.display_name.clone()
     };
 
-    let mute_tint = if p.muted {
-        theme::t().accent
-    } else {
-        theme::t().text_secondary
-    };
-    let fav_tint = if p.favorite {
-        theme::t().accent
-    } else {
-        theme::t().text_secondary
-    };
-    // Order: call, favorite, mute — flush right.
+    // Order: call, favorite, mute, settings — flush right.
     let header_actions = row![
         round_header_icon_btn(
-            icons::phone_icon(18.0, theme::t().text_secondary),
+            icons::phone_tool(PROFILE_HEADER_ICON, hover),
             Message::StartAudioCall(p.contact_id),
             hover,
         ),
         round_header_icon_btn(
-            icons::star_icon(18.0, fav_tint),
+            icons::star_tool(PROFILE_HEADER_ICON, p.favorite, hover),
             Message::ContactProfileFavorite,
             hover,
         ),
         round_header_icon_btn(
-            icons::mute_icon(18.0, mute_tint),
+            icons::mute_tool(PROFILE_HEADER_ICON, p.muted, hover),
             Message::ContactProfileMute,
+            hover,
+        ),
+        round_header_icon_btn(
+            icons::settings_tool(PROFILE_HEADER_ICON, hover),
+            Message::OpenContactPreferences,
             hover,
         ),
     ]
@@ -4220,23 +4193,110 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
     let narrow = matches!(app.layout(), LayoutMode::Mobile) || app.window_width() < 720.0;
     body = body.push(vertical().height(6));
     body = body.push(
-        text("Chat features")
-            .size(d.meta)
-            .color(theme::t().text_muted),
-    );
-    body = body.push(
-        text("Tap to cycle no → yes → always. Peer icon: red / green / gold.")
-            .size(d.meta)
-            .color(theme::t().text_secondary),
-    );
-    body = body.push(contact_feature_prefs(p, d, hover));
-    body = body.push(vertical().height(6));
-    body = body.push(
         text("Chat actions")
             .size(d.meta)
             .color(theme::t().text_muted),
     );
     body = body.push(contact_danger_actions(d, hover, narrow));
+
+    column![
+        header,
+        scroll_y(body.padding(Padding {
+            top: d.pad_tight,
+            right: d.pad,
+            bottom: d.pad,
+            left: d.pad,
+        })),
+    ]
+    .height(Length::Fill)
+    .into()
+}
+
+fn contact_preferences_page<'a>(
+    app: &'a App,
+    p: &'a crate::ContactProfileOverlay,
+    with_back: bool,
+) -> Element<'a, Message> {
+    let d = app.density();
+    let hover = app.hover_ok();
+    let leading: Element<'_, Message> = if with_back {
+        row![
+            mobile_back_btn(Message::CloseContactPreferences, hover),
+            text("Preferences")
+                .size(d.title)
+                .color(theme::t().text_primary)
+                .width(Length::Fill),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        row![
+            mobile_back_btn(Message::CloseContactPreferences, hover),
+            text("Preferences")
+                .size(d.title)
+                .color(theme::t().text_primary)
+                .width(Length::Fill),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .into()
+    };
+    let header = profile_header_bar(leading, Space::new().width(0).into(), d, true);
+
+    let rcpt_label = match p.send_rcpts {
+        None => "default",
+        Some(true) => "on",
+        Some(false) => "off",
+    };
+    let mut body = Column::new().spacing(8).width(Length::Fill);
+    body = body.push(
+        text("Chat features")
+            .size(d.meta)
+            .color(theme::t().text_muted),
+    );
+    body = body.push(
+        text("Tap chips to cycle. Peer icon: red / green / gold.")
+            .size(d.meta)
+            .color(theme::t().text_secondary),
+    );
+    body = body.push(
+        container(
+            row![
+                icons::receipt_tool(PROFILE_HEADER_ICON, hover),
+                text("Send receipts")
+                    .size(d.body)
+                    .color(theme::t().text_primary)
+                    .width(Length::Fill),
+                mouse_area(
+                    container(
+                        text(rcpt_label)
+                            .size(d.meta)
+                            .color(theme::t().text_primary),
+                    )
+                    .padding(Padding::from([6, 10]))
+                    .style(|_| {
+                        let c = theme::t();
+                        container::Style {
+                            background: Some(iced::Background::Color(c.bg_elevated)),
+                            border: iced::Border {
+                                color: c.border,
+                                width: 1.0,
+                                radius: 8.0.into(),
+                            },
+                            ..container::Style::default()
+                        }
+                    }),
+                )
+                .on_release(Message::CycleContactSendRcpts),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .padding(Padding::from([10, 8])),
+        )
+        .width(Length::Fill),
+    );
+    body = body.push(contact_feature_prefs(p, d, hover));
 
     column![
         header,
@@ -4590,7 +4650,7 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
                         .color(theme::t().text_primary)
                         .width(Length::Fill),
                     round_header_icon_btn(
-                        icons::phone_icon(18.0, theme::t().text_secondary),
+                        icons::phone_tool(PROFILE_HEADER_ICON, hover),
                         Message::StartAudioCall(contact_id),
                         hover,
                     ),
@@ -4646,21 +4706,20 @@ fn profile_photo_actions(
     hover: bool,
 ) -> Element<'static, Message> {
     let tint = theme::t().text_secondary;
+    let hit = PROFILE_HEADER_ICON;
     row![
-        button(icons::centered_hit(
-            icons::image_pen_icon(20.0, tint),
-            36.0,
-        ))
-        .on_press(pick)
-        .padding(0)
-        .style(theme::secondary_action(hover)),
-        button(icons::centered_hit(
-            icons::cancel_icon(18.0, tint),
-            36.0,
-        ))
-        .on_press_maybe(if has_image { Some(clear) } else { None })
-        .padding(0)
-        .style(theme::secondary_action(hover)),
+        button(icons::centered_hit(icons::image_pen_icon(18.0, tint), hit))
+            .on_press(pick)
+            .padding(0)
+            .width(hit)
+            .height(hit)
+            .style(theme::secondary_action(hover)),
+        button(icons::centered_hit(icons::cancel_icon(18.0, tint), hit))
+            .on_press_maybe(if has_image { Some(clear) } else { None })
+            .padding(0)
+            .width(hit)
+            .height(hit)
+            .style(theme::secondary_action(hover)),
     ]
     .spacing(6)
     .align_y(Alignment::Center)
@@ -4686,29 +4745,19 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
     let nested = !matches!(g.pane, GroupSettingsPane::Overview);
     let overview = matches!(g.pane, GroupSettingsPane::Overview);
 
-    let mute_tint = if g.muted {
-        theme::t().accent
-    } else {
-        theme::t().text_secondary
-    };
-    let fav_tint = if g.favorite {
-        theme::t().accent
-    } else {
-        theme::t().text_secondary
-    };
     let overview_actions: Element<'_, Message> = row![
         round_header_icon_btn(
-            icons::star_icon(18.0, fav_tint),
+            icons::star_tool(PROFILE_HEADER_ICON, g.favorite, hover),
             Message::GroupSettingsFavorite,
             hover,
         ),
         round_header_icon_btn(
-            icons::mute_icon(18.0, mute_tint),
+            icons::mute_tool(PROFILE_HEADER_ICON, g.muted, hover),
             Message::GroupSettingsMute,
             hover,
         ),
         round_header_icon_btn(
-            icons::preferences_icon(18.0, theme::t().text_secondary),
+            icons::settings_tool(PROFILE_HEADER_ICON, hover),
             Message::OpenGroupPreferences,
             hover,
         ),
@@ -4857,7 +4906,7 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
         }
     };
 
-    column![
+    let page: Element<'_, Message> = column![
         header,
         scroll_y(
             container(body).padding(Padding {
@@ -4869,7 +4918,168 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
         ),
     ]
     .height(Length::Fill)
-    .into()
+    .into();
+
+    if g.member_dropdown.is_some() && g.selected_member_id.is_some() {
+        iced::widget::opaque(
+            Stack::new()
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .push(page)
+                .push(member_dropdown_overlay(g, d, hover)),
+        )
+    } else {
+        page
+    }
+}
+
+fn member_dropdown_overlay(
+    g: &crate::GroupSettingsOverlay,
+    d: Density,
+    hover: bool,
+) -> Element<'_, Message> {
+    let Some(member_id) = g.selected_member_id else {
+        return Space::new().into();
+    };
+    let Some(m) = g.members.iter().find(|x| x.group_member_id == member_id) else {
+        return Space::new().into();
+    };
+    let Some(kind) = g.member_dropdown else {
+        return Space::new().into();
+    };
+    let tint = theme::t().text_secondary;
+    let danger = theme::t().danger;
+    let mut items = Column::new().spacing(4).width(Length::Fill);
+    items = items.push(
+        text(m.display_name.clone())
+            .size(d.meta)
+            .color(theme::t().text_muted),
+    );
+    match kind {
+        crate::MemberDropdown::Role => {
+            let roles: &[&str] = if g.my_role.eq_ignore_ascii_case("owner") {
+                &["observer", "member", "moderator", "admin", "owner"]
+            } else {
+                &["observer", "member", "moderator", "admin"]
+            };
+            for role in roles {
+                if m.role.eq_ignore_ascii_case(role) {
+                    continue;
+                }
+                items = items.push(
+                    button(
+                        row![
+                            icons::role_icon(role, 18.0, tint),
+                            text(format!("make {role}"))
+                                .size(d.body)
+                                .color(theme::t().text_primary),
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press(Message::GroupMemberSetRole((*role).into()))
+                    .padding(Padding::from([10, 12]))
+                    .width(Length::Fill)
+                    .style(theme::menu_item(hover)),
+                );
+            }
+        }
+        crate::MemberDropdown::Actions => {
+            let mod_plus = can_moderate(&g.my_role);
+            let admin = can_manage_members(&g.my_role);
+            if mod_plus
+                && !g.is_channel
+                && (m.support_chat.is_some()
+                    || (group_support_allowed(g.group_preferences.as_ref())
+                        && group_role_rank(&m.role) < group_role_rank("moderator")))
+            {
+                items = items.push(
+                    button(
+                        row![
+                            icons::admin_icon(18.0, tint),
+                            text("Support chat")
+                                .size(d.body)
+                                .color(theme::t().text_primary),
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press(Message::OpenMemberSupportChat {
+                        member_id: m.group_member_id,
+                        title: m.display_name.clone(),
+                    })
+                    .padding(Padding::from([10, 12]))
+                    .width(Length::Fill)
+                    .style(theme::menu_item(hover)),
+                );
+            }
+            if admin {
+                let block_label = if m.blocked_by_admin {
+                    "Unblock for all"
+                } else {
+                    "Block for all"
+                };
+                items = items.push(
+                    button(
+                        row![
+                            icons::block_prohibited_icon(18.0, danger),
+                            text(block_label).size(d.body).color(danger),
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press(Message::GroupMemberToggleBlockAll)
+                    .padding(Padding::from([10, 12]))
+                    .width(Length::Fill)
+                    .style(theme::menu_item(hover)),
+                );
+                items = items.push(
+                    button(
+                        row![
+                            icons::remove_profile_icon(18.0, danger),
+                            text("Remove member").size(d.body).color(danger),
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press(Message::GroupMemberRemove {
+                        with_messages: false,
+                    })
+                    .padding(Padding::from([10, 12]))
+                    .width(Length::Fill)
+                    .style(theme::menu_item(hover)),
+                );
+            }
+        }
+    }
+
+    let card = menu_card(items.into(), d);
+    let backdrop = mouse_area(
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(
+                    0.0, 0.0, 0.0, 0.45,
+                ))),
+                ..container::Style::default()
+            }),
+    )
+    .on_press(Message::CloseMemberDropdown);
+
+    let sheet = container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .padding(Padding::from([24, 20]));
+
+    Stack::new()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .push(backdrop)
+        .push(sheet)
+        .into()
 }
 
 fn group_overview_pane(
@@ -5032,11 +5242,27 @@ fn group_overview_pane(
     }
 
     col = col.push(vertical().height(6));
-    col = col.push(
-        text(format!("Members ({})", g.members.len()))
-            .size(d.meta)
-            .color(theme::t().text_muted),
-    );
+    {
+        let admin = can_manage_members(&g.my_role);
+        let mut members_header = Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(
+                text(format!("Members ({})", g.members.len()))
+                    .size(d.meta)
+                    .color(theme::t().text_muted)
+                    .width(Length::Fill),
+            );
+        // Private groups: invite contacts. Channels use the invite link instead.
+        if admin && !g.is_channel {
+            members_header = members_header.push(composer_hit(
+                icons::user_plus_tool(PROFILE_HEADER_ICON, hover),
+                PROFILE_HEADER_ICON,
+                Message::OpenAddGroupMember,
+            ));
+        }
+        col = col.push(members_header);
+    }
     if g.members_loading {
         col = col.push(
             text("Loading…")
@@ -5050,39 +5276,55 @@ fn group_overview_pane(
                 .color(theme::t().text_muted),
         );
     } else {
+        let admin = can_manage_members(&g.my_role);
+        let mod_plus = can_moderate(&g.my_role);
         for m in &g.members {
             let mid = m.group_member_id;
-            let status = if m.status.is_empty() {
-                String::new()
-            } else {
-                format!(" · {}", m.status)
-            };
-            col = col.push(settings_release_row(
-                row![
-                    text(m.display_name.clone())
-                        .size(d.body)
-                        .color(theme::t().text_primary)
-                        .width(Length::Fill),
-                    text(format!("{}{status}", m.role))
-                        .size(d.meta)
-                        .color(theme::t().text_muted),
-                ]
-                .spacing(8)
+            let invited = member_status_is_invited(&m.status);
+            let mut leading = Row::new()
+                .spacing(6)
                 .align_y(Alignment::Center)
-                .into(),
-                Message::OpenGroupMember(mid),
-            ));
+                .width(Length::Fill);
+            if invited {
+                leading = leading.push(icons::pending_status_icon(
+                    16.0,
+                    theme::t().text_muted,
+                ));
+            }
+            leading = leading.push(
+                text(m.display_name.clone())
+                    .size(d.body)
+                    .color(theme::t().text_primary)
+                    .width(Length::Fill),
+            );
+            let mut actions = Row::new().spacing(4).align_y(Alignment::Center);
+            if admin {
+                // Role button shows this member's current privilege glyph.
+                actions = actions.push(composer_hit(
+                    icons::role_tool(&m.role, PROFILE_HEADER_ICON, hover),
+                    PROFILE_HEADER_ICON,
+                    Message::OpenMemberRoleMenu(mid),
+                ));
+            }
+            if admin || mod_plus {
+                actions = actions.push(composer_hit(
+                    icons::actions_menu_tool(PROFILE_HEADER_ICON, hover),
+                    PROFILE_HEADER_ICON,
+                    Message::OpenMemberActionMenu(mid),
+                ));
+            }
+            // Members are not navigable — manage via the icon menus only.
+            // "connected"/active: no status glyph; invited: pending clock.
+            col = col.push(
+                container(
+                    row![leading, actions]
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                        .padding(Padding::from([8, 4])),
+                )
+                .width(Length::Fill),
+            );
         }
-    }
-    // Private groups: invite contacts directly. Channels (useRelays): core
-    // rejects /_add — share the invite link instead (same as official apps).
-    if admin && !g.is_channel {
-        col = col.push(
-            button(text("Add members").size(d.meta))
-                .on_press(Message::OpenAddGroupMember)
-                .padding(Padding::from([8, 12]))
-                .style(theme::secondary_action(hover)),
-        );
     }
 
     col = col.push(vertical().height(4));
@@ -5120,11 +5362,11 @@ via chat relays. Copy the link below (it must contain /c#).",
             .push(
                 button(icons::centered_hit(
                     icons::copy_icon(18.0, theme::t().text_secondary),
-                    36.0,
+                    PROFILE_HEADER_ICON,
                 ))
                 .on_press(Message::CopyGroupLink)
-                .width(36.0)
-                .height(36.0)
+                .width(PROFILE_HEADER_ICON)
+                .height(PROFILE_HEADER_ICON)
                 .padding(0)
                 .style(theme::icon_action(hover)),
             );
@@ -5132,11 +5374,11 @@ via chat relays. Copy the link below (it must contain /c#).",
             link_row = link_row.push(
                 button(icons::centered_hit(
                     icons::trash_icon(18.0, theme::t().danger),
-                    36.0,
+                    PROFILE_HEADER_ICON,
                 ))
                 .on_press(Message::DeleteGroupLink)
-                .width(36.0)
-                .height(36.0)
+                .width(PROFILE_HEADER_ICON)
+                .height(PROFILE_HEADER_ICON)
                 .padding(0)
                 .style(theme::danger_quiet(hover)),
             );
@@ -5258,11 +5500,21 @@ fn contact_feature_row(
     d: Density,
     _hover: bool,
 ) -> Element<'static, Message> {
-    // Only the yes/no/always value is a hit target (visible chip) so the rest
-    // of the row scrolls freely under a finger.
+    contact_feature_row_labeled(icon, label, you.label(), peer, on_press, d)
+}
+
+fn contact_feature_row_labeled(
+    icon: Element<'static, Message>,
+    label: &'static str,
+    you_label: &'static str,
+    peer: crate::FeatureAllow,
+    on_press: Message,
+    d: Density,
+) -> Element<'static, Message> {
+    // Only the chip value is a hit target so the rest of the row scrolls freely.
     let cycle = mouse_area(
         container(
-            text(you.label())
+            text(you_label)
                 .size(d.meta)
                 .color(theme::t().text_primary),
         )
@@ -5308,31 +5560,40 @@ fn contact_feature_prefs(
     let icon_tint = theme::t().text_secondary;
     let mut col = Column::new().spacing(0).width(Length::Fill);
 
-    col = col.push(contact_feature_row(
+    // Timed chip uses timed_label (“for me” instead of “always”).
+    col = col.push(contact_feature_row_labeled(
         icons::timer_icon(20.0, icon_tint),
         "Disappearing messages",
-        p.timed_allow,
+        p.timed_allow.timed_label(),
         p.timed_contact_allows,
         Message::CycleContactTimedMessages,
         d,
-        hover,
     ));
 
-    if p.timed_allow.is_on() {
+    let show_negotiated_ttl = matches!(p.timed_allow, crate::FeatureAllow::Yes);
+    let show_for_me_ttl = matches!(p.timed_allow, crate::FeatureAllow::Always);
+    if show_negotiated_ttl || show_for_me_ttl {
         col = col.push(
-            text("Delete after")
-                .size(d.meta)
-                .color(theme::t().text_muted)
-                .width(Length::Fill),
+            text(if show_for_me_ttl {
+                "Delete after (this device only)"
+            } else {
+                "Delete after"
+            })
+            .size(d.meta)
+            .color(theme::t().text_muted)
+            .width(Length::Fill),
         );
-        // Two rows so every TTL is visible at once (no cycle).
-        // Release-only chips — `button.on_press` steals the scroll gesture.
         let _ = hover;
+        let current = if show_for_me_ttl {
+            p.chat_item_ttl.unwrap_or(crate::DEFAULT_TIMED_TTL_SECS)
+        } else {
+            p.timed_ttl_secs
+        };
         let mut ttl_col = Column::new().spacing(6).width(Length::Fill);
         for chunk in crate::TIMED_TTL_STEPS.chunks(3) {
             let mut ttl_row = Row::new().spacing(6).width(Length::Fill);
             for &secs in chunk {
-                let selected = p.timed_ttl_secs == secs;
+                let selected = current == secs;
                 let label = text(crate::format_timed_ttl(secs))
                     .size(d.meta)
                     .color(if selected {
@@ -5356,9 +5617,12 @@ fn contact_feature_prefs(
                         ..container::Style::default()
                     }
                 });
-                ttl_row = ttl_row.push(
-                    mouse_area(chip).on_release(Message::SetContactTimedTtl(secs)),
-                );
+                let msg = if show_for_me_ttl {
+                    Message::SetContactChatItemTtl(secs)
+                } else {
+                    Message::SetContactTimedTtl(secs)
+                };
+                ttl_row = ttl_row.push(mouse_area(chip).on_release(msg));
             }
             ttl_col = ttl_col.push(ttl_row);
         }
@@ -5727,7 +5991,7 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
 
 fn pref_yes_no_chip(on: bool, d: Density, on_press: Option<Message>) -> Element<'static, Message> {
     let chip = container(
-        text(if on { "yes" } else { "no" })
+        text(if on { "on" } else { "off" })
             .size(d.meta)
             .color(theme::t().text_primary),
     )
@@ -5989,13 +6253,19 @@ fn group_member_info_pane(
                 .size(d.meta)
                 .color(theme::t().text_muted),
         );
-        for role in ["observer", "member", "moderator", "admin"] {
-            if role == m.role {
+        // Owners may transfer ownership; other admins stop at admin.
+        let roles: &[&str] = if g.my_role.eq_ignore_ascii_case("owner") {
+            &["observer", "member", "moderator", "admin", "owner"]
+        } else {
+            &["observer", "member", "moderator", "admin"]
+        };
+        for role in roles {
+            if *role == m.role {
                 continue;
             }
             col = col.push(
                 button(text(format!("Set {role}")).size(d.meta))
-                    .on_press(Message::GroupMemberSetRole(role.into()))
+                    .on_press(Message::GroupMemberSetRole((*role).into()))
                     .padding(Padding::from([8, 12]))
                     .style(theme::secondary_action(hover)),
             );

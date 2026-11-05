@@ -327,11 +327,21 @@ mod smoke {
         let settings = ChatSettings {
             enable_ntfs: NtfFilter::None,
             favorite: true,
+            send_rcpts: Some(true),
         };
         let settings_cmd = Commands::set_chat_settings(&chat, &settings);
         assert!(settings_cmd.starts_with("/_settings @9 "));
         assert!(settings_cmd.contains(r#""enableNtfs":"none""#));
         assert!(settings_cmd.contains(r#""favorite":true"#));
+        assert!(settings_cmd.contains(r#""sendRcpts":true"#));
+        assert_eq!(
+            Commands::set_chat_ttl(1, &chat, Some(86400)),
+            "/_ttl 1 @9 86400"
+        );
+        assert_eq!(
+            Commands::set_chat_ttl(1, &chat, None),
+            "/_ttl 1 @9 default"
+        );
         assert_eq!(Commands::set_chat_tags(&chat, &[1, 2]), "/_tags @9 1,2");
         assert_eq!(Commands::get_chat_tags(1), "/_get tags 1");
     }

@@ -342,6 +342,16 @@ impl FeatureAllow {
         }
     }
 
+    /// Disappearing-messages chip: SimpleX has no “always” for one-way device
+    /// wipe — that third state is local chatItemTTL, shown as “for me”.
+    pub fn timed_label(self) -> &'static str {
+        match self {
+            Self::No => "no",
+            Self::Yes => "yes",
+            Self::Always => "for me",
+        }
+    }
+
     pub fn is_on(self) -> bool {
         !matches!(self, Self::No)
     }
@@ -358,7 +368,7 @@ impl FeatureAllow {
     pub fn from_str(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
             "yes" | "on" | "true" => Self::Yes,
-            "always" => Self::Always,
+            "always" | "for me" | "forme" => Self::Always,
             _ => Self::No,
         }
     }
@@ -366,6 +376,12 @@ impl FeatureAllow {
     pub fn as_api(self) -> &'static str {
         self.label()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContactProfilePane {
+    Overview,
+    Preferences,
 }
 
 /// Contact / peer profile overlay (direct chats).
@@ -379,12 +395,17 @@ pub struct ContactProfileOverlay {
     pub alias_dirty: bool,
     pub muted: bool,
     pub favorite: bool,
-    /// Disappearing messages — `no` / `yes` / `always`.
+    pub pane: ContactProfilePane,
+    /// Disappearing messages — `no` / `yes` / `always`(=for me / chatItemTTL).
     pub timed_allow: FeatureAllow,
     /// Peer allow for disappearing messages (read-only).
     pub timed_contact_allows: FeatureAllow,
     /// TTL seconds when disappearing messages are on (SimpleX `ttl`).
     pub timed_ttl_secs: i64,
+    /// Local device wipe TTL when timed_allow is Always (“for me”).
+    pub chat_item_ttl: Option<i64>,
+    /// Per-chat send receipts; `None` = user default.
+    pub send_rcpts: Option<bool>,
     /// Full deletion — `no` / `yes` / `always`.
     pub full_delete_allow: FeatureAllow,
     pub full_delete_contact_allows: FeatureAllow,
@@ -476,8 +497,16 @@ pub struct GroupSettingsOverlay {
     pub member_admission: Option<serde_json::Value>,
     pub public_group: Option<serde_json::Value>,
     pub selected_member_id: Option<i64>,
+    /// Inline member role / action menu on the overview list.
+    pub member_dropdown: Option<MemberDropdown>,
     pub pane: GroupSettingsPane,
     pub dirty: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberDropdown {
+    Role,
+    Actions,
 }
 
 #[derive(Debug, Clone)]
@@ -563,6 +592,7 @@ pub fn main() -> iced::Result {
 
     // Prefer Noto Sans as UI font (no dingbat ❤) and register color emoji for
     // Advanced shaping fallback — otherwise hearts render as ugly text glyphs.
+    // Bundled copies come from `./scripts/fetch-fonts.sh` → linux/assets/fonts/.
     //
     // `daemon` (not `application`) so hide-to-tray can close the window on
     // Wayland — Mode::Hidden / set_visible(false) is a no-op there — and keep
@@ -572,15 +602,40 @@ pub fn main() -> iced::Result {
         .theme(|app: &App, _| app.iced_theme())
         .default_font(Font::with_name("Noto Sans"))
         .subscription(App::subscription);
-    for path in [
-        "/usr/share/fonts/noto/NotoColorEmoji.ttf",
-        "/usr/share/fonts/NotoColorEmoji/NotoColorEmoji.ttf",
-        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut roots = vec![manifest.join("assets/fonts")];
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
+        roots.push(dir.join("assets/fonts"));
+        roots.push(dir.join("../assets/fonts"));
+    }
+    roots.push(PathBuf::from("linux/assets/fonts"));
+    roots.push(PathBuf::from("/usr/share/fonts/noto"));
+    roots.push(PathBuf::from("/usr/share/fonts/truetype/noto"));
+    roots.push(PathBuf::from("/usr/share/fonts/NotoColorEmoji"));
+    for file in [
+        "NotoSans-Regular.ttf",
+        "NotoSans-Bold.ttf",
+        "NotoSans-Italic.ttf",
+        "NotoColorEmoji.ttf",
     ] {
-        if let Ok(bytes) = std::fs::read(path) {
-            tracing::info!(path, "loaded emoji font");
-            app = app.font(bytes);
-            break;
+        let mut loaded = false;
+        for root in &roots {
+            let path = root.join(file);
+            if let Ok(bytes) = std::fs::read(&path) {
+                tracing::info!(path = %path.display(), "loaded UI font");
+                app = app.font(bytes);
+                loaded = true;
+                break;
+            }
+        }
+        if !loaded && file == "NotoColorEmoji.ttf" {
+            tracing::warn!(
+                "NotoColorEmoji.ttf missing — run ./scripts/fetch-fonts.sh or install noto-fonts-emoji"
+            );
         }
     }
 
@@ -701,6 +756,8 @@ pub enum Message {
     OpenContactProfile,
     CloseContactProfile,
     CloseContactProfileAfterSave,
+    OpenContactPreferences,
+    CloseContactPreferences,
     ContactAliasChanged(String),
     SaveContactAlias,
     ContactAliasSaved(Result<(), String>),
@@ -708,9 +765,12 @@ pub enum Message {
     ContactProfileFavorite,
     ContactProfileClear,
     ContactProfileDelete,
-    /// Direct-chat feature prefs (contact Chat features) — cycle no/yes/always.
+    /// Direct-chat feature prefs (contact Chat features) — cycle no/yes/always|for me.
     CycleContactTimedMessages,
     SetContactTimedTtl(i64),
+    /// Local “delete messages after” when disappearing is “for me”.
+    SetContactChatItemTtl(i64),
+    CycleContactSendRcpts,
     CycleContactFullDelete,
     CycleContactReactions,
     CycleContactVoice,
@@ -762,6 +822,10 @@ pub enum Message {
     GroupMemberAdded(Result<(), String>),
     OpenGroupMember(i64),
     CloseGroupMember,
+    /// Overview list: role / action icon menus (no member detail navigation).
+    OpenMemberRoleMenu(i64),
+    OpenMemberActionMenu(i64),
+    CloseMemberDropdown,
     GroupMemberSetRole(String),
     GroupMemberRoleDone(Result<(), String>),
     GroupMemberRemove { with_messages: bool },
@@ -819,6 +883,8 @@ pub enum Message {
     DeleteSelected,
     /// Start/stop in-composer voice recording (ffmpeg → m4a draft).
     ToggleVoiceRecord,
+    /// Async mic open finished (Child parked in `voice_rec_slot`).
+    VoiceRecordStarted(Result<(), String>),
     /// Recording stopped — review before send.
     VoiceDraftReady(Result<VoiceDraft, String>),
     SendVoiceDraft,
@@ -954,8 +1020,12 @@ struct App {
     receiving_files: HashSet<i64>,
     /// Auto-receive queue deferred until after the first chat paint.
     pending_auto_receives: Vec<(i64, String)>,
-    /// Active ffmpeg voice capture, if any.
+    /// Active ffmpeg/arecord voice capture, if any.
     voice_rec: Option<VoiceRec>,
+    /// True while `start_voice_recording` runs off the UI thread.
+    voice_arming: bool,
+    /// Hand-off for Child (not Clone) from the arming task.
+    voice_rec_slot: std::sync::Arc<std::sync::Mutex<Option<VoiceRec>>>,
     /// Recorded voice waiting for send/cancel.
     voice_draft: Option<VoiceDraft>,
     /// In-bubble voice playback.
@@ -1135,6 +1205,8 @@ impl App {
                 receiving_files: HashSet::new(),
                 pending_auto_receives: Vec::new(),
                 voice_rec: None,
+                voice_arming: false,
+                voice_rec_slot: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 voice_draft: None,
                 voice_playback: None,
                 waveforms: std::collections::HashMap::new(),
@@ -2261,29 +2333,83 @@ impl App {
                 }
                 Task::none()
             }
+            Message::OpenContactPreferences => {
+                if let Some(p) = self.contact_profile.as_mut() {
+                    p.pane = ContactProfilePane::Preferences;
+                }
+                Task::none()
+            }
+            Message::CloseContactPreferences => {
+                if let Some(p) = self.contact_profile.as_mut() {
+                    p.pane = ContactProfilePane::Overview;
+                }
+                Task::none()
+            }
             Message::CycleContactTimedMessages => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
                 if let Some(p) = self.contact_profile.as_mut() {
                     p.timed_allow = p.timed_allow.cycle();
-                    if p.timed_allow.is_on() && p.timed_ttl_secs <= 0 {
-                        p.timed_ttl_secs = DEFAULT_TIMED_TTL_SECS;
+                    match p.timed_allow {
+                        FeatureAllow::No => {
+                            p.chat_item_ttl = None;
+                        }
+                        FeatureAllow::Yes => {
+                            p.chat_item_ttl = None;
+                            if p.timed_ttl_secs <= 0 {
+                                p.timed_ttl_secs = DEFAULT_TIMED_TTL_SECS;
+                            }
+                        }
+                        FeatureAllow::Always => {
+                            // “for me” — local chatItemTTL, not FeatureAllowed::always.
+                            if p.chat_item_ttl.unwrap_or(0) <= 0 {
+                                p.chat_item_ttl = Some(DEFAULT_TIMED_TTL_SECS);
+                            }
+                        }
                     }
                 }
-                self.save_contact_feature_prefs()
+                Task::batch([
+                    self.save_contact_feature_prefs(),
+                    self.save_contact_chat_item_ttl(),
+                ])
             }
             Message::SetContactTimedTtl(secs) => {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
                 if let Some(p) = self.contact_profile.as_mut() {
-                    if !p.timed_allow.is_on() {
+                    if !matches!(p.timed_allow, FeatureAllow::Yes) {
                         return Task::none();
                     }
                     p.timed_ttl_secs = secs.max(1);
                 }
                 self.save_contact_feature_prefs()
+            }
+            Message::SetContactChatItemTtl(secs) => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
+                if let Some(p) = self.contact_profile.as_mut() {
+                    if !matches!(p.timed_allow, FeatureAllow::Always) {
+                        return Task::none();
+                    }
+                    p.chat_item_ttl = Some(secs.max(1));
+                }
+                self.save_contact_chat_item_ttl()
+            }
+            Message::CycleContactSendRcpts => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
+                if let Some(p) = self.contact_profile.as_mut() {
+                    p.send_rcpts = match p.send_rcpts {
+                        None => Some(true),
+                        Some(true) => Some(false),
+                        Some(false) => None,
+                    };
+                }
+                self.save_contact_send_rcpts()
             }
             Message::CycleContactFullDelete => {
                 if !self.tap_allowed() {
@@ -2425,6 +2551,7 @@ impl App {
                                     unread_chat: false,
                                     settings: ChatSettings::default(),
                                     tag_ids: Vec::new(),
+                                    chat_item_ttl: None,
                                     pending_request_id: None,
                                     peer_profile: peer,
                                     local_alias: String::new(),
@@ -2515,6 +2642,9 @@ impl App {
                 };
                 if !matches!(chat.id.chat_type, ChatType::Group) {
                     return Task::none();
+                }
+                if let Some(g) = self.group_settings.as_mut() {
+                    g.member_dropdown = None;
                 }
                 let from_list = self
                     .support
@@ -2882,13 +3012,47 @@ impl App {
                 if let Some(g) = self.group_settings.as_mut() {
                     g.selected_member_id = Some(member_id);
                     g.pane = GroupSettingsPane::MemberInfo;
+                    g.member_dropdown = None;
                 }
                 Task::none()
             }
             Message::CloseGroupMember => {
                 if let Some(g) = self.group_settings.as_mut() {
                     g.selected_member_id = None;
+                    g.member_dropdown = None;
                     g.pane = GroupSettingsPane::Overview;
+                }
+                Task::none()
+            }
+            Message::OpenMemberRoleMenu(member_id) => {
+                if let Some(g) = self.group_settings.as_mut() {
+                    if g.member_dropdown == Some(MemberDropdown::Role)
+                        && g.selected_member_id == Some(member_id)
+                    {
+                        g.member_dropdown = None;
+                    } else {
+                        g.selected_member_id = Some(member_id);
+                        g.member_dropdown = Some(MemberDropdown::Role);
+                    }
+                }
+                Task::none()
+            }
+            Message::OpenMemberActionMenu(member_id) => {
+                if let Some(g) = self.group_settings.as_mut() {
+                    if g.member_dropdown == Some(MemberDropdown::Actions)
+                        && g.selected_member_id == Some(member_id)
+                    {
+                        g.member_dropdown = None;
+                    } else {
+                        g.selected_member_id = Some(member_id);
+                        g.member_dropdown = Some(MemberDropdown::Actions);
+                    }
+                }
+                Task::none()
+            }
+            Message::CloseMemberDropdown => {
+                if let Some(g) = self.group_settings.as_mut() {
+                    g.member_dropdown = None;
                 }
                 Task::none()
             }
@@ -2903,6 +3067,9 @@ impl App {
                     return Task::none();
                 };
                 let group_id = g.group_id;
+                if let Some(g) = self.group_settings.as_mut() {
+                    g.member_dropdown = None;
+                }
                 self.status = format!("Setting role to {role}…");
                 Task::perform(
                     set_group_member_role(session, group_id, member_id, role),
@@ -2911,6 +3078,9 @@ impl App {
             }
             Message::GroupMemberRoleDone(Ok(())) => {
                 self.status = "Member role updated.".into();
+                if let Some(g) = self.group_settings.as_mut() {
+                    g.member_dropdown = None;
+                }
                 self.reload_group_members()
             }
             Message::GroupMemberRoleDone(Err(err)) => {
@@ -2928,6 +3098,9 @@ impl App {
                     return Task::none();
                 };
                 let group_id = g.group_id;
+                if let Some(g) = self.group_settings.as_mut() {
+                    g.member_dropdown = None;
+                }
                 self.status = "Removing member…".into();
                 Task::perform(
                     remove_group_member(session, group_id, member_id, with_messages),
@@ -2991,8 +3164,12 @@ impl App {
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
+                let group_id = g.group_id;
+                if let Some(g) = self.group_settings.as_mut() {
+                    g.member_dropdown = None;
+                }
                 Task::perform(
-                    block_group_member(session, g.group_id, member_id, blocked),
+                    block_group_member(session, group_id, member_id, blocked),
                     Message::GroupMemberBlockAllDone,
                 )
             }
@@ -3044,7 +3221,8 @@ impl App {
                     toggle_group_pref(&mut g.group_preferences, key);
                     g.dirty = true;
                 }
-                Task::none()
+                // Persist immediately — waiting on “Save preferences” felt broken.
+                self.update(Message::SaveGroupPreferences)
             }
             Message::SetGroupTimedTtl(secs) => {
                 if let Some(g) = self.group_settings.as_mut() {
@@ -3069,7 +3247,7 @@ impl App {
                     }
                     g.dirty = true;
                 }
-                Task::none()
+                self.update(Message::SaveGroupPreferences)
             }
             Message::GroupAdmissionToggle => {
                 if let Some(g) = self.group_settings.as_mut() {
@@ -3085,7 +3263,7 @@ impl App {
                     };
                     g.dirty = true;
                 }
-                Task::none()
+                self.update(Message::SaveGroupPreferences)
             }
             Message::SaveGroupPreferences => self.update(Message::SaveGroupProfile),
             Message::EnsureGroupLink => {
@@ -3750,12 +3928,28 @@ impl App {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
-                let task = self.toggle_voice_record();
-                // Keep OSK / composer focus when possible after mic press.
-                Task::batch([
-                    task,
-                    iced::widget::operation::focus(iced::widget::Id::new("composer-input")),
-                ])
+                // Do not steal focus back to the composer — that flickered the
+                // mic/mute chrome and swallowed the first press on ARM/OSK.
+                self.toggle_voice_record()
+            }
+            Message::VoiceRecordStarted(result) => {
+                self.voice_arming = false;
+                match result {
+                    Ok(()) => {
+                        if let Ok(mut slot) = self.voice_rec_slot.lock() {
+                            self.voice_rec = slot.take();
+                        }
+                        if self.voice_rec.is_some() {
+                            self.status = "Recording… tap stop when done.".into();
+                        } else {
+                            self.status = "Recording failed to attach capture process.".into();
+                        }
+                    }
+                    Err(err) => {
+                        self.status = err;
+                    }
+                }
+                Task::none()
             }
             Message::VoiceDraftReady(Ok(draft)) => {
                 self.waveforms
@@ -4995,7 +5189,7 @@ impl App {
     }
 
     pub(crate) fn voice_recording(&self) -> bool {
-        self.voice_rec.is_some()
+        self.voice_rec.is_some() || self.voice_arming
     }
 
     pub(crate) fn voice_draft(&self) -> Option<&VoiceDraft> {
@@ -5120,6 +5314,10 @@ impl App {
             self.status = "Send or cancel the current voice draft first.".into();
             return Task::none();
         }
+        if self.voice_arming {
+            self.status = "Starting microphone…".into();
+            return Task::none();
+        }
         if self.voice_rec.is_some() {
             return self.stop_voice_to_draft();
         }
@@ -5135,17 +5333,25 @@ impl App {
             self.status = "Accept the contact request before sending voice.".into();
             return Task::none();
         }
-        match start_voice_recording() {
-            Ok(rec) => {
-                self.status = "Recording… tap stop when done.".into();
-                self.voice_rec = Some(rec);
-                Task::none()
-            }
-            Err(err) => {
-                self.status = err;
-                Task::none()
-            }
-        }
+        // Open the device off the UI thread — sync probes (350ms × backends)
+        // made the first tap feel dead and flickered mute chrome.
+        self.voice_arming = true;
+        self.status = "Starting microphone…".into();
+        let slot = self.voice_rec_slot.clone();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let rec = start_voice_recording()?;
+                    if let Ok(mut guard) = slot.lock() {
+                        *guard = Some(rec);
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(|e| e.to_string())?
+            },
+            Message::VoiceRecordStarted,
+        )
     }
 
     fn stop_voice_to_draft(&mut self) -> Task<Message> {
@@ -5348,97 +5554,16 @@ impl App {
     }
 
     fn enqueue_missing_video_thumbs(&mut self) -> Task<Message> {
-        // Newest first, hard cap — spawning ffmpeg for every video in history
-        // made opening a media-heavy chat hang for seconds.
-        const MAX_THUMBS: usize = 4;
-        let mut candidates = Vec::new();
-        for msg in self.messages.iter().rev() {
-            if candidates.len() >= MAX_THUMBS * 2 {
-                break;
-            }
-            let Some(file) = msg.file.as_ref() else {
-                continue;
-            };
-            if !matches!(
-                effective_complete(file.state, msg.outgoing, msg.delivery),
-                FileTransferState::Complete
-            ) {
-                continue;
-            }
-            let is_video = matches!(file.kind, cursus_core::FileKind::Video)
-                || media::is_video_name(&file.file_name);
-            if !is_video {
-                continue;
-            }
-            let Some(path) = self.plaintext_path_for(file) else {
-                continue;
-            };
-            candidates.push(path);
-        }
-        let mut tasks = Vec::new();
-        for path in candidates {
-            if tasks.len() >= MAX_THUMBS {
-                break;
-            }
-            if !path.is_file() {
-                continue;
-            }
-            if self.video_thumbs_pending.contains(&path) {
-                continue;
-            }
-            if let Some(cached) = media::cached_video_thumbnail(&path) {
-                self.video_thumbs.insert(path.clone(), cached.clone());
-                if self.image_previews.contains_key(&path) {
-                    continue;
-                }
-                if let Some(rounded) =
-                    media::cached_rounded_fitted_preview(&cached, 220, 280)
-                {
-                    self.image_previews.insert(path, rounded);
-                    continue;
-                }
-                if self.image_previews_pending.contains(&path) {
-                    continue;
-                }
-                self.image_previews_pending.insert(path.clone());
-                let video_path = path;
-                tasks.push(Task::perform(
-                    async move {
-                        let preview = tokio::task::spawn_blocking(move || {
-                            media::rounded_fitted_preview(&cached, 220, 280, 12.0).ok()
-                        })
-                        .await
-                        .ok()
-                        .flatten();
-                        Message::ImagePreviewReady {
-                            path: video_path,
-                            preview,
-                        }
-                    },
-                    |msg| msg,
-                ));
-                continue;
-            }
-            if self.video_thumbs.contains_key(&path) {
-                continue;
-            }
-            self.video_thumbs_pending.insert(path.clone());
-            tasks.push(Task::perform(
-                async move {
-                    let path_for_work = path.clone();
-                    let thumb = tokio::task::spawn_blocking(move || {
-                        media::cached_video_thumbnail(&path_for_work)
-                            .or_else(|| media::video_thumbnail(&path_for_work).ok())
-                    })
-                    .await
-                    .ok()
-                    .flatten();
-                    Message::VideoThumbReady { path, thumb }
-                },
-                |msg| msg,
-            ));
-        }
-        Task::batch(tasks)
+        // Intentionally no-op: ffmpeg video posters were reverted (.bugs.txt ARM).
+        // Bubbles use a play-icon placeholder; tap still opens the file.
+        let _ = (
+            &self.video_thumbs,
+            &self.video_thumbs_pending,
+            &self.image_previews,
+            &self.image_previews_pending,
+            &self.messages,
+        );
+        Task::none()
     }
 
     fn enqueue_missing_waveforms(&self) -> Task<Message> {
@@ -5859,6 +5984,7 @@ impl App {
             member_admission: chat.member_admission.clone(),
             public_group: chat.public_group.clone(),
             selected_member_id: None,
+            member_dropdown: None,
             pane: GroupSettingsPane::Overview,
             dirty: false,
         });
@@ -5911,9 +6037,12 @@ impl App {
             alias_dirty: false,
             muted: chat.settings.enable_ntfs.is_muted(),
             favorite: chat.settings.favorite,
+            pane: ContactProfilePane::Overview,
             timed_allow: FeatureAllow::No,
             timed_contact_allows: FeatureAllow::No,
             timed_ttl_secs: DEFAULT_TIMED_TTL_SECS,
+            chat_item_ttl: chat.chat_item_ttl,
+            send_rcpts: chat.settings.send_rcpts,
             full_delete_allow: FeatureAllow::No,
             full_delete_contact_allows: FeatureAllow::No,
             full_delete_for_user: false,
@@ -5965,6 +6094,76 @@ impl App {
                 .map_err(|e| e.to_string())?
             },
             Message::ContactPrefsSaved,
+        )
+    }
+
+    fn save_contact_chat_item_ttl(&mut self) -> Task<Message> {
+        let Some(overlay) = self.contact_profile.as_ref() else {
+            return Task::none();
+        };
+        let Some(session) = self.session.clone() else {
+            return Task::none();
+        };
+        let chat = ChatId::new(ChatType::Direct, overlay.contact_id);
+        let seconds = match overlay.timed_allow {
+            FeatureAllow::Always => overlay.chat_item_ttl,
+            _ => None,
+        };
+        // Mirror into the chats list so reopen keeps the chip.
+        if let Some(c) = self.chats.iter_mut().find(|c| c.id == chat) {
+            c.chat_item_ttl = seconds;
+        }
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    session
+                        .set_chat_ttl(&chat, seconds)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|e| e.to_string())?
+            },
+            |r| match r {
+                Ok(()) => Message::ContactPrefsSaved(Ok(())),
+                Err(e) => Message::ContactPrefsSaved(Err(e)),
+            },
+        )
+    }
+
+    fn save_contact_send_rcpts(&mut self) -> Task<Message> {
+        let Some(overlay) = self.contact_profile.as_ref() else {
+            return Task::none();
+        };
+        let Some(session) = self.session.clone() else {
+            return Task::none();
+        };
+        let chat = ChatId::new(ChatType::Direct, overlay.contact_id);
+        let mut settings = self
+            .chats
+            .iter()
+            .find(|c| c.id == chat)
+            .map(|c| c.settings.clone())
+            .unwrap_or_default();
+        settings.send_rcpts = overlay.send_rcpts;
+        if let Some(c) = self.chats.iter_mut().find(|c| c.id == chat) {
+            c.settings.send_rcpts = settings.send_rcpts;
+        }
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    session
+                        .set_chat_settings(&chat, &settings)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|e| e.to_string())?
+            },
+            |r| match r {
+                Ok(()) => Message::ContactPrefsSaved(Ok(())),
+                Err(e) => Message::ContactPrefsSaved(Err(e)),
+            },
         )
     }
 
@@ -7055,8 +7254,16 @@ fn toggle_group_pref(prefs: &mut Option<serde_json::Value>, key: &str) {
     // Support defaults to on in SimpleX when omitted — seed that so the first
     // toggle turns it off instead of writing a redundant "on".
     let default_enable = if key == "support" { "on" } else { "off" };
+    let role_pref = matches!(
+        key,
+        "directMessages" | "voice" | "files" | "simplexLinks" | "sessions"
+    );
     let entry = obj.entry(key.to_string()).or_insert_with(|| {
-        serde_json::json!({ "enable": default_enable })
+        if role_pref {
+            serde_json::json!({ "enable": default_enable, "role": "member" })
+        } else {
+            serde_json::json!({ "enable": default_enable })
+        }
     });
     let on = entry
         .get("enable")
@@ -7069,6 +7276,12 @@ fn toggle_group_pref(prefs: &mut Option<serde_json::Value>, key: &str) {
             "enable".into(),
             serde_json::Value::String(if turn_on { "on" } else { "off" }.into()),
         );
+        if role_pref && !map.contains_key("role") {
+            map.insert(
+                "role".into(),
+                serde_json::Value::String("member".into()),
+            );
+        }
         // Disappearing messages need a TTL when enabled (core uses `ttl`).
         if key == "timedMessages" {
             if turn_on {
@@ -7085,7 +7298,7 @@ fn toggle_group_pref(prefs: &mut Option<serde_json::Value>, key: &str) {
     }
 }
 
-const DEFAULT_TIMED_TTL_SECS: i64 = 86_400; // 1 day
+pub(crate) const DEFAULT_TIMED_TTL_SECS: i64 = 86_400; // 1 day
 pub(crate) const TIMED_TTL_STEPS: &[i64] = &[
     30,        // 30 sec
     300,       // 5 min
@@ -7188,6 +7401,12 @@ fn fill_contact_feature_overlay(overlay: &mut ContactProfileOverlay, chat: &Chat
         feature_you_allow(prefs, merged, "timedMessages", FeatureAllow::No);
     overlay.timed_contact_allows = merged_contact_allow(merged, "timedMessages");
     overlay.timed_ttl_secs = contact_pref_ttl(prefs, merged).unwrap_or(DEFAULT_TIMED_TTL_SECS);
+    overlay.chat_item_ttl = chat.chat_item_ttl;
+    overlay.send_rcpts = chat.settings.send_rcpts;
+    // Local wipe TTL takes the “for me” chip even if negotiated timed is off.
+    if chat.chat_item_ttl.is_some() && !matches!(overlay.timed_allow, FeatureAllow::Yes) {
+        overlay.timed_allow = FeatureAllow::Always;
+    }
     overlay.full_delete_allow =
         feature_you_allow(prefs, merged, "fullDelete", FeatureAllow::No);
     overlay.full_delete_contact_allows = merged_contact_allow(merged, "fullDelete");
@@ -7213,13 +7432,13 @@ fn build_contact_prefs_json(
     calls: FeatureAllow,
 ) -> serde_json::Value {
     let mut prefs = existing.cloned().unwrap_or_else(|| serde_json::json!({}));
-    let timed = if timed_allow.is_on() {
-        serde_json::json!({
-            "allow": timed_allow.as_api(),
+    // Always (= “for me”) is chatItemTTL, not FeatureAllowed::always on the wire.
+    let timed = match timed_allow {
+        FeatureAllow::Yes => serde_json::json!({
+            "allow": "yes",
             "ttl": timed_ttl_secs.max(1),
-        })
-    } else {
-        serde_json::json!({ "allow": "no" })
+        }),
+        FeatureAllow::Always | FeatureAllow::No => serde_json::json!({ "allow": "no" }),
     };
     if let Some(obj) = prefs.as_object_mut() {
         obj.insert("timedMessages".into(), timed);
@@ -7260,6 +7479,14 @@ pub(crate) fn group_support_allowed(prefs: Option<&serde_json::Value>) -> bool {
         .and_then(|v| v.as_str())
         .map(|s| s.eq_ignore_ascii_case("on"))
         .unwrap_or(true)
+}
+
+/// Invited (not yet connected) members get a pending glyph; connected/complete get none.
+pub(crate) fn member_status_is_invited(status: &str) -> bool {
+    matches!(
+        status.to_ascii_lowercase().as_str(),
+        "invited" | "intro-inv"
+    )
 }
 
 pub(crate) fn can_manage_members(my_role: &str) -> bool {
@@ -7642,6 +7869,17 @@ fn spawn_audio_player(path: &PathBuf) -> Result<Child, String> {
         .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
 
     let mut attempts: Vec<(&str, Result<Child, std::io::Error>)> = Vec::new();
+    // Prefer GStreamer first (same stack Fractal uses for Matrix voice).
+    attempts.push((
+        "gst-play-1.0",
+        Command::new("gst-play-1.0")
+            .args(["--no-interactive", "--"])
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn(),
+    ));
     attempts.push((
         "mpv",
         Command::new("mpv")
@@ -7707,7 +7945,7 @@ fn spawn_audio_player(path: &PathBuf) -> Result<Child, String> {
         }
     }
     Err(format!(
-        "{last}. Install mpv, ffplay, or aplay to play voice messages."
+        "{last}. Install gst-play-1.0 (gstreamer), mpv, ffplay, or aplay to play voice messages."
     ))
 }
 

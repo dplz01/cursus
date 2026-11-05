@@ -1016,11 +1016,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     } else {
         32.0
     };
-    let icon_size = if app.layout() == LayoutMode::Mobile {
-        20.0
-    } else {
-        18.0
-    };
+    let icon_size = 20.0;
     let hover_ok = app.hover_ok();
 
     // mouse_area + on_press: fires before OSK dismiss consumes the gesture;
@@ -1062,7 +1058,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     );
 
     let placeholder = if recording {
-        "Recording… tap stop when done"
+        "Recording…"
     } else {
         "Message"
     };
@@ -1070,37 +1066,17 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     let suggestions = app.emoji_suggestions();
     let suggest_idx = app.emoji_suggest_index();
 
-    // Fractal/GTK approach: TextView wrap-mode=word + natural height growth;
-    // side buttons stay bottom-aligned (fractal#802). We previously used
-    // Length::Fixed for the "single-line" look — soft-wrap then scrolled the
-    // caret into a one-line cosmic-text viewport and hid line 1 (ARM fonts
-    // wrap earlier than the Fixed→Shrink estimate). Always Shrink, but keep
-    // the old height math: content min_height + vertical padding ≈ send_size.
+    // Fractal/GTK: wrap + natural height; side buttons always bottom-aligned
+    // (fractal#802). Always Shrink so soft-wrap cannot scroll line 1 away.
+    // Keep content min_height + vertical padding ≈ send_size for the
+    // single-line look. Do NOT flip padding/alignment from a wrap estimate —
+    // that Center→End (and v_pad) switch mid-typing caused a visible bump
+    // on both arches when the estimate crossed 1 line before/at wrap.
     let line_px = d.body * 1.3;
     let h_pad = 10.0;
-    let hard_lines = app.composer_content().line_count().max(1);
-    // Estimate only drives icon alignment (Center vs End), not height mode.
-    // Bias wide so we End-align slightly before wrap (ARM FreeType is wider).
-    let editor_width = (app.window_width() - d.pad * 2.0 - send_size * 3.0).max(80.0);
-    let col_w = (d.body * 0.7).max(7.0);
-    let wrap_lines = app
-        .composer()
-        .lines()
-        .map(|line| ((line.chars().count() as f32 * col_w / editor_width).ceil()).max(1.0))
-        .sum::<f32>()
-        .max(1.0);
-    let multi_line = hard_lines as f32 > 1.0 || wrap_lines > 1.0;
     let max_content = line_px * 6.0 + 16.0;
     let line_height = iced::widget::text::LineHeight::Absolute(line_px.into());
-    // Same padding as before: centered in the send_size hit for one line,
-    // 8px once we look multi-line. Content min_height excludes padding so
-    // iced's Shrink+expand(padding) still lands on ≈ send_size (the previous
-    // always-Shrink attempt used min_height=send_size and overgrew the field).
-    let v_pad = if multi_line {
-        8.0
-    } else {
-        ((send_size - line_px) / 2.0).max(0.0)
-    };
+    let v_pad = ((send_size - line_px) / 2.0).max(0.0);
     let content_min = (send_size - 2.0 * v_pad).max(line_px);
 
     use crate::touch_mouse::touch_as_mouse;
@@ -1126,20 +1102,13 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             .key_binding(composer_key_binding(!suggestions.is_empty())),
     );
 
+    // Always End: equal-height single-line looks centered; multi-line grows up.
     let input_row = row![attach, mic, editor, send]
         .spacing(0)
-        .align_y(if multi_line {
-            Alignment::End
-        } else {
-            Alignment::Center
-        });
+        .align_y(Alignment::End);
 
     // Even inset above and below the text field on every layout.
-    let (bar_pad_top, bar_pad_bottom) = if app.layout() == LayoutMode::Mobile {
-        (6.0, 6.0)
-    } else {
-        (8.0, 8.0)
-    };
+    let (bar_pad_top, bar_pad_bottom) = (6.0,6.0);
 
     // Keep a fixed 3-slot column ([suggest][reply][input]) so showing the
     // `:shortcode` list doesn't shift the editor's tree index and steal focus.

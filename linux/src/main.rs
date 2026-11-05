@@ -645,7 +645,7 @@ pub enum Message {
     MsgBubbleLongPress { item_id: i64, generation: u64 },
     CancelReply,
     CancelEdit,
-    /// PageUp — edit the latest editable outgoing message in this chat.
+    /// ArrowUp (empty composer) — edit the latest editable outgoing message.
     EditLastOutgoing,
     /// Jump the history viewport to a quoted parent item.
     JumpToQuoted(i64),
@@ -1278,7 +1278,6 @@ impl App {
                     // Emoji suggest Tab/Shift+Tab/Enter are handled in the
                     // composer key_binding so they don't fight the editor.
                     iced::keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
-                    iced::keyboard::Key::Named(Named::PageUp) => Some(Message::EditLastOutgoing),
                     _ => None,
                 }
             }

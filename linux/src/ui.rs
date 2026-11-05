@@ -951,6 +951,7 @@ fn selection_bar(app: &App, d: Density) -> Element<'_, Message> {
 
 fn composer_key_binding(
     has_suggestions: bool,
+    composer_empty: bool,
 ) -> impl Fn(iced::widget::text_editor::KeyPress) -> Option<EditorBinding<Message>> {
     move |key_press| {
         // `:shortcode` list: Tab / Shift+Tab cycle, Enter accepts.
@@ -983,11 +984,15 @@ fn composer_key_binding(
             return Some(EditorBinding::Custom(Message::Send));
         }
 
-        // PageUp edits the latest editable outgoing message (Telegram-style).
-        if matches!(
-            key_press.key.as_ref(),
-            keyboard::Key::Named(key::Named::PageUp)
-        ) {
+        // ArrowUp with an empty field edits the latest editable outgoing
+        // message (Telegram-style). Skip when there's text so multi-line
+        // caret motion still works.
+        if composer_empty
+            && matches!(
+                key_press.key.as_ref(),
+                keyboard::Key::Named(key::Named::ArrowUp)
+            )
+        {
             return Some(EditorBinding::Custom(Message::EditLastOutgoing));
         }
 
@@ -1107,7 +1112,10 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             .max_height(max_content)
             .wrapping(Wrapping::WordOrGlyph)
             .style(theme::composer_editor())
-            .key_binding(composer_key_binding(!suggestions.is_empty())),
+            .key_binding(composer_key_binding(
+                !suggestions.is_empty(),
+                app.composer().trim().is_empty(),
+            )),
     );
 
     // Always End: equal-height single-line looks centered; multi-line grows up.

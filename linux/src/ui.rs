@@ -1070,80 +1070,68 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     let suggestions = app.emoji_suggestions();
     let suggest_idx = app.emoji_suggest_index();
 
-    // Single-line: Fixed(send_size) with padding sized to the *line height*
-    // (body * 1.3), not the font size. Padding to `d.body` left ~0.3*body of
-    // overflow so cosmic-text scrolled as glyphs changed → per-keystroke jiggle.
+    // Fractal/GTK approach: TextView wrap-mode=word + natural height growth;
+    // side buttons stay bottom-aligned (fractal#802). We previously used
+    // Length::Fixed for the "single-line" look — soft-wrap then scrolled the
+    // caret into a one-line cosmic-text viewport and hid line 1 (ARM fonts
+    // wrap earlier than the Fixed→Shrink estimate). Always Shrink, but keep
+    // the old height math: content min_height + vertical padding ≈ send_size.
     let line_px = d.body * 1.3;
     let h_pad = 10.0;
-    let composer_text = app.composer();
     let hard_lines = app.composer_content().line_count().max(1);
-    // Soft-wrap estimate only gates "single-line vs growing"; Shrink then
-    // sizes multi-line from real layout.
+    // Estimate only drives icon alignment (Center vs End), not height mode.
+    // Bias wide so we End-align slightly before wrap (ARM FreeType is wider).
     let editor_width = (app.window_width() - d.pad * 2.0 - send_size * 3.0).max(80.0);
-    let col_w = (d.body * 0.55).max(6.0);
-    let wrap_lines = composer_text
+    let col_w = (d.body * 0.7).max(7.0);
+    let wrap_lines = app
+        .composer()
         .lines()
         .map(|line| ((line.chars().count() as f32 * col_w / editor_width).ceil()).max(1.0))
         .sum::<f32>()
         .max(1.0);
-    let lines = (hard_lines as f32).max(wrap_lines);
-    let single_line = lines <= 1.0;
+    let multi_line = hard_lines as f32 > 1.0 || wrap_lines > 1.0;
     let max_content = line_px * 6.0 + 16.0;
-    // Absolute line height locks metrics so padding ↔ layout stay matched.
     let line_height = iced::widget::text::LineHeight::Absolute(line_px.into());
+    // Same padding as before: centered in the send_size hit for one line,
+    // 8px once we look multi-line. Content min_height excludes padding so
+    // iced's Shrink+expand(padding) still lands on ≈ send_size (the previous
+    // always-Shrink attempt used min_height=send_size and overgrew the field).
+    let v_pad = if multi_line {
+        8.0
+    } else {
+        ((send_size - line_px) / 2.0).max(0.0)
+    };
+    let content_min = (send_size - 2.0 * v_pad).max(line_px);
 
     use crate::touch_mouse::touch_as_mouse;
 
-    let editor = if single_line {
-        let v_pad = ((send_size - line_px) / 2.0).max(0.0);
-        touch_as_mouse(
-            text_editor(app.composer_content())
-                .id(iced::widget::Id::new("composer-input"))
-                .placeholder(placeholder)
-                .on_action(Message::ComposerEdit)
-                .padding(Padding {
-                    top: v_pad,
-                    right: h_pad,
-                    bottom: v_pad,
-                    left: h_pad,
-                })
-                .size(d.body)
-                .line_height(line_height)
-                .height(Length::Fixed(send_size))
-                .wrapping(Wrapping::WordOrGlyph)
-                .style(theme::composer_editor())
-                .key_binding(composer_key_binding(!suggestions.is_empty())),
-        )
-    } else {
-        // Growing: let layout decide height; keep icons on the bottom edge.
-        touch_as_mouse(
-            text_editor(app.composer_content())
-                .id(iced::widget::Id::new("composer-input"))
-                .placeholder(placeholder)
-                .on_action(Message::ComposerEdit)
-                .padding(Padding {
-                    top: 8.0,
-                    right: h_pad,
-                    bottom: 8.0,
-                    left: h_pad,
-                })
-                .size(d.body)
-                .line_height(line_height)
-                .height(Length::Shrink)
-                .min_height((send_size - 16.0).max(line_px))
-                .max_height(max_content)
-                .wrapping(Wrapping::WordOrGlyph)
-                .style(theme::composer_editor())
-                .key_binding(composer_key_binding(!suggestions.is_empty())),
-        )
-    };
+    let editor = touch_as_mouse(
+        text_editor(app.composer_content())
+            .id(iced::widget::Id::new("composer-input"))
+            .placeholder(placeholder)
+            .on_action(Message::ComposerEdit)
+            .padding(Padding {
+                top: v_pad,
+                right: h_pad,
+                bottom: v_pad,
+                left: h_pad,
+            })
+            .size(d.body)
+            .line_height(line_height)
+            .height(Length::Shrink)
+            .min_height(content_min)
+            .max_height(max_content)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(theme::composer_editor())
+            .key_binding(composer_key_binding(!suggestions.is_empty())),
+    );
 
     let input_row = row![attach, mic, editor, send]
         .spacing(0)
-        .align_y(if single_line {
-            Alignment::Center
-        } else {
+        .align_y(if multi_line {
             Alignment::End
+        } else {
+            Alignment::Center
         });
 
     // Even inset above and below the text field on every layout.

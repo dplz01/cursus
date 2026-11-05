@@ -678,15 +678,15 @@ fn chat_list(app: &App) -> Element<'_, Message> {
 
         let content = container(
             row![
-                profile_avatar(chat.peer_profile.image.as_deref(), &chat.title, 36.0),
+                chat_list_avatar(chat, 48.0),
                 column![title, preview].spacing(4).width(Length::Fill),
                 badges,
             ]
             .align_y(Alignment::Center)
-            .spacing(10),
+            .spacing(12),
         )
         .width(Length::Fill)
-        .padding(Padding::from([d.list_row + 2.0, d.pad_tight + 4.0]));
+        .padding(Padding::from([d.list_row + 4.0, d.pad_tight + 4.0]));
 
         // Hover paint + long-press slots without App Messages (avoids full view rebuild).
         let row = hover::chat_row(
@@ -789,10 +789,11 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
     });
     let in_support = support_thread.is_some();
 
-    let avatar = profile_avatar(
+    let avatar = profile_avatar_fallback(
         chat.peer_profile.image.as_deref(),
         &chat.title,
         if with_back { 32.0 } else { 36.0 },
+        chat_avatar_fallback(chat),
     );
     let title_text = support_thread.unwrap_or(chat.title.as_str());
     let subtitle = if in_support {
@@ -2948,36 +2949,36 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
     };
     body = body.push(share_row);
 
-    let link_field = text_input("Paste invite or address link…", app.invite_input())
+    let link_field = text_input("Invite or address link…", app.invite_input())
         .on_input(Message::InviteInputChanged)
         .on_submit(Message::AcceptInvite)
         .padding(d.composer)
         .size(d.meta)
         .width(Length::Fill)
         .style(theme::composer_input());
-    let accept = centered_action(
-        "Connect",
-        Message::AcceptInvite,
+    let paste_connect = centered_action(
+        "Paste and connect",
+        Message::PasteAndConnect,
         theme::primary_action(hover),
         d,
         narrow,
     );
     let paste_row: Element<'_, Message> = if narrow {
         column![
-            text("Or paste a link")
+            text("Join with a link")
                 .size(d.meta)
                 .color(theme::t().text_muted),
             link_field,
-            accept,
+            paste_connect,
         ]
         .spacing(8)
         .into()
     } else {
         column![
-            text("Or paste a link")
+            text("Join with a link")
                 .size(d.meta)
                 .color(theme::t().text_muted),
-            row![link_field, accept]
+            row![link_field, paste_connect]
                 .spacing(8)
                 .align_y(Alignment::Center),
         ]
@@ -3877,10 +3878,31 @@ fn message_menu_overlay(app: &App) -> Element<'_, Message> {
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AvatarFallback {
+    /// First letter of the label.
+    Initial,
+    /// User-group glyph (default private-group picture).
+    GroupIcon,
+    /// Antenna glyph (default channel picture).
+    ChannelIcon,
+    /// User silhouette (default contact picture).
+    ContactIcon,
+}
+
 fn profile_avatar<'a>(
     image_data_url: Option<&str>,
     label: &str,
     size: f32,
+) -> Element<'a, Message> {
+    profile_avatar_fallback(image_data_url, label, size, AvatarFallback::Initial)
+}
+
+fn profile_avatar_fallback<'a>(
+    image_data_url: Option<&str>,
+    label: &str,
+    size: f32,
+    fallback: AvatarFallback,
 ) -> Element<'a, Message> {
     if let Some(url) = image_data_url.filter(|s| !s.is_empty()) {
         // Render at 2× for sharper circles on HiDPI; iced clip is rectangular.
@@ -3909,7 +3931,84 @@ fn profile_avatar<'a>(
             .into();
         }
     }
-    icons::avatar_initial(label, size)
+    match fallback {
+        AvatarFallback::Initial => icons::avatar_initial(label, size),
+        AvatarFallback::GroupIcon => icons::group_avatar_disk(size),
+        AvatarFallback::ChannelIcon => icons::channel_avatar_disk(size),
+        AvatarFallback::ContactIcon => icons::contact_avatar_disk(size),
+    }
+}
+
+fn chat_avatar_fallback(chat: &cursus_core::ChatPreview) -> AvatarFallback {
+    if chat.is_channel {
+        AvatarFallback::ChannelIcon
+    } else if matches!(chat.id.chat_type, ChatType::Group) {
+        AvatarFallback::GroupIcon
+    } else if matches!(chat.id.chat_type, ChatType::Direct) {
+        AvatarFallback::ContactIcon
+    } else {
+        AvatarFallback::Initial
+    }
+}
+
+/// Chat / channel list avatar: larger disk; request bubble only for inbound
+/// contact requests (unknown senders).
+fn chat_list_avatar<'a>(chat: &cursus_core::ChatPreview, size: f32) -> Element<'a, Message> {
+    let avatar = profile_avatar_fallback(
+        chat.peer_profile.image.as_deref(),
+        &chat.title,
+        size,
+        chat_avatar_fallback(chat),
+    );
+
+    let badge_icon: Option<Element<'_, Message>> = if chat.pending_request_id.is_some() {
+        Some(icons::user_question_icon(11.0, theme::t().text_primary))
+    } else if matches!(chat.id.chat_type, ChatType::Group) && !chat.is_channel {
+        Some(icons::user_group_icon(11.0, theme::t().text_primary))
+    } else {
+        None
+    };
+
+    let Some(badge_icon) = badge_icon else {
+        return avatar;
+    };
+
+    let badge_size = (size * 0.38).clamp(16.0, 22.0);
+    let badge = container(badge_icon)
+        .width(badge_size)
+        .height(badge_size)
+        .center_x(badge_size)
+        .center_y(badge_size)
+        .style(move |_| container::Style {
+            background: Some(iced::Background::Color(theme::t().bg_panel)),
+            border: iced::Border {
+                color: theme::t().border,
+                width: 1.5,
+                radius: (badge_size * 0.5).into(),
+            },
+            ..container::Style::default()
+        });
+
+    // Slight overhang so the bubble sits on the disk edge.
+    let frame = size + badge_size * 0.22;
+    Stack::new()
+        .width(frame)
+        .height(frame)
+        .push(
+            container(avatar)
+                .width(frame)
+                .height(frame)
+                .align_x(Alignment::Start)
+                .align_y(Alignment::Start),
+        )
+        .push(
+            container(badge)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::End)
+                .align_y(Alignment::End),
+        )
+        .into()
 }
 
 fn round_header_icon_btn(
@@ -4728,7 +4827,16 @@ fn group_overview_pane(
     // Match contact profile: avatar + name + local alias under the name.
     col = col.push(
         row![
-            profile_avatar(g.image.as_deref(), &g.name, 72.0),
+            profile_avatar_fallback(
+                g.image.as_deref(),
+                &g.name,
+                72.0,
+                if g.is_channel {
+                    AvatarFallback::ChannelIcon
+                } else {
+                    AvatarFallback::GroupIcon
+                },
+            ),
             {
                 let mut names = Column::new().spacing(2).width(Length::Fill);
                 if owner {

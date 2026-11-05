@@ -863,6 +863,9 @@ pub enum Message {
     CreateInvitation,
     EnsureAddress,
     AcceptInvite,
+    /// Read the system clipboard, then connect to that invite / address link.
+    PasteAndConnect,
+    ClipboardForConnect(Option<String>),
     InviteReady(Result<ConnLink, String>),
     InviteAccepted(Result<String, String>),
     CopyInviteLink,
@@ -4088,17 +4091,23 @@ impl App {
                 self.status = "Preparing contact address…".into();
                 Task::perform(ensure_address(session), Message::InviteReady)
             }
-            Message::AcceptInvite => {
-                let Some(session) = self.session.clone() else {
+            Message::AcceptInvite => self.accept_invite_link(self.invite_input.clone()),
+            Message::PasteAndConnect => {
+                self.status = "Reading clipboard…".into();
+                iced::clipboard::read().map(Message::ClipboardForConnect)
+            }
+            Message::ClipboardForConnect(contents) => {
+                let Some(raw) = contents else {
+                    self.status = "Clipboard is empty — copy a link first.".into();
                     return Task::none();
                 };
-                let link = self.invite_input.trim().to_string();
+                let link = raw.trim().to_string();
                 if link.is_empty() {
-                    self.status = "Paste an invite or address link first.".into();
+                    self.status = "Clipboard is empty — copy a link first.".into();
                     return Task::none();
                 }
-                self.status = "Accepting link…".into();
-                Task::perform(accept_invite(session, link), Message::InviteAccepted)
+                self.invite_input = link.clone();
+                self.accept_invite_link(link)
             }
             Message::InviteReady(Ok(link)) => {
                 self.invite_link = Some(link.display.clone());
@@ -5466,6 +5475,20 @@ impl App {
     pub(crate) fn invite_input(&self) -> &str {
         &self.invite_input
     }
+
+    fn accept_invite_link(&mut self, raw: String) -> Task<Message> {
+        let Some(session) = self.session.clone() else {
+            return Task::none();
+        };
+        let link = raw.trim().to_string();
+        if link.is_empty() {
+            self.status = "Paste an invite or address link first.".into();
+            return Task::none();
+        }
+        self.status = "Accepting link…".into();
+        Task::perform(accept_invite(session, link), Message::InviteAccepted)
+    }
+
     pub(crate) fn invite_link(&self) -> Option<&str> {
         self.invite_link.as_deref()
     }

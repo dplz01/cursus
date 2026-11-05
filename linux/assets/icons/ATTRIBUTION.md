@@ -41,6 +41,8 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `forward.svg` | [svgrepo/522864](https://www.svgrepo.com/svg/522864/forward) | Solar Outline Icons / Solar Icons | **CC Attribution** | Yes (with credit) |
 | `info-circle.svg` | [svgrepo/524660](https://www.svgrepo.com/svg/524660/info-circle) | Solar Linear Icons / Solar Icons | **CC Attribution** | Yes (with credit) |
 | `select-multiple.svg` | [svgrepo/511120](https://www.svgrepo.com/svg/511120/select-multiple) | Coolicons Line Oval Icons / krystonschwarze | **CC Attribution** | Yes (with credit) |
+| `user-group.svg` | [svgrepo/472881](https://www.svgrepo.com/svg/472881/user-group) | Jtb Variety Oval Icons / jtblabs | **MIT License** | Yes |
+| `user-question-alt-1.svg` | [svgrepo/532383](https://www.svgrepo.com/svg/532383/user-question-alt-1) | Dazzle Line Icons / Dazzle UI | **CC Attribution** | Yes (with credit) |
 
 ## Required attribution (CC BY)
 
@@ -79,6 +81,10 @@ Reply / forward icons: **Solar Outline Icons** by Solar Icons (CC Attribution), 
 Info-circle icon: **Solar Linear Icons** by Solar Icons (CC Attribution), via [SVG Repo](https://www.svgrepo.com/svg/524660/info-circle).
 
 Select-multiple icon: **Coolicons Line Oval Icons** by krystonschwarze (CC Attribution), via [SVG Repo](https://www.svgrepo.com/svg/511120/select-multiple).
+
+User-group (default group avatar / list badge): **Jtb Variety Oval Icons** by jtblabs (MIT), via [SVG Repo](https://www.svgrepo.com/svg/472881/user-group).
+
+User-question (contact-request list badge): **Dazzle Line Icons** by Dazzle UI (CC Attribution), via [SVG Repo](https://www.svgrepo.com/svg/532383/user-question-alt-1).
 
 Leave / session-leave icon: **Gitlab Interface Icons** by Gitlab (MIT), via [SVG Repo](https://www.svgrepo.com/svg/491071/session-leave).
 

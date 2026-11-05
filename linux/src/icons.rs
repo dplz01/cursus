@@ -379,6 +379,77 @@ pub fn avatar_initial<'a>(label: &str, size: f32) -> Element<'a, Message> {
         .into()
 }
 
+/// Default group avatar disk — Jtb Variety Oval Icons / jtblabs (MIT via SVG Repo).
+pub fn group_avatar_disk<'a>(size: f32) -> Element<'a, Message> {
+    avatar_icon_disk(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/user-group.svg").as_slice()),
+        size,
+        theme::t().text_secondary,
+    )
+}
+
+/// Default contact avatar disk — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
+pub fn contact_avatar_disk<'a>(size: f32) -> Element<'a, Message> {
+    avatar_icon_disk(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/user-alt-1.svg").as_slice()),
+        size,
+        theme::t().text_secondary,
+    )
+}
+
+/// Default channel avatar disk — CFPB Design System (Public Domain via SVG Repo).
+pub fn channel_avatar_disk<'a>(size: f32) -> Element<'a, Message> {
+    avatar_icon_disk(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/channels.svg").as_slice()),
+        size,
+        theme::t().text_secondary,
+    )
+}
+
+/// Circular disk filled with a tinted SVG (default avatars / placeholders).
+pub fn avatar_icon_disk<'a>(
+    handle: svg::Handle,
+    size: f32,
+    color: Color,
+) -> Element<'a, Message> {
+    let glyph = (size * 0.52).clamp(14.0, 36.0);
+    container(tinted(handle, color, glyph))
+        .width(size)
+        .height(size)
+        .center_x(size)
+        .center_y(size)
+        .style(move |_| container::Style {
+            background: Some(Background::Color(theme::t().bg_elevated)),
+            border: Border {
+                color: theme::t().border,
+                width: 1.0,
+                radius: (size * 0.5).into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// Group / people — Jtb Variety Oval Icons / jtblabs (MIT via SVG Repo).
+pub fn user_group_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/user-group.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
+/// Contact request — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
+pub fn user_question_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(
+            include_bytes!("../assets/icons/user-question-alt-1.svg").as_slice(),
+        ),
+        color,
+        size,
+    )
+}
+
 fn handle_for(kind: NavIcon) -> svg::Handle {
     let bytes: &'static [u8] = match kind {
         NavIcon::Chats => include_bytes!("../assets/icons/chats.svg"),

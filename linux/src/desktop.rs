@@ -269,6 +269,20 @@ impl AppTray {
     }
 }
 
+impl AppTray {
+    /// Remove the tray without blocking the UI thread.
+    ///
+    /// tray-icon's ksni `Drop` joins its menu thread and blocks on
+    /// `handle.shutdown().wait()`; on some StatusNotifier hosts that never
+    /// returns, which froze Cursus on Quit / when the tray was switched off.
+    /// The icon is not `Send`, so instead of dropping elsewhere we mark it
+    /// passive (hidden) and leak the handle — a one-off, bounded cost.
+    pub fn dismiss(self) {
+        let _ = self._tray.set_visible(false);
+        std::mem::forget(self);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
     Show,

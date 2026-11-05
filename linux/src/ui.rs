@@ -224,13 +224,20 @@ fn auth_gate(app: &App) -> Element<'_, Message> {
             text("Choose a display name for this profile.")
                 .size(d.body)
                 .color(theme::t().text_secondary),
-            text_input("Your name", name)
+            crate::edit_menu::edit_field(
+                text_input("Your name", name)
+                .id("edit-field-WelcomeNameChanged")
                 .on_input(Message::WelcomeNameChanged)
                 .on_submit(Message::WelcomeNameNext)
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
                 .style(theme::composer_input()),
+                iced::widget::Id::new("edit-field-WelcomeNameChanged"),
+                name,
+                Message::WelcomeNameChanged,
+                true,
+            ),
             button(text(if busy { "Working…" } else { "Next" }).size(d.body))
                 .on_press_maybe(if busy {
                     None
@@ -646,6 +653,12 @@ fn chat_list(app: &App) -> Element<'_, Message> {
         return scroll_y(col);
     }
 
+    // Width of the list column (desktop: fixed pane; stacked: full window).
+    let list_w = match app.layout() {
+        LayoutMode::Desktop => d.list_width,
+        LayoutMode::Mobile | LayoutMode::Compact => app.window_width(),
+    };
+
     for (index, chat) in rows {
         let selected = app.selected() == Some(index);
         let title = txt(&chat.title)
@@ -655,11 +668,18 @@ fn chat_list(app: &App) -> Element<'_, Message> {
         // Word wrap alone won't break invite/URLs (no spaces); WordOrGlyph keeps
         // the preview inside the Fill column beside badges. Cap at two lines.
         let preview_line_px = f32::from(d.meta) * 1.25;
+        let show_unread = chat.unread > 0 || chat.unread_chat;
+        let support_badge = app.support_badge_count(chat);
+        // Text column = row − padding (12+12) − avatar (44) − gap (10)
+        // − trailing badges (+ their gap). Ellipsize to fit two lines there.
+        let badges_w = chat_row_badges_width(chat, show_unread, support_badge, d);
+        let text_w = (list_w - 24.0 - 44.0 - 10.0 - if badges_w > 0.0 { badges_w + 10.0 } else { 0.0 })
+            .max(40.0);
         let preview: Element<'_, Message> = if chat.preview.is_empty() {
             Space::new().height(0).into()
         } else {
             container(
-                txt(truncate(&chat.preview, 72))
+                txt(ellipsize_to_lines(&chat.preview, text_w, d.meta, 2))
                     .size(d.meta)
                     .color(theme::t().text_secondary)
                     .line_height(iced::widget::text::LineHeight::Absolute(
@@ -680,11 +700,9 @@ fn chat_list(app: &App) -> Element<'_, Message> {
         if chat.settings.enable_ntfs.is_muted() {
             badges = badges.push(text("muted").size(d.meta).color(theme::t().text_muted));
         }
-        let show_unread = chat.unread > 0 || chat.unread_chat;
         if show_unread {
             badges = badges.push(unread_count_badge(chat.unread, d));
         }
-        let support_badge = app.support_badge_count(chat);
         if support_badge > 0 {
             badges = badges.push(
                 text(format!("⚑{support_badge}"))
@@ -2960,16 +2978,11 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
         })
         .into()
     } else {
-        row![
-            text("New")
-                .size(d.title)
-                .color(theme::t().text_primary)
-                .width(Length::Fill),
-            button(text("Close").size(d.meta))
-                .on_press(Message::CloseCompose)
-                .padding(Padding::from([8, 12]))
-                .style(theme::secondary_action(hover)),
-        ]
+        // Desktop: no Close button — Esc (or picking another section) closes.
+        row![text("New")
+            .size(d.title)
+            .color(theme::t().text_primary)
+            .width(Length::Fill),]
         .spacing(10)
         .align_y(Alignment::Center)
         .padding(Padding::from([d.pad_tight, 0.0]))
@@ -3009,16 +3022,32 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
     };
     body = body.push(share_row);
 
-    let link_field = text_input("Invite or address link…", app.invite_input())
+    let link_field = crate::edit_menu::edit_field(
+        text_input("Invite or address link…", app.invite_input())
+        .id("edit-field-InviteInputChanged")
         .on_input(Message::InviteInputChanged)
         .on_submit(Message::AcceptInvite)
         .padding(d.composer)
         .size(d.meta)
         .width(Length::Fill)
-        .style(theme::composer_input());
-    let paste_connect = centered_action(
-        "Paste and connect",
-        Message::PasteAndConnect,
+        .style(theme::composer_input()),
+        iced::widget::Id::new("edit-field-InviteInputChanged"),
+        app.invite_input(),
+        Message::InviteInputChanged,
+        true,
+    );
+    // Icon-only paste (fills the field from the clipboard; never connects).
+    let paste_btn = composer_hit(
+        icons::paste_tool(PROFILE_HEADER_ICON, hover),
+        PROFILE_HEADER_ICON,
+        Message::PasteInviteLink,
+    );
+    let field_row = row![link_field, paste_btn]
+        .spacing(6)
+        .align_y(Alignment::Center);
+    let connect = centered_action(
+        "Connect",
+        Message::AcceptInvite,
         theme::primary_action(hover),
         d,
         narrow,
@@ -3028,8 +3057,8 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
             text("Join with a link")
                 .size(d.meta)
                 .color(theme::t().text_muted),
-            link_field,
-            paste_connect,
+            field_row,
+            connect,
         ]
         .spacing(8)
         .into()
@@ -3038,7 +3067,7 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
             text("Join with a link")
                 .size(d.meta)
                 .color(theme::t().text_muted),
-            row![link_field, paste_connect]
+            row![field_row.width(Length::Fill), connect]
                 .spacing(8)
                 .align_y(Alignment::Center),
         ]
@@ -3205,33 +3234,54 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
             text("Display name")
                 .size(d.meta)
                 .color(theme::t().text_muted),
-            text_input("Display name", &draft.fields.display_name)
+            crate::edit_menu::edit_field(
+                text_input("Display name", &draft.fields.display_name)
+                .id("edit-field-OwnProfileDisplayName")
                 .on_input(Message::OwnProfileDisplayName)
                 .on_submit(Message::SaveOwnProfile)
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
                 .style(theme::composer_input()),
+                iced::widget::Id::new("edit-field-OwnProfileDisplayName"),
+                &draft.fields.display_name,
+                Message::OwnProfileDisplayName,
+                true,
+            ),
             text("Bio")
                 .size(d.meta)
                 .color(theme::t().text_muted),
-            text_input("Short bio", &draft.fields.short_descr)
+            crate::edit_menu::edit_field(
+                text_input("Short bio", &draft.fields.short_descr)
+                .id("edit-field-OwnProfileBio")
                 .on_input(Message::OwnProfileBio)
                 .on_submit(Message::SaveOwnProfile)
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
                 .style(theme::composer_input()),
+                iced::widget::Id::new("edit-field-OwnProfileBio"),
+                &draft.fields.short_descr,
+                Message::OwnProfileBio,
+                true,
+            ),
             text("Description")
                 .size(d.meta)
                 .color(theme::t().text_muted),
-            text_input("Longer description", &draft.fields.description)
+            crate::edit_menu::edit_field(
+                text_input("Longer description", &draft.fields.description)
+                .id("edit-field-OwnProfileDescription")
                 .on_input(Message::OwnProfileDescription)
                 .on_submit(Message::SaveOwnProfile)
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
                 .style(theme::composer_input()),
+                iced::widget::Id::new("edit-field-OwnProfileDescription"),
+                &draft.fields.description,
+                Message::OwnProfileDescription,
+                true,
+            ),
             vertical().height(6),
             text("Address")
                 .size(d.meta)
@@ -3312,7 +3362,7 @@ fn settings_toggle_row<'a>(
         ]
         .spacing(10)
         .align_y(Alignment::Center)
-        .padding(Padding::from([10, 8])),
+        .padding(Padding::from([6, 8])),
     )
     .width(Length::Fill)
     .into()
@@ -3335,7 +3385,7 @@ fn settings_choice_row<'a>(
         ]
         .spacing(10)
         .align_y(Alignment::Center)
-        .padding(Padding::from([10, 8])),
+        .padding(Padding::from([6, 8])),
     )
     .width(Length::Fill)
     .into()
@@ -3569,13 +3619,20 @@ fn chat_menu_overlay(app: &App) -> Element<'_, Message> {
             }
             list = list.push(vertical().height(8));
             list = list.push(
-                text_input("New list name…", new_name)
+                crate::edit_menu::edit_field(
+                    text_input("New list name…", new_name)
+                    .id("edit-field-ChatMenuNewListChanged")
                     .on_input(Message::ChatMenuNewListChanged)
                     .on_submit(Message::ChatMenuCreateList)
                     .padding(d.composer)
                     .size(d.meta)
                     .width(Length::Fill)
                     .style(theme::composer_input()),
+                    iced::widget::Id::new("edit-field-ChatMenuNewListChanged"),
+                    new_name,
+                    Message::ChatMenuNewListChanged,
+                    true,
+                ),
             );
             list = list.push(
                 row![
@@ -3629,7 +3686,42 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
     let Some(kind) = app.pref_menu() else {
         return vertical().height(0).into();
     };
+    // Optional role glyph per row (menus with “svg + name” entries).
+    let mut item_icons: Vec<Option<&'static str>> = Vec::new();
     let (title, items): (&str, Vec<(String, bool, Message)>) = match kind {
+        PrefMenu::GroupLinkKind => {
+            let short = app.group_settings().map(|g| g.link_prefer_short);
+            (
+                "Link format",
+                vec![
+                    ("Short link".to_string(), short == Some(true), Message::SetGroupLinkShort(true)),
+                    ("Full link".to_string(), short == Some(false), Message::SetGroupLinkShort(false)),
+                ],
+            )
+        }
+        PrefMenu::GroupLinkRole | PrefMenu::GroupInviteRole => {
+            let link = matches!(kind, PrefMenu::GroupLinkRole);
+            let (cur, roles): (String, Vec<&'static str>) = match app.group_settings() {
+                Some(g) if link => (g.link_member_role.clone(), crate::LINK_JOINER_ROLES.to_vec()),
+                Some(g) => (g.invite_role.clone(), crate::invite_roles_for(&g.my_role)),
+                None => (String::new(), Vec::new()),
+            };
+            item_icons = roles.iter().map(|r| Some(*r)).collect();
+            (
+                if link { "Join as" } else { "Invite as" },
+                roles
+                    .into_iter()
+                    .map(|r| {
+                        let msg = if link {
+                            Message::SetGroupLinkRole(r.into())
+                        } else {
+                            Message::SetGroupInviteRole(r.into())
+                        };
+                        (role_label(r).to_string(), cur.eq_ignore_ascii_case(r), msg)
+                    })
+                    .collect(),
+            )
+        }
         PrefMenu::Theme => {
             let cur = app.desktop_prefs().theme;
             (
@@ -3766,14 +3858,24 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
             .size(d.meta)
             .color(theme::t().text_muted),
     );
-    for (label, selected, msg) in items {
+    for (i, (label, selected, msg)) in items.into_iter().enumerate() {
         let color = if selected {
             theme::t().accent
         } else {
             theme::t().text_primary
         };
+        let face: Element<'_, Message> = match item_icons.get(i).copied().flatten() {
+            Some(role) => row![
+                icons::role_icon(role, 18.0, color),
+                text(label).size(d.body).color(color),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .into(),
+            None => text(label).size(d.body).color(color).into(),
+        };
         body = body.push(
-            button(text(label).size(d.body).color(color))
+            button(face)
                 .on_press(msg)
                 .padding(Padding::from([10, 12]))
                 .width(Length::Fill)
@@ -3806,6 +3908,17 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
             .push(backdrop)
             .push(sheet),
     )
+}
+
+/// Capitalised role name for menus / buttons.
+fn role_label(role: &str) -> &'static str {
+    match role.to_ascii_lowercase().as_str() {
+        "observer" => "Observer",
+        "moderator" => "Moderator",
+        "admin" => "Admin",
+        "owner" => "Owner",
+        _ => "Member",
+    }
 }
 
 fn menu_card<'a>(body: Element<'a, Message>, d: Density) -> Element<'a, Message> {
@@ -4185,9 +4298,8 @@ fn chat_avatar_fallback(chat: &cursus_core::ChatPreview) -> AvatarFallback {
     }
 }
 
-/// Unread count pill — same palette as the active Chats nav button
-/// (`accent` glyph on `accent_soft` fill).
-fn unread_count_badge<'a>(count: i64, d: Density) -> Element<'a, Message> {
+/// Badge diameter/width shared by [`unread_count_badge`] and the preview fit.
+fn unread_badge_size(count: i64, d: Density) -> (String, f32, f32) {
     let label = if count <= 0 {
         "·".to_string()
     } else if count > 99 {
@@ -4196,12 +4308,133 @@ fn unread_count_badge<'a>(count: i64, d: Density) -> Element<'a, Message> {
         count.to_string()
     };
     let diameter = (d.meta + 10.0).clamp(20.0, 24.0);
-    let wide = label.len() > 1;
-    let width = if wide {
+    let width = if label.len() > 1 {
         (diameter + d.meta * 0.55 * (label.len().saturating_sub(1) as f32)).max(diameter)
     } else {
         diameter
     };
+    (label, diameter, width)
+}
+
+/// Estimated width of the trailing badge row in a chat-list row (0 if empty).
+fn chat_row_badges_width(
+    chat: &cursus_core::ChatPreview,
+    show_unread: bool,
+    support_badge: i64,
+    d: Density,
+) -> f32 {
+    let mut parts: Vec<f32> = Vec::new();
+    if chat.settings.favorite {
+        parts.push(14.0);
+    }
+    if chat.settings.enable_ntfs.is_muted() {
+        parts.push(estimate_text_width("muted", d.meta));
+    }
+    if show_unread {
+        parts.push(unread_badge_size(chat.unread, d).2);
+    }
+    if support_badge > 0 {
+        parts.push(estimate_text_width(&format!("⚑{support_badge}"), d.meta));
+    }
+    if parts.is_empty() {
+        0.0
+    } else {
+        parts.iter().sum::<f32>() + 6.0 * (parts.len() - 1) as f32
+    }
+}
+
+/// Rough advance of one grapheme in Noto Sans, in em.
+fn grapheme_em(g: &str) -> f32 {
+    let mut chars = g.chars();
+    let Some(c) = chars.next() else { return 0.0 };
+    if chars.next().is_some() && !c.is_ascii() {
+        return 1.2; // emoji sequences / combining clusters
+    }
+    match c {
+        ' ' => 0.27,
+        '\t' => 1.0,
+        'i' | 'l' | 'j' | 'I' | '.' | ',' | '\'' | '!' | '|' | ':' | ';' | '`' => 0.27,
+        'f' | 't' | 'r' | '(' | ')' | '[' | ']' | '/' | '-' => 0.36,
+        'm' | 'w' | 'M' | 'W' | '@' | '%' => 0.86,
+        'A'..='Z' => 0.66,
+        '0'..='9' => 0.57,
+        c if c.is_ascii() => 0.54,
+        // CJK, emoji and other wide scripts.
+        c if (c as u32) >= 0x1100 => 1.15,
+        _ => 0.6,
+    }
+}
+
+fn estimate_text_width(s: &str, size: f32) -> f32 {
+    s.graphemes(true).map(grapheme_em).sum::<f32>() * size
+}
+
+/// Fit `s` into `lines` word-wrapped lines of `max_w` px at `size`, ending
+/// with "…" when anything had to be cut. Mirrors iced's `WordOrGlyph` wrap
+/// closely enough that the container clip is only a safety net.
+fn ellipsize_to_lines(s: &str, max_w: f32, size: f32, lines: usize) -> String {
+    // Small safety margin: real shaping (kerning, fallback fonts) varies.
+    let max_w = max_w * 0.96;
+    let ell_w = 1.0 * size; // "…" ≈ 0.9em in Noto Sans
+    let mut line = 1usize;
+    let mut x = 0.0f32;
+    // Byte index where the text can be cut so "…" still fits on the last line.
+    let mut cut = 0usize;
+    let mut overflow = false;
+
+    'outer: for (tok_start, tok) in s.split_word_bound_indices() {
+        if tok.contains('\n') {
+            line += 1;
+            x = 0.0;
+            if line > lines {
+                overflow = true;
+                break;
+            }
+            cut = tok_start + tok.len();
+            continue;
+        }
+        let tok_w = estimate_text_width(tok, size);
+        let is_space = tok.chars().all(char::is_whitespace);
+        if !is_space && x > 0.0 && x + tok_w > max_w && tok_w <= max_w {
+            // Word wrap: the whole word moves to the next line.
+            line += 1;
+            x = 0.0;
+            if line > lines {
+                overflow = true;
+                break;
+            }
+        }
+        for (g_off, g) in tok.grapheme_indices(true) {
+            let gw = grapheme_em(g) * size;
+            if !is_space && x + gw > max_w {
+                // Glyph wrap inside an over-long word (links, hashes).
+                line += 1;
+                x = 0.0;
+                if line > lines {
+                    overflow = true;
+                    break 'outer;
+                }
+            }
+            x += gw;
+            if line == lines && x + ell_w <= max_w {
+                cut = tok_start + g_off + g.len();
+            } else if line < lines {
+                cut = tok_start + g_off + g.len();
+            }
+        }
+    }
+
+    if !overflow {
+        return s.to_string();
+    }
+    let head = s[..cut].trim_end();
+    format!("{head}…")
+}
+
+/// Unread count pill — same palette as the active Chats nav button
+/// (`accent` glyph on `accent_soft` fill).
+fn unread_count_badge<'a>(count: i64, d: Density) -> Element<'a, Message> {
+    let (label, diameter, width) = unread_badge_size(count, d);
     container(
         text(label)
             .size(d.meta)
@@ -4513,7 +4746,7 @@ fn contact_preferences_page<'a>(
             ]
             .spacing(10)
             .align_y(Alignment::Center)
-            .padding(Padding::from([10, 8])),
+            .padding(Padding::from([6, 8])),
         )
         .width(Length::Fill),
     );
@@ -4955,11 +5188,15 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
     };
 
     let (heading, close_msg): (&str, Message) = match g.pane {
-        GroupSettingsPane::AddMember => ("Add members", Message::CloseAddGroupMember),
+        GroupSettingsPane::AddMember => ("Invite", Message::CloseAddGroupMember),
         GroupSettingsPane::Preferences => ("Group preferences", Message::CloseGroupPreferences),
         GroupSettingsPane::MemberInfo => ("Member", Message::CloseGroupMember),
         GroupSettingsPane::ConfirmLeave => ("Leave group", Message::CloseGroupSettings),
         GroupSettingsPane::ConfirmDelete => ("Delete group", Message::CloseGroupSettings),
+        GroupSettingsPane::ChannelMembers if can_edit_group_profile(&g.my_role) => {
+            ("Subscribers", Message::Back)
+        }
+        GroupSettingsPane::ChannelMembers => ("Owners", Message::Back),
         GroupSettingsPane::Overview if g.is_channel => ("Channel", Message::CloseGroupSettings),
         GroupSettingsPane::Overview => ("Group", Message::CloseGroupSettings),
     };
@@ -5048,6 +5285,9 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
         GroupSettingsPane::AddMember => group_add_member_pane(app, g, d, hover),
         GroupSettingsPane::Preferences => group_preferences_pane(g, d, hover),
         GroupSettingsPane::MemberInfo => group_member_info_pane(g, d, hover),
+        GroupSettingsPane::ChannelMembers => {
+            group_members_list(g, d, hover, !can_edit_group_profile(&g.my_role))
+        }
         GroupSettingsPane::ConfirmLeave => column![
             icons::centered_hit(
                 icons::leave_icon(28.0, theme::t().text_secondary),
@@ -5266,8 +5506,30 @@ fn member_dropdown_overlay(
                     .style(theme::menu_item(hover)),
                 );
             }
+            // Direct message — only when the group allows direct messages.
+            if !g.is_channel
+                && !m.is_me
+                && !pending
+                && group_pref_on(g.group_preferences.as_ref(), "directMessages")
+            {
+                items = items.push(
+                    button(
+                        row![
+                            icons::paperplane_icon(18.0, tint),
+                            text("Direct message")
+                                .size(d.body)
+                                .color(theme::t().text_primary),
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press(Message::OpenMemberDirectChat)
+                    .padding(Padding::from([10, 12]))
+                    .width(Length::Fill)
+                    .style(theme::menu_item(hover)),
+                );
+            }
             if mod_plus
-                && !g.is_channel
                 && (m.support_chat.is_some()
                     || (group_support_allowed(g.group_preferences.as_ref())
                         && group_role_rank(&m.role) < group_role_rank("moderator")))
@@ -5370,7 +5632,7 @@ fn group_overview_pane(
 ) -> Element<'_, Message> {
     let owner = can_edit_group_profile(&g.my_role);
     let admin = can_manage_members(&g.my_role);
-    let mut col = Column::new().spacing(8).width(Length::Fill);
+    let mut col = Column::new().spacing(6).width(Length::Fill);
     // Match contact profile: avatar + name + local alias under the name.
     col = col.push(
         row![
@@ -5388,13 +5650,20 @@ fn group_overview_pane(
                 let mut names = Column::new().spacing(2).width(Length::Fill);
                 if owner {
                     names = names.push(
-                        text_input("Name", &g.name)
+                        crate::edit_menu::edit_field(
+                            text_input("Name", &g.name)
+                            .id("edit-field-GroupSettingsNameChanged")
                             .on_input(Message::GroupSettingsNameChanged)
                             .on_submit(Message::SaveGroupProfile)
                             .padding(Padding::from([2, 0]))
                             .size(d.title)
                             .width(Length::Fill)
                             .style(theme::composer_input()),
+                            iced::widget::Id::new("edit-field-GroupSettingsNameChanged"),
+                            &g.name,
+                            Message::GroupSettingsNameChanged,
+                            true,
+                        ),
                     );
                 } else {
                     names = names.push(
@@ -5432,13 +5701,20 @@ fn group_overview_pane(
     );
     if owner {
         col = col.push(
-            text_input("Optional short description", &g.short_descr)
+            crate::edit_menu::edit_field(
+                text_input("Optional short description", &g.short_descr)
+                .id("edit-field-GroupSettingsShortDescrChanged")
                 .on_input(Message::GroupSettingsShortDescrChanged)
                 .on_submit(Message::SaveGroupProfile)
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
                 .style(theme::composer_input()),
+                iced::widget::Id::new("edit-field-GroupSettingsShortDescrChanged"),
+                &g.short_descr,
+                Message::GroupSettingsShortDescrChanged,
+                true,
+            ),
         );
     } else if !g.short_descr.is_empty() {
         col = col.push(
@@ -5455,13 +5731,20 @@ fn group_overview_pane(
     );
     if owner {
         col = col.push(
-            text_input("Message shown to new members", &g.welcome_message)
+            crate::edit_menu::edit_field(
+                text_input("Message shown to new members", &g.welcome_message)
+                .id("edit-field-GroupSettingsWelcomeChanged")
                 .on_input(Message::GroupSettingsWelcomeChanged)
                 .on_submit(Message::SaveGroupProfile)
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
                 .style(theme::composer_input()),
+                iced::widget::Id::new("edit-field-GroupSettingsWelcomeChanged"),
+                &g.welcome_message,
+                Message::GroupSettingsWelcomeChanged,
+                true,
+            ),
         );
     } else if !g.welcome_message.is_empty() {
         col = col.push(
@@ -5471,7 +5754,7 @@ fn group_overview_pane(
         );
     }
 
-    if !g.is_channel {
+    {
         let support_ok = group_support_allowed(g.group_preferences.as_ref());
         let moderate = can_moderate(&g.my_role);
         if support_ok || moderate {
@@ -5481,68 +5764,96 @@ fn group_overview_pane(
                     .size(d.meta)
                     .color(theme::t().text_muted),
             );
-            if moderate {
-                col = col.push(
-                    button(
-                        row![
-                            icons::admin_icon(20.0, theme::t().text_secondary),
-                            text("Chats with members")
-                                .size(d.body)
-                                .color(theme::t().text_primary)
-                                .width(Length::Fill),
-                        ]
-                        .spacing(10)
-                        .align_y(Alignment::Center),
-                    )
-                    .on_press(Message::OpenSupportChatList)
-                    .padding(Padding::from([10, 8]))
-                    .width(Length::Fill)
-                    .style(theme::menu_item(hover)),
-                );
+            // Same shape as the chat-action tiles (ghost, row layout).
+            let (label, msg) = if moderate {
+                ("Chats with members", Message::OpenSupportChatList)
             } else {
-                col = col.push(
-                    button(
-                        row![
-                            icons::admin_icon(20.0, theme::t().text_secondary),
-                            text("Chat with admins")
-                                .size(d.body)
-                                .color(theme::t().text_primary)
-                                .width(Length::Fill),
-                        ]
-                        .spacing(10)
-                        .align_y(Alignment::Center),
-                    )
-                    .on_press(Message::OpenUserSupportChat)
-                    .padding(Padding::from([10, 8]))
-                    .width(Length::Fill)
-                    .style(theme::menu_item(hover)),
-                );
+                ("Chat with admins", Message::OpenUserSupportChat)
+            };
+            col = col.push(group_action_tile(
+                icons::admin_icon(18.0, theme::t().text_secondary),
+                label,
+                msg,
+                theme::ghost_tile(hover),
+                d,
+                true,
+                false,
+            ));
+            if admin && !g.is_channel {
+                col = col.push(invite_tile(d, hover));
             }
         }
     }
 
     col = col.push(vertical().height(6));
-    {
-        let admin = can_manage_members(&g.my_role);
-        let mut members_header = Row::new()
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .push(
-                text(format!("Members ({})", g.members.len()))
-                    .size(d.meta)
-                    .color(theme::t().text_muted)
-                    .width(Length::Fill),
-            );
-        // Private groups: invite contacts. Channels use the invite link instead.
-        if admin && !g.is_channel {
-            members_header = members_header.push(composer_hit(
-                icons::user_plus_tool(PROFILE_HEADER_ICON, hover),
-                PROFILE_HEADER_ICON,
-                Message::OpenAddGroupMember,
-            ));
-        }
-        col = col.push(members_header);
+    if g.is_channel {
+        // Official channels: no inline member list. Owners open “Subscribers”,
+        // everyone else only sees the channel’s owners.
+        let owner_view = can_edit_group_profile(&g.my_role);
+        let label = if owner_view {
+            format!("Subscribers ({})", g.members.len())
+        } else {
+            "Owners".to_string()
+        };
+        col = col.push(
+            button(
+                row![
+                    icons::centered_hit(icons::user_group_icon(18.0, theme::t().text_secondary), 28.0),
+                    text(label)
+                        .size(d.meta)
+                        .color(theme::t().text_primary)
+                        .width(Length::Fill),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
+            )
+            .on_press(Message::OpenChannelMembers)
+            .padding(Padding::from([8, 10]))
+            .width(Length::Fill)
+            .style(theme::ghost_tile(hover)),
+        );
+    } else {
+        col = col.push(
+            text(format!("Members ({})", g.members.len()))
+                .size(d.meta)
+                .color(theme::t().text_muted),
+        );
+        col = col.push(group_members_list(g, d, hover, false));
     }
+
+    // Private groups manage links on the Invite page; channels keep the
+    // share-only channel link here.
+    if g.is_channel {
+        col = col.push(channel_link_section(g, d, hover, admin));
+    }
+
+    col = col.push(vertical().height(10));
+    col = col.push(
+        text("Chat actions")
+            .size(d.meta)
+            .color(theme::t().text_muted),
+    );
+    // Official: a channel’s only owner can delete it but not leave it.
+    let sole_channel_owner = g.is_channel
+        && g.my_role.eq_ignore_ascii_case("owner")
+        && !g
+            .members
+            .iter()
+            .any(|m| !m.is_me && m.role.eq_ignore_ascii_case("owner"));
+    col = col.push(group_danger_actions(g.is_channel, !sole_channel_owner, d, hover, narrow));
+    col.into()
+}
+
+/// Member rows (avatar · name · gold pending clock · role/action menus).
+/// `owners_only`: channel subscribers see just the owners (official).
+fn group_members_list<'a>(
+    g: &'a crate::GroupSettingsOverlay,
+    d: Density,
+    hover: bool,
+    owners_only: bool,
+) -> Element<'a, Message> {
+    let admin = can_manage_members(&g.my_role);
+    let mut col = Column::new().spacing(0).width(Length::Fill);
     if g.members_loading {
         col = col.push(
             text("Loading…")
@@ -5556,190 +5867,97 @@ fn group_overview_pane(
                 .color(theme::t().text_muted),
         );
     } else {
-        let admin = can_manage_members(&g.my_role);
         let mod_plus = can_moderate(&g.my_role);
-        for m in &g.members {
+        let dm_ok = !g.is_channel && group_pref_on(g.group_preferences.as_ref(), "directMessages");
+        // Rows sit flush (no gap) — the list reads as one block.
+        let mut list = Column::new().spacing(0).width(Length::Fill);
+        for m in g
+            .members
+            .iter()
+            .filter(|m| !owners_only || m.role.eq_ignore_ascii_case("owner"))
+        {
             let mid = m.group_member_id;
-            let show_pending = member_status_shows_pending_icon(&m.status);
+            let name = if m.is_me {
+                format!("YOU ({})", m.public_name)
+            } else {
+                m.display_name.clone()
+            };
             let mut leading = Row::new()
-                .spacing(6)
+                .spacing(8)
                 .align_y(Alignment::Center)
-                .width(Length::Fill);
-            if show_pending {
-                leading = leading.push(icons::pending_status_icon(
-                    16.0,
-                    theme::t().text_muted,
-                ));
-            }
-            leading = leading.push(
-                text(m.display_name.clone())
-                    .size(d.body)
-                    .color(theme::t().text_primary)
-                    .width(Length::Fill),
-            );
-            let mut actions = Row::new().spacing(4).align_y(Alignment::Center);
-            if admin {
-                // Role button shows this member's current privilege glyph.
-                actions = actions.push(composer_hit(
-                    icons::role_tool(&m.role, PROFILE_HEADER_ICON, hover),
-                    PROFILE_HEADER_ICON,
-                    Message::OpenMemberRoleMenu(mid),
-                ));
-            }
-            if admin || mod_plus {
-                actions = actions.push(composer_hit(
-                    icons::actions_menu_tool(PROFILE_HEADER_ICON, hover),
-                    PROFILE_HEADER_ICON,
-                    Message::OpenMemberActionMenu(mid),
-                ));
-            }
-            // Members are not navigable — manage via the icon menus only.
-            // "connected"/active: no status glyph; invited: pending clock.
-            col = col.push(
-                container(
-                    row![leading, actions]
-                        .spacing(8)
-                        .align_y(Alignment::Center)
-                        .padding(Padding::from([8, 4])),
-                )
-                .width(Length::Fill),
-            );
-        }
-    }
-
-    col = col.push(vertical().height(4));
-    col = col.push(
-        text(if g.is_channel {
-            "Channel link"
-        } else {
-            "Invite link"
-        })
-        .size(d.meta)
-        .color(theme::t().text_muted),
-    );
-    // Official SimpleX: channel links are share-only (no delete / short-upgrade /
-    // role). Private groups get short upgrade + delete + joiner role.
-    if g.is_channel {
-        col = col.push(
-            text(
-                "You can share a link to this channel — anyone with it can join \
-via chat relays. Copy the link below (it must contain /c#).",
-            )
-            .size(d.meta)
-            .color(theme::t().text_secondary),
-        );
-    }
-    if let Some(link) = g.link.as_ref() {
-        let mut link_row = Row::new()
-            .spacing(4)
-            .align_y(Alignment::Center)
-            .push(
-                text(truncate_middle(link, if g.is_channel { 52 } else { 44 }))
-                    .size(d.meta)
-                    .color(theme::t().accent)
-                    .width(Length::Fill),
-            )
-            .push(
-                button(icons::centered_hit(
-                    icons::copy_icon(18.0, theme::t().text_secondary),
-                    PROFILE_HEADER_ICON,
-                ))
-                .on_press(Message::CopyGroupLink)
-                .width(PROFILE_HEADER_ICON)
-                .height(PROFILE_HEADER_ICON)
-                .padding(0)
-                .style(theme::icon_action(hover)),
-            );
-        if !g.is_channel && admin {
-            link_row = link_row.push(
-                button(icons::centered_hit(
-                    icons::trash_icon(18.0, theme::t().danger),
-                    PROFILE_HEADER_ICON,
-                ))
-                .on_press(Message::DeleteGroupLink)
-                .width(PROFILE_HEADER_ICON)
-                .height(PROFILE_HEADER_ICON)
-                .padding(0)
-                .style(theme::danger_quiet(hover)),
-            );
-        }
-        col = col.push(link_row);
-        if !g.is_channel {
-            col = col.push(
-                button(text("Short / profile link").size(d.meta))
-                    .on_press(Message::AddGroupShortLink)
-                    .padding(Padding::from([8, 12]))
-                    .style(theme::secondary_action(hover)),
-            );
-            if admin {
-                col = col.push(
-                    button(
-                        text(format!(
-                            "Joiner role: {} (observer/member)",
-                            g.link_member_role
-                        ))
-                        .size(d.meta),
-                    )
-                    .on_press(Message::GroupLinkRoleCycle)
-                    .padding(Padding::from([8, 12]))
-                    .style(theme::secondary_action(hover)),
+                .width(Length::Fill)
+                .push(profile_avatar(m.image.as_deref(), &m.public_name, 28.0))
+                .push(
+                    txt(name)
+                        .size(d.body)
+                        .color(theme::t().text_primary)
+                        .wrapping(Wrapping::WordOrGlyph),
                 );
+            // Invited / connecting: gold clock right after the name.
+            if member_status_shows_pending_icon(&m.status) {
+                leading = leading.push(icons::pending_status_icon(16.0, theme::t().always));
             }
-        }
-    } else if g.is_channel {
-        col = col.push(
-            text(
+            let mut actions = Row::new().spacing(4).align_y(Alignment::Center);
+            if !m.is_me {
                 if admin {
-                    "No channel invite link on this channel. SimpleX doesn’t recreate \
-channel links after they’re gone — create a new channel to invite people."
-                } else {
-                    "Only the owner can share the channel link."
-                },
-            )
-            .size(d.meta)
-            .color(theme::t().text_muted),
-        );
-    } else if admin {
-        col = col.push(
-            button(text("Create / show link").size(d.meta))
-                .on_press(Message::EnsureGroupLink)
-                .padding(Padding::from([8, 12]))
-                .style(theme::primary_action(hover)),
-        );
-    } else {
-        col = col.push(
-            text("Only admins can manage the invite link.")
-                .size(d.meta)
-                .color(theme::t().text_muted),
-        );
+                    // Role button shows this member's current privilege glyph.
+                    actions = actions.push(composer_hit(
+                        icons::role_tool(&m.role, PROFILE_HEADER_ICON, hover),
+                        PROFILE_HEADER_ICON,
+                        Message::OpenMemberRoleMenu(mid),
+                    ));
+                }
+                if admin || mod_plus || dm_ok {
+                    actions = actions.push(composer_hit(
+                        icons::actions_menu_tool(PROFILE_HEADER_ICON, hover),
+                        PROFILE_HEADER_ICON,
+                        Message::OpenMemberActionMenu(mid),
+                    ));
+                }
+            }
+            list = list.push(
+                row![leading, actions]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .padding(Padding::from([2, 4])),
+            );
+        }
+        col = col.push(list);
     }
-
-    col = col.push(vertical().height(10));
-    col = col.push(
-        text("Chat actions")
-            .size(d.meta)
-            .color(theme::t().text_muted),
-    );
-    col = col.push(group_danger_actions(g.is_channel, d, hover, narrow));
     col.into()
+
 }
 
 /// Local alias under the peer name — same title size, commits on Enter.
 fn alias_inline_field<'a>(
     value: &'a str,
     placeholder: &'a str,
-    on_changed: impl Fn(String) -> Message + 'a,
+    on_changed: impl Fn(String) -> Message + Clone + 'a,
     on_submit: Message,
     d: Density,
 ) -> Element<'a, Message> {
-    text_input(placeholder, value)
-        .on_input(on_changed)
-        .on_submit(on_submit)
-        .padding(Padding::from([2, 0]))
-        .size(d.title)
-        .width(Length::Fill)
-        .style(theme::composer_input())
-        .into()
+    // Action-tile radius (12) with matching side padding so the rounded
+    // corners never clip the placeholder.
+    const ID: &str = "edit-field-local-name";
+    crate::edit_menu::edit_field(
+        text_input(placeholder, value)
+            .id(ID)
+            .on_input(on_changed.clone())
+            .on_submit(on_submit)
+            .padding(Padding {
+                top: 6.0,
+                right: 12.0,
+                bottom: 6.0,
+                left: 12.0,
+            })
+            .size(d.body)
+            .width(Length::Fill)
+            .style(theme::rounded_field()),
+        iced::widget::Id::new(ID),
+        value,
+        on_changed,
+        true,
+    )
 }
 
 fn action_tile_row(
@@ -5790,7 +6008,7 @@ fn contact_feature_pick_row<'a>(
         ]
         .spacing(10)
         .align_y(Alignment::Center)
-        .padding(Padding::from([10, 8])),
+        .padding(Padding::from([6, 8])),
     )
     .width(Length::Fill)
     .into()
@@ -5846,7 +6064,7 @@ fn contact_feature_prefs(
                 ]
                 .spacing(10)
                 .align_y(Alignment::Center)
-                .padding(Padding::from([10, 8])),
+                .padding(Padding::from([6, 8])),
             )
             .width(Length::Fill),
         );
@@ -5915,7 +6133,7 @@ fn contact_danger_actions(
                 icons::clear_all_icon(18.0, theme::t().text_secondary),
                 "Clear chat",
                 Message::ContactProfileClear,
-                theme::quiet_tile(hover),
+                theme::ghost_tile(hover),
                 d,
                 narrow,
                 false,
@@ -5924,7 +6142,7 @@ fn contact_danger_actions(
                 icons::trash_icon(18.0, theme::t().danger),
                 "Delete contact",
                 Message::ContactProfileDelete,
-                theme::danger_quiet(hover),
+                theme::ghost_danger(hover),
                 d,
                 narrow,
                 true,
@@ -5937,6 +6155,7 @@ fn contact_danger_actions(
 /// Clear / leave / delete — compact tiles matching the contact page.
 fn group_danger_actions(
     is_channel: bool,
+    can_leave: bool,
     d: Density,
     hover: bool,
     narrow: bool,
@@ -5951,36 +6170,37 @@ fn group_danger_actions(
     } else {
         "Delete group"
     };
+    let mut tiles = vec![group_action_tile(
+        icons::clear_all_icon(18.0, theme::t().text_secondary),
+        "Clear chat",
+        Message::ClearGroupChat,
+        theme::ghost_tile(hover),
+        d,
+        narrow,
+        false,
+    )];
+    if can_leave {
+        tiles.push(group_action_tile(
+            icons::leave_icon(18.0, theme::t().text_secondary),
+            leave_label,
+            Message::OpenLeaveGroupConfirm,
+            theme::ghost_tile(hover),
+            d,
+            narrow,
+            false,
+        ));
+    }
+    tiles.push(group_action_tile(
+        icons::trash_icon(18.0, theme::t().danger),
+        delete_label,
+        Message::OpenDeleteGroupConfirm,
+        theme::ghost_danger(hover),
+        d,
+        narrow,
+        true,
+    ));
     action_tile_row(
-        vec![
-            group_action_tile(
-                icons::clear_all_icon(18.0, theme::t().text_secondary),
-                "Clear chat",
-                Message::ClearGroupChat,
-                theme::quiet_tile(hover),
-                d,
-                narrow,
-                false,
-            ),
-            group_action_tile(
-                icons::leave_icon(18.0, theme::t().text_secondary),
-                leave_label,
-                Message::OpenLeaveGroupConfirm,
-                theme::quiet_tile(hover),
-                d,
-                narrow,
-                false,
-            ),
-            group_action_tile(
-                icons::trash_icon(18.0, theme::t().danger),
-                delete_label,
-                Message::OpenDeleteGroupConfirm,
-                theme::danger_quiet(hover),
-                d,
-                narrow,
-                true,
-            ),
-        ],
+        tiles,
         narrow,
     )
 }
@@ -6038,6 +6258,126 @@ fn group_action_tile<'a>(
     .style(style)
 }
 
+/// “Invite” row in the group Support section — opens the Invite page.
+fn invite_tile(d: Density, hover: bool) -> Element<'static, Message> {
+    button(
+        row![
+            icons::centered_hit(icons::user_plus_icon(18.0, theme::t().text_secondary), 28.0),
+            text("Invite")
+                .size(d.meta)
+                .color(theme::t().text_primary)
+                .width(Length::Fill),
+            icons::centered_hit(icons::plus_icon(18.0, theme::t().accent), 28.0),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
+    )
+    .on_press(Message::OpenAddGroupMember)
+    .padding(Padding::from([8, 10]))
+    .width(Length::Fill)
+    .style(theme::ghost_tile(hover))
+    .into()
+}
+
+/// Rounded blue box showing a link; the whole box copies, copy glyph at the end.
+fn link_copy_box<'a>(
+    link: &str,
+    on_copy: Message,
+    d: Density,
+    hover: bool,
+) -> Element<'a, Message> {
+    button(
+        row![
+            txt(link.to_string())
+                .size(d.meta)
+                .color(theme::t().accent)
+                .wrapping(Wrapping::Glyph)
+                .width(Length::Fill),
+            icons::copy_icon(18.0, theme::t().accent),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
+    )
+    .on_press(on_copy)
+    .padding(Padding::from([10, 12]))
+    .width(Length::Fill)
+    .style(theme::link_box(hover))
+    .into()
+}
+
+/// Settings-style row: label on the left, an overlay-menu chip on the right.
+fn menu_choice_row<'a>(
+    label: &'a str,
+    chip: Element<'a, Message>,
+    on_press: Message,
+    d: Density,
+    hover: bool,
+) -> Element<'a, Message> {
+    row![
+        text(label)
+            .size(d.body)
+            .color(theme::t().text_primary)
+            .width(Length::Fill),
+        button(
+            row![chip, icons::chevron_down(14.0)]
+                .spacing(6)
+                .align_y(Alignment::Center),
+        )
+        .on_press(on_press)
+        .padding(Padding::from([6, 10]))
+        .style(theme::secondary_action(hover)),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center)
+    .padding(Padding::from([2, 4]))
+    .into()
+}
+
+fn role_chip<'a>(role: &str, d: Density) -> Element<'a, Message> {
+    row![
+        icons::role_icon(&role.to_ascii_lowercase(), 16.0, theme::t().text_secondary),
+        text(role_label(role)).size(d.meta).color(theme::t().text_primary),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+/// Channel overview: share-only `/c#` link (official: no delete / role / format).
+fn channel_link_section<'a>(
+    g: &'a crate::GroupSettingsOverlay,
+    d: Density,
+    hover: bool,
+    admin: bool,
+) -> Element<'a, Message> {
+    let mut col = Column::new().spacing(8).width(Length::Fill);
+    col = col.push(vertical().height(4));
+    col = col.push(text("Channel link").size(d.meta).color(theme::t().text_muted));
+    col = col.push(
+        text(
+            "Anyone with this link can join via chat relays. Tap the link to copy it.",
+        )
+        .size(d.meta)
+        .color(theme::t().text_secondary),
+    );
+    if let Some(link) = g.link.as_ref() {
+        col = col.push(link_copy_box(link, Message::CopyGroupLink, d, hover));
+    } else {
+        col = col.push(
+            text(if admin {
+                "No channel invite link on this channel. SimpleX doesn’t recreate \
+channel links after they’re gone — create a new channel to invite people."
+            } else {
+                "Only the owner can share the channel link."
+            })
+            .size(d.meta)
+            .color(theme::t().text_muted),
+        );
+    }
+    col.into()
+}
+
+/// Group Invite page: link (format / join-as / delete / copy) + invite contacts.
 fn group_add_member_pane<'a>(
     app: &'a App,
     g: &'a crate::GroupSettingsOverlay,
@@ -6049,57 +6389,107 @@ fn group_add_member_pane<'a>(
             text("Channels don’t support adding contacts.")
                 .size(d.body)
                 .color(theme::t().text_primary),
-            text("Go back and create/copy the channel link to invite people.")
+            text("Share the channel link from the channel page instead.")
                 .size(d.meta)
                 .color(theme::t().text_secondary),
-            button(text("Back to channel settings").size(d.meta))
-                .on_press(Message::CloseAddGroupMember)
-                .padding(Padding::from([8, 12]))
-                .style(theme::secondary_action(hover)),
         ]
         .spacing(10)
         .into();
     }
-    let mut list = Column::new().spacing(6).width(Length::Fill);
-    list = list.push(
-        text("Invite a contact into this group.")
-            .size(d.meta)
-            .color(theme::t().text_secondary),
-    );
-    list = list.push(
-        button(text(format!("Invite as: {}", g.invite_role)).size(d.meta))
-            .on_press(Message::GroupInviteRoleCycle)
-            .padding(Padding::from([8, 12]))
-            .style(theme::secondary_action(hover)),
-    );
+    let admin = can_manage_members(&g.my_role);
+    let mut col = Column::new().spacing(8).width(Length::Fill);
+
+    // ── Links ───────────────────────────────────────────────────────────
+    col = col.push(text("Links").size(d.meta).color(theme::t().text_muted));
+    if let Some(link) = g.link.as_ref() {
+        col = col.push(menu_choice_row(
+            "Link",
+            text(if g.link_prefer_short { "Short" } else { "Full" })
+                .size(d.meta)
+                .color(theme::t().text_primary)
+                .into(),
+            Message::OpenPrefMenu(PrefMenu::GroupLinkKind),
+            d,
+            hover,
+        ));
+        if admin {
+            col = col.push(menu_choice_row(
+                "Join as",
+                role_chip(&g.link_member_role, d),
+                Message::OpenPrefMenu(PrefMenu::GroupLinkRole),
+                d,
+                hover,
+            ));
+        }
+        let mut link_row = Row::new()
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .push(link_copy_box(link, Message::CopyGroupLink, d, hover));
+        if admin {
+            link_row = link_row.push(composer_hit(
+                icons::trash_icon(20.0, theme::t().danger),
+                PROFILE_HEADER_ICON,
+                Message::DeleteGroupLink,
+            ));
+        }
+        col = col.push(link_row);
+    } else if admin {
+        col = col.push(
+            button(text("Create link").size(d.meta))
+                .on_press(Message::EnsureGroupLink)
+                .padding(Padding::from([8, 12]))
+                .style(theme::primary_action(hover)),
+        );
+    } else {
+        col = col.push(
+            text("Only admins can manage the invite link.")
+                .size(d.meta)
+                .color(theme::t().text_muted),
+        );
+    }
+
+    // ── Invite contact ──────────────────────────────────────────────────
+    col = col.push(vertical().height(8));
+    col = col.push(text("Invite contact").size(d.meta).color(theme::t().text_muted));
+    col = col.push(menu_choice_row(
+        "As",
+        role_chip(&g.invite_role, d),
+        Message::OpenPrefMenu(PrefMenu::GroupInviteRole),
+        d,
+        hover,
+    ));
     let contacts = app.contacts_to_add_to_group();
     if contacts.is_empty() {
-        list = list.push(
-            text("No contacts left to add (connect someone in Chats first).")
+        col = col.push(
+            text("No contacts left to invite (connect someone in Chats first).")
                 .size(d.meta)
                 .color(theme::t().text_muted),
         );
     } else {
+        let mut list = Column::new().spacing(0).width(Length::Fill);
         for chat in contacts {
             let contact_id = chat.id.api_id;
             list = list.push(
                 row![
-                    profile_avatar(chat.peer_profile.image.as_deref(), &chat.title, 32.0),
-                    text(chat.title.clone())
+                    profile_avatar(chat.peer_profile.image.as_deref(), &chat.title, 28.0),
+                    txt(chat.title.clone())
                         .size(d.body)
                         .color(theme::t().text_primary)
                         .width(Length::Fill),
-                    button(text("Add").size(d.meta))
-                        .on_press(Message::AddGroupMember(contact_id))
-                        .padding(Padding::from([8, 12]))
-                        .style(theme::primary_action(hover)),
+                    composer_hit(
+                        icons::user_plus_tool(PROFILE_HEADER_ICON, hover),
+                        PROFILE_HEADER_ICON,
+                        Message::AddGroupMember(contact_id),
+                    ),
                 ]
-                .spacing(10)
-                .align_y(Alignment::Center),
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .padding(Padding::from([2, 4])),
             );
         }
+        col = col.push(list);
     }
-    list.into()
+    col.into()
 }
 
 fn group_pref_icon(key: &str) -> Element<'static, Message> {
@@ -6173,15 +6563,16 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
             let title = m.display_name.clone();
             let pending = member_status_is_pending(&m.status);
             let mut name = Row::new().spacing(6).align_y(Alignment::Center);
-            if pending {
-                name = name.push(icons::pending_status_icon(16.0, theme::t().text_muted));
-            }
+            name = name.push(profile_avatar(m.image.as_deref(), &m.public_name, 28.0));
             name = name.push(
                 text(m.display_name.clone())
                     .size(d.body)
-                    .color(theme::t().text_primary)
-                    .width(Length::Fill),
+                    .color(theme::t().text_primary),
             );
+            if pending {
+                name = name.push(icons::pending_status_icon(16.0, theme::t().always));
+            }
+            name = name.push(horizontal());
             if unread > 0 {
                 name = name.push(
                     text(format!("{unread}"))
@@ -6209,14 +6600,22 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
                         .padding(Padding::from([8, 10]))
                         .style(theme::secondary_action(hover)),
                 );
+                // Tap the name to read the join request (and its message) in
+                // the member's support chat; Accept / Reject stay inline.
                 body = body.push(
-                    container(
-                        row![name, actions]
-                            .spacing(8)
-                            .align_y(Alignment::Center)
-                            .padding(Padding::from([8, 4])),
-                    )
-                    .width(Length::Fill),
+                    row![
+                        button(name)
+                            .on_press(Message::OpenMemberSupportChat {
+                                member_id: mid,
+                                title,
+                            })
+                            .padding(Padding::from([6, 8]))
+                            .width(Length::Fill)
+                            .style(theme::menu_item(hover)),
+                        actions,
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
                 );
             } else {
                 body = body.push(
@@ -6226,7 +6625,7 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
                                 member_id: mid,
                                 title,
                             })
-                            .padding(Padding::from([10, 8]))
+                            .padding(Padding::from([6, 8]))
                             .width(Length::Fill)
                             .style(theme::menu_item(hover)),
                         button(icons::centered_hit(
@@ -6314,7 +6713,7 @@ fn group_preferences_pane(
                 ]
                 .spacing(10)
                 .align_y(Alignment::Center)
-                .padding(Padding::from([10, 8])),
+                .padding(Padding::from([6, 8])),
             )
             .width(Length::Fill),
         );
@@ -6350,7 +6749,7 @@ fn group_preferences_pane(
                     ]
                     .spacing(10)
                     .align_y(Alignment::Center)
-                    .padding(Padding::from([10, 8])),
+                    .padding(Padding::from([6, 8])),
                 )
                 .width(Length::Fill),
             );
@@ -6377,7 +6776,7 @@ fn group_preferences_pane(
             ]
             .spacing(10)
             .align_y(Alignment::Center)
-            .padding(Padding::from([10, 8])),
+            .padding(Padding::from([6, 8])),
         )
         .width(Length::Fill),
     );
@@ -6700,13 +7099,20 @@ fn create_chat_overlay(app: &App) -> Element<'_, Message> {
             text(hint)
                 .size(d.meta)
                 .color(theme::t().text_secondary),
-            text_input(placeholder_name, &draft.name)
+            crate::edit_menu::edit_field(
+                text_input(placeholder_name, &draft.name)
+                .id("edit-field-CreateChatNameChanged")
                 .on_input(Message::CreateChatNameChanged)
                 .on_submit(Message::ConfirmCreateChat)
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
                 .style(theme::composer_input()),
+                iced::widget::Id::new("edit-field-CreateChatNameChanged"),
+                &draft.name,
+                Message::CreateChatNameChanged,
+                true,
+            ),
             row![
                 button(text("Cancel").size(d.meta))
                     .on_press(Message::CloseCreateChat)
@@ -6762,17 +7168,41 @@ fn truncate(s: &str, max_chars: usize) -> String {
     out
 }
 
-/// Middle ellipsis so a selected preview is obviously incomplete (use the copy button).
-fn truncate_middle(s: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_chars {
-        return s.to_string();
+#[cfg(test)]
+mod ellipsize_tests {
+    use super::ellipsize_to_lines;
+
+    #[test]
+    fn short_text_is_untouched() {
+        assert_eq!(ellipsize_to_lines("hello there", 200.0, 12.0, 2), "hello there");
     }
-    if max_chars < 5 {
-        return truncate(s, max_chars);
+
+    #[test]
+    fn long_text_gets_ellipsis() {
+        let long = "word ".repeat(80);
+        let out = ellipsize_to_lines(&long, 150.0, 12.0, 2);
+        assert!(out.ends_with('…'));
+        assert!(out.len() < long.len());
     }
-    let keep = (max_chars - 1) / 2;
-    let head: String = chars.iter().take(keep).collect();
-    let tail: String = chars.iter().rev().take(keep).collect::<Vec<_>>().into_iter().rev().collect();
-    format!("{head}…{tail}")
+
+    #[test]
+    fn long_link_glyph_wraps_then_cuts() {
+        let link = "https://simplex.chat/contact#/?v=2-7&smp=smp%3A%2F%2Fabcdefghijklmnopqrstuvwxyz0123456789";
+        let out = ellipsize_to_lines(link, 120.0, 12.0, 2);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn newlines_count_as_lines() {
+        let out = ellipsize_to_lines("a\nb\nc", 200.0, 12.0, 2);
+        assert!(out.starts_with("a\nb") && out.ends_with('…'));
+    }
+
+    #[test]
+    fn narrower_column_cuts_earlier() {
+        let long = "lorem ipsum dolor sit amet ".repeat(10);
+        let wide = ellipsize_to_lines(&long, 260.0, 12.0, 2);
+        let narrow = ellipsize_to_lines(&long, 220.0, 12.0, 2);
+        assert!(narrow.len() < wide.len());
+    }
 }

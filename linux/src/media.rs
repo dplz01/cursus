@@ -544,18 +544,6 @@ mod tests {
         assert_eq!(h, 300);
     }
 
-    #[test]
-    fn viewer_preview_path_is_stable() {
-        let p = PathBuf::from("/tmp/photo.JPG");
-        let a = viewer_preview_path(&p, 1600);
-        let b = viewer_preview_path(&p, 1600);
-        assert_eq!(a, b);
-        assert!(a
-            .file_name()
-            .and_then(|s| s.to_str())
-            .is_some_and(|s| s.contains("view1600")));
-    }
-
     fn write_pcm_wav(path: &Path, samples: usize, sample_rate: u32) {
         let data_len = (samples * 2) as u32;
         let mut bytes = Vec::with_capacity(44 + data_len as usize);

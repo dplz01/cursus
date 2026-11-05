@@ -74,7 +74,13 @@ struct ReceiveWorker {
 impl ReceiveWorker {
     fn run(self) {
         loop {
-            match self.lib.recv_msg_wait(self.ctrl.0, 300_000_000) {
+            // Short wait so the worker notices a dropped subscriber (UI quit /
+            // session swap) within ~1s; a 5-minute wait kept tokio's blocking
+            // pool busy and froze runtime shutdown on Quit.
+            if self.tx.is_closed() {
+                break;
+            }
+            match self.lib.recv_msg_wait(self.ctrl.0, 1_000_000) {
                 Ok(None) => continue,
                 Ok(Some(raw)) => match serde_json::from_str::<ApiEnvelope>(&raw) {
                     Ok(env) => match env.into_result() {
@@ -753,6 +759,19 @@ impl Session {
         self.send(&Commands::block_members(group_id, &[member_id], blocked))
     }
 
+    /// Open (or create) a direct chat with a group member, as the official
+    /// “Send direct message” does: `/_create member contact` then
+    /// `/_invite member contact`. Returns the new contact id.
+    pub fn create_member_contact(&self, group_id: i64, member_id: i64) -> Result<i64> {
+        let value = self.send(&Commands::create_member_contact(group_id, member_id))?;
+        let contact_id = value
+            .pointer("/contact/contactId")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| Error::Command(format!("newMemberContact missing contact: {value}")))?;
+        self.send(&Commands::invite_member_contact(contact_id))?;
+        Ok(contact_id)
+    }
+
     pub fn accept_group_member(
         &self,
         group_id: i64,
@@ -789,7 +808,7 @@ impl Session {
     /// Channels must use the `/c#` short link created with `/_public group`.
     /// Falling back to `/_create link` produces a private-group `/g#` URI that
     /// official apps reject as `invalidConnReq` (entity id mismatch).
-    pub fn group_invite_link(&self, group_id: i64, member_role: &str) -> Result<String> {
+    pub fn group_invite_link(&self, group_id: i64, member_role: &str) -> Result<ConnLink> {
         let role = if member_role.is_empty() {
             "member"
         } else {
@@ -806,7 +825,12 @@ impl Session {
                     .or_else(|| parse_group_link(value))
                     .filter(|l| is_channel_short_link(l))
                 {
-                    return Ok(shareable_conn_uri(&link));
+                    let link = shareable_conn_uri(&link);
+                    return Ok(ConnLink {
+                        display: link.clone(),
+                        full: link.clone(),
+                        short: Some(link),
+                    });
                 }
                 return Err(Error::Command(
                     "this channel has no usable short link (need simplex:/c#… or https://…/c#…). \
@@ -814,13 +838,12 @@ Create a new channel — private-group style links won’t join."
                         .into(),
                 ));
             }
-            if let Some(link) = parse_group_link(value) {
-                return Ok(shareable_conn_uri(&link));
+            if let Some(links) = parse_group_conn_link(value) {
+                return Ok(links);
             }
         }
         let created = self.send(&Commands::create_group_link(group_id, role))?;
-        parse_group_link(&created)
-            .map(|l| shareable_conn_uri(&l))
+        parse_group_conn_link(&created)
             .ok_or_else(|| Error::Command(format!("group link missing: {created}")))
     }
 
@@ -832,10 +855,9 @@ Create a new channel — private-group style links won’t join."
         self.send(&Commands::delete_group_link(group_id))
     }
 
-    pub fn short_group_link(&self, group_id: i64) -> Result<String> {
+    pub fn short_group_link(&self, group_id: i64) -> Result<ConnLink> {
         let value = self.send(&Commands::short_group_link(group_id))?;
-        parse_group_link(&value)
-            .map(|l| shareable_conn_uri(&l))
+        parse_group_conn_link(&value)
             .ok_or_else(|| Error::Command(format!("short group link missing: {value}")))
     }
 
@@ -1229,6 +1251,11 @@ fn parse_one_group_member(m: &Value) -> Option<GroupMemberInfo> {
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
     let support_chat = parse_support_chat(m.get("supportChat"));
+    let image = nonempty_str(m.pointer("/memberProfile/image"))
+        .or_else(|| nonempty_str(m.pointer("/profile/image")));
+    let public_name = nonempty_str(m.pointer("/memberProfile/displayName"))
+        .or_else(|| nonempty_str(m.pointer("/profile/displayName")))
+        .unwrap_or_else(|| display_name.clone());
     Some(GroupMemberInfo {
         group_member_id: id,
         contact_id,
@@ -1238,6 +1265,9 @@ fn parse_one_group_member(m: &Value) -> Option<GroupMemberInfo> {
         blocked_by_admin,
         show_messages,
         support_chat,
+        image,
+        public_name,
+        is_me: false,
     })
 }
 
@@ -1250,7 +1280,8 @@ fn parse_group_members(value: &Value) -> Vec<GroupMemberInfo> {
         .pointer("/group/groupInfo/membership")
         .or_else(|| value.pointer("/groupInfo/membership"))
         .or_else(|| value.pointer("/membership"));
-    if let Some(m) = membership.and_then(parse_one_group_member) {
+    if let Some(mut m) = membership.and_then(parse_one_group_member) {
+        m.is_me = true;
         seen.insert(m.group_member_id);
         out.push(m);
     }
@@ -1321,6 +1352,29 @@ fn parse_profile_channel_link(value: &Value) -> Option<String> {
         .or_else(|| value.pointer("/groupProfile/publicGroup/groupLink"))
         .and_then(|v| v.as_str())
         .map(str::to_string)
+}
+
+/// Private-group link in both forms (short when the core has one, full always).
+fn parse_group_conn_link(value: &Value) -> Option<ConnLink> {
+    let conn = value
+        .pointer("/groupLink/connLinkContact")
+        .or_else(|| value.pointer("/groupLink/connLinkInvitation"))
+        .or_else(|| value.get("connLinkContact"))?;
+    let full = conn
+        .get("connFullLink")
+        .and_then(|v| v.as_str())
+        .map(shareable_conn_uri);
+    let short = conn
+        .get("connShortLink")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(shareable_conn_uri);
+    let full = full.or_else(|| short.clone())?;
+    Some(ConnLink {
+        display: short.clone().unwrap_or_else(|| full.clone()),
+        full,
+        short,
+    })
 }
 
 fn parse_group_link(value: &Value) -> Option<String> {

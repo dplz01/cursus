@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn text_scale_small_keeps_readable_meta() {
         let d = Density::for_window(LayoutMode::Desktop, 1200.0, 800.0).with_text_scale(0.875);
-        assert!(d.meta >= 10, "meta must stay ≥10px so time glyphs do not crush");
-        assert!(d.body >= 10);
+        assert!(d.meta >= 10.0, "meta must stay ≥10px so time glyphs do not crush");
+        assert!(d.body >= 10.0);
     }
 }

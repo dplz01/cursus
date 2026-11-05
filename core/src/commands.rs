@@ -455,6 +455,17 @@ impl Commands {
         format!("/_accept member #{group_id} {member_id} {role}")
     }
 
+    /// Create a direct contact with a group member (`APICreateMemberContact`).
+    pub fn create_member_contact(group_id: i64, member_id: i64) -> String {
+        format!("/_create member contact #{group_id} {member_id}")
+    }
+
+    /// Send the direct-connection invitation for a member contact
+    /// (`APISendMemberContactInvitation`, message content optional).
+    pub fn invite_member_contact(contact_id: i64) -> String {
+        format!("/_invite member contact @{contact_id}")
+    }
+
     /// Local group alias (`/_set alias #{groupId} {alias}`).
     pub fn set_group_alias(group_id: i64, alias: &str) -> String {
         if alias.is_empty() {

@@ -793,3 +793,22 @@ pub fn send_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mess
         )
     }
 }
+
+/// Paste-from-clipboard — Cursus original (CC0), same chrome as other icon-only tools.
+pub fn paste_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
+    profile_tool_icon(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/paste.svg").as_slice()),
+        hit,
+        theme::t().text_secondary,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
+pub fn user_plus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/user-plus-alt-1.svg").as_slice()),
+        color,
+        size,
+    )
+}

@@ -578,21 +578,23 @@ pub fn danger_quiet(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> 
     }
 }
 
-/// Soft elevated tile for secondary chrome actions (clear / leave).
-pub fn quiet_tile(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+/// Chat-action tile (clear / leave / delete / support / invite): same 12px
+/// rounded shape as the old bordered tiles but no border or fill at rest — the shape
+/// only appears on hover / press.
+pub fn ghost_tile(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
         let c = t();
         let background = match status {
             button::Status::Hovered if hover_ok => Some(Background::Color(c.bg_hover)),
             button::Status::Pressed => Some(Background::Color(c.accent_soft)),
-            _ => Some(Background::Color(c.bg_elevated)),
+            _ => None,
         };
         button::Style {
             background,
             text_color: c.text_primary,
             border: Border {
-                color: c.border,
-                width: 1.0,
+                color: Color::TRANSPARENT,
+                width: 0.0,
                 radius: 12.0.into(),
             },
             ..button::Style::default()
@@ -600,21 +602,67 @@ pub fn quiet_tile(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
     }
 }
 
-pub fn icon_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+/// Destructive variant of [`ghost_tile`] — red label/icon, soft red on hover.
+pub fn ghost_danger(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
         let c = t();
         let background = match status {
-            button::Status::Hovered if hover_ok => c.accent_hover,
-            button::Status::Pressed => c.accent_press,
-            button::Status::Disabled => c.disabled_fill,
-            _ => c.accent,
+            button::Status::Hovered if hover_ok => Some(Background::Color(Color { a: 0.14, ..c.danger })),
+            button::Status::Pressed => Some(Background::Color(Color { a: 0.24, ..c.danger })),
+            _ => None,
         };
         button::Style {
-            background: Some(Background::Color(background)),
-            text_color: c.accent_on,
+            background,
+            text_color: c.danger,
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
+                radius: 12.0.into(),
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
+/// Inline text field with the action-tile radius (12). Pair with ≥10px
+/// horizontal padding so the rounded corners never clip the placeholder.
+pub fn rounded_field() -> impl Fn(&iced::Theme, text_input::Status) -> text_input::Style {
+    |_, status| {
+        let c = t();
+        let border_color = match status {
+            text_input::Status::Focused { .. } => c.accent,
+            _ => c.border,
+        };
+        text_input::Style {
+            background: Background::Color(c.bg_sidebar),
+            border: Border {
+                color: border_color,
+                width: 1.0,
+                radius: 12.0.into(),
+            },
+            icon: c.text_muted,
+            placeholder: c.text_secondary,
+            value: c.text_primary,
+            selection: c.accent_soft,
+        }
+    }
+}
+
+/// Blue link box (accent-soft fill, accent hairline) — shared links / call cards.
+pub fn link_box(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let c = t();
+        let background = match status {
+            button::Status::Hovered if hover_ok => c.accent_soft_press,
+            button::Status::Pressed => c.accent_soft_press,
+            _ => c.accent_soft,
+        };
+        button::Style {
+            background: Some(Background::Color(background)),
+            text_color: c.accent,
+            border: Border {
+                color: c.accent,
+                width: 1.0,
                 radius: 12.0.into(),
             },
             ..button::Style::default()

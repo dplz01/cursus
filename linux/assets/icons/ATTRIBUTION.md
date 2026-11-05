@@ -28,6 +28,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `play.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `stop.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `back.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
+| `paste.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `timer.svg` | [svgrepo/521887](https://www.svgrepo.com/svg/521887/timer) | Gentlecons Interface Icons / Konstantin Filatov | **CC Attribution** — attribution required | Yes (with credit) |
 | `reaction-emoji-add.svg` | [svgrepo/440786](https://www.svgrepo.com/svg/440786/reaction-emoji-add) | Classjob Ff Game Icons / xivapi | **MIT License** | Yes |
 | `user-alt-1.svg` | [svgrepo/532363](https://www.svgrepo.com/svg/532363/user-alt-1) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |

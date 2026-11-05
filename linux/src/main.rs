@@ -4,6 +4,8 @@
 
 mod avatar_cache;
 mod desktop;
+mod edit_menu;
+mod float_open;
 mod hover;
 mod icons;
 mod kinetic;
@@ -452,6 +454,8 @@ pub struct CreateChatOverlay {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupSettingsPane {
     Overview,
+    /// Channels: subscribers (owners) / owners (everyone else).
+    ChannelMembers,
     AddMember,
     Preferences,
     MemberInfo,
@@ -497,7 +501,12 @@ pub struct GroupSettingsOverlay {
     pub is_channel: bool,
     pub members: Vec<GroupMemberInfo>,
     pub members_loading: bool,
+    /// Link currently shown (short or full per `link_prefer_short`).
     pub link: Option<String>,
+    /// Both link forms as returned by core (private groups).
+    pub links: Option<ConnLink>,
+    /// Invite page: show / copy the short link (else the full one).
+    pub link_prefer_short: bool,
     /// Default role granted to link joiners.
     pub link_member_role: String,
     /// Role used when inviting a contact from AddMember.
@@ -516,6 +525,36 @@ pub struct GroupSettingsOverlay {
     pub pane: GroupSettingsPane,
     pub dirty: bool,
 }
+
+impl GroupSettingsOverlay {
+    /// Store both link forms and pick the one matching the short/long choice.
+    pub fn apply_links(&mut self, links: ConnLink) {
+        self.link = Some(if self.link_prefer_short {
+            links.short.clone().unwrap_or_else(|| links.full.clone())
+        } else {
+            links.full.clone()
+        });
+        self.links = Some(links);
+    }
+
+    pub fn clear_links(&mut self) {
+        self.link = None;
+        self.links = None;
+    }
+}
+
+/// Roles this user may grant when inviting a contact (below own rank).
+pub(crate) fn invite_roles_for(my_role: &str) -> Vec<&'static str> {
+    let max = group_role_rank(my_role).saturating_sub(1).max(1);
+    GROUP_ROLES
+        .iter()
+        .copied()
+        .filter(|r| group_role_rank(r) <= max)
+        .collect()
+}
+
+/// Roles a link joiner may receive (core: `CEGroupMemberInitialRole`).
+pub(crate) const LINK_JOINER_ROLES: &[&str] = &["observer", "member"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemberDropdown {
@@ -537,6 +576,12 @@ pub enum PrefMenu {
     ContactVoice,
     ContactCalls,
     GroupTtl,
+    /// Invite page: short vs full link.
+    GroupLinkKind,
+    /// Invite page: role granted to link joiners.
+    GroupLinkRole,
+    /// Invite page: role for contacts invited directly.
+    GroupInviteRole,
 }
 
 #[derive(Debug, Clone)]
@@ -850,6 +895,7 @@ pub enum Message {
     AddGroupMember(i64),
     GroupMemberAdded(Result<(), String>),
     OpenGroupMember(i64),
+    OpenChannelMembers,
     CloseGroupMember,
     /// Overview list: role / action icon menus (no member detail navigation).
     OpenMemberRoleMenu(i64),
@@ -878,15 +924,21 @@ pub enum Message {
     GroupAdmissionSet(bool),
     SaveGroupPreferences,
     EnsureGroupLink,
-    GroupLinkReady(Result<String, String>),
+    GroupLinkReady(Result<ConnLink, String>),
+    /// Invite page: show the short (true) or full (false) link.
+    SetGroupLinkShort(bool),
+    SetGroupLinkRole(String),
+    SetGroupInviteRole(String),
     CopyGroupLink,
     GroupLinkRoleCycle,
     GroupLinkRoleSet(Result<(), String>),
     DeleteGroupLink,
     GroupLinkDeleted(Result<(), String>),
     AddGroupShortLink,
-    GroupShortLinkReady(Result<String, String>),
+    GroupShortLinkReady(Result<ConnLink, String>),
     OpenMemberDirectChat,
+    /// `/_create member contact` + invite finished → open that direct chat.
+    MemberContactCreated(Result<i64, String>),
     OpenLeaveGroupConfirm,
     ConfirmLeaveGroup,
     GroupLeft(Result<(), String>),
@@ -963,9 +1015,9 @@ pub enum Message {
     CreateInvitation,
     EnsureAddress,
     AcceptInvite,
-    /// Read the system clipboard, then connect to that invite / address link.
-    PasteAndConnect,
-    ClipboardForConnect(Option<String>),
+    /// Paste the clipboard into the invite field (no connect).
+    PasteInviteLink,
+    InviteLinkPasted(Option<String>),
     InviteReady(Result<ConnLink, String>),
     InviteAccepted(Result<String, String>),
     CopyInviteLink,
@@ -996,6 +1048,8 @@ pub enum Message {
     ChatMenuDone(Result<String, String>),
     /// Esc — close media viewer first, else chat menu.
     Escape,
+    /// Text-field context menu (Select all / Cut / Copy / Paste).
+    FieldMenu(edit_menu::FieldMenuAction),
 }
 
 struct App {
@@ -1135,6 +1189,8 @@ struct App {
     active_call: Option<CallInfo>,
     /// Ringing inbound call waiting for accept/reject.
     incoming_call: Option<CallInfo>,
+    /// Direct chat to open as soon as the next chat-list load contains it.
+    open_after_reload: Option<ChatId>,
 }
 
 struct VoiceRec {
@@ -1290,6 +1346,7 @@ impl App {
                 support: None,
                 active_call: None,
                 incoming_call: None,
+                open_after_reload: None,
             },
             // Daemon runs App::new tasks before the wgpu compositor boots.
             // Loading libsimplex that early exports Haskell ZSTD_* symbols that
@@ -2039,7 +2096,9 @@ impl App {
                     return Task::none();
                 }
                 if !on {
-                    self.tray = None;
+                    if let Some(tray) = self.tray.take() {
+                        tray.dismiss();
+                    }
                     self.desktop_prefs.tray = false;
                     self.desktop_prefs.close_to_tray = false;
                     desktop::save_prefs(&self.desktop_prefs);
@@ -2683,7 +2742,8 @@ impl App {
                 let Some(chat) = self.selected.and_then(|i| self.chats.get(i)) else {
                     return Task::none();
                 };
-                if !matches!(chat.id.chat_type, ChatType::Group) || chat.is_channel {
+                // Channels have member support too (official MemberSupportButton).
+                if !matches!(chat.id.chat_type, ChatType::Group) {
                     return Task::none();
                 }
                 self.open_support_list(chat.id.api_id)
@@ -2692,7 +2752,7 @@ impl App {
                 let Some(chat) = self.selected.and_then(|i| self.chats.get(i).cloned()) else {
                     return Task::none();
                 };
-                if !matches!(chat.id.chat_type, ChatType::Group) || chat.is_channel {
+                if !matches!(chat.id.chat_type, ChatType::Group) {
                     return Task::none();
                 }
                 self.open_support_thread(chat.id.api_id, None, "Chat with admins".into(), false)
@@ -3219,6 +3279,17 @@ impl App {
             }
             Message::GroupMemberRemoved(Ok(())) => {
                 self.status = "Member removed.".into();
+                // Rejected from inside their support thread → back to the list.
+                if let Some(support) = self.support.as_ref() {
+                    if let SupportPane::Thread { member_id: Some(_), from_list: true, .. } =
+                        &support.pane
+                    {
+                        if self.pending_support_member().is_some() {
+                            let group_id = support.group_id;
+                            return self.open_support_list(group_id);
+                        }
+                    }
+                }
                 if let Some(g) = self.group_settings.as_mut() {
                     g.selected_member_id = None;
                     g.pane = GroupSettingsPane::Overview;
@@ -3415,7 +3486,7 @@ impl App {
                     .as_ref()
                     .is_some_and(|g| g.is_channel);
                 if let Some(g) = self.group_settings.as_mut() {
-                    g.link = Some(link);
+                    g.apply_links(link);
                 }
                 // Quiet for channels (link is always created with the channel).
                 if !channel {
@@ -3429,7 +3500,7 @@ impl App {
                     .as_ref()
                     .is_some_and(|g| g.is_channel);
                 if let Some(g) = self.group_settings.as_mut() {
-                    g.link = None;
+                    g.clear_links();
                 }
                 // Don’t dump raw agent errors into the chrome for channels.
                 self.status = if channel {
@@ -3518,7 +3589,7 @@ impl App {
             }
             Message::GroupLinkDeleted(Ok(())) => {
                 if let Some(g) = self.group_settings.as_mut() {
-                    g.link = None;
+                    g.clear_links();
                 }
                 self.status = "Group link deleted.".into();
                 Task::none()
@@ -3547,12 +3618,60 @@ impl App {
                     Message::GroupShortLinkReady,
                 )
             }
-            Message::GroupShortLinkReady(Ok(link)) => {
-                if let Some(g) = self.group_settings.as_mut() {
-                    g.link = Some(link.clone());
+            Message::GroupShortLinkReady(Ok(links)) => {
+                let Some(g) = self.group_settings.as_mut() else {
+                    return Task::none();
+                };
+                g.link_prefer_short = true;
+                g.apply_links(links);
+                self.status = "Short link ready.".into();
+                Task::none()
+            }
+            Message::SetGroupLinkShort(short) => {
+                self.pref_menu = None;
+                let Some(g) = self.group_settings.as_mut() else {
+                    return Task::none();
+                };
+                g.link_prefer_short = short;
+                let has_short = g.links.as_ref().is_some_and(|l| l.short.is_some());
+                if let Some(links) = g.links.clone() {
+                    g.apply_links(links);
                 }
-                self.status = "Short link ready — copied.".into();
-                iced::clipboard::write(link)
+                // Older group links have no short form — upgrade via `/_short link`.
+                if short && !has_short && g.links.is_some() {
+                    return self.update(Message::AddGroupShortLink);
+                }
+                Task::none()
+            }
+            Message::SetGroupLinkRole(role) => {
+                self.pref_menu = None;
+                let Some(g) = self.group_settings.as_mut() else {
+                    return Task::none();
+                };
+                if !LINK_JOINER_ROLES.contains(&role.as_str()) || g.link_member_role == role {
+                    return Task::none();
+                }
+                g.link_member_role = role.clone();
+                let group_id = g.group_id;
+                if g.link.is_none() {
+                    return Task::none();
+                }
+                let Some(session) = self.session.clone() else {
+                    return Task::none();
+                };
+                Task::perform(
+                    set_group_link_role(session, group_id, role),
+                    Message::GroupLinkRoleSet,
+                )
+            }
+            Message::SetGroupInviteRole(role) => {
+                self.pref_menu = None;
+                if let Some(g) = self.group_settings.as_mut() {
+                    if invite_roles_for(&g.my_role).contains(&role.as_str()) {
+                        g.invite_role = role;
+                    }
+                }
+                Task::none()
             }
             Message::GroupShortLinkReady(Err(err)) => {
                 self.status = err;
@@ -3565,14 +3684,37 @@ impl App {
                 let Some(member_id) = g.selected_member_id else {
                     return Task::none();
                 };
-                let Some(contact_id) = g
-                    .members
-                    .iter()
-                    .find(|m| m.group_member_id == member_id)
-                    .and_then(|m| m.contact_id)
+                let group_id = g.group_id;
+                let Some(member) = g.members.iter().find(|m| m.group_member_id == member_id)
                 else {
-                    self.status = "No direct chat with this member yet.".into();
                     return Task::none();
+                };
+                let Some(contact_id) = member.contact_id else {
+                    // No contact yet — create one through the group (official
+                    // “Send direct message”); requires Direct messages enabled.
+                    if !group_pref_on(g.group_preferences.as_ref(), "directMessages") {
+                        self.status = "Direct messages are disabled in this group.".into();
+                        return Task::none();
+                    }
+                    let Some(session) = self.session.clone() else {
+                        return Task::none();
+                    };
+                    if let Some(g) = self.group_settings.as_mut() {
+                        g.member_dropdown = None;
+                    }
+                    self.status = "Opening direct chat…".into();
+                    return Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                session
+                                    .create_member_contact(group_id, member_id)
+                                    .map_err(|e| e.to_string())
+                            })
+                            .await
+                            .map_err(|e| e.to_string())?
+                        },
+                        Message::MemberContactCreated,
+                    );
                 };
                 let Some((index, _)) = self.chats.iter().enumerate().find(|(_, c)| {
                     matches!(c.id.chat_type, ChatType::Direct) && c.id.api_id == contact_id
@@ -3585,6 +3727,25 @@ impl App {
                 self.group_settings = None;
                 self.nav = NavSection::Chats;
                 self.update(Message::SelectChat(index))
+            }
+            Message::MemberContactCreated(Ok(contact_id)) => {
+                self.group_settings = None;
+                self.support = None;
+                self.nav = NavSection::Chats;
+                self.open_after_reload = Some(ChatId::new(ChatType::Direct, contact_id));
+                self.status = "Direct chat created — invitation sent.".into();
+                self.reload_chats()
+            }
+            Message::MemberContactCreated(Err(err)) => {
+                self.status = err;
+                Task::none()
+            }
+            Message::OpenChannelMembers => {
+                if let Some(g) = self.group_settings.as_mut() {
+                    g.pane = GroupSettingsPane::ChannelMembers;
+                    g.member_dropdown = None;
+                }
+                Task::none()
             }
             Message::OpenLeaveGroupConfirm => {
                 if let Some(g) = self.group_settings.as_mut() {
@@ -3916,7 +4077,24 @@ impl App {
                 iced::window::close(id)
             }
             Message::QuitApp => {
-                self.tray = None;
+                // Watchdog: iced::exit() lets tokio join its blocking pool, and a
+                // libsimplex call (receive wait, close_store, ffmpeg reader…) can
+                // keep that from finishing — the window vanished but the process
+                // (and tray) stayed “frozen”. Force the exit if shutdown stalls.
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    tracing::warn!("quit: shutdown stalled — forcing process exit");
+                    std::process::exit(0);
+                });
+                if let Some(mut playback) = self.voice_playback.take() {
+                    let _ = playback.child.kill();
+                }
+                if let Some(mut rec) = self.voice_rec.take() {
+                    let _ = rec.child.kill();
+                }
+                if let Some(tray) = self.tray.take() {
+                    tray.dismiss();
+                }
                 let close = self
                     .main_window
                     .take()
@@ -4232,6 +4410,11 @@ impl App {
                 self.chats =
                     merge_seeded_channels(chats, &self.chats, &self.seeded_channel_ids);
                 self.rebind_selection();
+                if let Some(want) = self.open_after_reload.take() {
+                    if let Some(index) = self.chats.iter().position(|c| c.id == want) {
+                        return self.update(Message::SelectChat(index));
+                    }
+                }
                 if let Some(overlay) = self.contact_profile.as_mut() {
                     if let Some((idx, chat)) = self.chats.iter().enumerate().find(|(_, c)| {
                         matches!(c.id.chat_type, ChatType::Direct)
@@ -4405,22 +4588,13 @@ impl App {
                 Task::perform(ensure_address(session), Message::InviteReady)
             }
             Message::AcceptInvite => self.accept_invite_link(self.invite_input.clone()),
-            Message::PasteAndConnect => {
-                self.status = "Reading clipboard…".into();
-                iced::clipboard::read().map(Message::ClipboardForConnect)
-            }
-            Message::ClipboardForConnect(contents) => {
-                let Some(raw) = contents else {
-                    self.status = "Clipboard is empty — copy a link first.".into();
-                    return Task::none();
-                };
-                let link = raw.trim().to_string();
-                if link.is_empty() {
-                    self.status = "Clipboard is empty — copy a link first.".into();
-                    return Task::none();
+            Message::PasteInviteLink => iced::clipboard::read().map(Message::InviteLinkPasted),
+            Message::InviteLinkPasted(contents) => {
+                match contents.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
+                    Some(link) => self.invite_input = link,
+                    None => self.status = "Clipboard is empty — copy a link first.".into(),
                 }
-                self.invite_input = link.clone();
-                self.accept_invite_link(link)
+                Task::none()
             }
             Message::InviteReady(Ok(link)) => {
                 self.invite_link = Some(link.display.clone());
@@ -4605,7 +4779,35 @@ impl App {
                 self.open_chat_menu(index);
                 Task::none()
             }
+            Message::FieldMenu(action) => match action {
+                edit_menu::FieldMenuAction::SelectAll(id) => Task::batch([
+                    iced::widget::operation::focus(id.clone()),
+                    iced::widget::operation::select_all(id),
+                ]),
+                edit_menu::FieldMenuAction::Copy(text) => iced::clipboard::write(text),
+                edit_menu::FieldMenuAction::Cut { copied, then } => {
+                    Task::batch([iced::clipboard::write(copied), self.update(*then)])
+                }
+                edit_menu::FieldMenuAction::Paste(then) => self.update(*then),
+            },
             Message::Escape => {
+                if self.pref_menu.take().is_some() {
+                    return Task::none();
+                }
+                if self.group_settings.as_ref().is_some_and(|g| g.member_dropdown.is_some()) {
+                    if let Some(g) = self.group_settings.as_mut() {
+                        g.member_dropdown = None;
+                    }
+                    return Task::none();
+                }
+                if let Some(support) = self.support.as_ref() {
+                    return match &support.pane {
+                        SupportPane::Thread { from_list: true, .. } => {
+                            self.open_support_list(support.group_id)
+                        }
+                        _ => self.close_support_overlay(),
+                    };
+                }
                 if self.create_chat.is_some() {
                     self.create_chat = None;
                     Task::none()
@@ -4670,8 +4872,23 @@ impl App {
                     }
                     self.emoji_suggest_index = 0;
                     Task::none()
-                } else {
+                } else if self.chat_menu.is_some() {
                     self.chat_menu = None;
+                    Task::none()
+                } else if self.selected.is_some()
+                    && matches!(self.nav, NavSection::Chats | NavSection::Channels)
+                {
+                    // Leave the conversation: mobile/compact → the list of the
+                    // current section (Chats or Channels); desktop → the
+                    // “select a chat” placeholder in the main pane. Section is
+                    // kept, so a channel returns to Channels, a chat to Chats.
+                    self.clear_pointer_gesture();
+                    self.selected = None;
+                    self.selected_id = None;
+                    self.messages.clear();
+                    self.reply_to = None;
+                    Task::none()
+                } else {
                     Task::none()
                 }
             }
@@ -6053,12 +6270,21 @@ impl App {
         title: String,
         from_list: bool,
     ) -> Task<Message> {
-        self.group_settings = None;
+        // Opened from the group page's member menu: reuse that member list so
+        // a pending joiner's thread shows Accept / Reject right away.
+        let from_group = self
+            .group_settings
+            .take()
+            .filter(|g| g.group_id == group_id)
+            .map(|g| g.members);
         let members = self
             .support
             .as_ref()
             .map(|s| s.members.clone())
+            .filter(|m| !m.is_empty())
+            .or(from_group)
             .unwrap_or_default();
+        let need_members = members.is_empty() && member_id.is_some();
         self.support = Some(SupportOverlay {
             group_id,
             pane: SupportPane::Thread {
@@ -6076,7 +6302,14 @@ impl App {
         self.editing = None;
         self.selection_mode = false;
         self.selected_items.clear();
-        Task::batch([self.mark_selected_read(), self.reload_messages()])
+        let members_task = match (need_members, self.session.clone()) {
+            (true, Some(session)) => Task::perform(
+                load_group_members(session, group_id),
+                Message::SupportMembersLoaded,
+            ),
+            _ => Task::none(),
+        };
+        Task::batch([self.mark_selected_read(), self.reload_messages(), members_task])
     }
 
     fn close_support_overlay(&mut self) -> Task<Message> {
@@ -6136,6 +6369,8 @@ impl App {
             members: Vec::new(),
             members_loading: true,
             link: None,
+            links: None,
+            link_prefer_short: true,
             link_member_role: "member".into(),
             invite_role: "member".into(),
             my_role: my_role.clone(),
@@ -6170,6 +6405,17 @@ impl App {
 
     fn reload_group_members(&mut self) -> Task<Message> {
         let Some(g) = self.group_settings.as_mut() else {
+            // Accept / reject from the support list or a support thread.
+            if let Some(support) = self.support.as_mut() {
+                support.members_loading = true;
+                let group_id = support.group_id;
+                if let Some(session) = self.session.clone() {
+                    return Task::perform(
+                        load_group_members(session, group_id),
+                        Message::SupportMembersLoaded,
+                    );
+                }
+            }
             return Task::none();
         };
         g.members_loading = true;
@@ -7055,34 +7301,29 @@ async fn open_local_file(path: PathBuf) -> Result<String, String> {
             return Err(format!("File missing: {}", path.display()));
         }
         // Prefer mpv for video — xdg-open often picks a sluggish default player.
+        // Both paths float the viewer on tiling compositors (float_open.rs).
+        let path_str = path.to_string_lossy().to_string();
         if media::is_video_name(
             path.file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or_default(),
-        ) {
-            if Command::new("mpv")
-                .args([
-                    "--force-window=immediate",
-                    "--keep-open=no",
-                    "--really-quiet",
-                    "--",
-                ])
-                .arg(&path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .is_ok()
-            {
-                return Ok(format!("Opened {}", path.display()));
-            }
+        ) && float_open::spawn_floating(
+            "mpv",
+            &[
+                "--force-window=immediate",
+                "--keep-open=no",
+                "--really-quiet",
+                "--",
+                &path_str,
+            ],
+            Some("mpv".into()),
+        )
+        .is_ok()
+        {
+            return Ok(format!("Opened {}", path.display()));
         }
-        Command::new("xdg-open")
-            .arg(&path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+        let handler = float_open::default_handler_id(&path);
+        float_open::spawn_floating("xdg-open", &[&path_str], handler)
             .map_err(|e| format!("xdg-open failed: {e}"))?;
         Ok(format!("Opened {}", path.display()))
     })
@@ -7226,7 +7467,7 @@ async fn ensure_group_link(
     session: Arc<Session>,
     group_id: i64,
     role: String,
-) -> Result<String, String> {
+) -> Result<ConnLink, String> {
     tokio::task::spawn_blocking(move || {
         session
             .group_invite_link(group_id, &role)
@@ -7277,7 +7518,7 @@ async fn delete_member_support_chat(
     .map_err(|e| e.to_string())?
 }
 
-async fn add_group_short_link(session: Arc<Session>, group_id: i64) -> Result<String, String> {
+async fn add_group_short_link(session: Arc<Session>, group_id: i64) -> Result<ConnLink, String> {
     tokio::task::spawn_blocking(move || {
         session
             .short_group_link(group_id)

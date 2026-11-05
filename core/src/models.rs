@@ -256,6 +256,12 @@ pub struct GroupMemberInfo {
     pub show_messages: bool,
     /// Present once a support thread exists with this member.
     pub support_chat: Option<GroupSupportChat>,
+    /// Profile picture data-URL (`memberProfile.image`), if any.
+    pub image: Option<String>,
+    /// Public profile name (`memberProfile.displayName`), ignoring local alias.
+    pub public_name: String,
+    /// True for the current user's own membership row.
+    pub is_me: bool,
 }
 
 /// Roles used by group admin UI (excludes `relay` / `author`).

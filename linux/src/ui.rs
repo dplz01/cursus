@@ -660,12 +660,7 @@ fn chat_list(app: &App) -> Element<'_, Message> {
         }
         let show_unread = chat.unread > 0 || chat.unread_chat;
         if show_unread {
-            let label = if chat.unread > 0 {
-                format!("{}", chat.unread)
-            } else {
-                "·".into()
-            };
-            badges = badges.push(text(label).size(d.meta).color(theme::t().accent));
+            badges = badges.push(unread_count_badge(chat.unread, d));
         }
         let support_badge = app.support_badge_count(chat);
         if support_badge > 0 {
@@ -3949,6 +3944,45 @@ fn chat_avatar_fallback(chat: &cursus_core::ChatPreview) -> AvatarFallback {
     } else {
         AvatarFallback::Initial
     }
+}
+
+/// Unread count pill — same palette as the active Chats nav button
+/// (`accent` glyph on `accent_soft` fill).
+fn unread_count_badge<'a>(count: i64, d: Density) -> Element<'a, Message> {
+    let label = if count <= 0 {
+        "·".to_string()
+    } else if count > 99 {
+        "99+".to_string()
+    } else {
+        count.to_string()
+    };
+    let diameter = (d.meta + 10.0).clamp(20.0, 24.0);
+    let wide = label.len() > 1;
+    let width = if wide {
+        (diameter + d.meta * 0.55 * (label.len().saturating_sub(1) as f32)).max(diameter)
+    } else {
+        diameter
+    };
+    container(
+        text(label)
+            .size(d.meta)
+            .color(theme::t().accent)
+            .line_height(iced::widget::text::LineHeight::Absolute(diameter.into())),
+    )
+    .width(width)
+    .height(diameter)
+    .center_x(width)
+    .center_y(diameter)
+    .style(move |_| container::Style {
+        background: Some(iced::Background::Color(theme::t().accent_soft)),
+        border: iced::Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: (diameter * 0.5).into(),
+        },
+        ..container::Style::default()
+    })
+    .into()
 }
 
 /// Chat / channel list avatar: larger disk; request bubble only for inbound

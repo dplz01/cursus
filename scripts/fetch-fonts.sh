@@ -7,7 +7,8 @@ OUT="$ROOT/linux/assets/fonts"
 mkdir -p "$OUT"
 TAG="${NOTO_RELEASE_TAG:-noto-monthly-release-2026.11.01}"
 BASE="https://raw.githubusercontent.com/notofonts/notofonts.github.io/${TAG}/fonts"
-EMOJI_URL="https://github.com/googlefonts/noto-emoji/raw/main/fonts/NotoColorEmoji.ttf"
+# Upstream moved the CBDT color font out of fonts/ into 2D/fonts/.
+EMOJI_URL="https://raw.githubusercontent.com/googlefonts/noto-emoji/main/2D/fonts/NotoColorEmoji.ttf"
 
 fetch() {
   local url="$1" dest="$2"

@@ -277,6 +277,7 @@ pub struct ChatContextMenu {
 pub enum MsgMenuAction {
     Reply,
     Copy,
+    Edit,
     Forward,
     Info,
     Delete,
@@ -485,6 +486,13 @@ pub struct ReplyTarget {
     pub preview: String,
 }
 
+/// Composer is rewriting an existing outgoing item instead of sending new.
+#[derive(Debug, Clone)]
+pub struct EditTarget {
+    pub item_id: i64,
+    pub preview: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ItemInfoData {
     pub item_id: i64,
@@ -601,6 +609,7 @@ pub enum Message {
     EmojiSuggestPrev,
     Send,
     Sent(Result<(), String>),
+    Edited(Result<(), String>),
     AttachFile,
     FileAttached(Result<(), String>),
     ReceiveFile { file_id: i64, file_name: String },
@@ -635,6 +644,9 @@ pub enum Message {
     MsgBubbleReleased(i64),
     MsgBubbleLongPress { item_id: i64, generation: u64 },
     CancelReply,
+    CancelEdit,
+    /// PageUp — edit the latest editable outgoing message in this chat.
+    EditLastOutgoing,
     /// Jump the history viewport to a quoted parent item.
     JumpToQuoted(i64),
     /// Clear the temporary focus ring around a jumped-to message.
@@ -967,6 +979,7 @@ struct App {
     msg_long_press_item: Option<i64>,
     /// Composer reply target.
     reply_to: Option<ReplyTarget>,
+    editing: Option<EditTarget>,
     /// Multi-select mode for messages.
     selection_mode: bool,
     selected_items: HashSet<i64>,
@@ -1135,6 +1148,7 @@ impl App {
                 msg_long_press_generation: 0,
                 msg_long_press_item: None,
                 reply_to: None,
+                editing: None,
                 selection_mode: false,
                 selected_items: HashSet::new(),
                 revealed_deleted: HashSet::new(),
@@ -1264,6 +1278,7 @@ impl App {
                     // Emoji suggest Tab/Shift+Tab/Enter are handled in the
                     // composer key_binding so they don't fight the editor.
                     iced::keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
+                    iced::keyboard::Key::Named(Named::PageUp) => Some(Message::EditLastOutgoing),
                     _ => None,
                 }
             }
@@ -1464,6 +1479,7 @@ impl App {
                 self.messages.clear();
                 self.pin_history_end = true;
                 self.reply_to = None;
+                self.editing = None;
                 self.message_menu = None;
                 self.chat_menu = None;
                 self.selection_mode = false;
@@ -1561,6 +1577,17 @@ impl App {
                 if text.is_empty() {
                     return Task::none();
                 }
+                if let Some(edit) = self.editing.take() {
+                    self.clear_composer();
+                    self.reply_to = None;
+                    return Task::batch([
+                        Task::perform(
+                            update_text(session, chat.id, edit.item_id, text),
+                            Message::Edited,
+                        ),
+                        iced::widget::operation::focus(iced::widget::Id::new("composer-input")),
+                    ]);
+                }
                 let quoted = self.reply_to.as_ref().map(|r| r.item_id);
                 self.clear_composer();
                 self.reply_to = None;
@@ -1579,6 +1606,15 @@ impl App {
                 self.status = err;
                 Task::none()
             }
+            Message::Edited(Ok(())) => {
+                self.status = "Message updated.".into();
+                Task::batch([self.reload_chats(), self.reload_messages()])
+            }
+            Message::Edited(Err(err)) => {
+                self.status = friendly_edit_error(&err);
+                Task::none()
+            }
+            Message::EditLastOutgoing => self.begin_edit_last_outgoing(),
             Message::AttachFile => {
                 if !self.tap_allowed() {
                     return Task::none();
@@ -1831,6 +1867,11 @@ impl App {
             }
             Message::CancelReply => {
                 self.reply_to = None;
+                Task::none()
+            }
+            Message::CancelEdit => {
+                self.editing = None;
+                self.clear_composer();
                 Task::none()
             }
             Message::JumpToQuoted(item_id) => {
@@ -4288,6 +4329,10 @@ impl App {
                 } else if self.pending_url.is_some() {
                     self.pending_url = None;
                     Task::none()
+                } else if self.editing.is_some() {
+                    self.editing = None;
+                    self.clear_composer();
+                    Task::none()
                 } else if self.reply_to.is_some() {
                     self.reply_to = None;
                     Task::none()
@@ -5471,6 +5516,59 @@ impl App {
         self.reply_to.as_ref()
     }
 
+    pub(crate) fn editing(&self) -> Option<&EditTarget> {
+        self.editing.as_ref()
+    }
+
+    fn begin_edit_message(&mut self, msg: &ChatMessage) -> Task<Message> {
+        if !msg.can_edit_text() {
+            self.status = if !msg.outgoing {
+                "Only your own messages can be edited.".into()
+            } else if msg.is_deleted() {
+                "Deleted messages can't be edited.".into()
+            } else if msg.file.is_some() {
+                "File and media messages can't be edited.".into()
+            } else {
+                "This message can no longer be edited.".into()
+            };
+            return Task::none();
+        }
+        self.reply_to = None;
+        self.editing = Some(EditTarget {
+            item_id: msg.item_id,
+            preview: truncate_preview(&msg.text, 80),
+        });
+        self.set_composer_text(&msg.text);
+        iced::widget::operation::focus(iced::widget::Id::new("composer-input"))
+    }
+
+    fn begin_edit_last_outgoing(&mut self) -> Task<Message> {
+        if self.selected_chat_for_api().is_none() {
+            return Task::none();
+        }
+        let last = self
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.outgoing && !m.is_announcement && m.group_invitation.is_none())
+            .cloned();
+        let Some(msg) = last else {
+            self.status = "No sent messages to edit.".into();
+            return Task::none();
+        };
+        if !msg.can_edit_text() {
+            self.status = if msg.file.is_some() {
+                "Latest sent message is a file and can't be edited.".into()
+            } else if msg.is_deleted() {
+                "Latest sent message was deleted.".into()
+            } else {
+                "Latest sent message can no longer be edited.".into()
+            };
+            return Task::none();
+        }
+        self.begin_edit_message(&msg)
+    }
+
     pub(crate) fn selection_mode(&self) -> bool {
         self.selection_mode
     }
@@ -5665,6 +5763,7 @@ impl App {
         self.messages.clear();
         self.pin_history_end = true;
         self.reply_to = None;
+        self.editing = None;
         self.selection_mode = false;
         self.selected_items.clear();
         Task::batch([self.mark_selected_read(), self.reload_messages()])
@@ -5973,6 +6072,7 @@ impl App {
         };
         match action {
             MsgMenuAction::Reply => {
+                self.editing = None;
                 self.reply_to = Some(ReplyTarget {
                     item_id,
                     preview: truncate_preview(&msg.text, 80),
@@ -5984,6 +6084,10 @@ impl App {
                 self.message_menu = None;
                 self.status = "Copied.".into();
                 iced::clipboard::write(msg.text)
+            }
+            MsgMenuAction::Edit => {
+                self.message_menu = None;
+                self.begin_edit_message(&msg)
             }
             MsgMenuAction::Forward => {
                 if let Some(menu) = self.message_menu.as_mut() {
@@ -6335,6 +6439,35 @@ async fn send_text(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+async fn update_text(
+    session: Arc<Session>,
+    chat: ChatId,
+    item_id: i64,
+    text: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        session
+            .update_text(&chat, item_id, &text)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn friendly_edit_error(err: &str) -> String {
+    let lower = err.to_ascii_lowercase();
+    if lower.contains("invalidchatitemupdate")
+        || lower.contains("invalid chat item update")
+        || lower.contains("not editable")
+        || lower.contains("ceinvalidchatitemupdate")
+    {
+        "This message can no longer be edited.".into()
+    } else {
+        err.to_string()
+    }
 }
 
 async fn delete_items(

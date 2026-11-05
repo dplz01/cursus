@@ -36,6 +36,11 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `history.svg` | [svgrepo/524639](https://www.svgrepo.com/svg/524639/history) | Solar Linear Icons / Solar Icons | **CC Attribution** — attribution required | Yes (with credit) |
 | `review-file.svg` | [svgrepo/521218](https://www.svgrepo.com/svg/521218/review-file) | Iconship Interface Icons / Giovana | **CC Attribution** — attribution required | Yes (with credit) |
 | `admin.svg` | [svgrepo/501805](https://www.svgrepo.com/svg/501805/admin) | Instructure UI Line Interface Icons / instructure-ui | **MIT License** | Yes |
+| `edit-3.svg` | [svgrepo/522527](https://www.svgrepo.com/svg/522527/edit-3) | Generica Tiny Interface Icons / Vlad Cristea | **CC Attribution** | Yes (with credit) |
+| `reply.svg` | [svgrepo/523002](https://www.svgrepo.com/svg/523002/reply) | Solar Outline Icons / Solar Icons | **CC Attribution** | Yes (with credit) |
+| `forward.svg` | [svgrepo/522864](https://www.svgrepo.com/svg/522864/forward) | Solar Outline Icons / Solar Icons | **CC Attribution** | Yes (with credit) |
+| `info-circle.svg` | [svgrepo/524660](https://www.svgrepo.com/svg/524660/info-circle) | Solar Linear Icons / Solar Icons | **CC Attribution** | Yes (with credit) |
+| `select-multiple.svg` | [svgrepo/511120](https://www.svgrepo.com/svg/511120/select-multiple) | Coolicons Line Oval Icons / krystonschwarze | **CC Attribution** | Yes (with credit) |
 
 ## Required attribution (CC BY)
 
@@ -66,6 +71,14 @@ Cancel icon: **Interface Line Icons** by kreevstudio (CC Attribution), via SVG R
 Trash / marked-deleted icon: **Wave Oval Interface Icons** by Arthur Kazais (Public Domain), via [SVG Repo](https://www.svgrepo.com/svg/499657/trash-delete).
 
 Copy icon: **Solar Linear Icons** by Solar Icons (CC Attribution), via [SVG Repo](https://www.svgrepo.com/svg/524469/copy).
+
+Edit (edit-3) icon: **Generica Tiny Interface Icons** by Vlad Cristea (CC Attribution), via [SVG Repo](https://www.svgrepo.com/svg/522527/edit-3).
+
+Reply / forward icons: **Solar Outline Icons** by Solar Icons (CC Attribution), via [SVG Repo](https://www.svgrepo.com/svg/523002/reply) / [forward](https://www.svgrepo.com/svg/522864/forward).
+
+Info-circle icon: **Solar Linear Icons** by Solar Icons (CC Attribution), via [SVG Repo](https://www.svgrepo.com/svg/524660/info-circle).
+
+Select-multiple icon: **Coolicons Line Oval Icons** by krystonschwarze (CC Attribution), via [SVG Repo](https://www.svgrepo.com/svg/511120/select-multiple).
 
 Leave / session-leave icon: **Gitlab Interface Icons** by Gitlab (MIT), via [SVG Repo](https://www.svgrepo.com/svg/491071/session-leave).
 

@@ -241,6 +241,10 @@ impl Session {
         self.send(&Commands::send_text_quoted(chat, text, quoted_item_id))
     }
 
+    pub fn update_text(&self, chat: &ChatId, item_id: i64, text: &str) -> Result<Value> {
+        self.send(&Commands::update_text(chat, item_id, text))
+    }
+
     pub fn delete_items(&self, chat: &ChatId, item_ids: &[i64], broadcast: bool) -> Result<Value> {
         if item_ids.is_empty() {
             return Err(Error::Command("no items to delete".into()));
@@ -1528,6 +1532,14 @@ fn parse_one_message(item: &Value) -> Option<ChatMessage> {
     } else {
         text
     };
+    let edited = item
+        .pointer("/meta/itemEdited")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let editable = item
+        .pointer("/meta/editable")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     Some(ChatMessage {
         item_id,
         text,
@@ -1542,6 +1554,8 @@ fn parse_one_message(item: &Value) -> Option<ChatMessage> {
         sender,
         is_announcement,
         group_invitation,
+        edited,
+        editable,
     })
 }
 

@@ -983,6 +983,14 @@ fn composer_key_binding(
             return Some(EditorBinding::Custom(Message::Send));
         }
 
+        // PageUp edits the latest editable outgoing message (Telegram-style).
+        if matches!(
+            key_press.key.as_ref(),
+            keyboard::Key::Named(key::Named::PageUp)
+        ) {
+            return Some(EditorBinding::Custom(Message::EditLastOutgoing));
+        }
+
         // Keep Ctrl/Cmd chords (SelectAll, Copy, Cut, Paste) on the
         // default path — never intercept Character while modifiers are set.
         // iced 0.14 IME handles composed accents / preedit natively.
@@ -1173,7 +1181,52 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             .into()
     };
 
-    let reply_slot: Element<'_, Message> = if let Some(reply) = app.reply_to() {
+    let reply_slot: Element<'_, Message> = if let Some(edit) = app.editing() {
+        let preview: Element<'_, Message> = if cursus_core::is_short_emoji(&edit.preview) {
+            emoji_glyph(edit.preview.clone())
+                .size(d.body)
+                .color(Color::WHITE)
+                .into()
+        } else {
+            txt(edit.preview.clone())
+                .size(d.meta)
+                .color(theme::t().text_secondary)
+                .into()
+        };
+        let edit_bar = container(
+            row![
+                icons::edit_icon(16.0, theme::t().accent),
+                column![
+                    text("Editing")
+                        .size(d.meta)
+                        .color(theme::t().accent),
+                    preview,
+                ]
+                .spacing(2)
+                .width(Length::Fill),
+                button(txt("✕").size(d.meta).color(theme::t().text_muted))
+                    .on_press(Message::CancelEdit)
+                    .padding(Padding::from([4, 8]))
+                    .style(theme::secondary_action(app.hover_ok())),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .padding(Padding::from([8, 10]))
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().accent_soft)),
+            border: iced::Border {
+                color: theme::t().border,
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            ..container::Style::default()
+        });
+        column![edit_bar, vertical().height(6)]
+            .width(Length::Fill)
+            .into()
+    } else if let Some(reply) = app.reply_to() {
         let preview: Element<'_, Message> = if cursus_core::is_short_emoji(&reply.preview) {
             emoji_glyph(reply.preview.clone())
                 .size(d.body)
@@ -1187,6 +1240,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         };
         let reply_bar = container(
             row![
+                icons::reply_icon(16.0, theme::t().accent),
                 column![
                     text("Replying")
                         .size(d.meta)
@@ -2125,16 +2179,19 @@ fn bubble_text_content_max(app: &App) -> f32 {
 /// Full reserved width for time + receipt + gaps (no chip chrome — stamp is bare).
 ///
 /// Includes the row gap and the right edge inset so fit checks match layout.
-fn estimate_time_width(d: Density, outgoing: bool) -> f32 {
+fn estimate_time_width(d: Density, outgoing: bool, edited: bool) -> f32 {
     // Conservative: "12:00 PM" (~8 glyphs) at ~0.62×meta advance.
     let text_w = f32::from(d.meta) * 6.2;
-    let ticks = if outgoing {
-        // icon + spacing inside the stamp row
-        (f32::from(d.meta) * 0.85).clamp(10.0, 13.0) + 6.0
-    } else {
-        0.0
-    };
-    text_w + ticks + STAMP_GAP + STAMP_EDGE_PAD
+    let icon = (f32::from(d.meta) * 0.85).clamp(10.0, 13.0);
+    let mut extras = 0.0;
+    if edited {
+        extras += icon + 3.0;
+    }
+    if outgoing {
+        // receipt icon + spacing inside the stamp row
+        extras += icon + 6.0;
+    }
+    text_w + extras + STAMP_GAP + STAMP_EDGE_PAD
 }
 
 fn estimate_last_line_width(text: &str, d: Density) -> f32 {
@@ -2161,9 +2218,10 @@ fn should_keep_timestamp_inline(
     text: &str,
     d: Density,
     outgoing: bool,
+    edited: bool,
     content_max: f32,
 ) -> bool {
-    let time_w = estimate_time_width(d, outgoing);
+    let time_w = estimate_time_width(d, outgoing, edited);
     let last_w = estimate_last_line_width(text, d);
     last_w + time_w < content_max
 }
@@ -2179,8 +2237,8 @@ fn bubble_content_with_time<'a>(
     content_max: f32,
 ) -> Element<'a, Message> {
     let stamp = bubble_time_meta(msg, d);
-    let stamp_w = estimate_time_width(d, msg.outgoing);
-    let inline = should_keep_timestamp_inline(&msg.text, d, msg.outgoing, content_max);
+    let stamp_w = estimate_time_width(d, msg.outgoing, msg.edited);
+    let inline = should_keep_timestamp_inline(&msg.text, d, msg.outgoing, msg.edited, content_max);
     let multi = count_visual_lines(&msg.text, d, content_max) > 1;
     if inline {
         if multi {
@@ -2233,7 +2291,7 @@ fn bubble_content_with_time<'a>(
     }
 }
 
-/// Telegram-style trailing time (+ receipt for outgoing).
+/// Telegram-style trailing time (+ edited pencil + receipt for outgoing).
 fn bubble_time_meta(msg: &ChatMessage, d: Density) -> Element<'static, Message> {
     let time_h = bubble_time_height(d);
     let icon_size = (f32::from(d.meta) * 0.85).clamp(10.0, 13.0);
@@ -2241,6 +2299,9 @@ fn bubble_time_meta(msg: &ChatMessage, d: Density) -> Element<'static, Message> 
         .spacing(3)
         .height(Length::Fixed(time_h))
         .align_y(Alignment::Center);
+    if msg.edited {
+        row = row.push(icons::edit_icon(icon_size, theme::t().text_muted));
+    }
     if let Some(label) = format_bubble_time(msg.created_at.as_deref()) {
         row = row.push(
             txt(label)
@@ -3548,7 +3609,8 @@ fn message_menu_overlay(app: &App) -> Element<'_, Message> {
                 .map(|m| m.deleted == Some(cursus_core::DeletedState::Marked))
                 .unwrap_or(false);
             if can_reveal {
-                body = body.push(menu_action(
+                body = body.push(icon_menu_action(
+                    icons::history_icon(18.0, theme::t().text_primary),
                     if revealed { "Hide" } else { "Reveal" },
                     Message::MsgMenuAction(MsgMenuAction::ToggleReveal),
                     hover,
@@ -3570,7 +3632,8 @@ fn message_menu_overlay(app: &App) -> Element<'_, Message> {
                 })
                 .unwrap_or(false);
             if can_download && !is_deleted {
-                body = body.push(menu_action(
+                body = body.push(icon_menu_action(
+                    icons::download_icon(18.0, theme::t().text_primary),
                     "Download",
                     Message::MsgMenuAction(MsgMenuAction::Download),
                     hover,
@@ -3579,10 +3642,21 @@ fn message_menu_overlay(app: &App) -> Element<'_, Message> {
                 ));
             }
             let outgoing = msg.map(|m| m.outgoing).unwrap_or(false);
+            let can_edit = msg.map(|m| m.can_edit_text()).unwrap_or(false);
             let actions: &[(&str, MsgMenuAction, bool)] = if is_deleted {
                 &[
                     ("Info", MsgMenuAction::Info, false),
                     ("Delete for me", MsgMenuAction::Delete, true),
+                    ("Select", MsgMenuAction::Select, false),
+                ]
+            } else if outgoing && can_edit {
+                &[
+                    ("Reply", MsgMenuAction::Reply, false),
+                    ("Copy", MsgMenuAction::Copy, false),
+                    ("Edit", MsgMenuAction::Edit, false),
+                    ("Forward", MsgMenuAction::Forward, false),
+                    ("Info", MsgMenuAction::Info, false),
+                    ("Delete for everyone", MsgMenuAction::Delete, true),
                     ("Select", MsgMenuAction::Select, false),
                 ]
             } else if outgoing {
@@ -3605,7 +3679,14 @@ fn message_menu_overlay(app: &App) -> Element<'_, Message> {
                 ]
             };
             for (label, action, danger) in actions {
-                body = body.push(menu_action(
+                let icon_color = if *danger {
+                    theme::t().danger
+                } else {
+                    theme::t().text_primary
+                };
+                let icon = msg_menu_icon(*action, 18.0, icon_color);
+                body = body.push(icon_menu_action(
+                    icon,
                     label,
                     Message::MsgMenuAction(*action),
                     hover,
@@ -4150,6 +4231,20 @@ fn open_url_confirm_overlay(app: &App) -> Element<'_, Message> {
     )
 }
 
+fn msg_menu_icon<'a>(action: MsgMenuAction, size: f32, color: Color) -> Element<'a, Message> {
+    match action {
+        MsgMenuAction::Reply => icons::reply_icon(size, color),
+        MsgMenuAction::Copy => icons::copy_icon(size, color),
+        MsgMenuAction::Edit => icons::edit_icon(size, color),
+        MsgMenuAction::Forward => icons::forward_icon(size, color),
+        MsgMenuAction::Info => icons::info_icon(size, color),
+        MsgMenuAction::Delete => icons::trash_icon(size, color),
+        MsgMenuAction::Select => icons::select_icon(size, color),
+        MsgMenuAction::Download => icons::download_icon(size, color),
+        MsgMenuAction::ToggleReveal => icons::history_icon(size, color),
+    }
+}
+
 fn menu_action<'a>(
     label: &'a str,
     on_press: Message,
@@ -4163,6 +4258,30 @@ fn menu_action<'a>(
         theme::t().text_primary
     };
     button(text(label).size(d.body).color(color))
+        .on_press(on_press)
+        .padding(Padding::from([12, 12]))
+        .width(Length::Fill)
+        .style(theme::menu_item(hover_ok))
+        .into()
+}
+
+fn icon_menu_action<'a>(
+    icon: Element<'a, Message>,
+    label: &'a str,
+    on_press: Message,
+    hover_ok: bool,
+    d: Density,
+    danger: bool,
+) -> Element<'a, Message> {
+    let color = if danger {
+        theme::t().danger
+    } else {
+        theme::t().text_primary
+    };
+    let label_row = row![icon, text(label).size(d.body).color(color)]
+        .spacing(10)
+        .align_y(Alignment::Center);
+    button(label_row)
         .on_press(on_press)
         .padding(Padding::from([12, 12]))
         .width(Length::Fill)

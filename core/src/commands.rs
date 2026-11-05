@@ -240,6 +240,22 @@ impl Commands {
         }
     }
 
+    /// Update an existing chat item's text (`/_update item …`).
+    ///
+    /// Only works while SimpleX marks the item `editable` (outgoing, not
+    /// forwarded, typically within 24h). Core returns `invalidChatItemUpdate`
+    /// once that window closes.
+    pub fn update_text(chat: &ChatId, item_id: i64, text: &str) -> String {
+        let payload = serde_json::json!({
+            "msgContent": { "type": "text", "text": text },
+            "mentions": {}
+        });
+        format!(
+            "/_update item {} {item_id} live=off json {payload}",
+            chat.command_ref()
+        )
+    }
+
     /// Send a file/image attachment.
     ///
     /// Uses composed-message `fileSource` (CryptoFile) when key/nonce are set —

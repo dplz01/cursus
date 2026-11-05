@@ -175,6 +175,53 @@ pub fn copy_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     )
 }
 
+/// Edit / pencil — Generica Tiny Interface Icons / Vlad Cristea (CC Attribution via SVG Repo).
+pub fn edit_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/edit-3.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
+/// Reply — Solar Outline Icons / Solar Icons (CC Attribution via SVG Repo).
+pub fn reply_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/reply.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
+/// Forward — Solar Outline Icons / Solar Icons (CC Attribution via SVG Repo).
+pub fn forward_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/forward.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
+/// Info circle — Solar Linear Icons / Solar Icons (CC Attribution via SVG Repo).
+pub fn info_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/info-circle.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
+/// Select multiple — Coolicons Line Oval Icons / krystonschwarze (CC Attribution via SVG Repo).
+pub fn select_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(
+            include_bytes!("../assets/icons/select-multiple.svg").as_slice(),
+        ),
+        color,
+        size,
+    )
+}
+
 /// Leave / exit session — Gitlab Interface Icons / Gitlab (MIT via SVG Repo).
 pub fn leave_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(

@@ -524,6 +524,10 @@ pub struct ChatMessage {
     pub is_announcement: bool,
     /// Group invite card (direct chat with the inviter).
     pub group_invitation: Option<GroupInvitationInfo>,
+    /// `meta.itemEdited` — show the edited tag next to the timestamp.
+    pub edited: bool,
+    /// `meta.editable` from SimpleX (outgoing, not forwarded, within ~24h).
+    pub editable: bool,
 }
 
 impl ChatMessage {
@@ -544,6 +548,16 @@ impl ChatMessage {
 
     pub fn is_deleted(&self) -> bool {
         self.deleted.is_some()
+    }
+
+    /// Outgoing text (no attachment) that SimpleX still allows updating.
+    pub fn can_edit_text(&self) -> bool {
+        self.outgoing
+            && self.editable
+            && !self.is_deleted()
+            && !self.is_announcement
+            && self.group_invitation.is_none()
+            && self.file.is_none()
     }
 }
 

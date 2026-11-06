@@ -16,6 +16,8 @@ pub struct WaveformInfo {
     pub peaks: Vec<f32>,
     /// Decoded length at 8 kHz mono (seconds).
     pub duration_secs: f32,
+    /// Loudest absolute sample before normalisation (0.0–1.0); ~0 means silence.
+    pub raw_peak: f32,
 }
 
 /// Downsample mono float PCM into normalized peak bars for chat waveforms.
@@ -64,10 +66,12 @@ pub fn analyze_audio(path: &Path, bars: usize) -> Result<WaveformInfo, String> {
             .fold(0.0_f32, f32::max);
         peaks.push(peak);
     }
-    let max = peaks.iter().copied().fold(0.0_f32, f32::max).max(1e-6);
+    let raw_peak = peaks.iter().copied().fold(0.0_f32, f32::max);
+    let max = raw_peak.max(1e-6);
     Ok(WaveformInfo {
         peaks: peaks.into_iter().map(|p| (p / max).clamp(0.05, 1.0)).collect(),
         duration_secs,
+        raw_peak,
     })
 }
 
@@ -324,13 +328,152 @@ pub fn fit_within(sw: u32, sh: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     (w.max(1), h.max(1))
 }
 
+/// EXIF orientation (1–8) of a JPEG file, if tagged. Phone cameras store
+/// portrait shots as landscape pixels + this tag; the `image` crate ignores it.
+pub fn exif_orientation(path: &Path) -> Option<u16> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = vec![0u8; 256 * 1024];
+    let n = f.read(&mut head).ok()?;
+    head.truncate(n);
+    exif_orientation_from_jpeg(&head)
+}
+
+pub fn exif_orientation_from_jpeg(b: &[u8]) -> Option<u16> {
+    if b.len() < 4 || b[0] != 0xFF || b[1] != 0xD8 {
+        return None;
+    }
+    let mut i = 2usize;
+    while i + 4 <= b.len() {
+        if b[i] != 0xFF {
+            return None;
+        }
+        let marker = b[i + 1];
+        if marker == 0xFF {
+            i += 1;
+            continue;
+        }
+        // SOS / EOI: metadata segments are over.
+        if marker == 0xDA || marker == 0xD9 {
+            return None;
+        }
+        let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
+        if len < 2 {
+            return None;
+        }
+        let seg = b.get(i + 4..(i + 2 + len).min(b.len()))?;
+        if marker == 0xE1 && seg.len() >= 14 && &seg[0..6] == b"Exif\0\0" {
+            return tiff_orientation(&seg[6..]);
+        }
+        i += 2 + len;
+    }
+    None
+}
+
+fn tiff_orientation(t: &[u8]) -> Option<u16> {
+    let le = match t.get(0..2)? {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let u16_at = |o: usize| -> Option<u16> {
+        let s = t.get(o..o + 2)?;
+        Some(if le { u16::from_le_bytes([s[0], s[1]]) } else { u16::from_be_bytes([s[0], s[1]]) })
+    };
+    let u32_at = |o: usize| -> Option<u32> {
+        let s = t.get(o..o + 4)?;
+        let a = [s[0], s[1], s[2], s[3]];
+        Some(if le { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) })
+    };
+    let ifd = u32_at(4)? as usize;
+    let count = u16_at(ifd)? as usize;
+    for k in 0..count.min(256) {
+        let e = ifd + 2 + k * 12;
+        if u16_at(e)? == 0x0112 {
+            let v = u16_at(e + 8)?;
+            return (1..=8).contains(&v).then_some(v);
+        }
+    }
+    None
+}
+
+/// Rotate/flip decoded pixels so they display upright for `orientation`.
+pub fn apply_orientation(img: image::DynamicImage, orientation: u16) -> image::DynamicImage {
+    match orientation {
+        2 => img.fliph(),
+        3 => img.rotate180(),
+        4 => img.flipv(),
+        5 => img.rotate90().fliph(),
+        6 => img.rotate90(),
+        7 => img.rotate270().fliph(),
+        8 => img.rotate270(),
+        _ => img,
+    }
+}
+
+/// Decode an image file with EXIF orientation applied.
+pub fn open_upright(path: &Path) -> Result<image::DynamicImage, String> {
+    let img = image::open(path).map_err(|e| format!("decode image: {e}"))?;
+    Ok(match exif_orientation(path) {
+        Some(o) if o != 1 => apply_orientation(img, o),
+        _ => img,
+    })
+}
+
+/// Pixel dimensions as displayed (width/height swapped for 90° EXIF tags).
+pub fn upright_dimensions(path: &Path) -> Option<(u32, u32)> {
+    let (w, h) = image::image_dimensions(path).ok()?;
+    Some(match exif_orientation(path) {
+        Some(5..=8) => (h, w),
+        _ => (w, h),
+    })
+}
+
+/// Longest side of a re-encoded outgoing photo (matches official clients' ~1600px).
+const OUTGOING_IMAGE_MAX_SIDE: u32 = 1920;
+
+/// If `path` is a JPEG with a non-identity EXIF orientation, write an upright,
+/// EXIF-free copy under `out_dir` and return its path. Receivers (including
+/// official SimpleX clients) do not all honour EXIF, so we bake the rotation in.
+pub fn upright_copy_for_send(path: &Path, out_dir: &Path) -> Result<Option<PathBuf>, String> {
+    let Some(o) = exif_orientation(path) else {
+        return Ok(None);
+    };
+    if o == 1 {
+        return Ok(None);
+    }
+    let img = open_upright(path)?;
+    let img = if img.width().max(img.height()) > OUTGOING_IMAGE_MAX_SIDE {
+        img.resize(
+            OUTGOING_IMAGE_MAX_SIDE,
+            OUTGOING_IMAGE_MAX_SIDE,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        img
+    };
+    std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("image.jpg");
+    let out = out_dir.join(name);
+    let file = std::fs::File::create(&out).map_err(|e| e.to_string())?;
+    let mut w = std::io::BufWriter::new(file);
+    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut w, 88);
+    image::DynamicImage::ImageRgb8(img.to_rgb8())
+        .write_with_encoder(enc)
+        .map_err(|e| format!("jpeg encode: {e}"))?;
+    Ok(Some(out))
+}
+
 /// Return a cached rounded preview if one already exists (never decodes).
 pub fn cached_rounded_fitted_preview(
     path: &Path,
     max_w: u32,
     max_h: u32,
 ) -> Option<(PathBuf, u32, u32)> {
-    let (sw, sh) = image::image_dimensions(path).ok()?;
+    let (sw, sh) = upright_dimensions(path)?;
     if sw == 0 || sh == 0 {
         return None;
     }
@@ -360,7 +503,7 @@ pub fn rounded_fitted_preview(
     if let Some(hit) = cached_rounded_fitted_preview(path, max_w, max_h) {
         return Ok(hit);
     }
-    let (sw, sh) = image::image_dimensions(path).map_err(|e| format!("preview size: {e}"))?;
+    let (sw, sh) = upright_dimensions(path).ok_or_else(|| "preview size: unreadable image".to_string())?;
     if sw == 0 || sh == 0 {
         return Err("empty image".into());
     }
@@ -369,7 +512,13 @@ pub fn rounded_fitted_preview(
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let img = image::open(path).map_err(|e| format!("decode preview: {e}"))?;
+    let img = open_upright(path)?;
+    // Cheap pre-shrink: full-res camera JPEGs (12MP+) are slow to filter on ARM.
+    let img = if img.width() > width * 2 || img.height() > height * 2 {
+        img.thumbnail(width * 2, height * 2)
+    } else {
+        img
+    };
     let rgba = img.to_rgba8();
     let mut resized =
         image::imageops::resize(&rgba, width, height, image::imageops::FilterType::Triangle);
@@ -399,7 +548,7 @@ fn rounded_preview_path(path: &Path, width: u32, height: u32) -> PathBuf {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("media");
-    path.with_file_name(format!("{stem}.round{width}x{height}.png"))
+    path.with_file_name(format!("{stem}.upright{width}x{height}.png"))
 }
 
 fn rounded_rect_coverage(x: f32, y: f32, w: f32, h: f32, r: f32) -> f32 {
@@ -427,7 +576,7 @@ fn rounded_rect_coverage(x: f32, y: f32, w: f32, h: f32, r: f32) -> f32 {
 
 /// Resize an image file into a SimpleX profile data-URL (≤ [`MAX_PROFILE_IMAGE_CHARS`]).
 pub fn encode_profile_image(path: &Path) -> Result<String, String> {
-    let img = image::open(path).map_err(|e| format!("open profile image: {e}"))?;
+    let img = open_upright(path).map_err(|e| format!("open profile image: {e}"))?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     if w == 0 || h == 0 {
@@ -520,6 +669,51 @@ pub fn truncate_bio_bytes(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 40×20 JPEG with an EXIF Orientation=6 (rotate 90° CW) APP1 segment.
+    fn jpeg_with_orientation(orientation: u16) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(40, 20, |x, _| {
+            if x < 20 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 0, 255]) }
+        });
+        let mut jpg = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_with_encoder(image::codecs::jpeg::JpegEncoder::new(&mut jpg))
+            .unwrap();
+        let mut tiff = b"MM\0\x2a\0\0\0\x08\0\x01".to_vec();
+        tiff.extend_from_slice(&[0x01, 0x12, 0x00, 0x03, 0, 0, 0, 1]);
+        tiff.extend_from_slice(&orientation.to_be_bytes());
+        tiff.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(&tiff);
+        let mut out = jpg[..2].to_vec();
+        out.extend_from_slice(&[0xFF, 0xE1]);
+        out.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        out.extend_from_slice(&payload);
+        out.extend_from_slice(&jpg[2..]);
+        out
+    }
+
+    #[test]
+    fn exif_orientation_is_applied_for_preview_and_send() {
+        let dir = std::env::temp_dir().join(format!("cursus-exif-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cam.jpg");
+        std::fs::write(&path, jpeg_with_orientation(6)).unwrap();
+        assert_eq!(exif_orientation(&path), Some(6));
+        assert_eq!(upright_dimensions(&path), Some((20, 40)));
+        let up = open_upright(&path).unwrap();
+        assert_eq!((up.width(), up.height()), (20, 40));
+        // Rotated CW: the left (red) half ends up on top.
+        let top = up.to_rgb8().get_pixel(10, 5).0;
+        assert!(top[0] > 200 && top[2] < 60, "top pixel {top:?}");
+        let sent = upright_copy_for_send(&path, &dir.join("out")).unwrap().unwrap();
+        assert_eq!(exif_orientation(&sent), None);
+        assert_eq!(image::image_dimensions(&sent).unwrap(), (20, 40));
+        // Untagged / identity JPEGs are sent untouched.
+        std::fs::write(&path, jpeg_with_orientation(1)).unwrap();
+        assert!(upright_copy_for_send(&path, &dir.join("out2")).unwrap().is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn fit_within_preserves_landscape() {

@@ -769,6 +769,11 @@ pub enum Message {
     OpenLocalFile(PathBuf),
     /// Ask before opening a URI from rich-text (http / simplex / mailto / tel).
     OpenUrl(String),
+    /// Tapped a SimpleX connection link in a message — ask before joining.
+    OpenSimplexLink {
+        uri: String,
+        kind: cursus_core::SimplexLinkKind,
+    },
     ConfirmOpenUrl,
     CancelOpenUrl,
     /// Add or remove a reaction (`emoji` is a protocol char / display form).
@@ -1151,10 +1156,12 @@ struct App {
     /// Cached rounded still-image previews (UI thread must not decode).
     image_previews: std::collections::HashMap<PathBuf, (PathBuf, u32, u32)>,
     image_previews_pending: HashSet<PathBuf>,
+    /// Paths whose preview decode failed (skip until restart).
+    image_previews_failed: HashSet<PathBuf>,
     /// After opening a chat, pin history to the newest message once it loads.
     pin_history_end: bool,
     /// Link waiting for “Open link?” confirmation.
-    pending_url: Option<String>,
+    pending_url: Option<PendingLink>,
     /// Highlighted row in the `:shortcode` autocomplete list.
     emoji_suggest_index: usize,
     /// Per-message context menu (reactions + actions).
@@ -1224,6 +1231,13 @@ struct App {
     composer_pre_click: Option<text_editor::Cursor>,
 }
 
+/// A tapped link awaiting confirmation (browser open, or SimpleX join).
+#[derive(Debug, Clone)]
+pub struct PendingLink {
+    pub url: String,
+    pub simplex: Option<cursus_core::SimplexLinkKind>,
+}
+
 struct VoiceRec {
     path: PathBuf,
     child: Child,
@@ -1239,7 +1253,6 @@ pub struct VoiceDraft {
 
 struct VoicePlayback {
     file_id: i64,
-    #[allow(dead_code)]
     path: PathBuf,
     duration_secs: u32,
     started: Instant,
@@ -1341,6 +1354,7 @@ impl App {
                 video_thumbs_pending: HashSet::new(),
                 image_previews: HashMap::new(),
                 image_previews_pending: HashSet::new(),
+                image_previews_failed: HashSet::new(),
                 pin_history_end: false,
                 messages_load_gen: 0,
                 chats_refresh_gen: 0,
@@ -1893,13 +1907,32 @@ impl App {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
-                self.pending_url = Some(url);
+                let simplex = cursus_core::SimplexLinkKind::from_uri(&url);
+                self.pending_url = Some(PendingLink { url, simplex });
+                Task::none()
+            }
+            Message::OpenSimplexLink { uri, kind } => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
+                self.pending_url = Some(PendingLink {
+                    url: uri,
+                    simplex: Some(kind),
+                });
                 Task::none()
             }
             Message::ConfirmOpenUrl => {
-                let Some(url) = self.pending_url.take() else {
+                let Some(pending) = self.pending_url.take() else {
                     return Task::none();
                 };
+                if pending.simplex.is_some() {
+                    if self.session.is_none() {
+                        self.status = "Connect before joining a SimpleX link.".into();
+                        return Task::none();
+                    }
+                    return self.accept_invite_link(pending.url);
+                }
+                let url = pending.url;
                 self.status = format!("Opening {url}…");
                 Task::perform(open_url(url), Message::FileReceived)
             }
@@ -4102,6 +4135,8 @@ impl App {
                 // Keep the decrypt queue moving without blasting the thread pool.
                 tasks.push(self.enqueue_decrypts());
                 tasks.push(self.enqueue_missing_video_thumbs());
+                // A freshly decrypted image needs its bubble preview too.
+                tasks.push(self.enqueue_missing_image_previews());
                 Task::batch(tasks)
             }
             Message::ShowFromTray => {
@@ -4134,7 +4169,7 @@ impl App {
                     std::process::exit(0);
                 });
                 if let Some(mut playback) = self.voice_playback.take() {
-                    let _ = playback.child.kill();
+                    kill_audio_player(&mut playback.child, &playback.path);
                 }
                 if let Some(mut rec) = self.voice_rec.take() {
                     let _ = rec.child.kill();
@@ -4369,9 +4404,15 @@ impl App {
             Message::VoiceTick => {
                 if let Some(play) = self.voice_playback.as_mut() {
                     let elapsed = play.started.elapsed().as_secs_f32();
-                    if elapsed >= play.duration_secs.max(1) as f32 {
+                    // Grace for the ffmpeg→WAV decode before the player starts.
+                    if elapsed >= play.duration_secs.max(1) as f32 + 4.0 {
                         self.stop_voice_playback();
-                    } else if let Ok(Some(_)) = play.child.try_wait() {
+                    } else if let Ok(Some(status)) = play.child.try_wait() {
+                        if !status.success() {
+                            self.status = "Couldn't play voice message — install pipewire (pw-play), \
+                                 pulseaudio-utils (paplay) or alsa-utils (aplay), plus ffmpeg."
+                                .into();
+                        }
                         self.stop_voice_playback();
                     }
                 }
@@ -4547,6 +4588,9 @@ impl App {
                 self.image_previews_pending.remove(&path);
                 if let Some(preview) = preview {
                     self.image_previews.insert(path, preview);
+                } else {
+                    // Don't re-decode a broken file on every enqueue.
+                    self.image_previews_failed.insert(path);
                 }
                 self.enqueue_missing_image_previews()
             }
@@ -5795,24 +5839,7 @@ impl App {
             async move {
                 tokio::task::spawn_blocking(move || {
                     stop_ffmpeg(&mut rec.child);
-                    let elapsed = rec.started.elapsed();
-                    let meta = std::fs::metadata(&rec.path).map_err(|e| e.to_string())?;
-                    if meta.len() < 64 {
-                        let _ = std::fs::remove_file(&rec.path);
-                        return Err("Recording was empty — check microphone / PulseAudio.".into());
-                    }
-                    let (peaks, decoded) =
-                        match media::analyze_audio(&rec.path, media::WAVEFORM_BARS) {
-                            Ok(w) => (w.peaks, Some(w.duration_secs)),
-                            Err(_) => (vec![0.35; media::WAVEFORM_BARS], None),
-                        };
-                    let duration_secs =
-                        media::voice_duration_secs(&rec.path, elapsed, decoded);
-                    Ok(VoiceDraft {
-                        path: rec.path,
-                        duration_secs,
-                        peaks,
-                    })
+                    finish_voice_recording(rec.path, rec.started.elapsed())
                 })
                 .await
                 .map_err(|e| e.to_string())?
@@ -5886,8 +5913,7 @@ impl App {
 
     fn stop_voice_playback(&mut self) {
         if let Some(mut play) = self.voice_playback.take() {
-            let _ = play.child.kill();
-            let _ = play.child.wait();
+            kill_audio_player(&mut play.child, &play.path);
         }
     }
 
@@ -5963,6 +5989,7 @@ impl App {
             }
             if self.image_previews.contains_key(&path)
                 || self.image_previews_pending.contains(&path)
+                || self.image_previews_failed.contains(&path)
             {
                 continue;
             }
@@ -6091,8 +6118,8 @@ impl App {
     pub(crate) fn chat_menu(&self) -> Option<&ChatContextMenu> {
         self.chat_menu.as_ref()
     }
-    pub(crate) fn pending_url(&self) -> Option<&str> {
-        self.pending_url.as_deref()
+    pub(crate) fn pending_url(&self) -> Option<&PendingLink> {
+        self.pending_url.as_ref()
     }
 
     pub(crate) fn emoji_suggestions(&self) -> Vec<cursus_core::EmojiSuggestion> {
@@ -7382,8 +7409,26 @@ async fn attach_and_send_file(session: Arc<Session>, chat: ChatPreview) -> Resul
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "Attachment cancelled.".to_string())?;
 
-    let path_str = path.to_string_lossy().to_string();
     tokio::task::spawn_blocking(move || {
+        // Bake EXIF rotation into camera JPEGs so every receiver sees them upright.
+        let path = if media::is_image_name(&path.to_string_lossy()) {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let dir = cursus_core::temp_dir().join(format!("send-{stamp}"));
+            match media::upright_copy_for_send(&path, &dir) {
+                Ok(Some(upright)) => upright,
+                Ok(None) => path,
+                Err(err) => {
+                    tracing::warn!(%err, "upright copy failed; sending original");
+                    path
+                }
+            }
+        } else {
+            path
+        };
+        let path_str = path.to_string_lossy().to_string();
         session
             .send_file(&chat.id, &path_str)
             .map(|_| ())
@@ -8184,207 +8229,179 @@ fn reaction_emoji_eq(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
+/// True when a PipeWire / PulseAudio server is reachable for this user.
+///
+/// On phones (postmarketOS) the mic/speaker routing lives in the sound
+/// server's UCM profile — raw ALSA `default` is often silent or unrouted,
+/// so server-native tools must win whenever a server is up.
+fn sound_server_running() -> bool {
+    if std::env::var_os("PULSE_SERVER").is_some() {
+        return true;
+    }
+    let Some(rt) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) else {
+        return false;
+    };
+    rt.join("pulse/native").exists() || rt.join("pipewire-0").exists()
+}
+
+/// One capture recipe: program + args (the output path is appended).
+struct CaptureRecipe {
+    label: &'static str,
+    program: &'static str,
+    args: &'static [&'static str],
+    /// Raw ALSA can open a device that never delivers frames — require the
+    /// WAV to grow past its header before trusting it.
+    needs_growth: bool,
+}
+
+fn capture_recipes() -> Vec<CaptureRecipe> {
+    const FF_PULSE: &[&str] = &[
+        "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "pulse", "-i", "default",
+        "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-flush_packets", "1", "-f", "wav", "-y",
+    ];
+    const FF_ALSA_DEFAULT: &[&str] = &[
+        "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "alsa", "-i", "default",
+        "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-flush_packets", "1", "-f", "wav", "-y",
+    ];
+    const FF_ALSA_PLUGHW: &[&str] = &[
+        "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "alsa", "-i", "plughw:0,0",
+        "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-flush_packets", "1", "-f", "wav", "-y",
+    ];
+    let mut out = Vec::new();
+    if sound_server_running() {
+        out.push(CaptureRecipe {
+            label: "pw-record",
+            program: "pw-record",
+            args: &["--rate", "16000", "--channels", "1", "--format", "s16"],
+            needs_growth: false,
+        });
+        out.push(CaptureRecipe {
+            label: "parecord",
+            program: "parecord",
+            args: &["--file-format=wav", "--rate=16000", "--channels=1", "--format=s16le"],
+            needs_growth: false,
+        });
+        out.push(CaptureRecipe {
+            label: "ffmpeg pulse",
+            program: "ffmpeg",
+            args: FF_PULSE,
+            needs_growth: false,
+        });
+    }
+    out.push(CaptureRecipe {
+        label: "arecord",
+        program: "arecord",
+        args: &["-q", "-f", "S16_LE", "-c", "1", "-r", "16000", "-t", "wav"],
+        needs_growth: true,
+    });
+    out.push(CaptureRecipe {
+        label: "ffmpeg alsa default",
+        program: "ffmpeg",
+        args: FF_ALSA_DEFAULT,
+        needs_growth: true,
+    });
+    out.push(CaptureRecipe {
+        label: "ffmpeg alsa plughw:0,0",
+        program: "ffmpeg",
+        args: FF_ALSA_PLUGHW,
+        needs_growth: true,
+    });
+    out
+}
+
 fn start_voice_recording() -> Result<VoiceRec, String> {
     // Record under tmp/ — send path encrypts into files/ (CryptoFile) then deletes this.
+    // Always capture PCM WAV (no muxer buffering / moov finalisation to go wrong);
+    // `finish_voice_recording` transcodes to AAC m4a afterwards.
     let dir = cursus_core::temp_dir().join("rec");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let path = dir.join(format!("voice-{stamp}.m4a"));
-    let mut last_err = String::from("no audio capture backend worked");
+    let wav = dir.join(format!("voice-{stamp}.wav"));
+    let mut errors = Vec::new();
 
-    // On musl/ARM, prefer arecord first — ffmpeg ALSA/Pulse often opens a device
-    // that stays silent (UI thinks it records, file is near-empty header only).
-    #[cfg(target_env = "musl")]
-    {
-        if let Ok(rec) = try_arecord_voice(path.with_extension("wav"), &mut last_err) {
-            return Ok(rec);
-        }
-    }
-
-    // Prefer AAC when available; fall back to PCM WAV.
-    #[cfg(target_env = "musl")]
-    let backends: &[&[&str]] = &[
-        &["-f", "alsa", "-i", "default"],
-        &["-f", "alsa", "-i", "plughw:0,0"],
-        &["-f", "alsa", "-i", "hw:0,0"],
-        &["-f", "alsa", "-i", "sysdefault"],
-        &["-f", "pulse", "-i", "default"],
-    ];
-    #[cfg(not(target_env = "musl"))]
-    let backends: &[&[&str]] = &[
-        &["-f", "pulse", "-i", "default"],
-        &["-f", "pipewire", "-i", "default"],
-        &["-f", "alsa", "-i", "default"],
-        &["-f", "alsa", "-i", "plughw:0,0"],
-        &["-f", "alsa", "-i", "hw:0,0"],
-        &["-f", "alsa", "-i", "sysdefault"],
-    ];
-    let encodes: &[&[&str]] = &[
-        &["-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "32k", "-y"],
-        &["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", "-y"],
-    ];
-
-    for input in backends {
-        for encode in encodes {
-            let out = if encode.iter().any(|s| *s == "wav") {
-                path.with_extension("wav")
-            } else {
-                path.clone()
-            };
-            let mut args = vec!["-hide_banner", "-loglevel", "error", "-nostdin"];
-            args.extend_from_slice(input);
-            args.extend_from_slice(encode);
-            match Command::new("ffmpeg")
-                .args(&args)
-                .arg(&out)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .spawn()
-            {
-                Ok(mut child) => {
-                    let started = Instant::now();
-                    std::thread::sleep(std::time::Duration::from_millis(350));
-                    match child.try_wait() {
-                        Ok(None) => {
-                            let len = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
-                            // WAV header alone is ~44 bytes; require real PCM growth.
-                            if len > 256 {
-                                return Ok(VoiceRec {
-                                    path: out,
-                                    child,
-                                    started,
-                                });
-                            }
-                            let _ = child.kill();
-                            let _ = child.wait();
-                            last_err = format!(
-                                "ffmpeg {:?} wrote only {len} bytes (silent/hung device?)",
-                                input
-                            );
-                            let _ = std::fs::remove_file(&out);
-                        }
-                        Ok(Some(status)) => {
-                            let stderr = child.stderr.as_mut().and_then(|s| {
-                                let mut buf = String::new();
-                                use std::io::Read;
-                                let _ = s.read_to_string(&mut buf);
-                                Some(buf)
-                            });
-                            last_err = format!(
-                                "ffmpeg {:?} {:?} exited ({status}): {}",
-                                input,
-                                encode,
-                                stderr.unwrap_or_default().trim()
-                            );
-                            let _ = std::fs::remove_file(&out);
-                        }
-                        Err(e) => {
-                            last_err = format!("ffmpeg {:?} wait failed: {e}", input);
-                            let _ = child.kill();
-                            let _ = std::fs::remove_file(&out);
-                        }
-                    }
+    for recipe in capture_recipes() {
+        let _ = std::fs::remove_file(&wav);
+        let spawned = Command::new(recipe.program)
+            .args(recipe.args)
+            .arg(&wav)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn();
+        let mut child = match spawned {
+            Ok(c) => c,
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    errors.push(format!("{}: {e}", recipe.label));
                 }
-                Err(e) => {
-                    last_err = format!("ffmpeg {:?} spawn failed: {e}", input);
-                }
+                continue;
             }
-        }
-    }
-
-    #[cfg(not(target_env = "musl"))]
-    {
-        if let Ok(rec) = try_arecord_voice(path.with_extension("wav"), &mut last_err) {
-            return Ok(rec);
-        }
-    }
-
-    Err(format!(
-        "{last_err}. Install ffmpeg (with ALSA/Pulse) or arecord for mic capture."
-    ))
-}
-
-fn try_arecord_voice(wav: PathBuf, last_err: &mut String) -> Result<VoiceRec, ()> {
-    match Command::new("arecord")
-        .args([
-            "-q",
-            "-f",
-            "S16_LE",
-            "-c",
-            "1",
-            "-r",
-            "16000",
-            "-t",
-            "wav",
-            wav.to_str().unwrap_or("voice.wav"),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(mut child) => {
-            let started = Instant::now();
-            std::thread::sleep(std::time::Duration::from_millis(250));
+        };
+        let started = Instant::now();
+        // Poll for up to ~600ms: an unusable device makes the tool exit fast.
+        let mut alive = true;
+        let mut grew = false;
+        for _ in 0..12 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
             match child.try_wait() {
                 Ok(None) => {
                     let len = std::fs::metadata(&wav).map(|m| m.len()).unwrap_or(0);
                     if len > 44 {
-                        return Ok(VoiceRec {
-                            path: wav,
-                            child,
-                            started,
-                        });
+                        grew = true;
+                        if recipe.needs_growth {
+                            break;
+                        }
                     }
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    *last_err = format!("arecord wrote only {len} bytes");
-                    let _ = std::fs::remove_file(&wav);
                 }
-                Ok(Some(status)) => {
-                    *last_err = format!("arecord exited ({status})");
-                    let _ = std::fs::remove_file(&wav);
-                }
-                Err(e) => {
-                    *last_err = format!("arecord wait failed: {e}");
-                    let _ = child.kill();
-                    let _ = std::fs::remove_file(&wav);
+                _ => {
+                    alive = false;
+                    break;
                 }
             }
         }
-        Err(e) => {
-            *last_err = format!("arecord spawn failed: {e}");
+        if alive && (grew || !recipe.needs_growth) {
+            tracing::info!(backend = recipe.label, "voice capture started");
+            return Ok(VoiceRec {
+                path: wav,
+                child,
+                started,
+            });
         }
+        if alive {
+            let _ = child.kill();
+            let _ = child.wait();
+            errors.push(format!("{}: no audio frames", recipe.label));
+        } else {
+            let mut stderr = String::new();
+            if let Some(mut s) = child.stderr.take() {
+                use std::io::Read;
+                let _ = s.read_to_string(&mut stderr);
+            }
+            let _ = child.wait();
+            let first = stderr.lines().next().unwrap_or("exited").trim().to_string();
+            errors.push(format!("{}: {first}", recipe.label));
+        }
+        let _ = std::fs::remove_file(&wav);
     }
-    Err(())
+
+    let detail = if errors.is_empty() {
+        "no recorder found".to_string()
+    } else {
+        errors.join("; ")
+    };
+    Err(format!(
+        "Microphone unavailable ({detail}). Install pipewire-tools (pw-record), pulseaudio-utils (parecord), alsa-utils (arecord) or ffmpeg."
+    ))
 }
 
+/// Stop a capture/player process gracefully (SIGINT lets recorders finalise
+/// the WAV header), then force-kill after a grace period.
 fn stop_ffmpeg(child: &mut Child) {
-    // Prefer SIGINT so arecord / ffmpeg finalize the WAV/m4a header.
-    // (stdin 'q' only works when ffmpeg stdin is a pipe — we use -nostdin now.)
-    #[cfg(unix)]
-    {
-        let pid = child.id();
-        let _ = Command::new("kill")
-            .args(["-INT", &pid.to_string()])
-            .status();
-    }
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        let _ = stdin.write_all(b"q");
-        let _ = stdin.flush();
-    }
-    let _ = Command::new("kill")
-        .args(["-INT", &child.id().to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    // Give the recorder a moment to finalize; then force-kill if needed.
-    for _ in 0..50 {
+    signal_pid(child.id() as i32, libc::SIGINT);
+    for _ in 0..100 {
         match child.try_wait() {
             Ok(Some(_)) => return,
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
@@ -8395,7 +8412,100 @@ fn stop_ffmpeg(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// Send `sig` to `pid`; a negative pid targets the whole process group.
+fn signal_pid(pid: i32, sig: libc::c_int) {
+    // SAFETY: plain syscall; pid comes from a child we spawned.
+    unsafe {
+        libc::kill(pid, sig);
+    }
+}
+
+/// After capture: validate, analyse, and transcode the WAV to AAC m4a
+/// (official clients send m4a; WAV is ~8× larger). Falls back to the WAV.
+fn finish_voice_recording(wav: PathBuf, elapsed: std::time::Duration) -> Result<VoiceDraft, String> {
+    let meta = std::fs::metadata(&wav).map_err(|e| e.to_string())?;
+    if meta.len() <= 1024 {
+        let _ = std::fs::remove_file(&wav);
+        return Err("Recording was empty — check the microphone.".into());
+    }
+    let info = media::analyze_audio(&wav, media::WAVEFORM_BARS).ok();
+    if let Some(info) = info.as_ref() {
+        if info.raw_peak < 0.002 {
+            let _ = std::fs::remove_file(&wav);
+            return Err(
+                "Recording was silent — check the input device / mic level (pavucontrol, alsamixer)."
+                    .into(),
+            );
+        }
+    }
+    let duration_secs =
+        media::voice_duration_secs(&wav, elapsed, info.as_ref().map(|i| i.duration_secs));
+    let peaks = info
+        .map(|i| i.peaks)
+        .unwrap_or_else(|| vec![0.35; media::WAVEFORM_BARS]);
+
+    let m4a = wav.with_extension("m4a");
+    let transcoded = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
+        .arg(&wav)
+        .args(["-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "32k"])
+        .arg(&m4a)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+        && std::fs::metadata(&m4a).is_ok_and(|m| m.len() > 64);
+    let path = if transcoded {
+        let _ = std::fs::remove_file(&wav);
+        m4a
+    } else {
+        let _ = std::fs::remove_file(&m4a);
+        wav
+    };
+    Ok(VoiceDraft {
+        path,
+        duration_secs,
+        peaks,
+    })
+}
+
+/// Shell fallback chain for playback. Runs in its own process group so Stop
+/// kills whichever player is active (and any ffmpeg decode).
+///
+/// Non-WAV input is decoded to WAV first so the sound-server / ALSA players
+/// (always present on phones) can play it without codec plugins.
+const PLAY_SCRIPT: &str = r#"
+f="$1"; t="$2"
+w=""
+case "$f" in
+  *.wav|*.WAV) w="$f" ;;
+  *) if ffmpeg -hide_banner -loglevel error -nostdin -y -i "$f" -ac 2 -ar 48000 -c:a pcm_s16le -f wav "$t"; then w="$t"; fi ;;
+esac
+if [ -n "$w" ]; then
+  if [ -n "$CURSUS_SOUND_SERVER" ]; then
+    pw-play "$w" 2>/dev/null && exit 0
+    paplay "$w" 2>/dev/null && exit 0
+  fi
+  aplay -q "$w" 2>/dev/null && exit 0
+fi
+mpv --no-video --really-quiet -- "$f" 2>/dev/null && exit 0
+ffplay -nodisp -autoexit -loglevel quiet "$f" 2>/dev/null && exit 0
+gst-play-1.0 --no-interactive -- "$f" 2>/dev/null && exit 0
+exit 3
+"#;
+
+/// Temp WAV used when decoding `path` for playback.
+fn playback_wav_path(path: &std::path::Path) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("voice");
+    cursus_core::temp_dir().join("play").join(format!("{stem}.play.wav"))
+}
+
 fn spawn_audio_player(path: &PathBuf) -> Result<Child, String> {
+    use std::os::unix::process::CommandExt;
     if !path.is_file() {
         return Err(format!("Voice file missing: {}", path.display()));
     }
@@ -8407,90 +8517,37 @@ fn spawn_audio_player(path: &PathBuf) -> Result<Child, String> {
             path.display()
         ));
     }
-    let is_wav = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
-
-    let mut attempts: Vec<(&str, Result<Child, std::io::Error>)> = Vec::new();
-    // Prefer GStreamer first (same stack Fractal uses for Matrix voice).
-    attempts.push((
-        "gst-play-1.0",
-        Command::new("gst-play-1.0")
-            .args(["--no-interactive", "--"])
-            .arg(path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn(),
-    ));
-    attempts.push((
-        "mpv",
-        Command::new("mpv")
-            .args(["--no-video", "--really-quiet", "--"])
-            .arg(path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn(),
-    ));
-    attempts.push((
-        "ffplay",
-        Command::new("ffplay")
-            .args(["-nodisp", "-autoexit", "-loglevel", "quiet", "--"])
-            .arg(path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn(),
-    ));
-    if is_wav {
-        attempts.push((
-            "aplay",
-            Command::new("aplay")
-                .args(["-q", "--"])
-                .arg(path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn(),
-        ));
-        attempts.push((
-            "paplay",
-            Command::new("paplay")
-                .arg(path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn(),
-        ));
+    let tmp = playback_wav_path(path);
+    if let Some(dir) = tmp.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    // Decode via ffmpeg → aplay pipe for odd containers on ARM.
-    attempts.push((
-        "ffmpeg|aplay",
-        Command::new("sh")
-            .args([
-                "-c",
-                "ffmpeg -hide_banner -loglevel error -i \"$1\" -f wav -ac 1 -ar 16000 - | aplay -q -t wav -",
-                "sh",
-                path.to_str().unwrap_or(""),
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn(),
-    ));
-
-    let mut last = String::from("no audio player worked");
-    for (name, result) in attempts {
-        match result {
-            Ok(child) => return Ok(child),
-            Err(e) => last = format!("{name}: {e}"),
-        }
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(PLAY_SCRIPT)
+        .arg("cursus-play")
+        .arg(path)
+        .arg(&tmp)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    if sound_server_running() {
+        cmd.env("CURSUS_SOUND_SERVER", "1");
+    } else {
+        cmd.env_remove("CURSUS_SOUND_SERVER");
     }
-    Err(format!(
-        "{last}. Install gst-play-1.0 (gstreamer), mpv, ffplay, or aplay to play voice messages."
-    ))
+    cmd.spawn()
+        .map_err(|e| format!("Could not start audio playback: {e}"))
+}
+
+/// Kill a player started by [`spawn_audio_player`] (whole process group).
+fn kill_audio_player(child: &mut Child, path: &std::path::Path) {
+    if child.try_wait().ok().flatten().is_none() {
+        signal_pid(-(child.id() as i32), libc::SIGTERM);
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    let _ = std::fs::remove_file(playback_wav_path(path));
 }
 
 async fn save_media_as(src: PathBuf, file_name: String) -> Result<String, String> {

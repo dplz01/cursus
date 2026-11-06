@@ -284,6 +284,33 @@ fn shots() {
             app.own_profile.fields = profile("Davide", "Building Cursus");
             render(&app, MOBILE, &format!("msettings-{t}"));
         }
+        if want("links") {
+            let mut app = demo_app(dark, MOBILE.width, MOBILE.height);
+            select(&mut app, 2);
+            let v = serde_json::json!([
+                {"format": null, "text": "Join us: "},
+                {"format": {"type": "simplexLink", "linkType": "group",
+                            "simplexUri": "https://smp9.simplex.im/g#Xk2pQ7vN1sLm9aR4tY8uW3eZ6cB0dF5hJ",
+                            "smpHosts": ["smp9.simplex.im"]},
+                 "text": "https://smp9.simplex.im/g#Xk2pQ7vN1sLm9aR4tY8uW3eZ6cB0dF5hJ"},
+                {"format": null, "text": " and docs at "},
+                {"format": "uri", "text": "simplex.chat/docs"}
+            ]);
+            let mut m = msg(6, "", false, "09:10");
+            m.segments = cursus_core::parse_formatted_text(Some(&v));
+            app.messages.push(m);
+            render(&app, MOBILE, &format!("links-{t}"));
+            app.pending_url = Some(crate::PendingLink {
+                url: "https://smp9.simplex.im/g#Xk2pQ7vN1sLm9aR4tY8uW3eZ6cB0dF5hJ".into(),
+                simplex: Some(cursus_core::SimplexLinkKind::Group),
+            });
+            render(&app, MOBILE, &format!("links-join-{t}"));
+            app.pending_url = Some(crate::PendingLink {
+                url: "https://simplex.chat/docs".into(),
+                simplex: None,
+            });
+            render(&app, MOBILE, &format!("links-web-{t}"));
+        }
         if want("new") {
             let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);
             app.compose_open = true;

@@ -921,6 +921,7 @@ dependencies = [
  "iced_aw",
  "iced_runtime",
  "image 0.24.9",
+ "libc",
  "notify-rust",
  "rfd",
  "serde",

@@ -57,12 +57,175 @@ impl FormatColor {
     }
 }
 
+/// What a SimpleX link connects to (official `SimplexLinkType`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimplexLinkKind {
+    Invitation,
+    Address,
+    Group,
+    Channel,
+    Relay,
+}
+
+impl SimplexLinkKind {
+    fn from_link_type(raw: &str) -> Option<Self> {
+        Some(match raw {
+            "invitation" => Self::Invitation,
+            "contact" => Self::Address,
+            "group" => Self::Group,
+            "channel" => Self::Channel,
+            "relay" => Self::Relay,
+            _ => return None,
+        })
+    }
+
+    /// Classify a raw link: `simplex:/…` full links and `https://<host>/<t>#…`
+    /// short links (`i` invitation, `a` address, `g` group, `c` channel, `r` relay).
+    /// Returns `None` for ordinary web URLs.
+    pub fn from_uri(uri: &str) -> Option<Self> {
+        let uri = uri.trim();
+        if let Some(rest) = uri.strip_prefix("simplex:") {
+            let rest = rest.trim_start_matches('/');
+            let lower = rest.to_ascii_lowercase();
+            if lower.starts_with("invitation") {
+                return Some(Self::Invitation);
+            }
+            if lower.starts_with("contact") {
+                // Group links are contact links carrying a groupLinkId.
+                return Some(if lower.contains("grouplinkid") {
+                    Self::Group
+                } else {
+                    Self::Address
+                });
+            }
+            return short_link_kind(rest);
+        }
+        let rest = uri.strip_prefix("https://")?;
+        let (host, path) = rest.split_once('/')?;
+        if host.is_empty() || !path.contains('#') {
+            return None;
+        }
+        // Only trust the short-link shape on SimpleX-looking hosts; the full
+        // https form (`/invitation#/?v=…`, `/contact#/?v=…`) is unambiguous.
+        let lower = path.to_ascii_lowercase();
+        if lower.starts_with("invitation#") {
+            return Some(Self::Invitation);
+        }
+        if lower.starts_with("contact#") {
+            return Some(if lower.contains("grouplinkid") {
+                Self::Group
+            } else {
+                Self::Address
+            });
+        }
+        if host.contains("simplex") {
+            return short_link_kind(path);
+        }
+        None
+    }
+
+    /// Official wording ("SimpleX one-time invitation", …).
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Invitation => "SimpleX one-time invitation",
+            Self::Address => "SimpleX contact address",
+            Self::Group => "SimpleX group link",
+            Self::Channel => "SimpleX channel link",
+            Self::Relay => "SimpleX relay link",
+        }
+    }
+
+    /// Question for the join confirmation sheet.
+    pub fn join_prompt(self) -> &'static str {
+        match self {
+            Self::Invitation => "Connect via one-time link?",
+            Self::Address => "Connect via contact address?",
+            Self::Group => "Join group?",
+            Self::Channel => "Join channel?",
+            Self::Relay => "Connect to relay?",
+        }
+    }
+
+    pub fn join_action(self) -> &'static str {
+        match self {
+            Self::Group | Self::Channel => "Join",
+            _ => "Connect",
+        }
+    }
+}
+
+fn short_link_kind(path: &str) -> Option<SimplexLinkKind> {
+    let (head, frag) = path.split_once('#')?;
+    if frag.is_empty() {
+        return None;
+    }
+    Some(match head.trim_matches('/') {
+        "i" => SimplexLinkKind::Invitation,
+        "a" => SimplexLinkKind::Address,
+        "g" => SimplexLinkKind::Group,
+        "c" => SimplexLinkKind::Channel,
+        "r" => SimplexLinkKind::Relay,
+        _ => return None,
+    })
+}
+
+/// Hostname of a link (`smp.simplex.im`), for "via …" captions.
+pub fn link_host(uri: &str) -> Option<String> {
+    let rest = uri.split_once("://").map(|(_, r)| r)?;
+    let host = rest.split(['/', '#', '?']).next()?;
+    let host = host.rsplit('@').next()?.split(':').next()?;
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+/// Human-readable label for a SimpleX link: "SimpleX group link (via smp.simplex.im)".
+pub fn simplex_link_label(kind: SimplexLinkKind, hosts: &[String]) -> String {
+    if hosts.is_empty() {
+        kind.description().to_string()
+    } else {
+        format!("{} (via {})", kind.description(), hosts.join(", "))
+    }
+}
+
+/// Replace SimpleX link tokens in plain text with readable labels, for
+/// one-line previews (chat list, quotes) that have no `formattedText`.
+pub fn humanize_simplex_links(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains("simplex") && !s.contains('#') {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut changed = false;
+    let mut last = 0usize;
+    for (start, token) in s
+        .split_whitespace()
+        .map(|t| (t.as_ptr() as usize - s.as_ptr() as usize, t))
+    {
+        let trimmed = token.trim_end_matches(['.', ',', ')', '!', '?', ';']);
+        if let Some(kind) = SimplexLinkKind::from_uri(trimmed) {
+            out.push_str(&s[last..start]);
+            let hosts: Vec<String> = link_host(trimmed)
+                .filter(|_| !trimmed.starts_with("simplex:"))
+                .into_iter()
+                .collect();
+            out.push_str(&simplex_link_label(kind, &hosts));
+            last = start + trimmed.len();
+            changed = true;
+        }
+    }
+    if !changed {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    out.push_str(&s[last..]);
+    std::borrow::Cow::Owned(out)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextSegment {
     pub text: String,
     pub style: TextStyle,
     /// Absolute URL / URI to open when the segment is a link.
     pub link: Option<String>,
+    /// Set when `link` is a SimpleX connection link (opens the join sheet).
+    pub simplex: Option<SimplexLinkKind>,
 }
 
 /// One autocomplete hit for an incomplete `:prefix` in the composer.
@@ -291,16 +454,60 @@ fn parse_one_segment(item: &Value) -> Option<TextSegment> {
     }
     let format = item.get("format");
     let (style, link) = parse_format(format, raw);
-    let text = match style {
-        TextStyle::Uri => format
-            .and_then(|f| f.get("showText"))
+    let show_text = format
+        .and_then(|f| f.get("showText"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let ty = format
+        .and_then(|f| f.get("type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let mut simplex = None;
+    let text = if ty == "simplexLink" {
+        let kind = format
+            .and_then(|f| f.get("linkType"))
             .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(raw)
-            .to_string(),
-        _ => raw.to_string(),
+            .and_then(SimplexLinkKind::from_link_type)
+            .or_else(|| link.as_deref().and_then(SimplexLinkKind::from_uri))
+            .unwrap_or(SimplexLinkKind::Address);
+        simplex = Some(kind);
+        match show_text {
+            Some(t) => t.to_string(),
+            None => {
+                let mut hosts: Vec<String> = format
+                    .and_then(|f| f.get("smpHosts"))
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|h| h.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if hosts.is_empty() {
+                    hosts.extend(link.as_deref().and_then(link_host));
+                }
+                simplex_link_label(kind, &hosts)
+            }
+        }
+    } else if style == TextStyle::Uri {
+        // A bare `simplex:` / short link the core tagged as a plain URI.
+        simplex = link.as_deref().and_then(SimplexLinkKind::from_uri);
+        match (show_text, simplex) {
+            (Some(t), _) => t.to_string(),
+            (None, Some(kind)) if raw.starts_with("simplex:") => {
+                simplex_link_label(kind, &[])
+            }
+            _ => raw.to_string(),
+        }
+    } else {
+        raw.to_string()
     };
-    Some(TextSegment { text, style, link })
+    Some(TextSegment {
+        text,
+        style,
+        link,
+        simplex,
+    })
 }
 
 fn parse_format(format: Option<&Value>, raw_text: &str) -> (TextStyle, Option<String>) {
@@ -348,7 +555,9 @@ fn parse_format(format: Option<&Value>, raw_text: &str) -> (TextStyle, Option<St
             let link = format
                 .get("simplexUri")
                 .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
                 .unwrap_or(raw_text)
+                .trim()
                 .to_string();
             (TextStyle::Uri, Some(link))
         }
@@ -436,5 +645,51 @@ mod tests {
             segs[2].link.as_deref(),
             Some("https://example.com")
         );
+    }
+
+    #[test]
+    fn simplex_links_get_readable_labels() {
+        let v = json!([
+            {"format": null, "text": "join "},
+            {"format": {"type": "simplexLink", "linkType": "group",
+                        "simplexUri": "https://smp9.simplex.im/g#abc", "smpHosts": ["smp9.simplex.im"]},
+             "text": "https://smp9.simplex.im/g#abc"},
+            {"format": {"type": "simplexLink", "linkType": "invitation", "showText": "my link",
+                        "simplexUri": "simplex:/invitation#/?v=2-7&smp=x", "smpHosts": ["a", "b"]},
+             "text": "[my link](simplex:/invitation#/?v=2-7&smp=x)"}
+        ]);
+        let segs = parse_formatted_text(Some(&v));
+        assert_eq!(segs[0].simplex, None);
+        assert_eq!(segs[1].text, "SimpleX group link (via smp9.simplex.im)");
+        assert_eq!(segs[1].simplex, Some(SimplexLinkKind::Group));
+        assert_eq!(segs[1].link.as_deref(), Some("https://smp9.simplex.im/g#abc"));
+        assert_eq!(segs[2].text, "my link");
+        assert_eq!(segs[2].simplex, Some(SimplexLinkKind::Invitation));
+    }
+
+    #[test]
+    fn classify_simplex_uris() {
+        use SimplexLinkKind::*;
+        assert_eq!(SimplexLinkKind::from_uri("https://smp.simplex.im/a#xyz"), Some(Address));
+        assert_eq!(SimplexLinkKind::from_uri("https://smp.simplex.im/c#xyz"), Some(Channel));
+        assert_eq!(SimplexLinkKind::from_uri("https://simplex.chat/invitation#/?v=2"), Some(Invitation));
+        assert_eq!(
+            SimplexLinkKind::from_uri("simplex:/contact#/?v=2&data=%7B%22groupLinkId%22"),
+            Some(Group)
+        );
+        assert_eq!(SimplexLinkKind::from_uri("simplex:/contact#/?v=2"), Some(Address));
+        assert_eq!(SimplexLinkKind::from_uri("https://example.com/a#top"), None);
+        assert_eq!(SimplexLinkKind::from_uri("https://example.com/page"), None);
+        assert_eq!(link_host("https://smp.simplex.im/g#x").as_deref(), Some("smp.simplex.im"));
+    }
+
+    #[test]
+    fn humanize_previews() {
+        assert_eq!(
+            humanize_simplex_links("join https://smp9.simplex.im/g#abc now"),
+            "join SimpleX group link (via smp9.simplex.im) now"
+        );
+        assert_eq!(humanize_simplex_links("see https://example.com/#x"), "see https://example.com/#x");
+        assert_eq!(humanize_simplex_links("plain"), "plain");
     }
 }

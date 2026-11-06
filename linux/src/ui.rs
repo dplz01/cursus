@@ -699,7 +699,7 @@ fn chat_list(app: &App) -> Element<'_, Message> {
             Space::new().height(0).into()
         } else {
             container(ellipsis_text(
-                chat.preview.clone(),
+                cursus_core::humanize_simplex_links(&chat.preview).into_owned(),
                 d.meta,
                 theme::t().text_secondary,
                 2,
@@ -1935,7 +1935,7 @@ fn deleted_mark_chip<'a>(msg: &'a ChatMessage, d: Density) -> Element<'a, Messag
 }
 
 fn quote_preview<'a>(quote: &'a cursus_core::MessageQuote, d: Density) -> Element<'a, Message> {
-    let preview = truncate_ui(&quote.text, 120);
+    let preview = truncate_ui(&cursus_core::humanize_simplex_links(&quote.text), 120);
     let glyph = if cursus_core::is_short_emoji(&quote.text) {
         emoji_glyph(preview.clone())
             .size(d.meta)
@@ -2112,6 +2112,7 @@ fn message_text_content(app: &App, msg: &ChatMessage, d: Density) -> Element<'st
         })
         .collect();
     rich_text(spans)
+        .on_link_click(|msg: Message| msg)
         .size(d.body)
         .color(theme::t().text_primary)
         .wrapping(Wrapping::WordOrGlyph)
@@ -2186,7 +2187,13 @@ fn styled_span(
     }
 
     if let Some(link) = seg.link.as_ref() {
-        s = s.link(Message::OpenUrl(link.clone()));
+        s = s.link(match seg.simplex {
+            Some(kind) => Message::OpenSimplexLink {
+                uri: link.clone(),
+                kind,
+            },
+            None => Message::OpenUrl(link.clone()),
+        });
     }
     s
 }
@@ -4765,34 +4772,65 @@ fn reaction_members_overlay(app: &App) -> Element<'_, Message> {
 fn open_url_confirm_overlay(app: &App) -> Element<'_, Message> {
     let d = app.density();
     let hover = app.hover_ok();
-    let Some(url) = app.pending_url() else {
+    let Some(pending) = app.pending_url() else {
         return vertical().height(0).into();
     };
+    let url = pending.url.clone();
+    let (title, headline, note, action) = match pending.simplex {
+        Some(kind) => {
+            let hosts: Vec<String> = cursus_core::link_host(&url).into_iter().collect();
+            (
+                kind.join_prompt(),
+                cursus_core::simplex_link_label(kind, &hosts),
+                "You will connect via this SimpleX link. Only continue if you trust the sender.",
+                kind.join_action(),
+            )
+        }
+        None => (
+            "Open this link?",
+            url.clone(),
+            "It will open in your web browser. Only continue if you trust the sender and the destination.",
+            "Open",
+        ),
+    };
+    let mut body = column![
+        text(title).size(d.body).color(theme::t().text_primary),
+        text(headline)
+            .size(d.meta)
+            .color(theme::t().accent)
+            .wrapping(Wrapping::WordOrGlyph),
+    ]
+    .spacing(12);
+    if pending.simplex.is_some() {
+        // Full link, muted, so the user can still inspect what they join.
+        let shown: String = if url.chars().count() > 120 {
+            url.chars().take(117).chain("…".chars()).collect()
+        } else {
+            url.clone()
+        };
+        body = body.push(
+            text(shown)
+                .size(d.meta)
+                .color(theme::t().text_muted)
+                .wrapping(Wrapping::Glyph),
+        );
+    }
     let card = menu_card(
-        column![
-            text("Open this link?")
-                .size(d.body)
-                .color(theme::t().text_primary),
-            text(url.to_string())
-                .size(d.meta)
-                .color(theme::t().accent),
-            text("Only continue if you trust the sender and the destination.")
-                .size(d.meta)
-                .color(theme::t().text_secondary),
-            row![
-                button(text("Cancel").size(d.meta))
-                    .on_press(Message::CancelOpenUrl)
-                    .padding(Padding::from([10, 14]))
-                    .style(theme::secondary_action(hover)),
-                button(text("Open").size(d.meta))
-                    .on_press(Message::ConfirmOpenUrl)
-                    .padding(Padding::from([10, 14]))
-                    .style(theme::primary_action(hover)),
-            ]
-            .spacing(8),
-        ]
-        .spacing(12)
-        .into(),
+        body.push(text(note).size(d.meta).color(theme::t().text_secondary))
+            .push(
+                row![
+                    button(text("Cancel").size(d.meta))
+                        .on_press(Message::CancelOpenUrl)
+                        .padding(Padding::from([10, 14]))
+                        .style(theme::secondary_action(hover)),
+                    button(text(action).size(d.meta))
+                        .on_press(Message::ConfirmOpenUrl)
+                        .padding(Padding::from([10, 14]))
+                        .style(theme::primary_action(hover)),
+                ]
+                .spacing(8),
+            )
+            .into(),
         d,
     );
 

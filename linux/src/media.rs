@@ -1,4 +1,4 @@
-//! Lightweight media helpers (ffmpeg CLI — no heavy player crates).
+//! Lightweight media helpers (ffmpeg CLI; symphonia for waveform decode).
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -27,43 +27,143 @@ pub fn extract_waveform_peaks(path: &Path, bars: usize) -> Result<Vec<f32>, Stri
 
 pub fn analyze_audio(path: &Path, bars: usize) -> Result<WaveformInfo, String> {
     let bars = bars.max(8);
-    let raw = path.with_extension("peaks.f32");
-    // High-pass strips DC offset / handling rumble: phone mics often sit on a
-    // constant offset that made every bar read as full ("||||||").
-    let status = Command::new("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-y",
-            "-i",
-        ])
-        .arg(path)
-        .args(["-af", "highpass=f=80", "-ac", "1", "-ar", "8000", "-f", "f32le"])
-        .arg(&raw)
-        .status()
-        .map_err(|e| format!("ffmpeg waveform: {e}"))?;
-    if !status.success() {
-        let _ = std::fs::remove_file(&raw);
-        return Err("ffmpeg could not decode audio for waveform".into());
-    }
-    let bytes = std::fs::read(&raw).map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_file(&raw);
-    if bytes.len() < 4 {
-        return Err("empty audio".into());
-    }
-    let samples: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .map(|v| if v.is_finite() { v } else { 0.0 })
-        .collect();
-    let duration_secs = samples.len() as f32 / 8000.0;
+    // Decode in-process first: phones (musl postmarketOS) often have no
+    // working ffmpeg, which left every voice note on the flat placeholder.
+    let samples = match decode_mono_8k(path) {
+        Ok(s) if !s.is_empty() => s,
+        Ok(_) => return Err("empty audio".into()),
+        Err(native_err) => decode_mono_8k_ffmpeg(path)
+            .map_err(|e| format!("waveform decode failed ({native_err}; {e})"))?,
+    };
+    let duration_secs = samples.len() as f32 / WAVE_RATE as f32;
     Ok(WaveformInfo {
         peaks: waveform_bars(&samples, bars),
         duration_secs,
         raw_peak: samples.iter().fold(0.0_f32, |m, s| m.max(s.abs())),
     })
+}
+
+/// Sample rate used for waveform analysis.
+const WAVE_RATE: u32 = 8000;
+
+/// Pure-Rust decode (WAV/PCM, AAC/M4A, MP3, Ogg Vorbis) to mono ~8 kHz.
+/// Downsampling averages blocks, which is cheap and enough for bars.
+fn decode_mono_8k(path: &Path) -> Result<Vec<f32>, String> {
+    use symphonia::core::audio::SampleBuffer;
+    use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_AAC, CODEC_TYPE_NULL};
+    use symphonia::core::errors::Error;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::probe::Hint;
+
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions { enable_gapless: true, ..Default::default() },
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| e.to_string())?;
+    let mut format = probed.format;
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .ok_or("no audio track")?;
+    let track_id = track.id;
+    // AAC encoders prepend ~1024 priming frames; M4A edit lists that would
+    // trim them aren't applied here, so skip them to keep bars aligned.
+    let mut skip = match track.codec_params.delay {
+        Some(d) => d as usize,
+        None if track.codec_params.codec == CODEC_TYPE_AAC => 1024,
+        None => 0,
+    };
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|e| e.to_string())?;
+
+    let mut out = Vec::new();
+    let mut acc = 0.0_f32;
+    let mut acc_n = 0_u32;
+    let mut block = 1_u32;
+    let mut buf: Option<SampleBuffer<f32>> = None;
+    loop {
+        let packet = match format.next_packet() {
+            Ok(p) => p,
+            Err(Error::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(Error::ResetRequired) => break,
+            Err(e) => {
+                if out.is_empty() {
+                    return Err(e.to_string());
+                }
+                break;
+            }
+        };
+        if packet.track_id() != track_id {
+            continue;
+        }
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(Error::DecodeError(_)) => continue,
+            Err(e) => return Err(e.to_string()),
+        };
+        let spec = *decoded.spec();
+        block = (spec.rate / WAVE_RATE).max(1);
+        let channels = spec.channels.count().max(1);
+        if buf
+            .as_ref()
+            .is_none_or(|b| b.capacity() < decoded.capacity() * channels)
+        {
+            buf = Some(SampleBuffer::new(decoded.capacity() as u64, spec));
+        }
+        let Some(sb) = buf.as_mut() else { break };
+        sb.copy_interleaved_ref(decoded);
+        for frame in sb.samples().chunks(channels) {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            acc += frame.iter().sum::<f32>() / channels as f32;
+            acc_n += 1;
+            if acc_n >= block {
+                let v = acc / acc_n as f32;
+                out.push(if v.is_finite() { v } else { 0.0 });
+                acc = 0.0;
+                acc_n = 0;
+            }
+        }
+    }
+    if acc_n > block / 2 {
+        out.push(acc / acc_n as f32);
+    }
+    Ok(out)
+}
+
+/// Fallback for formats symphonia lacks (e.g. Opus): ffmpeg to stdout.
+fn decode_mono_8k_ffmpeg(path: &Path) -> Result<Vec<f32>, String> {
+    let output = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-i"])
+        .arg(path)
+        .args(["-ac", "1", "-ar", "8000", "-f", "f32le", "-"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("ffmpeg: {e}"))?;
+    if !output.status.success() || output.stdout.len() < 4 {
+        return Err("ffmpeg could not decode audio".into());
+    }
+    Ok(output
+        .stdout
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .map(|v| if v.is_finite() { v } else { 0.0 })
+        .collect())
 }
 
 /// Loudness bars (0.05–1.0) from mono samples: per-bar RMS with the DC
@@ -738,6 +838,63 @@ mod tests {
         std::fs::write(&path, jpeg_with_orientation(1)).unwrap();
         assert!(upright_copy_for_send(&path, &dir.join("out2")).unwrap().is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn waveform_decodes_wav_without_ffmpeg() {
+        // 48 kHz stereo s16 WAV: quiet, loud burst, quiet.
+        let rate = 48_000u32;
+        let mut pcm = Vec::new();
+        for i in 0..rate {
+            let loud = (rate / 3..2 * rate / 3).contains(&i);
+            let amp = if loud { 12_000.0 } else { 150.0 };
+            let v = (amp * (i as f32 * 0.07).sin()) as i16;
+            pcm.extend_from_slice(&v.to_le_bytes());
+            pcm.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&rate.to_le_bytes());
+        wav.extend_from_slice(&(rate * 4).to_le_bytes());
+        wav.extend_from_slice(&4u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&pcm);
+        let path = std::env::temp_dir().join(format!("cursus-wave-{}.wav", std::process::id()));
+        std::fs::write(&path, wav).unwrap();
+        let samples = decode_mono_8k(&path).expect("native decode");
+        let _ = std::fs::remove_file(&path);
+        assert!((samples.len() as i64 - 8000).abs() < 50, "{}", samples.len());
+        let bars = waveform_bars(&samples, 12);
+        assert!(bars[0] < 0.2 && bars[11] < 0.2, "{bars:?}");
+        assert!(bars[6] > 0.8, "{bars:?}");
+    }
+
+    /// Compares native decode against ffmpeg on local voice notes.
+    #[test]
+    #[ignore]
+    fn native_matches_ffmpeg_on_local_voice_files() {
+        let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+            .join(".local/share/cursus/tmp/plain");
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = entry.path();
+            if !p.to_string_lossy().contains("voice-") {
+                continue;
+            }
+            let a = decode_mono_8k(&p).unwrap();
+            let b = decode_mono_8k_ffmpeg(&p).unwrap();
+            let (wa, wb) = (waveform_bars(&a, 96), waveform_bars(&b, 96));
+            // AAC priming/padding can shift bars slightly; compare on average.
+            let diff = wa.iter().zip(&wb).map(|(x, y)| (x - y).abs()).sum::<f32>() / 96.0;
+            println!("{}: {} vs {} samples, mean bar diff {diff:.3}", p.display(), a.len(), b.len());
+            assert!(diff < 0.05);
+        }
     }
 
     #[test]

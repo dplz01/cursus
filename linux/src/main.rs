@@ -4421,8 +4421,11 @@ impl App {
                 Task::none()
             }
             Message::WaveformReady { path, peaks } => {
-                if let Ok(peaks) = peaks {
-                    self.waveforms.insert(path, peaks);
+                match peaks {
+                    Ok(peaks) => {
+                        self.waveforms.insert(path, peaks);
+                    }
+                    Err(err) => tracing::warn!(%err, path = %path.display(), "waveform"),
                 }
                 Task::none()
             }

@@ -23,6 +23,8 @@ chrono.workspace = true
 iced = { version = "0.14", features = ["tokio", "debug", "svg", "image", "canvas", "advanced"] }
 iced_aw = { version = "0.14.1", default-features = false, features = ["context_menu"] }
 libc = "0.2"
+# Pure-Rust audio decode for waveforms (ffmpeg may be missing on phones).
+symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4", "wav", "pcm", "mp3", "ogg", "vorbis"] }
 image = { version = "0.24", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
 notify-rust.workspace = true
 rfd.workspace = true

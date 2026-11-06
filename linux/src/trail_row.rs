@@ -32,7 +32,13 @@ pub fn trail_row<'a>(
     })
 }
 
+struct TrailRowTag;
+
 impl Widget<Message, Theme, iced::Renderer> for TrailRow<'_> {
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<TrailRowTag>()
+    }
+
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.content), Tree::new(&self.badge)]
     }

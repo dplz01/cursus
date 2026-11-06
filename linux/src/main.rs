@@ -1394,6 +1394,8 @@ struct App {
     window_focused: bool,
     /// Open UI window id; `None` while hidden to tray (daemon keeps running).
     main_window: Option<iced::window::Id>,
+    /// Start time while the phone-size decoration check is armed (see `WindowResized`).
+    decorations_checked: Option<Instant>,
     /// Ensures libsimplex is loaded only after the first GPU window is up.
     core_connect_launched: bool,
     /// Settings → My profile draft.
@@ -1590,6 +1592,7 @@ impl App {
                 tray,
                 window_focused: true,
                 main_window: Some(main_window),
+                decorations_checked: want_decorations().then(Instant::now),
                 core_connect_launched: false,
                 own_profile: OwnProfileDraft {
                     fields: ProfileFields {
@@ -1868,7 +1871,24 @@ impl App {
             Message::WindowResized(size) => {
                 self.width = size.width;
                 self.height = size.height;
-                refresh_scale_factor()
+                // Unknown phone shell: right after start the compositor forces
+                // a narrow portrait size instead of our 1180×720 request → drop
+                // the client-side title bar. Only during the first seconds, so
+                // a desktop window resized narrow later keeps its decorations.
+                let mut tasks = vec![refresh_scale_factor()];
+                if self.decorations_checked.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(5)) {
+                    if let Some(id) = self.main_window {
+                        if decorations_override().is_none()
+                            && !mobile_shell()
+                            && size.width < 600.0
+                            && size.height > size.width
+                        {
+                            self.decorations_checked = None;
+                            tasks.push(iced::window::toggle_decorations(id));
+                        }
+                    }
+                }
+                Task::batch(tasks)
             }
             Message::ScaleFactor(factor) => {
                 if factor.is_finite() && factor > 0.0 {
@@ -7929,9 +7949,53 @@ impl App {
     }
 }
 
+/// `CURSUS_DECORATIONS=0|1` forces window decorations off/on.
+fn decorations_override() -> Option<bool> {
+    match std::env::var("CURSUS_DECORATIONS").ok()?.trim() {
+        "0" | "false" | "no" | "off" => Some(false),
+        "1" | "true" | "yes" | "on" => Some(true),
+        _ => None,
+    }
+}
+
+/// Phone shells (Phosh, Plasma Mobile, Sxmo, Lomiri…) show every app
+/// full-screen and have no server-side decorations, so winit falls back to
+/// drawing its own title bar — which eats the top of the screen and pushes
+/// the bottom of the app off it. No decorations there.
+fn mobile_shell() -> bool {
+    let env = |k: &str| std::env::var(k).unwrap_or_default().to_ascii_lowercase();
+    let desktop = format!("{}:{}", env("XDG_CURRENT_DESKTOP"), env("XDG_SESSION_DESKTOP"));
+    ["phosh", "sxmo", "lomiri", "ubuntu-touch", "plasma-mobile", "plasmamobile", "gnome-mobile"]
+        .iter()
+        .any(|m| desktop.contains(m))
+        || env("PLASMA_PLATFORM").contains("phone")
+        || env("PLASMA_PLATFORM").contains("handset")
+        || handset_device()
+}
+
+/// Phone kernels (postmarketOS, Mobian…) describe the device as a `handset`
+/// in the device tree. GNOME Mobile reports plain `GNOME`, so this is the only
+/// up-front hint there; inside the Flatpak sandbox `/sys/firmware` may be
+/// hidden, and the first-size check in `WindowResized` covers that case.
+fn handset_device() -> bool {
+    ["/sys/firmware/devicetree/base/chassis-type", "/proc/device-tree/chassis-type"]
+        .iter()
+        .filter_map(|p| std::fs::read(p).ok())
+        .any(|b| {
+            let t = String::from_utf8_lossy(&b);
+            let t = t.trim_end_matches('\0').trim();
+            t == "handset" || t == "tablet"
+        })
+}
+
+fn want_decorations() -> bool {
+    decorations_override().unwrap_or_else(|| !mobile_shell())
+}
+
 fn main_window_settings() -> iced::window::Settings {
     iced::window::Settings {
         size: iced::Size::new(1180.0, 720.0),
+        decorations: want_decorations(),
         exit_on_close_request: false,
         icon: iced::window::icon::from_file_data(desktop_entry::logo_png(256), None).ok(),
         // Wayland app id / X11 class — lets users write compositor rules.

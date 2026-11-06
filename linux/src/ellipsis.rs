@@ -224,12 +224,19 @@ struct Ellipsis {
 }
 
 impl Widget<Message, Theme, iced::Renderer> for Ellipsis {
+    /// Own tag: with the default (stateless) tag iced would reuse the tree of
+    /// any other stateless widget (e.g. a `Space`) that previously sat in this
+    /// slot, leaving `tree.children` empty → index-out-of-bounds panic.
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<Ellipsis>()
+    }
+
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.inner as &dyn Widget<Message, Theme, iced::Renderer>)]
     }
 
     fn diff(&self, tree: &mut Tree) {
-        tree.children[0].diff(&self.inner as &dyn Widget<Message, Theme, iced::Renderer>);
+        tree.diff_children(&[&self.inner as &dyn Widget<Message, Theme, iced::Renderer>]);
     }
 
     fn size(&self) -> Size<Length> {

@@ -42,6 +42,14 @@ type ChatEncryptFile = unsafe extern "C" fn(
 
 static HS_INIT: Once = Once::new();
 
+/// The one loaded libsimplex, never unloaded. `hs_init` starts the GHC
+/// runtime once per process and its threads (network, timers, GC) keep
+/// running code from the library after a session is closed; dropping the
+/// last handle `dlclose`d it underneath them → SIGSEGV (reproduced by
+/// opening sessions again after closing networked ones, see
+/// `call::simplex_e2e_tests`; in the app: on quit / after a failed unlock).
+static LOADED: std::sync::Mutex<Option<std::sync::Arc<LibSimplex>>> = std::sync::Mutex::new(None);
+
 pub struct LibSimplex {
     _library: Library,
     chat_migrate_init: ChatMigrateInit,
@@ -57,7 +65,18 @@ unsafe impl Send for LibSimplex {}
 unsafe impl Sync for LibSimplex {}
 
 impl LibSimplex {
-    pub fn load(libs_dir: Option<&Path>) -> Result<Self> {
+    /// Load once per process and share (see [`LOADED`]).
+    pub fn shared(libs_dir: Option<&Path>) -> Result<std::sync::Arc<Self>> {
+        let mut slot = LOADED.lock().map_err(|_| Error::LibraryLoad("libsimplex lock poisoned".into()))?;
+        if let Some(lib) = slot.as_ref() {
+            return Ok(std::sync::Arc::clone(lib));
+        }
+        let lib = std::sync::Arc::new(Self::load(libs_dir)?);
+        *slot = Some(std::sync::Arc::clone(&lib));
+        Ok(lib)
+    }
+
+    fn load(libs_dir: Option<&Path>) -> Result<Self> {
         let dir = libs_dir
             .map(Path::to_path_buf)
             .unwrap_or_else(default_libs_dir);

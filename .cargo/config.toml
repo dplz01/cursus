@@ -1,0 +1,8 @@
+[env]
+# Calls: always build the bundled libopus and link it statically (audiopus_sys
+# would otherwise pick a system libopus.so via pkg-config, which phones running
+# the AppImage may not have).
+LIBOPUS_NO_PKG = "1"
+# The bundled Opus declares cmake_minimum_required < 3.5, which CMake 4
+# rejects; older CMake ignores this variable.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

@@ -150,7 +150,7 @@ impl Session {
         }
 
         tracing::info!(libs = %config.libs_dir.display(), "session open: load libsimplex");
-        let lib = Arc::new(LibSimplex::load(Some(&config.libs_dir))?);
+        let lib = LibSimplex::shared(Some(&config.libs_dir))?;
         tracing::info!(
             db = %config.db_prefix.display(),
             "session open: migrate_init (SQLCipher)"
@@ -954,6 +954,35 @@ Create a new channel — private-group style links won’t join."
 
     pub fn call_end(&self, contact_id: i64) -> Result<Value> {
         self.send(&Commands::call_end(contact_id))
+    }
+
+    pub fn call_offer(
+        &self,
+        contact_id: i64,
+        media: CallMedia,
+        encryption: bool,
+        rtc_session: &str,
+        rtc_ice_candidates: &str,
+    ) -> Result<Value> {
+        self.send(&Commands::call_offer(
+            contact_id,
+            media,
+            encryption,
+            rtc_session,
+            rtc_ice_candidates,
+        ))
+    }
+
+    pub fn call_answer(&self, contact_id: i64, rtc_session: &str, rtc_ice_candidates: &str) -> Result<Value> {
+        self.send(&Commands::call_answer(contact_id, rtc_session, rtc_ice_candidates))
+    }
+
+    pub fn call_extra(&self, contact_id: i64, rtc_ice_candidates: &str) -> Result<Value> {
+        self.send(&Commands::call_extra(contact_id, rtc_ice_candidates))
+    }
+
+    pub fn call_status(&self, contact_id: i64, status: &str) -> Result<Value> {
+        self.send(&Commands::call_status(contact_id, status))
     }
 
     fn user_id(&self) -> Result<i64> {

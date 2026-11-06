@@ -612,6 +612,50 @@ impl Commands {
         "/_call get"
     }
 
+    /// Callee → caller: WebRTC offer (`/_call offer @{id} {WebRTCCallOffer}`).
+    /// `rtc_session` / `rtc_ice_candidates` are LZString-base64 JSON, as the
+    /// official clients send them.
+    pub fn call_offer(
+        contact_id: i64,
+        media: crate::models::CallMedia,
+        encryption: bool,
+        rtc_session: &str,
+        rtc_ice_candidates: &str,
+    ) -> String {
+        let payload = serde_json::json!({
+            "callType": {
+                "media": media.as_api(),
+                "capabilities": { "encryption": encryption }
+            },
+            "rtcSession": {
+                "rtcSession": rtc_session,
+                "rtcIceCandidates": rtc_ice_candidates
+            }
+        });
+        format!("/_call offer @{contact_id} {payload}")
+    }
+
+    /// Caller → callee: WebRTC answer (`/_call answer @{id} {WebRTCSession}`).
+    pub fn call_answer(contact_id: i64, rtc_session: &str, rtc_ice_candidates: &str) -> String {
+        let payload = serde_json::json!({
+            "rtcSession": rtc_session,
+            "rtcIceCandidates": rtc_ice_candidates
+        });
+        format!("/_call answer @{contact_id} {payload}")
+    }
+
+    /// Late ICE candidates (`/_call extra @{id} {WebRTCExtraInfo}`).
+    pub fn call_extra(contact_id: i64, rtc_ice_candidates: &str) -> String {
+        let payload = serde_json::json!({ "rtcIceCandidates": rtc_ice_candidates });
+        format!("/_call extra @{contact_id} {payload}")
+    }
+
+    /// Media connection state for the call chat item
+    /// (`connecting` | `connected` | `disconnected` | `failed`).
+    pub fn call_status(contact_id: i64, status: &str) -> String {
+        format!("/_call status @{contact_id} {status}")
+    }
+
     /// Item metadata (`/_get item info {ref} {itemId}`).
     pub fn item_info(chat: &ChatId, item_id: i64) -> String {
         format!("/_get item info {} {item_id}", chat.command_ref())

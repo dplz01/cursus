@@ -5928,80 +5928,8 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
         left: d.pad_tight,
     });
 
-    if let Some(call) = app.incoming_call() {
-        col = col.push(
-            container(
-                column![
-                    text(format!("Incoming call — {}", call.peer_name))
-                        .size(d.body)
-                        .color(theme::t().text_primary),
-                    text(match call.media {
-                        cursus_core::CallMedia::Audio => "Audio",
-                        cursus_core::CallMedia::Video => "Video",
-                    })
-                    .size(d.meta)
-                    .color(theme::t().text_muted),
-                    row![
-                        button(text("Decline").size(d.meta))
-                            .on_press(Message::RejectIncomingCall)
-                            .padding(Padding::from([8, 12]))
-                            .style(theme::secondary_action(hover)),
-                        button(text("Accept").size(d.meta))
-                            .on_press(Message::AcceptIncomingCall)
-                            .padding(Padding::from([8, 12]))
-                            .style(theme::primary_action(hover)),
-                    ]
-                    .spacing(8),
-                ]
-                .spacing(8)
-                .padding(d.pad_tight),
-            )
-            .width(Length::Fill)
-            .style(|_| container::Style {
-                background: Some(iced::Background::Color(theme::t().accent_soft)),
-                border: iced::Border {
-                    color: theme::t().accent,
-                    width: 1.0,
-                    radius: 12.0.into(),
-                },
-                ..container::Style::default()
-            }),
-        );
-    }
-
-    if let Some(call) = app.active_call() {
-        col = col.push(
-            container(
-                column![
-                    text(format!(
-                        "{} — {}",
-                        if call.outgoing { "Calling" } else { "In call" },
-                        call.peer_name
-                    ))
-                    .size(d.body)
-                    .color(theme::t().text_primary),
-                    text("Signaling via SimpleX. Media uses the peer’s WebRTC client when connected.")
-                        .size(d.meta)
-                        .color(theme::t().text_muted),
-                    button(text("End call").size(d.meta))
-                        .on_press(Message::EndActiveCall)
-                        .padding(Padding::from([8, 12]))
-                        .style(theme::primary_action(hover)),
-                ]
-                .spacing(8)
-                .padding(d.pad_tight),
-            )
-            .width(Length::Fill)
-            .style(|_| container::Style {
-                background: Some(iced::Background::Color(theme::t().bg_elevated)),
-                border: iced::Border {
-                    color: theme::t().border,
-                    width: 1.0,
-                    radius: 12.0.into(),
-                },
-                ..container::Style::default()
-            }),
-        );
+    if let Some(card) = call_card(app, false) {
+        col = col.push(card);
     }
 
     let contacts = app.direct_contacts();
@@ -6038,36 +5966,130 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
 
 fn calls_detail(app: &App) -> Element<'_, Message> {
     let d = app.density();
-    if let Some(call) = app.active_call().or(app.incoming_call()) {
-        return container(
-            column![
-                text(call.peer_name.clone())
-                    .size(d.title).font(BOLD)
-                    .color(theme::t().text_primary),
-                text(if app.incoming_call().is_some() {
-                    "Incoming call"
-                } else if call.outgoing {
-                    "Outgoing call — waiting for answer"
-                } else {
-                    "Call in progress (signaling)"
-                })
-                .size(d.body)
-                .color(theme::t().text_secondary),
-                text("Cursus sends SimpleX call signaling. Audio/video media needs the WebRTC call page (official desktop opens it in the browser).")
-                    .size(d.meta)
-                    .color(theme::t().text_muted),
-            ]
-            .spacing(12)
-            .padding(d.pad),
-        )
-        .width(Length::Fill)
-        .into();
+    if let Some(card) = call_card(app, true) {
+        return container(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .padding(d.pad)
+            .into();
     }
     placeholder(
         "Calls",
-        "Pick a contact on the left to start an audio call, or wait for an incoming invite.",
+        "Pick a contact to start an audio call. Calls are end-to-end encrypted and peer-to-peer.",
         d,
     )
+}
+
+/// Ringing / active call: avatar, name, state, and its actions.
+/// `large` = the detail pane; otherwise a card on top of the contact list.
+fn call_card(app: &App, large: bool) -> Option<Element<'_, Message>> {
+    use crate::call_flow::CallPhase;
+    let d = app.density();
+    let hover = app.hover_ok();
+    let t = theme::t();
+
+    let (contact_id, name, state, actions): (i64, String, String, Element<'_, Message>) =
+        if let Some(inv) = app.incoming_call() {
+            let kind = match inv.media {
+                cursus_core::CallMedia::Audio => "Incoming call",
+                // We answer video invitations with audio only.
+                cursus_core::CallMedia::Video => "Incoming video call (audio only)",
+            };
+            let actions = row![
+                call_button("Decline", icons::phone_icon(18.0, t.text_primary), Message::RejectIncomingCall, theme::danger_action(hover)),
+                call_button("Accept", icons::phone_icon(18.0, t.accent_on), Message::AcceptIncomingCall, theme::primary_action(hover)),
+            ]
+            .spacing(12)
+            .into();
+            (inv.contact_id, inv.peer_name.clone(), kind.to_string(), actions)
+        } else {
+            let call = app.active_call()?;
+            let state = match call.phase {
+                CallPhase::Ringing => "Calling…".to_string(),
+                CallPhase::Connecting => "Connecting…".to_string(),
+                CallPhase::Connected => {
+                    let secs = call.connected_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                    let clock = if secs >= 3600 {
+                        format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
+                    } else {
+                        format!("{:02}:{:02}", secs / 60, secs % 60)
+                    };
+                    if call.muted { format!("{clock} · muted") } else { clock }
+                }
+            };
+            let mute_label = if call.muted { "Unmute" } else { "Mute" };
+            let mute_tint = if call.muted { t.danger } else { t.text_primary };
+            let actions = row![
+                call_button(mute_label, icons::mic_icon(18.0, mute_tint), Message::Call(crate::call_flow::CallMsg::ToggleMute), theme::secondary_action(hover)),
+                call_button("End", icons::phone_icon(18.0, t.text_primary), Message::EndActiveCall, theme::danger_action(hover)),
+            ]
+            .spacing(12)
+            .into();
+            (call.contact_id, call.peer_name.clone(), state, actions)
+        };
+
+    let image = app
+        .chats()
+        .iter()
+        .find(|c| matches!(c.id.chat_type, cursus_core::ChatType::Direct) && c.id.api_id == contact_id)
+        .and_then(|c| c.peer_profile.image.clone());
+    let avatar_size = if large { 112.0 } else { 44.0 };
+    let avatar = profile_avatar(image.as_deref(), &name, avatar_size);
+    let name_text = text(name).size(if large { d.title } else { d.body }).font(BOLD).color(t.text_primary);
+    let state_text = text(state).size(if large { d.body } else { d.meta }).color(t.text_secondary);
+
+    if large {
+        return Some(
+            column![
+                avatar,
+                name_text,
+                state_text,
+                vertical().height(24),
+                actions,
+            ]
+            .spacing(10)
+            .align_x(Alignment::Center)
+            .into(),
+        );
+    }
+    Some(
+        container(
+            column![
+                row![avatar, column![name_text, state_text].spacing(2)]
+                    .spacing(12)
+                    .align_y(Alignment::Center),
+                actions,
+            ]
+            .spacing(12)
+            .padding(d.pad_tight),
+        )
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().accent_soft)),
+            border: iced::Border {
+                color: theme::t().accent,
+                width: 1.0,
+                radius: 12.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into(),
+    )
+}
+
+fn call_button<'a>(
+    label: &'a str,
+    icon: Element<'a, Message>,
+    on_press: Message,
+    style: impl Fn(&iced::Theme, button::Status) -> button::Style + 'a,
+) -> Element<'a, Message> {
+    button(row![icon, text(label).size(14)].spacing(8).align_y(Alignment::Center))
+        .on_press(on_press)
+        .padding(Padding::from([10, 16]))
+        .style(style)
+        .into()
 }
 
 /// Image-pen (set) + cancel/X (clear) for own / group / channel profile photos.

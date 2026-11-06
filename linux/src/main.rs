@@ -4,6 +4,8 @@
 
 mod app_lock;
 mod avatar_cache;
+mod call;
+mod call_flow;
 mod desktop;
 mod desktop_entry;
 mod edit_menu;
@@ -43,7 +45,7 @@ use tracing_subscriber::EnvFilter;
 use cursus_core::{
     auto_receive_candidates, data_dir, files_dir, group_role_rank, is_channel_short_link,
     load_account, merge_seeded_channels, prune_resolved_seeds, save_account, setup_complete,
-    AccountMeta, CallInfo, CallMedia, ChatId, ChatMessage, ChatPreview, ChatSettings, ChatTag,
+    AccountMeta, ChatId, ChatMessage, ChatPreview, ChatSettings, ChatTag,
     ChatType, ConnLink, DeliveryStatus, Event, FileTransferState, GroupMemberInfo,
     GroupProfileUpdate, ProfileFields, Session, SessionConfig, UserProfile, GROUP_ROLES,
 };
@@ -1153,7 +1155,7 @@ pub enum Message {
     AcceptIncomingCall,
     RejectIncomingCall,
     EndActiveCall,
-    CallActionDone(Result<String, String>),
+    Call(call_flow::CallMsg),
     WindowFocused(bool),
     WindowCloseRequested,
     /// Main window finished opening (daemon / re-show from tray).
@@ -1421,10 +1423,8 @@ struct App {
     pref_menu: Option<PrefMenu>,
     /// Member support chat overlay (chat with admins).
     support: Option<SupportOverlay>,
-    /// Outgoing or accepted active call (signaling).
-    active_call: Option<CallInfo>,
-    /// Ringing inbound call waiting for accept/reject.
-    incoming_call: Option<CallInfo>,
+    /// Audio call: ringing / active call, tones, media engine.
+    call: call_flow::CallState,
     /// Direct chat to open as soon as the next chat-list load contains it.
     open_after_reload: Option<ChatId>,
     /// Render as connected without a live session (screenshot harness only).
@@ -1614,8 +1614,7 @@ impl App {
                 group_settings: None,
                 pref_menu: None,
                 support: None,
-                active_call: None,
-                incoming_call: None,
+                call: call_flow::CallState::default(),
                 open_after_reload: None,
                 demo: false,
                 settings_section: SettingsSection::Profile,
@@ -1801,7 +1800,15 @@ impl App {
             Subscription::none()
         };
 
-        Subscription::batch([window, events, voice_tick, fling_tick, tray_tick, lock_tick])
+        Subscription::batch([
+            window,
+            events,
+            voice_tick,
+            fling_tick,
+            tray_tick,
+            lock_tick,
+            self.call_subscription(),
+        ])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -4648,73 +4655,11 @@ impl App {
                 self.status = err;
                 Task::none()
             }
-            Message::StartAudioCall(contact_id) => {
-                let Some(session) = self.session.clone() else {
-                    return Task::none();
-                };
-                let peer_name = self
-                    .chats
-                    .iter()
-                    .find(|c| {
-                        matches!(c.id.chat_type, ChatType::Direct) && c.id.api_id == contact_id
-                    })
-                    .map(|c| c.title.clone())
-                    .unwrap_or_else(|| "Contact".into());
-                self.active_call = Some(CallInfo {
-                    contact_id,
-                    peer_name: peer_name.clone(),
-                    outgoing: true,
-                    media: CallMedia::Audio,
-                });
-                self.incoming_call = None;
-                self.status = format!("Calling {peer_name}…");
-                self.nav = NavSection::Calls;
-                Task::perform(
-                    call_invite(session, contact_id, CallMedia::Audio),
-                    Message::CallActionDone,
-                )
-            }
-            Message::AcceptIncomingCall => {
-                let Some(call) = self.incoming_call.take() else {
-                    return Task::none();
-                };
-                // Accept path: keep call active; peer's WebRTC offer will follow.
-                // Full media plane (browser call.html bridge) is still thin here.
-                self.active_call = Some(CallInfo {
-                    outgoing: false,
-                    ..call
-                });
-                self.status = format!("In call with {}.", self.active_call.as_ref().unwrap().peer_name);
-                Task::none()
-            }
-            Message::RejectIncomingCall => {
-                let Some(call) = self.incoming_call.take() else {
-                    return Task::none();
-                };
-                let Some(session) = self.session.clone() else {
-                    return Task::none();
-                };
-                Task::perform(call_reject(session, call.contact_id), Message::CallActionDone)
-            }
-            Message::EndActiveCall => {
-                let Some(call) = self.active_call.take() else {
-                    return Task::none();
-                };
-                let Some(session) = self.session.clone() else {
-                    return Task::none();
-                };
-                self.status = "Call ended.".into();
-                Task::perform(call_end(session, call.contact_id), Message::CallActionDone)
-            }
-            Message::CallActionDone(Ok(msg)) => {
-                self.status = msg;
-                Task::none()
-            }
-            Message::CallActionDone(Err(err)) => {
-                self.status = err;
-                self.active_call = None;
-                Task::none()
-            }
+            Message::StartAudioCall(contact_id) => self.update_call(call_flow::CallMsg::Start(contact_id)),
+            Message::AcceptIncomingCall => self.update_call(call_flow::CallMsg::Accept),
+            Message::RejectIncomingCall => self.update_call(call_flow::CallMsg::Reject),
+            Message::EndActiveCall => self.update_call(call_flow::CallMsg::End),
+            Message::Call(msg) => self.update_call(msg),
             Message::WindowFocused(focused) => {
                 self.window_focused = focused;
                 if !focused && self.desktop_prefs.lock_after == crate::desktop::LockAfter::Immediately {
@@ -4914,6 +4859,8 @@ impl App {
                 iced::window::close(id)
             }
             Message::QuitApp => {
+                // Tell the peer and free the mic/speaker before exiting.
+                self.end_calls_for_exit();
                 // Decrypted attachments must not outlive the app (at rest they
                 // exist only as ciphertext under files/).
                 cursus_core::wipe_plaintext_cache();
@@ -6162,17 +6109,8 @@ impl App {
                 Event::Other { type_name, body } => {
                     tracing::debug!(%type_name, "core event");
                     match type_name.as_str() {
-                        "callInvitation" => {
-                            if let Some(call) = parse_call_invitation(body, false) {
-                                self.incoming_call = Some(call.clone());
-                                self.status = format!("Incoming call from {}.", call.peer_name);
-                                self.nav = NavSection::Calls;
-                            }
-                        }
-                        "callEnded" => {
-                            self.active_call = None;
-                            self.incoming_call = None;
-                            self.status = "Call ended.".into();
+                        "callInvitation" | "callOffer" | "callAnswer" | "callExtraInfo" | "callEnded" => {
+                            tasks.push(self.on_call_core_event(type_name, body));
                         }
                         "rcvFileComplete" => {
                             let name = body
@@ -7186,12 +7124,12 @@ impl App {
             .find(|m| m.group_member_id == *mid && member_status_is_pending(&m.status))
     }
 
-    pub(crate) fn active_call(&self) -> Option<&CallInfo> {
-        self.active_call.as_ref()
+    pub(crate) fn active_call(&self) -> Option<&call_flow::ActiveCall> {
+        self.call.active()
     }
 
-    pub(crate) fn incoming_call(&self) -> Option<&CallInfo> {
-        self.incoming_call.as_ref()
+    pub(crate) fn incoming_call(&self) -> Option<&call_flow::IncomingCall> {
+        self.call.incoming()
     }
 
     /// Chats for the current nav: inbox (non-channel) or channels only.
@@ -9319,68 +9257,6 @@ async fn create_chat_entity(
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-async fn call_invite(
-    session: Arc<Session>,
-    contact_id: i64,
-    media: CallMedia,
-) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .call_invite(contact_id, media)
-            .map(|_| "Call invitation sent.".into())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-async fn call_reject(session: Arc<Session>, contact_id: i64) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .call_reject(contact_id)
-            .map(|_| "Call declined.".into())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-async fn call_end(session: Arc<Session>, contact_id: i64) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .call_end(contact_id)
-            .map(|_| "Call ended.".into())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-fn parse_call_invitation(body: &serde_json::Value, outgoing: bool) -> Option<CallInfo> {
-    let contact = body.get("contact")?;
-    let contact_id = contact.get("contactId")?.as_i64()?;
-    let peer_name = contact
-        .get("localDisplayName")
-        .or_else(|| contact.pointer("/profile/displayName"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("Contact")
-        .to_string();
-    let media = match body
-        .pointer("/callType/media")
-        .or_else(|| body.pointer("/callInvitation/callType/media"))
-        .and_then(|v| v.as_str())
-    {
-        Some("video") => CallMedia::Video,
-        _ => CallMedia::Audio,
-    };
-    Some(CallInfo {
-        contact_id,
-        peer_name,
-        outgoing,
-        media,
-    })
 }
 
 async fn pick_and_encode_profile_image() -> Result<String, String> {

@@ -61,6 +61,8 @@ chmod +x Cursus-$(uname -m).AppImage
 ./Cursus-$(uname -m).AppImage
 ```
 
+The first start adds Cursus to your app launcher (`--uninstall-desktop` removes it).
+
 ## Build from source
 
 ```sh
@@ -89,6 +91,7 @@ flatpak install --user cursus.flatpak
 ./scripts/fetch-libs.sh     # official libsimplex for this architecture
 ./scripts/fetch-fonts.sh
 cargo install --path linux  # or: cargo run -p cursus-linux
+cursus --install-desktop    # add to the app launcher (also done on first start)
 ```
 
 On musl (Alpine, postmarketOS) first run `apk add gcompat libucontext build-base`.
@@ -101,6 +104,4 @@ On musl (Alpine, postmarketOS) first run `apk add gcompat libucontext build-base
 
 ## License
 
-Cursus application code: **AGPL-3.0-or-later** (aligned with SimpleX Chat).
-
-`libsimplex` is AGPL; linking or distributing it requires complying with that license and pointing at the matching SimpleX source tag (see `SIMPLEX_LIBS_TAG` in `scripts/fetch-libs.sh`).
+Cursus is **AGPL-3.0-or-later** (like SimpleX Chat). Releases bundle the official SimpleX core (`libsimplex`, AGPL-3.0, built from simplex-chat [`1fd7ed8`](https://github.com/simplex-chat/simplex-chat/tree/1fd7ed8327d8481299215ca3240eb0140400924a)), Rust crates, Noto fonts (OFL 1.1) and icons under their own licenses — see [`licenses/NOTICE.md`](licenses/NOTICE.md).

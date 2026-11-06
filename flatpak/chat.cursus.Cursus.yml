@@ -55,7 +55,9 @@ modules:
       - install -Dm644 -t /app/share/cursus/fonts fonts/*.ttf
       - install -Dm644 flatpak/chat.cursus.Cursus.desktop /app/share/applications/chat.cursus.Cursus.desktop
       - install -Dm644 flatpak/chat.cursus.Cursus.metainfo.xml /app/share/metainfo/chat.cursus.Cursus.metainfo.xml
-      - install -Dm644 flatpak/chat.cursus.Cursus.svg /app/share/icons/hicolor/scalable/apps/chat.cursus.Cursus.svg
+      # Licenses and sources of everything in the package (AGPL, OFL, crates, icons).
+      - install -Dm644 -t /app/share/licenses/chat.cursus.Cursus LICENSE licenses/*
+      - for s in 16 24 32 48 64 128 256 512; do install -Dm644 linux/assets/logo/cursus-$s.png /app/share/icons/hicolor/${s}x${s}/apps/chat.cursus.Cursus.png; done
     sources:
       - type: dir
         path: ..

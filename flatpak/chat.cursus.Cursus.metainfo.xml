@@ -34,6 +34,16 @@
     <display_length compare="ge">360</display_length>
   </requires>
   <releases>
-    <release version="0.1.0" date="2026-11-06"/>
+    <release version="0.1.0" date="2026-11-06">
+      <description>
+        <p>First release.</p>
+        <ul>
+          <li>Chats, groups and channels with replies, reactions, voice messages and files</li>
+          <li>Layouts for desktop windows and phones (touch, on-screen keyboard)</li>
+          <li>Encrypted database and attachments; decrypted media never kept after quitting</li>
+          <li>App lock, unlock via system keyring, hidden notification text, IP protection for downloads</li>
+        </ul>
+      </description>
+    </release>
   </releases>
 </component>

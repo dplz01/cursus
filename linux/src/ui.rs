@@ -3744,18 +3744,42 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 .style(theme::list_row(selected, hover)),
             );
         }
+        col = col.push(app_version_line(d, hover));
         return page_scroll_y(col.padding(Padding::from([0, 8])));
     }
     let mut col = Column::new().spacing(PAGE_GAP).width(Length::Fill);
     for section in crate::SettingsSection::ALL {
         col = col.push(settings_section_card(app, section));
     }
+    col = col.push(app_version_line(d, hover));
     page_scroll_y(col.padding(Padding {
         top: 0.0,
         right: d.pad,
         bottom: d.pad,
         left: d.pad,
     }))
+}
+
+/// "Cursus 0.1.0 · Source code (AGPL-3.0)" at the foot of the settings list.
+/// The AGPL asks that users can get the source from the running app.
+fn app_version_line<'a>(d: Density, hover: bool) -> Element<'a, Message> {
+    container(
+        row![
+            text(concat!("Cursus ", env!("CARGO_PKG_VERSION"), " ·"))
+                .size(d.meta)
+                .color(theme::t().text_muted),
+            button(text("Source code (AGPL-3.0)").size(d.meta).color(theme::t().accent))
+                .on_press(Message::OpenUrl("https://github.com/dplz01/cursus".into()))
+                .padding(Padding::from([4, 6]))
+                .style(theme::ghost_tile(hover)),
+        ]
+        .spacing(2)
+        .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .center_x(Length::Fill)
+    .padding(Padding::from([12, 0]))
+    .into()
 }
 
 fn settings_section_meta(section: crate::SettingsSection) -> (Element<'static, Message>, &'static str, &'static str) {

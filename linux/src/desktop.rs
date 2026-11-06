@@ -303,37 +303,13 @@ pub fn notify_message(title: &str, body: &str) {
     });
 }
 
-/// Simple 32×32 accent disc used as the tray glyph.
+/// App logo for the tray (decoded from the embedded 64 px PNG).
 fn tray_rgba_icon() -> Icon {
-    const SIZE: u32 = 32;
-    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
-    let cx = (SIZE as f32) / 2.0 - 0.5;
-    let cy = cx;
-    let r_outer = 13.0;
-    let r_inner = 5.5;
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let dx = x as f32 - cx;
-            let dy = y as f32 - cy;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let i = ((y * SIZE + x) * 4) as usize;
-            if dist <= r_outer {
-                // Accent blue (#5B8CFF)
-                rgba[i] = 0x5B;
-                rgba[i + 1] = 0x8C;
-                rgba[i + 2] = 0xFF;
-                let edge = (r_outer - dist).clamp(0.0, 1.0);
-                rgba[i + 3] = (255.0 * edge.max(0.35)).round() as u8;
-                if dist <= r_inner {
-                    rgba[i] = 0xF8;
-                    rgba[i + 1] = 0xFA;
-                    rgba[i + 2] = 0xFC;
-                    rgba[i + 3] = 255;
-                }
-            }
-        }
-    }
-    Icon::from_rgba(rgba, SIZE, SIZE).expect("tray icon rgba")
+    let img = image::load_from_memory(crate::desktop_entry::logo_png(64))
+        .expect("embedded logo")
+        .to_rgba8();
+    let (w, h) = img.dimensions();
+    Icon::from_rgba(img.into_raw(), w, h).expect("tray icon rgba")
 }
 
 pub struct AppTray {

@@ -5,6 +5,7 @@
 mod app_lock;
 mod avatar_cache;
 mod desktop;
+mod desktop_entry;
 mod edit_menu;
 mod emoji_font;
 mod exit_wipe;
@@ -747,12 +748,58 @@ fn init_file_logging() {
     }
 }
 
+/// Command-line flags (everything else starts the app).
+fn handle_cli() -> Option<i32> {
+    let arg = std::env::args().nth(1)?;
+    let version = env!("CARGO_PKG_VERSION");
+    match arg.as_str() {
+        "-V" | "--version" => println!("Cursus {version}"),
+        "-h" | "--help" => println!(
+            "Cursus {version} — SimpleX Chat client\n\n\
+             Usage: cursus [OPTION]\n\n\
+             \x20 --install-desktop    add Cursus to the app launcher (done automatically on first start)\n\
+             \x20 --uninstall-desktop  remove it from the launcher and don't add it again\n\
+             \x20 -V, --version        print the version\n\
+             \x20 -h, --help           show this help"
+        ),
+        "--install-desktop" => match desktop_entry::install(true) {
+            Ok(Some(path)) => println!("Added to the launcher: {}", path.display()),
+            Ok(None) => println!("Already in the launcher (or installed by a package / Flatpak)."),
+            Err(err) => {
+                eprintln!("cursus: could not add the launcher entry: {err}");
+                return Some(1);
+            }
+        },
+        "--uninstall-desktop" => match desktop_entry::uninstall() {
+            Ok(()) => println!("Removed Cursus from the launcher."),
+            Err(err) => {
+                eprintln!("cursus: {err}");
+                return Some(1);
+            }
+        },
+        other => {
+            eprintln!("cursus: unknown option {other} (see --help)");
+            return Some(2);
+        }
+    }
+    Some(0)
+}
+
 pub fn main() -> iced::Result {
+    if let Some(code) = handle_cli() {
+        std::process::exit(code);
+    }
     // musl builds: re-exec once with the glibc compat shim in LD_PRELOAD.
     #[cfg(target_env = "musl")]
     cursus_core::ensure_ld_preload_reexec();
 
     init_file_logging();
+    // AppImage / cargo installs: make sure Cursus shows up in the launcher.
+    match desktop_entry::install(false) {
+        Ok(Some(path)) => tracing::info!(path = %path.display(), "added launcher entry"),
+        Ok(None) => {}
+        Err(err) => tracing::warn!(%err, "could not add launcher entry"),
+    }
     // Logout / shutdown / Ctrl+C / panic: wipe decrypted media on the way out.
     exit_wipe::install();
 
@@ -7886,6 +7933,7 @@ fn main_window_settings() -> iced::window::Settings {
     iced::window::Settings {
         size: iced::Size::new(1180.0, 720.0),
         exit_on_close_request: false,
+        icon: iced::window::icon::from_file_data(desktop_entry::logo_png(256), None).ok(),
         // Wayland app id / X11 class — lets users write compositor rules.
         platform_specific: iced::window::settings::PlatformSpecific {
             // Matches the .desktop file (icon, taskbar): the Flatpak id inside

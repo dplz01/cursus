@@ -69,9 +69,13 @@ jobs:
           cp -a third_party/libsimplex/. $D/usr/lib/cursus/
           install -Dm644 -t $D/usr/share/cursus/fonts linux/assets/fonts/*.ttf
           install -Dm644 flatpak/chat.cursus.Cursus.desktop $D/usr/share/applications/chat.cursus.Cursus.desktop
-          install -Dm644 flatpak/chat.cursus.Cursus.svg $D/usr/share/icons/hicolor/scalable/apps/chat.cursus.Cursus.svg
+          for s in 16 24 32 48 64 128 256 512; do
+            install -Dm644 linux/assets/logo/cursus-$s.png $D/usr/share/icons/hicolor/${s}x${s}/apps/chat.cursus.Cursus.png
+          done
           install -Dm644 flatpak/chat.cursus.Cursus.metainfo.xml $D/usr/share/metainfo/chat.cursus.Cursus.appdata.xml
-          cp flatpak/chat.cursus.Cursus.desktop flatpak/chat.cursus.Cursus.svg $D/
+          install -Dm644 -t $D/usr/share/licenses/cursus LICENSE licenses/*
+          cp flatpak/chat.cursus.Cursus.desktop $D/
+          cp linux/assets/logo/cursus-256.png $D/chat.cursus.Cursus.png
           ln -s usr/bin/cursus $D/AppRun
       - name: Pack AppImage
         run: |
@@ -108,6 +112,14 @@ jobs:
             echo "| \`SHA256SUMS\` | Checksums of all files above |"
             echo
             echo "Install instructions: see the README."
+            echo
+            echo "## License and source"
+            echo
+            echo "Cursus is free software under **AGPL-3.0-or-later**. Every package ships the full license texts and notices in \`share/licenses/\` (see \`NOTICE.md\`)."
+            echo
+            echo "- **Cursus source** for this release: tag [\`${GITHUB_REF_NAME}\`](https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_REF_NAME}) (also attached below as *Source code*)."
+            echo "- **SimpleX core (libsimplex 7.1.0.17, AGPL-3.0)**: [simplex-chat \`1fd7ed8\`](https://github.com/simplex-chat/simplex-chat/tree/1fd7ed8327d8481299215ca3240eb0140400924a) with [simplexmq \`d1f97d3\`](https://github.com/simplex-chat/simplexmq/tree/d1f97d38f7a01f112efb6be753a1b45a40777826), prebuilt by SimpleX as [\`core-7.1.0.17\`](https://github.com/simplex-chat/simplex-chat-libs/releases/tag/core-7.1.0.17)."
+            echo "- **Rust crates**: licenses and notices in \`THIRD_PARTY_LICENSES.txt\`; **fonts**: Noto (SIL OFL 1.1); **icons**: see \`ICONS-ATTRIBUTION.md\`."
           } > ../NOTES.md
       - uses: softprops/action-gh-release@v2
         with:

@@ -8,6 +8,8 @@ set -euo pipefail
 
 # Release tag on https://github.com/simplex-chat/simplex-chat-libs/releases
 # Prefer `core-*` builds (raw libsimplex).
+# core-7.1.0.17 = simplex-chat 1fd7ed8327d8481299215ca3240eb0140400924a
+# (simplexmq d1f97d38f7a01f112efb6be753a1b45a40777826) — see licenses/NOTICE.md.
 SIMPLEX_LIBS_TAG="${SIMPLEX_LIBS_TAG:-core-7.1.0.17}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

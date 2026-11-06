@@ -5,6 +5,7 @@
 mod avatar_cache;
 mod desktop;
 mod edit_menu;
+mod emoji_font;
 mod ellipsis;
 mod float_open;
 mod hover;
@@ -694,6 +695,7 @@ pub fn main() -> iced::Result {
     // `daemon` (not `application`) so hide-to-tray can close the window on
     // Wayland — Mode::Hidden / set_visible(false) is a no-op there — and keep
     // the process alive until Quit.
+    emoji_font::prefer_color_emoji();
     let mut app = iced::daemon(App::new, App::update, App::view)
         .title(App::title)
         .theme(|app: &App, _| app.iced_theme())
@@ -1807,7 +1809,10 @@ impl App {
                         "Accept the contact request before sending messages.".into();
                     return Task::none();
                 }
-                let text = cursus_core::expand_emoji_shortcodes(self.composer_text().trim());
+                let text = cursus_core::emoji_presentation(&cursus_core::expand_emoji_shortcodes(
+                    self.composer_text().trim(),
+                ))
+                .into_owned();
                 if text.is_empty() {
                     return Task::none();
                 }

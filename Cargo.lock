@@ -923,6 +923,7 @@ dependencies = [
  "base64",
  "chrono",
  "cursus-core",
+ "emojis",
  "iced",
  "iced_aw",
  "iced_runtime",
@@ -937,6 +938,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tray-icon",
+ "unicode-script",
  "unicode-segmentation",
 ]
 

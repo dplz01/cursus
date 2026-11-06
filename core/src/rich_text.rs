@@ -272,83 +272,162 @@ const COLLOQUIAL_ALIASES: &[(&str, &str)] = &[
     ("checkmark", "white_check_mark"),
 ];
 
+/// Everyday emoji, most used first (gemoji shortcodes). Within a match tier
+/// these outrank obscure ones so `:he` offers ❤️ before 🌿 herb.
+const POPULAR: &[&str] = &[
+    "joy", "heart", "rofl", "+1", "sob", "pray", "heart_eyes", "kissing_heart",
+    "smile", "blush", "wink", "fire", "sparkles", "tada", "100", "ok_hand", "clap",
+    "raised_hands", "thinking", "slightly_smiling_face", "smiley", "grin", "laughing",
+    "sweat_smile", "sunglasses", "star_struck", "partying_face", "hugs", "relieved",
+    "pleading_face", "face_holding_back_tears", "pensive", "cry", "sleeping", "rage",
+    "angry", "scream", "flushed", "upside_down_face", "wave", "muscle", "eyes", "skull",
+    "see_no_evil", "white_check_mark", "x", "warning", "rocket", "star", "sunny",
+    "rainbow", "coffee", "beer", "beers", "pizza", "birthday", "gift", "balloon",
+    "broken_heart", "two_hearts", "sparkling_heart", "purple_heart", "blue_heart",
+    "green_heart", "yellow_heart", "orange_heart", "black_heart", "white_heart",
+    "heart_hands", "-1", "v", "point_up", "point_right", "facepalm", "shrug",
+    "grimacing", "neutral_face", "expressionless", "unamused", "roll_eyes", "smirk",
+    "yum", "stuck_out_tongue_winking_eye", "zany_face", "melting_face",
+    "saluting_face", "hot_face", "cold_face", "nauseated_face", "hankey",
+    "kissing", "innocent", "nerd_face", "money_mouth_face", "zipper_mouth_face",
+    "sleepy", "yawning_face", "dizzy_face", "exploding_head", "cowboy_hat_face",
+    "clown_face", "ghost", "alien", "robot", "cat", "dog", "unicorn", "tulip", "rose",
+    "sunflower", "cherry_blossom", "four_leaf_clover", "snowflake", "zap", "moon",
+    "earth_africa", "christmas_tree", "jack_o_lantern", "champagne", "wine_glass",
+    "cocktail", "hamburger", "fries", "taco", "sushi", "cookie", "doughnut", "apple",
+    "avocado", "soccer", "basketball", "trophy", "medal_sports", "musical_note",
+    "headphones", "camera", "phone", "computer", "bulb", "moneybag", "books",
+    "pencil2", "lock", "key", "hourglass", "alarm_clock", "calendar", "pushpin",
+    "airplane", "car", "house", "beach_umbrella", "world_map", "handshake",
+    "crossed_fingers", "fist", "call_me_hand", "writing_hand", "nail_care",
+    "kiss", "speech_balloon", "zzz", "boom", "dizzy", "question", "exclamation",
+    "heavy_check_mark", "heavy_plus_sign", "recycle", "no_entry", "stop_sign",
+];
+
+fn popularity(shortcode: &str) -> usize {
+    POPULAR
+        .iter()
+        .position(|p| *p == shortcode)
+        .unwrap_or(POPULAR.len())
+}
+
+/// Emoji that read as plain text or UI chrome rather than a picture: letters
+/// and number blocks, keycaps, arrows, geometric squares, ©®™ etc. They are
+/// still rendered if typed, just never suggested.
+fn is_dull_emoji(glyph: &str) -> bool {
+    glyph.chars().any(|c| {
+        let u = c as u32;
+        c.is_ascii_alphanumeric()
+            || matches!(c, '#' | '*' | '\u{20E3}')
+            || matches!(u, 0x00A9 | 0x00AE | 0x2122 | 0x2139 | 0x203C | 0x2049 | 0x24C2)
+            || (0x2190..=0x21FF).contains(&u)
+            || matches!(u, 0x27A1 | 0x2934 | 0x2935 | 0x2B05..=0x2B07 | 0x2B1B | 0x2B1C)
+            || (0x1F500..=0x1F504).contains(&u) // 🔀 🔁 🔂 🔃 🔄
+            || (0x25AA..=0x25FE).contains(&u)
+            || matches!(u, 0x3030 | 0x303D | 0x3297 | 0x3299)
+            || (0x1F170..=0x1F19A).contains(&u) // 🅰 🆎 🆑 … squared letters
+            || (0x1F201..=0x1F251).contains(&u) // 🈁 🉐 … squared CJK
+            || (0x1F520..=0x1F524).contains(&u) // 🔠 🔡 🔢 🔣 🔤
+            || (0x1F532..=0x1F53D).contains(&u) // 🔲 🔳 🔴 … buttons/triangles
+            || (0x1F7E0..=0x1F7EB).contains(&u) // 🟠 🟦 coloured circles/squares
+    })
+}
+
+/// How well `prefix` matches `shortcode`: 0 exact, 1 prefix, 2 word prefix
+/// (`smil` → `slightly_smiling_face`), 4 substring (≥3 chars). `None` = no match.
+fn shortcode_tier(shortcode: &str, prefix: &str) -> Option<u8> {
+    if shortcode == prefix {
+        Some(0)
+    } else if shortcode.starts_with(prefix) {
+        Some(1)
+    } else if shortcode
+        .split(['_', '-'])
+        .skip(1)
+        .any(|w| w.starts_with(prefix))
+    {
+        Some(2)
+    } else if prefix.len() >= 3 && shortcode.contains(prefix) {
+        Some(4)
+    } else {
+        None
+    }
+}
+
 /// Suggest shortcodes for an incomplete `:prefix`.
 ///
-/// Matches (in order): shortcode prefix, colloquial aliases, shortcode substring,
-/// CLDR name substring.
+/// Tiers: exact shortcode / alias, shortcode prefix, word prefix inside the
+/// shortcode, word prefix in the CLDR name, substring. Inside a tier everyday
+/// emoji come first, then shorter shortcodes. One entry per glyph; flags only
+/// on prefix matches; text-like symbols ([`is_dull_emoji`]) are skipped.
 pub fn suggest_emoji_shortcodes(prefix: &str, limit: usize) -> Vec<EmojiSuggestion> {
     if prefix.is_empty() || limit == 0 {
         return Vec::new();
     }
     let prefix = prefix.to_ascii_lowercase();
-    let mut scored: Vec<(u8, EmojiSuggestion)> = Vec::new();
+    // (tier, popularity, presentation, shortcode len, suggestion)
+    let mut scored: Vec<(u8, usize, u8, usize, EmojiSuggestion)> = Vec::new();
+    let mut push = |tier: u8, emoji: &'static emojis::Emoji, shortcode: &'static str| {
+        let glyph = emoji.as_str();
+        if is_dull_emoji(glyph) {
+            return;
+        }
+        let pop = emoji.shortcodes().map(popularity).min().unwrap_or(POPULAR.len());
+        scored.push((
+            tier,
+            pop,
+            emoji_presentation_rank(glyph),
+            shortcode.len(),
+            EmojiSuggestion { shortcode, glyph },
+        ));
+    };
 
     for &(alias, target) in COLLOQUIAL_ALIASES {
-        if alias.starts_with(&prefix) || alias.contains(&prefix) {
-            if let Some(emoji) = emojis::get_by_shortcode(target) {
-                scored.push((
-                    if alias.starts_with(&prefix) { 0 } else { 1 },
-                    EmojiSuggestion {
-                        shortcode: emoji.shortcode().unwrap_or(target),
-                        glyph: emoji.as_str(),
-                    },
-                ));
-            }
+        if let (Some(tier), Some(emoji)) =
+            (shortcode_tier(alias, &prefix), emojis::get_by_shortcode(target))
+        {
+            push(tier, emoji, emoji.shortcode().unwrap_or(target));
         }
     }
 
-    for emoji in emojis::iter().filter(|emoji| {
-        matches!(
-            emoji.skin_tone(),
-            Some(emojis::SkinTone::Default) | None
-        )
+    for emoji in emojis::iter().filter(|e| {
+        matches!(e.skin_tone(), Some(emojis::SkinTone::Default) | None)
     }) {
-        let name = emoji.name().to_ascii_lowercase();
-        let name_hit = name.contains(&prefix);
+        let flag = emoji.group() == emojis::Group::Flags;
+        let mut best: Option<(u8, &'static str)> = None;
         for sc in emoji.shortcodes() {
-            let rank = if sc.starts_with(&prefix) {
-                Some(0)
-            } else if sc.contains(&prefix) {
-                Some(2)
-            } else if name_hit {
-                Some(3)
-            } else {
-                None
-            };
-            if let Some(rank) = rank {
-                scored.push((
-                    rank,
-                    EmojiSuggestion {
-                        shortcode: sc,
-                        glyph: emoji.as_str(),
-                    },
-                ));
+            if let Some(tier) = shortcode_tier(sc, &prefix) {
+                if flag && tier > 1 {
+                    continue;
+                }
+                if best.is_none_or(|(t, b)| tier < t || (tier == t && sc.len() < b.len())) {
+                    best = Some((tier, sc));
+                }
             }
         }
-        // Name hit but no shortcodes (rare) — still surface via primary shortcode.
-        if name_hit && emoji.shortcode().is_none() {
-            // skip — can't insert without a shortcode/glyph still works:
-            scored.push((
-                3,
-                EmojiSuggestion {
-                    shortcode: emoji.name(),
-                    glyph: emoji.as_str(),
-                },
-            ));
+        if best.is_none() && !flag && prefix.len() >= 2 {
+            // CLDR name words ("grinning face with big eyes").
+            let name = emoji.name().to_ascii_lowercase();
+            if name.split([' ', '-']).any(|w| w.starts_with(&prefix)) {
+                if let Some(sc) = emoji.shortcode() {
+                    best = Some((3, sc));
+                }
+            }
+        }
+        if let Some((tier, sc)) = best {
+            push(tier, emoji, sc);
         }
     }
 
     scored.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then_with(|| {
-                emoji_presentation_rank(a.1.glyph).cmp(&emoji_presentation_rank(b.1.glyph))
-            })
-            .then_with(|| a.1.shortcode.len().cmp(&b.1.shortcode.len()))
-            .then_with(|| a.1.shortcode.cmp(b.1.shortcode))
+        (a.0, a.1, a.2, a.3, a.4.shortcode).cmp(&(b.0, b.1, b.2, b.3, b.4.shortcode))
     });
-    scored.dedup_by(|a, b| a.1.shortcode == b.1.shortcode || a.1.glyph == b.1.glyph);
-    scored.truncate(limit);
-    scored.into_iter().map(|(_, s)| s).collect()
+    let mut seen = std::collections::HashSet::new();
+    scored
+        .into_iter()
+        .filter(|s| seen.insert(s.4.glyph))
+        .take(limit)
+        .map(|s| s.4)
+        .collect()
 }
 
 /// Prefer colorful emoji (🚀 / ❤️) over dingbat/text hearts (❤ / ♥ without color).
@@ -363,6 +442,46 @@ fn emoji_presentation_rank(glyph: &str) -> u8 {
     } else {
         2
     }
+}
+
+/// Add the emoji variation selector (U+FE0F) to emoji that default to text
+/// presentation (❤ ☺ ☀ ✌ …) so every client — not just ours — draws them in
+/// colour. Letter/arrow-like symbols, skin-tone and keycap sequences are left
+/// alone.
+pub fn emoji_presentation(s: &str) -> std::borrow::Cow<'_, str> {
+    let needs = |c: char| {
+        let mut b = [0u8; 4];
+        let base: &str = c.encode_utf8(&mut b);
+        !c.is_ascii()
+            && emojis::get(&format!("{base}\u{FE0F}")).is_some_and(|e| e.as_str().contains('\u{FE0F}'))
+            && !is_dull_emoji(base)
+            && !emoji_default_presentation(c)
+    };
+    let chars: Vec<char> = s.chars().collect();
+    let fix_at = |i: usize| {
+        needs(chars[i])
+            && !matches!(
+                chars.get(i + 1),
+                Some('\u{FE0F}' | '\u{FE0E}' | '\u{20E3}' | '\u{1F3FB}'..='\u{1F3FF}')
+            )
+    };
+    if !(0..chars.len()).any(fix_at) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len() + 8);
+    for (i, &c) in chars.iter().enumerate() {
+        out.push(c);
+        if fix_at(i) {
+            out.push('\u{FE0F}');
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// Code points that are already pictographic without a selector (😄 🚀 ⭐ ⚡).
+fn emoji_default_presentation(c: char) -> bool {
+    let mut b = [0u8; 4];
+    emojis::get(c.encode_utf8(&mut b)).is_some_and(|e| e.as_str().chars().count() == 1)
 }
 
 /// Expand GitHub-style `:shortcode:` tokens to emoji (unknown codes left as-is).
@@ -381,7 +500,7 @@ pub fn expand_emoji_shortcodes(s: &str) -> String {
                         .find(|(alias, _)| *alias == code)
                         .and_then(|(_, target)| emojis::get_by_shortcode(target))
                 });
-                if let Some(emoji) = resolved {
+                if let Some(emoji) = resolved.filter(|e| !is_dull_emoji(e.as_str())) {
                     out.push_str(emoji.as_str());
                     rest = &after[end + 1..];
                     continue;
@@ -609,9 +728,16 @@ mod tests {
         assert_eq!(expand_emoji_shortcodes(":+1:"), "👍");
         assert_eq!(expand_emoji_shortcodes(":not_a_real_emoji:"), ":not_a_real_emoji:");
         // `:b:` is a real gemoji shortcode (B button).
-        assert!(expand_emoji_shortcodes("a:b:c").contains('🅱') || expand_emoji_shortcodes("a:b:c") == "a🅱️c");
+        // Letter-block emoji are never produced from ordinary text.
+        assert_eq!(expand_emoji_shortcodes("a:b:c"), "a:b:c");
+        assert_eq!(expand_emoji_shortcodes("ratio 1:m:2 :heart:"), "ratio 1:m:2 ❤️");
         assert_eq!(expand_emoji_shortcodes("still :typing"), "still :typing");
         assert_eq!(expand_emoji_shortcodes("time 12:30 ok"), "time 12:30 ok");
+        // Text-style emoji gain the colour selector; others stay untouched.
+        assert_eq!(emoji_presentation("I \u{2764} it \u{263A}"), "I \u{2764}\u{FE0F} it \u{263A}\u{FE0F}");
+        assert_eq!(emoji_presentation("\u{2764}\u{FE0F} 😄 ⭐"), "\u{2764}\u{FE0F} 😄 ⭐");
+        assert_eq!(emoji_presentation("\u{270C}\u{1F3FD} ok"), "\u{270C}\u{1F3FD} ok");
+        assert_eq!(emoji_presentation("a → b © 2026 #1 ™"), "a → b © 2026 #1 ™");
     }
 
     #[test]
@@ -623,6 +749,15 @@ mod tests {
         let names: Vec<_> = hits.iter().map(|h| h.shortcode).collect();
         assert!(names.iter().any(|n| *n == "cat" || n.starts_with("cat")));
         assert!(names.iter().any(|n| n.starts_with("car")));
+        let first = |p: &str| suggest_emoji_shortcodes(p, 8)[0].shortcode;
+        assert_eq!(first("he"), "heart");
+        assert_eq!(first("ok"), "ok_hand");
+        assert_eq!(first("th"), "+1");
+        let th = suggest_emoji_shortcodes("th", 8);
+        let mut glyphs: Vec<_> = th.iter().map(|h| h.glyph).collect();
+        glyphs.dedup();
+        assert_eq!(glyphs.len(), th.len(), "one entry per emoji: {th:?}");
+        assert!(suggest_emoji_shortcodes("a", 20).iter().all(|h| !h.glyph.contains('🔤')));
         let pumpkin = suggest_emoji_shortcodes("pumpkin", 5);
         assert!(
             pumpkin.iter().any(|h| h.glyph.contains('🎃')),

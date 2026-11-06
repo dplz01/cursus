@@ -19,6 +19,7 @@ use crate::desktop::{DesktopPrefs, ThemePreference};
 use crate::{App, GroupSettingsPane, Message, NavSection};
 
 fn load_fonts() {
+    crate::emoji_font::prefer_color_emoji();
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/fonts");
     let mut fs = iced::advanced::graphics::text::font_system()
         .write()
@@ -323,6 +324,16 @@ fn shots() {
                 simplex: None,
             });
             render(&app, MOBILE, &format!("links-web-{t}"));
+        }
+        if want("emoji") {
+            let mut app = demo_app(dark, MOBILE.width, MOBILE.height);
+            select(&mut app, 0);
+            app.messages.push(msg(8, "I don't like these emojis \u{2764}\u{1F604}", true, "14:27"));
+            app.messages.push(msg(9, "Text-style ones: \u{263A} \u{2764}\u{FE0F} \u{2600} \u{270C} \u{2B50} 👍🏽 🇮🇹 👨‍👩‍👧 ok → ✓", false, "14:28"));
+            app.set_composer_text("\u{2764}\u{1F604} hi");
+            render(&app, MOBILE, &format!("emoji-{t}"));
+            app.set_composer_text("love you :he");
+            render(&app, MOBILE, &format!("emoji-suggest-{t}"));
         }
         if want("new") {
             let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);

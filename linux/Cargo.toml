@@ -35,7 +35,10 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tray-icon.workspace = true
 unicode-segmentation.workspace = true
+# Fallback trait signature (same version cosmic-text uses).
+unicode-script = "0.5"
 
 [dev-dependencies]
+emojis.workspace = true
 # Headless UserInterface harness for widget tests (edit_menu).
 iced_runtime = "0.14"

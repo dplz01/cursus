@@ -30,7 +30,7 @@ pub use models::{
     MAX_IMAGE_SIZE_AUTO_RCV, MAX_VIDEO_SIZE_AUTO_RCV, MAX_VOICE_SIZE_AUTO_RCV,
 };
 pub use rich_text::{
-    expand_emoji_shortcodes, is_short_emoji, parse_formatted_text, pending_shortcode_query,
+    emoji_presentation, expand_emoji_shortcodes, is_short_emoji, parse_formatted_text, pending_shortcode_query,
     suggest_emoji_shortcodes, humanize_simplex_links, link_host, simplex_link_label, EmojiSuggestion, FormatColor,
     SimplexLinkKind, TextSegment, TextStyle, LARGE_EMOJI_MAX,
 };

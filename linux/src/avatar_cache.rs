@@ -17,9 +17,24 @@ const MAX_ENTRIES: usize = 192;
 static CACHE: LazyLock<Mutex<HashMap<(u64, u32), Handle>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Cache key for an avatar data URL. Runs for every visible avatar on every
+/// frame, so it samples instead of hashing all ~12 KB of base64: the length
+/// plus the head, middle and tail windows. Distinct images differ in their
+/// compressed payload, so equal length *and* identical windows don't happen in
+/// practice (~20x cheaper than hashing the whole string).
 fn url_key(url: &str) -> u64 {
+    const WINDOW: usize = 256;
+    let bytes = url.as_bytes();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    url.hash(&mut hasher);
+    bytes.len().hash(&mut hasher);
+    if bytes.len() <= WINDOW * 3 {
+        bytes.hash(&mut hasher);
+    } else {
+        let mid = bytes.len() / 2 - WINDOW / 2;
+        bytes[..WINDOW].hash(&mut hasher);
+        bytes[mid..mid + WINDOW].hash(&mut hasher);
+        bytes[bytes.len() - WINDOW..].hash(&mut hasher);
+    }
     hasher.finish()
 }
 

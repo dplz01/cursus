@@ -169,31 +169,25 @@ pub fn save_prefs(prefs: &DesktopPrefs) {
 }
 
 /// Fire a desktop notification (best-effort; never panics the UI).
+///
+/// `show()` is a synchronous D-Bus round trip (~20 ms, or a long timeout when
+/// no notification daemon answers), so it runs on its own short-lived thread
+/// instead of stalling `update()` once per incoming message.
 pub fn notify_message(title: &str, body: &str) {
-    let title = truncate(title, 80);
-    let body = truncate(body, 160);
-    if let Err(err) = notify_rust::Notification::new()
-        .appname("Cursus")
-        .summary(&title)
-        .body(&body)
-        .icon("mail-message-new")
-        .timeout(notify_rust::Timeout::Milliseconds(6_000))
-        .show()
-    {
-        tracing::debug!(%err, "desktop notification failed");
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    let mut out = String::new();
-    for (i, ch) in s.chars().enumerate() {
-        if i >= max {
-            out.push('…');
-            break;
+    let title = crate::ui::truncate_graphemes(title, 80);
+    let body = crate::ui::truncate_graphemes(body, 160);
+    std::thread::spawn(move || {
+        if let Err(err) = notify_rust::Notification::new()
+            .appname("Cursus")
+            .summary(&title)
+            .body(&body)
+            .icon("mail-message-new")
+            .timeout(notify_rust::Timeout::Milliseconds(6_000))
+            .show()
+        {
+            tracing::debug!(%err, "desktop notification failed");
         }
-        out.push(ch);
-    }
-    out
+    });
 }
 
 /// Simple 32×32 accent disc used as the tray glyph.

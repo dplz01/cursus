@@ -2746,8 +2746,10 @@ impl App {
                         // do the same so the channel shows immediately.
                         self.seeded_channel_ids.insert(chat_id.api_id);
                         if !self.chats.iter().any(|c| c.id == chat_id) {
-                            let mut peer = ProfileFields::default();
-                            peer.display_name = title.clone();
+                            let peer = ProfileFields {
+                                display_name: title.clone(),
+                                ..Default::default()
+                            };
                             self.chats.insert(
                                 0,
                                 ChatPreview {
@@ -5333,6 +5335,13 @@ impl App {
             }
         }
 
+        // Events about another chat must not reload the open conversation
+        // (a download elsewhere used to refetch this history on every tick).
+        let about_open_chat = match event.chat_hint() {
+            Some(hint) => self.selected_id.as_ref() == Some(&hint),
+            None => true,
+        };
+
         // Apply delivery/read receipt ticks without a full history reload when possible.
         let status_updates = event.status_updates();
         if !status_updates.is_empty() {
@@ -5382,12 +5391,13 @@ impl App {
                     }
                 }
             }
-            if !touched && self.selected_id.is_some() && !messages_reload_queued {
+            if !touched && self.selected_id.is_some() && !messages_reload_queued && about_open_chat {
                 tasks.push(self.reload_messages());
             }
         } else if event.refreshes_messages()
             && self.selected_id.is_some()
             && !messages_reload_queued
+            && about_open_chat
         {
             // File complete / delete / reaction events carry updated rows.
             tasks.push(self.reload_messages());
@@ -6175,7 +6185,7 @@ impl App {
         self.reply_to = None;
         self.editing = Some(EditTarget {
             item_id: msg.item_id,
-            preview: truncate_preview(&msg.text, 80),
+            preview: ui::truncate_graphemes(&msg.text, 80),
         });
         self.set_composer_text(&msg.text);
         iced::widget::operation::focus(iced::widget::Id::new("composer-input"))
@@ -6870,7 +6880,7 @@ impl App {
                 self.editing = None;
                 self.reply_to = Some(ReplyTarget {
                     item_id,
-                    preview: truncate_preview(&msg.text, 80),
+                    preview: ui::truncate_graphemes(&msg.text, 80),
                 });
                 self.message_menu = None;
                 Task::none()
@@ -7397,18 +7407,6 @@ fn chat_title_from_info(info: &serde_json::Value) -> Option<String> {
     }
 }
 
-fn truncate_preview(s: &str, max: usize) -> String {
-    let mut out = String::new();
-    for (i, ch) in s.chars().enumerate() {
-        if i >= max {
-            out.push('…');
-            break;
-        }
-        out.push(ch);
-    }
-    out
-}
-
 async fn attach_and_send_file(session: Arc<Session>, chat: ChatPreview) -> Result<(), String> {
     let path = tokio::task::spawn_blocking(|| {
         float_open::float_next_dialog("Attach file");
@@ -7883,14 +7881,6 @@ fn set_group_pref(prefs: &mut Option<serde_json::Value>, key: &str, turn_on: boo
 }
 
 pub(crate) const DEFAULT_TIMED_TTL_SECS: i64 = 86_400; // 1 day
-pub(crate) const TIMED_TTL_STEPS: &[i64] = &[
-    30,        // 30 sec
-    300,       // 5 min
-    3_600,     // 1 hour
-    86_400,    // 1 day
-    604_800,   // 1 week
-    2_592_000, // 30 days
-];
 
 pub(crate) fn format_timed_ttl(secs: i64) -> String {
     match secs {

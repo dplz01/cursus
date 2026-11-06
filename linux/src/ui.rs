@@ -54,6 +54,26 @@ fn mobile_back_btn(on_press: Message, hover: bool) -> Element<'static, Message> 
     composer_hit(icons::back_tool(32.0, hover), 32.0, on_press)
 }
 
+/// Bold page heading, with a Back button in front when `back` is set.
+fn page_title<'a>(
+    title: impl iced::widget::text::IntoFragment<'a>,
+    back: Option<Message>,
+    d: Density,
+    hover: bool,
+) -> Element<'a, Message> {
+    let title = text(title)
+        .size(d.title)
+        .font(BOLD)
+        .color(theme::t().text_primary);
+    match back {
+        Some(msg) => row![mobile_back_btn(msg, hover), title.width(Length::Fill)]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into(),
+        None => title.into(),
+    }
+}
+
 /// Composer tool hit — press fires immediately (before OSK dismiss steals the
 /// gesture on some ARM compositors). mouse_area avoids `button`'s focus steal.
 fn composer_hit<'a>(
@@ -1379,94 +1399,25 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             .into()
     };
 
+    // Editing wins over replying; both share one context bar.
     let reply_slot: Element<'_, Message> = if let Some(edit) = app.editing() {
-        let preview: Element<'_, Message> = if cursus_core::is_short_emoji(&edit.preview) {
-            emoji_glyph(edit.preview.clone())
-                .size(d.body)
-                .color(Color::WHITE)
-                .into()
-        } else {
-            txt(edit.preview.clone())
-                .size(d.meta)
-                .color(theme::t().text_secondary)
-                .into()
-        };
-        let edit_bar = container(
-            row![
-                icons::edit_icon(16.0, theme::t().accent),
-                column![
-                    text("Editing")
-                        .size(d.meta)
-                        .color(theme::t().accent),
-                    preview,
-                ]
-                .spacing(2)
-                .width(Length::Fill),
-                button(txt("✕").size(d.meta).color(theme::t().text_muted))
-                    .on_press(Message::CancelEdit)
-                    .padding(Padding::from([4, 8]))
-                    .style(theme::secondary_action(app.hover_ok())),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
+        composer_context_bar(
+            icons::edit_icon(16.0, theme::t().accent),
+            "Editing",
+            &edit.preview,
+            Message::CancelEdit,
+            d,
+            app.hover_ok(),
         )
-        .padding(Padding::from([8, 10]))
-        .width(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().accent_soft)),
-            border: iced::Border {
-                radius: 14.0.into(),
-                ..Default::default()
-            },
-            ..container::Style::default()
-        });
-        column![edit_bar, vertical().height(6)]
-            .width(Length::Fill)
-            .into()
     } else if let Some(reply) = app.reply_to() {
-        let preview: Element<'_, Message> = if cursus_core::is_short_emoji(&reply.preview) {
-            emoji_glyph(reply.preview.clone())
-                .size(d.body)
-                .color(Color::WHITE)
-                .into()
-        } else {
-            txt(reply.preview.clone())
-                .size(d.meta)
-                .color(theme::t().text_secondary)
-                .into()
-        };
-        let reply_bar = container(
-            row![
-                icons::reply_icon(16.0, theme::t().accent),
-                column![
-                    text("Replying")
-                        .size(d.meta)
-                        .color(theme::t().accent),
-                    preview,
-                ]
-                .spacing(2)
-                .width(Length::Fill),
-                button(txt("✕").size(d.meta).color(theme::t().text_muted))
-                    .on_press(Message::CancelReply)
-                    .padding(Padding::from([4, 8]))
-                    .style(theme::secondary_action(app.hover_ok())),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
+        composer_context_bar(
+            icons::reply_icon(16.0, theme::t().accent),
+            "Replying",
+            &reply.preview,
+            Message::CancelReply,
+            d,
+            app.hover_ok(),
         )
-        .padding(Padding::from([8, 10]))
-        .width(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().accent_soft)),
-            border: iced::Border {
-                radius: 14.0.into(),
-                ..Default::default()
-            },
-            ..container::Style::default()
-        });
-        column![reply_bar, vertical().height(6)]
-            .width(Length::Fill)
-            .into()
     } else {
         Column::new().width(Length::Fill).into()
     };
@@ -1493,6 +1444,54 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             ..container::Style::default()
         });
     column![hairline(), bar].width(Length::Fill).into()
+}
+
+/// "Editing" / "Replying" strip above the composer: icon, label, preview and ✕.
+/// Returned as a Column so the composer's slot keeps the same widget type.
+fn composer_context_bar(
+    icon: Element<'static, Message>,
+    label: &'static str,
+    preview: &str,
+    on_cancel: Message,
+    d: Density,
+    hover: bool,
+) -> Element<'static, Message> {
+    let preview: Element<'static, Message> = if cursus_core::is_short_emoji(preview) {
+        emoji_glyph(preview.to_string())
+            .size(d.body)
+            .color(Color::WHITE)
+            .into()
+    } else {
+        txt(preview.to_string())
+            .size(d.meta)
+            .color(theme::t().text_secondary)
+            .into()
+    };
+    let bar = container(
+        row![
+            icon,
+            column![text(label).size(d.meta).color(theme::t().accent), preview]
+                .spacing(2)
+                .width(Length::Fill),
+            button(txt("✕").size(d.meta).color(theme::t().text_muted))
+                .on_press(on_cancel)
+                .padding(Padding::from([4, 8]))
+                .style(theme::secondary_action(hover)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .padding(Padding::from([8, 10]))
+    .width(Length::Fill)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(theme::t().accent_soft)),
+        border: iced::Border {
+            radius: 14.0.into(),
+            ..Default::default()
+        },
+        ..container::Style::default()
+    });
+    column![bar, vertical().height(6)].width(Length::Fill).into()
 }
 
 /// 1px horizontal rule in the border colour (top of bars, under headers).
@@ -2125,7 +2124,7 @@ fn deleted_mark_chip<'a>(msg: &'a ChatMessage, d: Density) -> Element<'a, Messag
 }
 
 fn quote_preview<'a>(quote: &'a cursus_core::MessageQuote, d: Density) -> Element<'a, Message> {
-    let preview = truncate_ui(&cursus_core::humanize_simplex_links(&quote.text), 120);
+    let preview = truncate_graphemes(&cursus_core::humanize_simplex_links(&quote.text), 120);
     let glyph = if cursus_core::is_short_emoji(&quote.text) {
         emoji_glyph(preview.clone())
             .size(d.meta)
@@ -2181,7 +2180,9 @@ fn quote_preview<'a>(quote: &'a cursus_core::MessageQuote, d: Density) -> Elemen
     }
 }
 
-fn truncate_ui(s: &str, max_chars: usize) -> String {
+/// First `max_chars` user-visible characters (grapheme clusters) plus "…".
+/// Never splits an emoji sequence, flag or combining mark.
+pub(crate) fn truncate_graphemes(s: &str, max_chars: usize) -> String {
     let mut out = String::new();
     for (i, g) in s.graphemes(true).enumerate() {
         if i >= max_chars {
@@ -2485,7 +2486,7 @@ const BUBBLE_PAD_X: f32 = 12.0;
 
 /// Compact height for time + ticks.
 fn bubble_time_height(d: Density) -> f32 {
-    f32::from(d.meta) + 2.0
+    d.meta + 2.0
 }
 
 /// Gap between last text glyphs and the time row.
@@ -2508,16 +2509,14 @@ fn bubble_text_content_max(app: &App) -> f32 {
     // Small slack only — previous 8px stacked with padded stamp estimates and
     // forced short lines like "sei un coglione" onto two rows.
     let slack = 2.0;
-    (win - history_pad - bubble_chrome - slack)
-        .min(BUBBLE_TEXT_MAX)
-        .max(96.0)
+    (win - history_pad - bubble_chrome - slack).clamp(96.0, BUBBLE_TEXT_MAX)
 }
 
 /// Intrinsic width of the stamp row (edit + time + receipt), no outer gap.
 fn estimate_stamp_width(d: Density, outgoing: bool, edited: bool) -> f32 {
     // ~8 glyphs ("11:15 AM") at ~0.55×meta — was 6.2×meta (~0.78em) and far too wide.
-    let time_w = f32::from(d.meta) * 4.4;
-    let icon = (f32::from(d.meta) * 0.85).clamp(10.0, 13.0);
+    let time_w = d.meta * 4.4;
+    let icon = (d.meta * 0.85).clamp(10.0, 13.0);
     let mut w = time_w;
     if edited {
         w += icon + STAMP_INNER_GAP;
@@ -2630,7 +2629,7 @@ fn bubble_content_with_time<'a>(
 /// Telegram-style trailing time (+ edited pencil + receipt for outgoing).
 fn bubble_time_meta(msg: &ChatMessage, d: Density) -> Element<'static, Message> {
     let time_h = bubble_time_height(d);
-    let icon_size = (f32::from(d.meta) * 0.85).clamp(10.0, 13.0);
+    let icon_size = (d.meta * 0.85).clamp(10.0, 13.0);
     let mut row = Row::new()
         .spacing(3)
         .height(Length::Fixed(time_h))
@@ -4454,7 +4453,7 @@ fn message_menu_overlay(app: &App) -> Element<'_, Message> {
                 );
             }
             if !info_text.is_empty() {
-                let preview = truncate_ui(info_text, 160);
+                let preview = truncate_graphemes(info_text, 160);
                 let value: Element<'_, Message> = if cursus_core::is_short_emoji(info_text) {
                     emoji_glyph(preview)
                         .size(d.body)
@@ -4777,7 +4776,7 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
     };
 
     if matches!(p.pane, crate::ContactProfilePane::Preferences) {
-        return contact_preferences_page(app, p, with_back);
+        return contact_preferences_page(app, p);
     }
 
     let display = if p.fields.display_name.is_empty() {
@@ -4812,23 +4811,7 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
     .spacing(8)
     .align_y(Alignment::Center);
 
-    let leading: Element<'_, Message> = if with_back {
-        row![
-            mobile_back_btn(Message::CloseContactProfile, hover),
-            text("Contact")
-                .size(d.title).font(BOLD)
-                .color(theme::t().text_primary)
-                .width(Length::Fill),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
-    } else {
-        text("Contact")
-            .size(d.title).font(BOLD)
-            .color(theme::t().text_primary)
-            .into()
-    };
+    let leading = page_title("Contact", with_back.then_some(Message::CloseContactProfile), d, hover);
     let header = profile_header_bar(leading, header_actions.into(), d, with_back);
 
     let mut body = Column::new().spacing(PAGE_GAP).width(Length::Fill);
@@ -4893,33 +4876,11 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
 fn contact_preferences_page<'a>(
     app: &'a App,
     p: &'a crate::ContactProfileOverlay,
-    with_back: bool,
 ) -> Element<'a, Message> {
     let d = app.density();
     let hover = app.hover_ok();
-    let leading: Element<'_, Message> = if with_back {
-        row![
-            mobile_back_btn(Message::CloseContactPreferences, hover),
-            text("Preferences")
-                .size(d.title).font(BOLD)
-                .color(theme::t().text_primary)
-                .width(Length::Fill),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
-    } else {
-        row![
-            mobile_back_btn(Message::CloseContactPreferences, hover),
-            text("Preferences")
-                .size(d.title).font(BOLD)
-                .color(theme::t().text_primary)
-                .width(Length::Fill),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
-    };
+    // Same header with or without a parent pane: the page always has Back.
+    let leading = page_title("Preferences", Some(Message::CloseContactPreferences), d, hover);
     let header = profile_header_bar(leading, Space::new().width(0).into(), d, true);
 
     let mut body = Column::new().spacing(0).width(Length::Fill);
@@ -5442,41 +5403,13 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
     .align_y(Alignment::Center)
     .into();
 
-    let leading: Element<'_, Message> = if with_back {
-        row![
-            mobile_back_btn(
-                if nested {
-                    Message::Back
-                } else {
-                    close_msg.clone()
-                },
-                hover,
-            ),
-            text(heading)
-                .size(d.title).font(BOLD)
-                .color(theme::t().text_primary)
-                .width(Length::Fill),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
-    } else if nested {
-        row![
-            mobile_back_btn(Message::Back, hover),
-            text(heading)
-                .size(d.title).font(BOLD)
-                .color(theme::t().text_primary)
-                .width(Length::Fill),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
+    // Nested panes always go Back; top-level ones close (phones only).
+    let back = if nested {
+        Some(Message::Back)
     } else {
-        text(heading)
-            .size(d.title).font(BOLD)
-            .color(theme::t().text_primary)
-            .into()
+        with_back.then(|| close_msg.clone())
     };
+    let leading = page_title(heading, back, d, hover);
 
     let header = if overview {
         profile_header_bar(leading, overview_actions, d, with_back)
@@ -6880,23 +6813,12 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
         return vertical().height(0).into();
     };
 
-    let leading: Element<'_, Message> = if with_back {
-        row![
-            mobile_back_btn(Message::CloseSupportOverlay, hover),
-            text("Chats with members")
-                .size(d.title).font(BOLD)
-                .color(theme::t().text_primary)
-                .width(Length::Fill),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
-    } else {
-        text("Chats with members")
-            .size(d.title).font(BOLD)
-            .color(theme::t().text_primary)
-            .into()
-    };
+    let leading = page_title(
+        "Chats with members",
+        with_back.then_some(Message::CloseSupportOverlay),
+        d,
+        hover,
+    );
     let header = profile_header_bar(leading, horizontal().width(0).into(), d, with_back);
 
     let mut body = Column::new().spacing(8).width(Length::Fill);
@@ -7483,3 +7405,17 @@ fn create_chat_overlay(app: &App) -> Element<'_, Message> {
     )
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_graphemes;
+
+    #[test]
+    fn truncation_keeps_emoji_sequences_whole() {
+        let family = "👨\u{200D}👩\u{200D}👧";
+        let s = format!("{family}🇮🇹 ciao");
+        // 2 visible characters, not 2 code points.
+        assert_eq!(truncate_graphemes(&s, 2), format!("{family}🇮🇹…"));
+        assert_eq!(truncate_graphemes("short", 10), "short");
+    }
+}

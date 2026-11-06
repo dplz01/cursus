@@ -532,16 +532,25 @@ pub fn is_short_emoji(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }
-    let graphemes: Vec<&str> = s.graphemes(true).collect();
-    if graphemes.is_empty() || graphemes.len() > SHORT_EMOJI_MAX {
-        return false;
+    // Runs for every message on every frame: bail on the first non-emoji
+    // grapheme or the (MAX+1)th one instead of segmenting the whole text.
+    let mut n = 0;
+    for g in s.graphemes(true) {
+        n += 1;
+        if n > SHORT_EMOJI_MAX || !is_emoji_grapheme(g) {
+            return false;
+        }
     }
-    graphemes.iter().all(|g| is_emoji_grapheme(g))
+    n > 0
 }
 
 fn is_emoji_grapheme(g: &str) -> bool {
     if emojis::get(g).is_some() {
         return true;
+    }
+    // Plain letters/digits/punctuation are never emoji on their own.
+    if g.len() == 1 {
+        return false;
     }
     // Keycaps: 1️⃣ / 1⃣ / #️⃣
     let chars: Vec<char> = g.chars().collect();

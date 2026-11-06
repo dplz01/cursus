@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use base64::Engine;
+use image::metadata::Orientation;
 
 pub const WAVEFORM_BARS: usize = 96;
 /// Official SimpleX `maxProfileImageSize` (characters of the data-URL).
@@ -453,103 +454,43 @@ pub fn fit_within(sw: u32, sh: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     (w.max(1), h.max(1))
 }
 
-/// EXIF orientation (1–8) of a JPEG file, if tagged. Phone cameras store
-/// portrait shots as landscape pixels + this tag; the `image` crate ignores it.
-pub fn exif_orientation(path: &Path) -> Option<u16> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path).ok()?;
-    let mut head = vec![0u8; 256 * 1024];
-    let n = f.read(&mut head).ok()?;
-    head.truncate(n);
-    exif_orientation_from_jpeg(&head)
-}
-
-pub fn exif_orientation_from_jpeg(b: &[u8]) -> Option<u16> {
-    if b.len() < 4 || b[0] != 0xFF || b[1] != 0xD8 {
-        return None;
-    }
-    let mut i = 2usize;
-    while i + 4 <= b.len() {
-        if b[i] != 0xFF {
-            return None;
-        }
-        let marker = b[i + 1];
-        if marker == 0xFF {
-            i += 1;
-            continue;
-        }
-        // SOS / EOI: metadata segments are over.
-        if marker == 0xDA || marker == 0xD9 {
-            return None;
-        }
-        let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
-        if len < 2 {
-            return None;
-        }
-        let seg = b.get(i + 4..(i + 2 + len).min(b.len()))?;
-        if marker == 0xE1 && seg.len() >= 14 && &seg[0..6] == b"Exif\0\0" {
-            return tiff_orientation(&seg[6..]);
-        }
-        i += 2 + len;
-    }
-    None
-}
-
-fn tiff_orientation(t: &[u8]) -> Option<u16> {
-    let le = match t.get(0..2)? {
-        b"II" => true,
-        b"MM" => false,
-        _ => return None,
-    };
-    let u16_at = |o: usize| -> Option<u16> {
-        let s = t.get(o..o + 2)?;
-        Some(if le { u16::from_le_bytes([s[0], s[1]]) } else { u16::from_be_bytes([s[0], s[1]]) })
-    };
-    let u32_at = |o: usize| -> Option<u32> {
-        let s = t.get(o..o + 4)?;
-        let a = [s[0], s[1], s[2], s[3]];
-        Some(if le { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) })
-    };
-    let ifd = u32_at(4)? as usize;
-    let count = u16_at(ifd)? as usize;
-    for k in 0..count.min(256) {
-        let e = ifd + 2 + k * 12;
-        if u16_at(e)? == 0x0112 {
-            let v = u16_at(e + 8)?;
-            return (1..=8).contains(&v).then_some(v);
-        }
-    }
-    None
-}
-
-/// Rotate/flip decoded pixels so they display upright for `orientation`.
-pub fn apply_orientation(img: image::DynamicImage, orientation: u16) -> image::DynamicImage {
-    match orientation {
-        2 => img.fliph(),
-        3 => img.rotate180(),
-        4 => img.flipv(),
-        5 => img.rotate90().fliph(),
-        6 => img.rotate90(),
-        7 => img.rotate270().fliph(),
-        8 => img.rotate270(),
-        _ => img,
-    }
+/// EXIF orientation of an image file (headers only, no pixel decode). Phone
+/// cameras store portrait shots as landscape pixels plus this tag.
+pub fn exif_orientation(path: &Path) -> Option<Orientation> {
+    let mut decoder = image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .into_decoder()
+        .ok()?;
+    use image::ImageDecoder;
+    decoder.orientation().ok()
 }
 
 /// Decode an image file with EXIF orientation applied.
 pub fn open_upright(path: &Path) -> Result<image::DynamicImage, String> {
-    let img = image::open(path).map_err(|e| format!("decode image: {e}"))?;
-    Ok(match exif_orientation(path) {
-        Some(o) if o != 1 => apply_orientation(img, o),
-        _ => img,
-    })
+    use image::ImageDecoder;
+    let mut decoder = image::ImageReader::open(path)
+        .and_then(|r| r.with_guessed_format())
+        .map_err(|e| format!("open image: {e}"))?
+        .into_decoder()
+        .map_err(|e| format!("decode image: {e}"))?;
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    let mut img = image::DynamicImage::from_decoder(decoder).map_err(|e| format!("decode image: {e}"))?;
+    img.apply_orientation(orientation);
+    Ok(img)
 }
 
 /// Pixel dimensions as displayed (width/height swapped for 90° EXIF tags).
 pub fn upright_dimensions(path: &Path) -> Option<(u32, u32)> {
     let (w, h) = image::image_dimensions(path).ok()?;
     Some(match exif_orientation(path) {
-        Some(5..=8) => (h, w),
+        Some(
+            Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH,
+        ) => (h, w),
         _ => (w, h),
     })
 }
@@ -561,10 +502,7 @@ const OUTGOING_IMAGE_MAX_SIDE: u32 = 1920;
 /// EXIF-free copy under `out_dir` and return its path. Receivers (including
 /// official SimpleX clients) do not all honour EXIF, so we bake the rotation in.
 pub fn upright_copy_for_send(path: &Path, out_dir: &Path) -> Result<Option<PathBuf>, String> {
-    let Some(o) = exif_orientation(path) else {
-        return Ok(None);
-    };
-    if o == 1 {
+    if exif_orientation(path).is_none_or(|o| o == Orientation::NoTransforms) {
         return Ok(None);
     }
     let img = open_upright(path)?;
@@ -824,7 +762,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("cam.jpg");
         std::fs::write(&path, jpeg_with_orientation(6)).unwrap();
-        assert_eq!(exif_orientation(&path), Some(6));
+        assert_eq!(exif_orientation(&path), Some(Orientation::Rotate90));
         assert_eq!(upright_dimensions(&path), Some((20, 40)));
         let up = open_upright(&path).unwrap();
         assert_eq!((up.width(), up.height()), (20, 40));
@@ -832,7 +770,7 @@ mod tests {
         let top = up.to_rgb8().get_pixel(10, 5).0;
         assert!(top[0] > 200 && top[2] < 60, "top pixel {top:?}");
         let sent = upright_copy_for_send(&path, &dir.join("out")).unwrap().unwrap();
-        assert_eq!(exif_orientation(&sent), None);
+        assert!(exif_orientation(&sent).is_none_or(|o| o == Orientation::NoTransforms));
         assert_eq!(image::image_dimensions(&sent).unwrap(), (20, 40));
         // Untagged / identity JPEGs are sent untouched.
         std::fs::write(&path, jpeg_with_orientation(1)).unwrap();
@@ -913,7 +851,7 @@ mod tests {
         let bars = waveform_bars(&samples, 16);
         let full = bars.iter().filter(|b| **b > 0.9).count();
         let low = bars.iter().filter(|b| **b < 0.2).count();
-        assert!(full >= 1 && full < 8, "only the words should peak: {bars:?}");
+        assert!((1..8).contains(&full), "only the words should peak: {bars:?}");
         assert!(low >= 6, "pauses should dip: {bars:?}");
         // Flat input → even low line, not maxed.
         assert!(waveform_bars(&vec![0.7; 800], 8).iter().all(|b| *b <= 0.2));

@@ -1571,10 +1571,9 @@ fn parse_one_message(item: &Value) -> Option<ChatMessage> {
             } else {
                 format!("Invited to join {} as {}", inv.group_name, inv.member_role)
             };
-        } else if let Some(f) = file.as_ref() {
-            text = f.file_name.clone();
         } else {
-            return None;
+            let f = file.as_ref()?;
+            text = f.file_name.clone();
         }
     } else if text.starts_with('📎') {
         // Older rows / core itemText may still prefix a paperclip glyph.

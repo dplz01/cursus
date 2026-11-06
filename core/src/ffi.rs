@@ -257,7 +257,7 @@ unsafe fn libc_free(ptr: *mut std::ffi::c_void) {
 
 unsafe fn init_haskell(hs_init: HsInit) {
     // Mirrors packages/simplex-chat-nodejs/cpp/simplex.cc
-    let mut args = vec![
+    let mut args = [
         CString::new("cursus").unwrap(),
         CString::new("+RTS").unwrap(),
         CString::new("-A64m").unwrap(),

@@ -305,14 +305,13 @@ where
                     shell.capture_event();
                 }
             }
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
-                if cursor.is_over(layout.bounds()) {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
+                if cursor.is_over(layout.bounds()) => {
                     if let Some(msg) = self.on_right_press.as_ref() {
                         shell.publish(msg.clone());
                         shell.capture_event();
                     }
                 }
-            }
             _ => {}
         }
     }

@@ -68,10 +68,13 @@ fn measured_lines_font(
     (paragraph.min_height() / line_px).round().max(1.0) as usize
 }
 
+/// (text, width bits, size bits, lines, bold) → fitted text.
+type FitKey = (String, u32, u32, usize, bool);
+
 thread_local! {
     /// (text, width, size, lines) → fitted preview. Layout is not free and the
     /// chat list re-renders often; previews rarely change.
-    static ELLIPSIS_CACHE: std::cell::RefCell<std::collections::HashMap<(String, u32, u32, usize, bool), String>> =
+    static ELLIPSIS_CACHE: std::cell::RefCell<std::collections::HashMap<FitKey, String>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 

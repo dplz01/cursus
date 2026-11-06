@@ -688,6 +688,24 @@ impl Event {
         parse_chat_info_id(info)
     }
 
+    /// Chat an event is about, when its payload says so (`newChatItems`,
+    /// file transfer events, reactions, updates, deletions). `None` means
+    /// unknown — callers should treat it as "could be any chat".
+    pub fn chat_hint(&self) -> Option<ChatId> {
+        let body = match self {
+            Event::NewChatItems(_) => return self.chat_id_hint(),
+            Event::Other { body, .. } => body,
+            _ => return None,
+        };
+        let info = body
+            .pointer("/chatItem/chatInfo")
+            .or_else(|| body.pointer("/reaction/chatInfo"))
+            .or_else(|| body.pointer("/chatItems/0/chatInfo"))
+            .or_else(|| body.pointer("/chatItemDeletions/0/deletedChatItem/chatInfo"))
+            .or_else(|| body.get("chatInfo"))?;
+        parse_chat_info_id(info)
+    }
+
     /// Live XFTP progress patches: `(file_id, transferred, total)`.
     pub fn file_progress_updates(&self) -> Option<(i64, i64, i64)> {
         let Event::Other { type_name, body } = self else {
@@ -880,6 +898,31 @@ pub(crate) fn parse_conn_link(value: &Value, full_path: &str, short_path: &str) 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn event_chat_hint_covers_item_events() {
+        use serde_json::json;
+        let direct = json!({"type": "direct", "contact": {"contactId": 7}});
+        let group = json!({"type": "group", "groupInfo": {"groupId": 3}});
+        let ev = |t: &str, body: Value| Event::Other { type_name: t.into(), body };
+        let d7 = Some(ChatId::new(ChatType::Direct, 7));
+        let g3 = Some(ChatId::new(ChatType::Group, 3));
+        assert_eq!(
+            ev("rcvFileProgressXFTP", json!({"chatItem": {"chatInfo": direct.clone()}, "receivedSize": 1, "totalSize": 2})).chat_hint(),
+            d7
+        );
+        assert_eq!(ev("chatItemReaction", json!({"reaction": {"chatInfo": group.clone()}})).chat_hint(), g3);
+        assert_eq!(
+            ev("chatItemsDeleted", json!({"chatItemDeletions": [{"deletedChatItem": {"chatInfo": direct}}]})).chat_hint(),
+            d7
+        );
+        // Unknown shape → None (callers then refresh to be safe).
+        assert_eq!(ev("rcvFileProgressXFTP", json!({"receivedSize": 1})).chat_hint(), None);
+        assert_eq!(
+            Event::NewChatItems(json!({"chatItems": [{"chatInfo": group}]})).chat_hint(),
+            g3
+        );
+    }
+
     use super::*;
     use serde_json::json;
 

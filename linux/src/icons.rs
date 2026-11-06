@@ -35,14 +35,6 @@ pub fn admin_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     )
 }
 
-pub fn back_icon<'a>(size: f32) -> Element<'a, Message> {
-    tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/back.svg").as_slice()),
-        theme::t().text_primary,
-        size,
-    )
-}
-
 /// Paper-plane send glyph (Dazzle Line Icons / CC Attribution).
 pub fn send_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
@@ -600,10 +592,6 @@ pub fn mute_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mess
     )
 }
 
-pub fn preferences_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
-    settings_tool(hit, hover_ok)
-}
-
 pub fn settings_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     profile_tool_icon(
         svg::Handle::from_memory(include_bytes!("../assets/icons/settings.svg").as_slice()),
@@ -634,16 +622,6 @@ pub fn user_member_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
         svg::Handle::from_memory(include_bytes!("../assets/icons/user-member.svg").as_slice()),
         color,
         size,
-    )
-}
-
-pub fn user_member_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
-    profile_tool_icon(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/user-member.svg").as_slice()),
-        hit,
-        theme::t().text_secondary,
-        theme::t().text_primary,
-        hover_ok,
     )
 }
 

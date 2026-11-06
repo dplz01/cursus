@@ -180,23 +180,41 @@ static SYSTEM_THEME_CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
 /// Order: xdg-desktop-portal (Hyprland / non-GNOME) → gsettings color-scheme →
 /// gtk-theme name → dark fallback only when nothing reports a preference.
 ///
-/// Results are cached briefly — `view()` / `iced_theme()` resolve appearance on
-/// every rebuild, and spawning `gdbus`/`gsettings` each time stalls scroll/fling.
+/// `view()` / `iced_theme()` call this on every rebuild. Detection spawns
+/// `gdbus` / `gsettings` (~10–20 ms, longer if D-Bus has to wait for a portal),
+/// so only the very first call — or the first after the user switches theme —
+/// runs it inline. Afterwards the cached answer is returned immediately and a
+/// background thread refreshes it once the TTL has passed; the next frame
+/// picks the new value up.
 pub fn system_prefers_dark() -> bool {
-    if let Ok(guard) = SYSTEM_THEME_CACHE.lock() {
-        if let Some((at, dark)) = *guard {
-            if at.elapsed() < SYSTEM_THEME_TTL {
-                return dark;
+    let cached = SYSTEM_THEME_CACHE.lock().ok().and_then(|g| *g);
+    match cached {
+        Some((at, dark)) => {
+            if at.elapsed() >= SYSTEM_THEME_TTL
+                && !SYSTEM_THEME_REFRESHING.swap(true, std::sync::atomic::Ordering::AcqRel)
+            {
+                std::thread::spawn(|| {
+                    let dark = system_prefers_dark_uncached();
+                    if let Ok(mut guard) = SYSTEM_THEME_CACHE.lock() {
+                        *guard = Some((Instant::now(), dark));
+                    }
+                    SYSTEM_THEME_REFRESHING.store(false, std::sync::atomic::Ordering::Release);
+                });
             }
+            dark
+        }
+        None => {
+            let dark = system_prefers_dark_uncached();
+            if let Ok(mut guard) = SYSTEM_THEME_CACHE.lock() {
+                *guard = Some((Instant::now(), dark));
+            }
+            dark
         }
     }
-
-    let dark = system_prefers_dark_uncached();
-    if let Ok(mut guard) = SYSTEM_THEME_CACHE.lock() {
-        *guard = Some((Instant::now(), dark));
-    }
-    dark
 }
+
+/// Set while a background refresh is running (at most one at a time).
+static SYSTEM_THEME_REFRESHING: AtomicBool = AtomicBool::new(false);
 
 /// Drop the cached system preference (call after the user cycles theme).
 pub fn invalidate_system_theme_cache() {
@@ -402,28 +420,6 @@ pub fn secondary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status)
                 color: c.border,
                 width: 1.0,
                 radius: 10.0.into(),
-            },
-            ..button::Style::default()
-        }
-    }
-}
-
-/// Round icon-only control — idle is icon-only (no fill / border); hover tint only.
-pub fn round_icon(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
-    move |_, status| {
-        let c = t();
-        let background = match status {
-            button::Status::Hovered if hover_ok => Some(Background::Color(c.bg_hover)),
-            button::Status::Pressed => Some(Background::Color(c.accent_soft)),
-            _ => None,
-        };
-        button::Style {
-            background,
-            text_color: c.text_primary,
-            border: Border {
-                color: iced::Color::TRANSPARENT,
-                width: 0.0,
-                radius: 999.0.into(),
             },
             ..button::Style::default()
         }

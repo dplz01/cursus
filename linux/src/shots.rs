@@ -12,7 +12,7 @@ use cursus_core::{
     MessageSender, ProfileFields, ReactionCount,
 };
 use iced::advanced::renderer::Headless;
-use iced::{Size, Theme};
+use iced::Size;
 use iced_runtime::user_interface::{Cache, UserInterface};
 
 use crate::desktop::{DesktopPrefs, ThemePreference};
@@ -389,4 +389,67 @@ fn support_back_returns_to_group_page() {
     let _ = app.update(Message::OpenSupportChatList);
     let _ = app.update(Message::Back);
     assert!(app.support.is_none() && app.group_settings.is_none());
+}
+
+/// Frame-cost benchmark: what one update (fling tick, voice tick, core event)
+/// costs with a long conversation open. `cargo test --release -p cursus-linux
+/// frame_bench -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn frame_bench() {
+    load_fonts();
+    for (label, size) in [("desktop", DESKTOP), ("mobile", MOBILE)] {
+        let mut app = demo_app(true, size.width, size.height);
+        select(&mut app, 0);
+        let base = app.messages.clone();
+        app.messages.clear();
+        let n = std::env::var("CURSUS_BENCH_MSGS").ok().and_then(|v| v.parse().ok()).unwrap_or(300usize);
+        for i in 0..n {
+            let mut m = base[i % base.len()].clone();
+            m.item_id = 1000 + i as i64;
+            m.created_at = Some(format!("2026-11-{:02}T{:02}:{:02}:00Z", 1 + (i / 100).min(5), 8 + (i / 10) % 12, i % 60));
+            app.messages.push(m);
+        }
+        let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+            iced::Font::with_name("Noto Sans"),
+            iced::Pixels(16.0),
+            Some("tiny-skia"),
+        ))
+        .unwrap();
+        let theme = app.iced_theme();
+        let style = iced::advanced::renderer::Style { text_color: iced::Color::WHITE };
+        let mut cache = Cache::default();
+        let (mut t_view, mut t_build, mut t_update, mut t_draw) = (0.0, 0.0, 0.0, 0.0);
+        let frames = 30;
+        for f in 0..frames + 3 {
+            let t0 = std::time::Instant::now();
+            let el = app.view(iced::window::Id::unique());
+            let t1 = std::time::Instant::now();
+            let mut ui = UserInterface::build(el, size, cache, &mut renderer);
+            let t2 = std::time::Instant::now();
+            let mut msgs: Vec<Message> = Vec::new();
+            let _ = ui.update(
+                &[iced::Event::Window(iced::window::Event::RedrawRequested(iced::time::Instant::now()))],
+                iced::mouse::Cursor::Unavailable,
+                &mut renderer,
+                &mut iced::advanced::clipboard::Null,
+                &mut msgs,
+            );
+            let t3 = std::time::Instant::now();
+            ui.draw(&mut renderer, &theme, &style, iced::mouse::Cursor::Unavailable);
+            let t4 = std::time::Instant::now();
+            cache = ui.into_cache();
+            if f >= 3 {
+                t_view += (t1 - t0).as_secs_f64();
+                t_build += (t2 - t1).as_secs_f64();
+                t_update += (t3 - t2).as_secs_f64();
+                t_draw += (t4 - t3).as_secs_f64();
+            }
+        }
+        let ms = |t: f64| t * 1000.0 / frames as f64;
+        println!(
+            "BENCH {label} {n} msgs: view {:.2}ms  build+layout {:.2}ms  update {:.2}ms  draw {:.2}ms  total {:.2}ms",
+            ms(t_view), ms(t_build), ms(t_update), ms(t_draw), ms(t_view + t_build + t_update + t_draw)
+        );
+    }
 }

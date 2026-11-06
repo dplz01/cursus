@@ -768,7 +768,8 @@ impl Event {
     }
 }
 
-fn parse_chat_info_id(info: &Value) -> Option<ChatId> {
+/// Chat id from a core `chatInfo` object (`direct` / `group` / `local`).
+pub fn parse_chat_info_id(info: &Value) -> Option<ChatId> {
     let type_name = info.get("type")?.as_str()?;
     match type_name {
         "direct" => Some(ChatId {

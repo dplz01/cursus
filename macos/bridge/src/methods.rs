@@ -1,0 +1,264 @@
+//! Request dispatch: one arm per method the Swift app calls.
+
+use std::path::PathBuf;
+
+use cursus_core::{
+    AccountMeta, ChatSettings, NtfFilter, ReceiveOutcome, Session, SessionConfig,
+};
+use serde_json::{json, Value};
+
+use crate::dto::{self, parse_chat_ref};
+
+fn str_param<'a>(p: &'a Value, key: &str) -> Result<&'a str, String> {
+    p.get(key).and_then(Value::as_str).ok_or_else(|| format!("missing string `{key}`"))
+}
+
+fn opt_str<'a>(p: &'a Value, key: &str) -> Option<&'a str> {
+    p.get(key).and_then(Value::as_str)
+}
+
+fn i64_param(p: &Value, key: &str) -> Result<i64, String> {
+    p.get(key).and_then(Value::as_i64).ok_or_else(|| format!("missing integer `{key}`"))
+}
+
+fn bool_param(p: &Value, key: &str) -> Result<bool, String> {
+    p.get(key).and_then(Value::as_bool).ok_or_else(|| format!("missing bool `{key}`"))
+}
+
+fn chat_param(p: &Value) -> Result<cursus_core::ChatId, String> {
+    parse_chat_ref(str_param(p, "chat")?)
+}
+
+fn err(e: impl std::fmt::Display) -> String {
+    e.to_string()
+}
+
+pub fn dispatch(method: &str, p: &Value) -> Result<Value, String> {
+    match method {
+        "appInfo" => Ok(app_info()),
+        "open" => open(p),
+        "close" => {
+            crate::drop_session();
+            Ok(Value::Null)
+        }
+        "wipeLocalData" => {
+            crate::drop_session();
+            cursus_core::wipe_local_data().map_err(err)?;
+            Ok(Value::Null)
+        }
+        "selfTest" => self_test(p),
+        _ => with_session(method, p),
+    }
+}
+
+fn app_info() -> Value {
+    let account = cursus_core::load_account();
+    json!({
+        "setupComplete": cursus_core::setup_complete(),
+        "databaseExists": cursus_core::database_exists(),
+        "displayName": account.as_ref().map(|a| a.display_name.clone()),
+        "encryptLocalFiles": account.map(|a| a.encrypt_local_files).unwrap_or(true),
+        "dataDir": cursus_core::data_dir().to_string_lossy(),
+        "version": env!("CARGO_PKG_VERSION"),
+    })
+}
+
+fn config(p: &Value, password: &str) -> SessionConfig {
+    let mut cfg = SessionConfig {
+        db_key: zeroize::Zeroizing::new(password.to_string()),
+        ..SessionConfig::default()
+    };
+    // Inside Cursus.app the libraries live in Contents/Frameworks.
+    if let Some(dir) = opt_str(p, "libsDir").filter(|d| !d.is_empty()) {
+        cfg.libs_dir = PathBuf::from(dir);
+    }
+    cfg
+}
+
+/// Open (first run: create) the encrypted database and start the chat core.
+fn open(p: &Value) -> Result<Value, String> {
+    if crate::session().is_ok() {
+        return Err("Already unlocked".into());
+    }
+    let password = str_param(p, "password")?;
+    let display_name = opt_str(p, "displayName").unwrap_or("").trim().to_string();
+    let encrypt = p.get("encryptLocalFiles").and_then(Value::as_bool).unwrap_or(true);
+    let save = p.get("saveAccount").and_then(Value::as_bool).unwrap_or(false);
+
+    let mut cfg = config(p, password);
+    if !display_name.is_empty() {
+        cfg.initial_display_name = display_name.clone();
+    }
+    cfg.encrypt_local_files = encrypt;
+    let mut session = Session::open(cfg).map_err(err)?;
+    session.start_chat_with_options(encrypt).map_err(err)?;
+    // The core may have created a default profile: use the welcome name.
+    if let Some(user) = session.active_profile() {
+        if !display_name.is_empty() && user.display_name() != display_name {
+            let mut fields = user.profile.clone();
+            fields.display_name = display_name.clone();
+            let _ = session.update_profile(fields);
+        }
+    }
+    if save {
+        let meta = AccountMeta { display_name: display_name.clone(), version: 1, encrypt_local_files: encrypt };
+        cursus_core::save_account(&meta).map_err(err)?;
+    }
+    let session = crate::install_session(session)?;
+    let user = session.refresh_user().map_err(err)?;
+    Ok(dto::user(&user))
+}
+
+/// Load libsimplex and open a throwaway database: proves the library runs on
+/// this Mac (`Cursus --self-test`, also used by CI).
+fn self_test(p: &Value) -> Result<Value, String> {
+    let dir = std::env::temp_dir().join(format!("cursus-selftest-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let mut cfg = config(p, "self-test");
+    cfg.db_prefix = dir.join("simplex_v1");
+    cfg.initial_display_name = "Self test".into();
+    let libs = cfg.libs_dir.to_string_lossy().to_string();
+    let result = (|| {
+        let mut session = Session::open(cfg).map_err(err)?;
+        session.start_chat().map_err(err)?;
+        let chats = session.list_chats().map_err(err)?;
+        let user = session.refresh_user().map_err(err)?;
+        Ok::<_, String>(json!({ "libsDir": libs, "user": user.display_name(), "chats": chats.len() }))
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
+fn with_session(method: &str, p: &Value) -> Result<Value, String> {
+    let s = crate::session()?;
+    match method {
+        "user" => Ok(dto::user(&s.refresh_user().map_err(err)?)),
+        "updateProfile" => {
+            let mut fields = s.refresh_user().map_err(err)?.profile;
+            if let Some(v) = opt_str(p, "displayName") {
+                fields.display_name = v.trim().to_string();
+            }
+            if let Some(v) = opt_str(p, "fullName") {
+                fields.full_name = v.to_string();
+            }
+            if let Some(v) = opt_str(p, "shortDescr") {
+                fields.short_descr = v.to_string();
+            }
+            if let Some(v) = p.get("image") {
+                fields.image = v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
+            }
+            Ok(dto::user(&s.update_profile(fields).map_err(err)?))
+        }
+        "setDeliveryReceipts" => {
+            let u = s.set_delivery_receipts(bool_param(p, "groups")?, bool_param(p, "on")?).map_err(err)?;
+            Ok(dto::user(&u))
+        }
+        "setProfileAddress" => Ok(dto::user(&s.set_profile_address(bool_param(p, "on")?).map_err(err)?)),
+        "listChats" => Ok(Value::Array(s.list_chats().map_err(err)?.iter().map(dto::chat).collect())),
+        "listMessages" => {
+            let count = p.get("count").and_then(Value::as_u64).unwrap_or(100).min(1000) as u32;
+            let msgs = s.list_messages(&chat_param(p)?, count).map_err(err)?;
+            Ok(Value::Array(msgs.iter().map(dto::message).collect()))
+        }
+        "sendText" => {
+            let quote = p.get("quote").and_then(Value::as_i64);
+            s.send_text_quoted(&chat_param(p)?, str_param(p, "text")?, quote).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "updateText" => {
+            s.update_text(&chat_param(p)?, i64_param(p, "itemId")?, str_param(p, "text")?).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "deleteItems" => {
+            let ids: Vec<i64> = p
+                .get("itemIds")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_i64).collect())
+                .unwrap_or_default();
+            s.delete_items(&chat_param(p)?, &ids, bool_param(p, "forEveryone")?).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "react" => {
+            s.set_reaction(&chat_param(p)?, i64_param(p, "itemId")?, str_param(p, "emoji")?, bool_param(p, "add")?)
+                .map_err(err)?;
+            Ok(Value::Null)
+        }
+        "sendFile" => {
+            s.send_file(&chat_param(p)?, str_param(p, "path")?).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "receiveFile" => {
+            let approved = p.get("approved").and_then(Value::as_bool).unwrap_or(false);
+            match s.receive_file(i64_param(p, "fileId")?, approved).map_err(err)? {
+                ReceiveOutcome::Accepted => Ok(json!({ "accepted": true, "servers": [] })),
+                ReceiveOutcome::NeedsApproval { servers } => Ok(json!({ "accepted": false, "servers": servers })),
+            }
+        }
+        // Readable path for a received / sent file (decrypts CryptoFiles into
+        // the private cache).
+        "plainFile" => {
+            let path = PathBuf::from(str_param(p, "path")?);
+            match (opt_str(p, "key"), opt_str(p, "nonce")) {
+                (Some(k), Some(n)) => Ok(json!(s.ensure_plaintext_file(&path, k, n).map_err(err)?.to_string_lossy())),
+                _ => Ok(json!(path.to_string_lossy())),
+            }
+        }
+        "markRead" => {
+            s.mark_chat_read(&chat_param(p)?).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "markUnread" => {
+            s.mark_chat_unread(&chat_param(p)?).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "setChatSettings" => {
+            let settings = ChatSettings {
+                enable_ntfs: NtfFilter::parse(opt_str(p, "notifications").unwrap_or("all")),
+                favorite: p.get("favorite").and_then(Value::as_bool).unwrap_or(false),
+                send_rcpts: None,
+            };
+            s.set_chat_settings(&chat_param(p)?, &settings).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "clearChat" => {
+            s.clear_chat(&chat_param(p)?).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "deleteChat" => {
+            s.delete_chat(&chat_param(p)?).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "createInvitation" => Ok(dto::link(&s.create_invitation_link().map_err(err)?)),
+        "addressLink" => Ok(dto::link(&s.ensure_address_link().map_err(err)?)),
+        "addressAutoAccept" => Ok(json!(s.address_auto_accept().map_err(err)?)),
+        "setAddressAutoAccept" => Ok(json!(s.set_address_auto_accept(bool_param(p, "on")?).map_err(err)?)),
+        "connect" => {
+            s.connect_link(str_param(p, "link")?.trim()).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "acceptRequest" => {
+            s.accept_contact_request(i64_param(p, "id")?).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "rejectRequest" => {
+            s.reject_contact_request(i64_param(p, "id")?).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "joinGroup" => {
+            s.join_group(i64_param(p, "groupId")?).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "createGroup" => Ok(json!(s.create_group(str_param(p, "name")?.trim()).map_err(err)?.command_ref())),
+        "setEncryptLocalFiles" => {
+            let on = bool_param(p, "on")?;
+            s.set_encrypt_local_files(on).map_err(err)?;
+            if let Some(mut meta) = cursus_core::load_account() {
+                meta.encrypt_local_files = on;
+                cursus_core::save_account(&meta).map_err(err)?;
+            }
+            Ok(Value::Null)
+        }
+        other => Err(format!("unknown method: {other}")),
+    }
+}

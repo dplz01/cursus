@@ -24,3 +24,8 @@ build-dir/
 .flatpak-builder/
 repo/
 *.flatpak
+
+# macOS app builds (./macos/build.sh)
+/macos/build/
+/macos/Cursus/.build/
+/macos/Cursus/.swiftpm/

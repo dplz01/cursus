@@ -22,7 +22,7 @@ pub use chat_list::{merge_seeded_channels, prune_resolved_seeds};
 pub use commands::Commands;
 pub use error::{Error, Result};
 pub use models::{
-    group_role_rank, CallInfo, CallMedia, ChatId, ChatMessage, ChatPreview, ChatRelayInfo,
+    group_role_rank, parse_chat_info_id, CallInfo, CallMedia, ChatId, ChatMessage, ChatPreview, ChatRelayInfo,
     ChatSettings, ChatTag, ChatType, ConnLink, DeletedState, DeliveryStatus, Event, FileInfo,
     FileKind, FileTransferState, GroupChatScope, GroupMemberInfo, GroupProfileUpdate,
     GroupSupportChat, MessageContent, MessageQuote, MessageSender, NtfFilter, ProfileFields,

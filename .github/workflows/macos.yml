@@ -1,0 +1,43 @@
+# macOS app: build Cursus.app on an Intel and an Apple Silicon runner with
+# macos/build.sh (which also self-tests libsimplex), upload a zipped app.
+#
+# The runners have a newer Xcode than Monterey's last (14.2 / Swift 5.7); the
+# package's tools version and macOS 12 deployment target keep the code within
+# what that toolchain accepts, but only a build on the Mac itself proves it.
+name: macOS
+
+on:
+  push:
+    branches: [master, "feature/macos"]
+    paths: ["macos/**", "core/**", "Cargo.lock", ".github/workflows/macos.yml"]
+  pull_request:
+    paths: ["macos/**", "core/**", "Cargo.lock", ".github/workflows/macos.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: Cursus.app (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: macos-15-intel }
+          - { arch: arm64, runner: macos-15 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust bridge tests
+        run: cargo test --locked -p cursus-bridge
+      - name: Build Cursus.app
+        run: ./macos/build.sh
+      - name: Zip
+        run: ditto -c -k --keepParent macos/build/Cursus.app Cursus-macos-${{ matrix.arch }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cursus-macos-${{ matrix.arch }}
+          path: Cursus-macos-${{ matrix.arch }}.zip

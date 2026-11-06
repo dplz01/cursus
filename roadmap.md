@@ -44,7 +44,7 @@ Living progress tracker. Design tokens and IA: [`docs/DESIGN_SYSTEM.md`](docs/DE
 
 | Status | Item |
 |---|---|
-| Todo | macOS app sharing desktop UI modules + native nav chrome |
+| In progress | macOS app: native SwiftUI over cursus-core via `macos/bridge` (macOS 12+, see `macos/README.md`) |
 | Done | Richer attachment UX (progress bars, failure detail) |
 | Done | Notifications + optional tray (Linux) |
 | Done | Light theme following OS preference (System / Light / Dark) |

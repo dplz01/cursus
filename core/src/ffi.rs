@@ -297,6 +297,7 @@ unsafe fn init_haskell(hs_init: HsInit) {
     hs_init(&mut argc, &mut argv);
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn is_musl_host() -> bool {
     #[cfg(target_os = "linux")]
     {

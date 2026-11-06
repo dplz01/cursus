@@ -21,7 +21,7 @@ const PORTRAIT_ASPECT: f32 = 0.85;
 /// Extreme portrait on a wide window: fall back from desktop to compact.
 const EXTREME_PORTRAIT_ASPECT: f32 = 0.70;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LayoutMode {
     /// Narrow / portrait: full-screen destinations, bottom nav, push conversation.
     Mobile,

@@ -383,7 +383,8 @@ impl FeatureAllow {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    /// Parse the API value (`yes` / `always` / anything else → `No`).
+    pub fn from_api(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
             "yes" | "on" | "true" => Self::Yes,
             "always" | "for me" | "forme" => Self::Always,
@@ -1013,8 +1014,6 @@ pub enum Message {
     ScrollFlingCancel { id: String },
     ScrollFlingTick,
     WaveformReady { path: PathBuf, peaks: Result<Vec<f32>, String> },
-    /// Async video poster for chat-bubble previews.
-    VideoThumbReady { path: PathBuf, thumb: Option<PathBuf> },
     /// Deferred media warm-up after the chat view has painted once.
     WarmChatMedia,
     ImagePreviewReady {
@@ -1031,7 +1030,7 @@ pub enum Message {
         gen: u64,
         result: Result<Vec<ChatMessage>, String>,
     },
-    /// Second-phase media warm (posters) after decrypt/waveforms start.
+    /// Second-phase media warm (image previews) after decrypt/waveforms start.
     WarmChatVisuals,
     ChatMarkedRead(Result<ChatId, String>),
     AcceptContactRequest(i64),
@@ -1152,10 +1151,6 @@ struct App {
     voice_playback: Option<VoicePlayback>,
     /// Cached waveform peaks keyed by absolute path.
     waveforms: std::collections::HashMap<PathBuf, Vec<f32>>,
-    /// Cached video poster frames keyed by absolute media path.
-    video_thumbs: std::collections::HashMap<PathBuf, PathBuf>,
-    /// In-flight video thumb extractions (avoid duplicate ffmpeg jobs).
-    video_thumbs_pending: HashSet<PathBuf>,
     /// Cached rounded still-image previews (UI thread must not decode).
     image_previews: std::collections::HashMap<PathBuf, (PathBuf, u32, u32)>,
     image_previews_pending: HashSet<PathBuf>,
@@ -1353,8 +1348,6 @@ impl App {
                 voice_draft: None,
                 voice_playback: None,
                 waveforms: std::collections::HashMap::new(),
-                video_thumbs: std::collections::HashMap::new(),
-                video_thumbs_pending: HashSet::new(),
                 image_previews: HashMap::new(),
                 image_previews_pending: HashSet::new(),
                 image_previews_failed: HashSet::new(),
@@ -4144,7 +4137,6 @@ impl App {
                 }
                 // Keep the decrypt queue moving without blasting the thread pool.
                 tasks.push(self.enqueue_decrypts());
-                tasks.push(self.enqueue_missing_video_thumbs());
                 // A freshly decrypted image needs its bubble preview too.
                 tasks.push(self.enqueue_missing_image_previews());
                 Task::batch(tasks)
@@ -4437,50 +4429,6 @@ impl App {
                 }
                 Task::none()
             }
-            Message::VideoThumbReady { path, thumb } => {
-                self.video_thumbs_pending.remove(&path);
-                let mut tasks = Vec::new();
-                if let Some(thumb) = thumb {
-                    // Round the poster off the UI thread; stash under the video path
-                    // so chat bubbles reuse image_previews like stills.
-                    let thumb_for_round = thumb.clone();
-                    let video_path = path.clone();
-                    self.video_thumbs.insert(path.clone(), thumb);
-                    if !self.image_previews.contains_key(&path)
-                        && !self.image_previews_pending.contains(&path)
-                    {
-                        self.image_previews_pending.insert(path);
-                        tasks.push(Task::perform(
-                            async move {
-                                let preview = tokio::task::spawn_blocking(move || {
-                                    media::rounded_fitted_preview(
-                                        &thumb_for_round,
-                                        220,
-                                        280,
-                                        12.0,
-                                    )
-                                    .ok()
-                                })
-                                .await
-                                .ok()
-                                .flatten();
-                                Message::ImagePreviewReady {
-                                    path: video_path,
-                                    preview,
-                                }
-                            },
-                            |m| m,
-                        ));
-                    }
-                } else {
-                    tracing::warn!(
-                        path = %path.display(),
-                        "video poster extraction failed"
-                    );
-                }
-                tasks.push(self.enqueue_missing_video_thumbs());
-                Task::batch(tasks)
-            }
             Message::MediaSaved(Ok(summary)) => {
                 self.status = summary;
                 Task::none()
@@ -4593,10 +4541,7 @@ impl App {
                     defer_visuals,
                 ])
             }
-            Message::WarmChatVisuals => Task::batch([
-                self.enqueue_missing_video_thumbs(),
-                self.enqueue_missing_image_previews(),
-            ]),
+            Message::WarmChatVisuals => self.enqueue_missing_image_previews(),
             Message::ImagePreviewReady { path, preview } => {
                 self.image_previews_pending.remove(&path);
                 if let Some(preview) = preview {
@@ -5706,12 +5651,6 @@ impl App {
         self.waveforms.get(path).map(|v| v.as_slice())
     }
 
-    /// Poster for a video path — **memory only** on the view path.
-    /// Disk thumbs are loaded asynchronously via [`Self::enqueue_missing_video_thumbs`].
-    pub(crate) fn video_thumb_for(&self, path: &std::path::Path) -> Option<PathBuf> {
-        self.video_thumbs.get(path).cloned()
-    }
-
     /// Rounded still preview — **memory only** (never probes disk / image headers
     /// during `view()`, which ran on every fling tick).
     pub(crate) fn image_preview_for(
@@ -6036,19 +5975,6 @@ impl App {
             ));
         }
         Task::batch(tasks)
-    }
-
-    fn enqueue_missing_video_thumbs(&mut self) -> Task<Message> {
-        // Intentionally no-op: ffmpeg video posters were reverted (.bugs.txt ARM).
-        // Bubbles use a play-icon placeholder; tap still opens the file.
-        let _ = (
-            &self.video_thumbs,
-            &self.video_thumbs_pending,
-            &self.image_previews,
-            &self.image_previews_pending,
-            &self.messages,
-        );
-        Task::none()
     }
 
     fn enqueue_missing_waveforms(&self) -> Task<Message> {
@@ -7903,7 +7829,7 @@ fn contact_pref_allow(prefs: Option<&serde_json::Value>, key: &str) -> FeatureAl
         .and_then(|p| p.get(key))
         .and_then(|v| v.get("allow"))
         .and_then(|v| v.as_str())
-        .map(FeatureAllow::from_str)
+        .map(FeatureAllow::from_api)
         .unwrap_or(FeatureAllow::No)
 }
 
@@ -7912,7 +7838,7 @@ fn merged_user_allow(merged: Option<&serde_json::Value>, key: &str) -> Option<Fe
     up.get("preference")
         .and_then(|v| v.get("allow"))
         .and_then(|v| v.as_str())
-        .map(FeatureAllow::from_str)
+        .map(FeatureAllow::from_api)
 }
 
 fn feature_you_allow(
@@ -7933,7 +7859,7 @@ fn merged_contact_allow(merged: Option<&serde_json::Value>, key: &str) -> Featur
         .and_then(|v| v.get("contactPreference"))
         .and_then(|v| v.get("allow"))
         .and_then(|v| v.as_str())
-        .map(FeatureAllow::from_str)
+        .map(FeatureAllow::from_api)
         .unwrap_or(FeatureAllow::No)
 }
 

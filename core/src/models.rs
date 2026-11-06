@@ -236,7 +236,7 @@ pub struct ChatRelayInfo {
 }
 
 /// Per-member support chat stats (`supportChat` on GroupMember).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Hash)]
 pub struct GroupSupportChat {
     pub unread: i64,
     pub member_attention: i64,
@@ -314,7 +314,7 @@ pub enum MessageContent {
 }
 
 /// Outgoing delivery / receipt state from `meta.itemStatus`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeliveryStatus {
     /// Queued locally (`sndNew`).
     Pending,
@@ -356,7 +356,7 @@ impl DeliveryStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileTransferState {
     /// Incoming offer waiting for Accept.
     Offer,
@@ -375,7 +375,7 @@ pub const MAX_IMAGE_SIZE_AUTO_RCV: i64 = 261_120 * 2; // ~510 KiB
 pub const MAX_VOICE_SIZE_AUTO_RCV: i64 = 261_120 * 2;
 pub const MAX_VIDEO_SIZE_AUTO_RCV: i64 = 1_047_552; // ~1023 KiB
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileKind {
     Image,
     Video,
@@ -408,7 +408,7 @@ impl FileKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct FileInfo {
     pub file_id: i64,
     pub file_name: String,
@@ -455,7 +455,7 @@ impl FileInfo {
 /// Heart is stored/sent as ❤ (U+2764); UI should show ❤️.
 pub const KNOWN_REACTIONS: &[&str] = &["👍", "👎", "😀", "😂", "😢", "❤", "🚀", "✅"];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ReactionCount {
     /// Protocol emoji char (❤ without VS16).
     pub emoji: String,
@@ -481,7 +481,7 @@ impl ReactionCount {
 }
 
 /// How a chat item was removed / hidden (matches SimpleX `itemDeleted` / deleted content).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeletedState {
     /// `meta.itemDeleted` set — content still in DB; official UI shows “marked deleted”.
     Marked,
@@ -490,7 +490,7 @@ pub enum DeletedState {
 }
 
 /// Quoted parent message for a reply bubble.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct MessageQuote {
     pub item_id: Option<i64>,
     pub text: String,
@@ -498,7 +498,7 @@ pub struct MessageQuote {
 }
 
 /// Sender of an incoming group / channel message (`chatDir.groupMember`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct MessageSender {
     pub group_member_id: i64,
     /// Linked direct contact when known (`memberContactId`).
@@ -509,7 +509,7 @@ pub struct MessageSender {
 }
 
 /// Group invitation embedded in a direct-chat item (`rcvGroupInvitation` / `sndGroupInvitation`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct GroupInvitationInfo {
     pub group_id: i64,
     pub group_name: String,
@@ -518,7 +518,7 @@ pub struct GroupInvitationInfo {
     pub status: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct ChatMessage {
     pub item_id: i64,
     pub text: String,

@@ -1562,9 +1562,90 @@ fn message_history<'a>(app: &'a App, d: Density) -> Element<'a, Message> {
         .into();
     }
 
+    let jump_visible = app.show_jump_to_latest();
+    // The bubble column is rebuilt only when something it shows changes
+    // (see `history_key`): scroll-fling ticks, pointer/hover messages, typing
+    // in the composer, chat-list refreshes… reuse the cached widgets.
+    let col = iced::widget::lazy(history_key(app, d), move |_| history_column(app, d));
+    message_history_shell(col, app, d, jump_visible)
+}
+
+/// Fingerprint of everything [`history_column`] reads. When it is unchanged
+/// the cached column is reused; anything that alters what a bubble shows must
+/// be hashed here. Messages hash through their derived `Hash` (every field),
+/// and per-file media state is hashed by the same lookups the bubbles make,
+/// so the key cannot drift from the view.
+fn history_key(app: &App, d: Density) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let f = |h: &mut std::collections::hash_map::DefaultHasher, v: f32| v.to_bits().hash(h);
+
+    // Layout / appearance inputs.
+    for v in [d.body, d.meta, d.title, d.pad, d.pad_tight, app.window_width()] {
+        f(&mut h, v);
+    }
+    app.layout().hash(&mut h);
+    theme::is_light_active().hash(&mut h);
+    app.hover_ok().hash(&mut h);
+    // "Today" / "Yesterday" dividers roll over at midnight.
+    chrono::Local::now().date_naive().hash(&mut h);
+
+    // Open chat (channel header name/avatar, member-header mode).
+    if let Some(chat) = app.selected().and_then(|i| app.chats().get(i)) {
+        chat.id.hash(&mut h);
+        chat.title.hash(&mut h);
+        chat.peer_profile.image.hash(&mut h);
+        chat.is_channel.hash(&mut h);
+    }
+
+    // Selection, focus and reveal state.
+    app.selection_mode().hash(&mut h);
+    app.focus_item().hash(&mut h);
+    let mut picked: Vec<i64> = app.selected_items().iter().copied().collect();
+    picked.sort_unstable();
+    picked.hash(&mut h);
+
+    for msg in app.messages() {
+        msg.hash(&mut h);
+        app.is_deleted_revealed(msg.item_id).hash(&mut h);
+        for i in 0..msg.segments.len() {
+            app.is_secret_revealed(msg.item_id, i).hash(&mut h);
+        }
+        if let Some(sender) = msg.sender.as_ref() {
+            app.member_display_name(sender).hash(&mut h);
+        }
+        if let Some(file) = msg.file.as_ref() {
+            let plain = app.plaintext_path_for(file);
+            plain.hash(&mut h);
+            if let Some(p) = plain.as_ref() {
+                p.is_file().hash(&mut h);
+                app.image_preview_for(p, 0, 0).hash(&mut h);
+                if let Some(peaks) = app.waveform_for(p) {
+                    for v in peaks {
+                        f(&mut h, *v);
+                    }
+                }
+            }
+            if let Some(local) = file.local_path.as_ref() {
+                local.is_file().hash(&mut h);
+                if let Some(peaks) = app.waveform_for(local) {
+                    peaks.len().hash(&mut h);
+                }
+            }
+            app.voice_playback_progress(file.file_id)
+                .map(f32::to_bits)
+                .hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+/// Every message bubble, day divider and event row of the open chat.
+/// Owns all its data (`'static`) so [`iced::widget::lazy`] can cache it.
+fn history_column(app: &App, d: Density) -> Element<'static, Message> {
+    let messages = app.messages();
     let show_members = app.selected_shows_member_headers();
     let show_channel = app.selected_is_channel();
-    let jump_visible = app.show_jump_to_latest();
     let mut col = Column::new().spacing(0).padding(Padding {
         top: 4.0,
         right: d.pad,
@@ -1578,7 +1659,7 @@ fn message_history<'a>(app: &'a App, d: Density) -> Element<'a, Message> {
     let msgs: Vec<&ChatMessage> = messages.iter().collect();
     for (i, msg) in msgs.iter().copied().enumerate() {
         // Day divider whenever the local date changes.
-        let at = msg.created_at.as_deref().and_then(parse_local_ts);
+        let at = divider_time(msg);
         if let Some(at) = at.as_ref() {
             if prev_day != Some(at.date_naive()) {
                 prev_day = Some(at.date_naive());
@@ -1637,6 +1718,16 @@ fn message_history<'a>(app: &'a App, d: Density) -> Element<'a, Message> {
             BubbleRun { joined_prev },
         ));
     }
+    col.into()
+}
+
+/// Scrollable + kinetic fling + jump-to-latest FAB around the (cached) column.
+fn message_history_shell<'a>(
+    col: impl Into<Element<'a, Message>>,
+    app: &'a App,
+    d: Density,
+    jump_visible: bool,
+) -> Element<'a, Message> {
     // Do NOT append spacer when the jump FAB appears — that grows content at
     // Anchor::End and leaves an empty gap under the last bubble while scrolling.
     // The FAB is a Stack overlay; slight overlap with the last row is fine.
@@ -1706,7 +1797,7 @@ fn group_invitation_card<'a>(
     app: &'a App,
     msg: &'a ChatMessage,
     d: Density,
-) -> Element<'a, Message> {
+) -> Element<'static, Message> {
     let Some(inv) = msg.group_invitation.as_ref() else {
         return announcement_row(msg, d);
     };
@@ -1763,7 +1854,7 @@ fn group_invitation_card<'a>(
 }
 
 /// Telegram / SimpleX-style centered protocol line (left group, profile update, …).
-fn announcement_row<'a>(msg: &'a ChatMessage, d: Density) -> Element<'a, Message> {
+fn announcement_row(msg: &ChatMessage, d: Density) -> Element<'static, Message> {
     let time = format_bubble_time(msg.created_at.as_deref()).unwrap_or_default();
     let line = if time.is_empty() {
         msg.text.clone()
@@ -1814,7 +1905,7 @@ fn same_group(a: &ChatMessage, b: &ChatMessage) -> bool {
 }
 
 /// Centered "Today" / "Yesterday" / date pill between days.
-fn day_divider<'a>(at: &chrono::DateTime<chrono::Local>, d: Density) -> Element<'a, Message> {
+fn day_divider(at: &chrono::DateTime<chrono::Local>, d: Density) -> Element<'static, Message> {
     container(
         container(
             txt(format_day_label(at))
@@ -1849,7 +1940,7 @@ fn message_bubble<'a>(
     d: Density,
     show_member_header: bool,
     run: BubbleRun,
-) -> Element<'a, Message> {
+) -> Element<'static, Message> {
     let align = if msg.outgoing {
         Alignment::End
     } else {
@@ -2101,7 +2192,7 @@ fn message_bubble<'a>(
     col.into()
 }
 
-fn deleted_mark_chip<'a>(msg: &'a ChatMessage, d: Density) -> Element<'a, Message> {
+fn deleted_mark_chip(msg: &ChatMessage, d: Density) -> Element<'static, Message> {
     let label = match msg.deleted {
         Some(cursus_core::DeletedState::Content) => "deleted",
         _ => "marked deleted",
@@ -2123,7 +2214,7 @@ fn deleted_mark_chip<'a>(msg: &'a ChatMessage, d: Density) -> Element<'a, Messag
     .into()
 }
 
-fn quote_preview<'a>(quote: &'a cursus_core::MessageQuote, d: Density) -> Element<'a, Message> {
+fn quote_preview(quote: &cursus_core::MessageQuote, d: Density) -> Element<'static, Message> {
     let preview = truncate_graphemes(&cursus_core::humanize_simplex_links(&quote.text), 120);
     let glyph = if cursus_core::is_short_emoji(&quote.text) {
         emoji_glyph(preview.clone())
@@ -2194,7 +2285,7 @@ pub(crate) fn truncate_graphemes(s: &str, max_chars: usize) -> String {
     out
 }
 
-fn reaction_chips<'a>(app: &'a App, msg: &'a ChatMessage, d: Density) -> Element<'a, Message> {
+fn reaction_chips<'a>(app: &'a App, msg: &'a ChatMessage, d: Density) -> Element<'static, Message> {
     let group = app.selected_is_group();
     let mut row = Row::new().spacing(4).align_y(Alignment::Center);
     for r in &msg.reactions {
@@ -2565,12 +2656,12 @@ fn should_keep_timestamp_inline(
 ///
 /// Inline (over / near) when the last line has room including gaps; else stack
 /// underneath.
-fn bubble_content_with_time<'a>(
-    content: Element<'a, Message>,
-    msg: &'a ChatMessage,
+fn bubble_content_with_time(
+    content: Element<'static, Message>,
+    msg: &ChatMessage,
     d: Density,
     content_max: f32,
-) -> Element<'a, Message> {
+) -> Element<'static, Message> {
     let stamp = bubble_time_meta(msg, d);
     let stamp_w = estimate_stamp_width(d, msg.outgoing, msg.edited);
     let inline = should_keep_timestamp_inline(&msg.text, d, msg.outgoing, msg.edited, content_max);
@@ -2687,6 +2778,15 @@ fn format_list_time(iso: Option<&str>) -> Option<String> {
         }
         _ => at.format("%-d %b %Y").to_string(),
     })
+}
+
+/// Local time a message is filed under for day dividers. Placeholder
+/// timestamps (Unix epoch, "1 January 1970") are not a real day → `None`.
+fn divider_time(msg: &ChatMessage) -> Option<chrono::DateTime<chrono::Local>> {
+    msg.created_at
+        .as_deref()
+        .and_then(parse_local_ts)
+        .filter(|t| chrono::Datelike::year(t) >= 2000)
 }
 
 /// Day divider label for the conversation ("Today", "Yesterday", "Monday 3 November").
@@ -2857,7 +2957,7 @@ fn attachment_status_footer<'a>(
     state: FileTransferState,
     d: Density,
     _stretch: bool,
-) -> Element<'a, Message> {
+) -> Element<'static, Message> {
     let line = transfer_status_line(file, state, msg.outgoing);
     let color = if matches!(state, FileTransferState::Failed) {
         theme::t().danger
@@ -2903,13 +3003,13 @@ fn is_image_file(name: &str) -> bool {
     )
 }
 
-fn file_title_row<'a>(
-    app: &'a App,
+fn file_title_row(
+    app: &App,
     msg: &ChatMessage,
     file: &cursus_core::FileInfo,
     state: FileTransferState,
     d: Density,
-) -> Element<'a, Message> {
+) -> Element<'static, Message> {
     let kind_icon = if is_image_file(&file.file_name) {
         icons::image_icon(18.0, theme::t().text_secondary)
     } else if media::is_video_name(&file.file_name) {
@@ -2921,7 +3021,7 @@ fn file_title_row<'a>(
         .size(d.body)
         .color(theme::t().text_primary);
     let open_path = app.plaintext_path_for(file);
-    let name: Element<'a, Message> =
+    let name: Element<'static, Message> =
         if matches!(state, FileTransferState::Complete) {
             if let Some(path) = open_path.filter(|p| p.is_file()) {
                 mouse_area(name)
@@ -2943,13 +3043,13 @@ fn file_title_row<'a>(
     row.into()
 }
 
-fn voice_waveform_row<'a>(
-    app: &'a App,
+fn voice_waveform_row(
+    app: &App,
     msg: &ChatMessage,
     file: &cursus_core::FileInfo,
     state: FileTransferState,
     d: Density,
-) -> Element<'a, Message> {
+) -> Element<'static, Message> {
     let play = 40.0;
     let wave_h = 28.0;
     let receipt_h = 14.0;
@@ -3111,13 +3211,13 @@ fn format_duration(secs: u32) -> String {
     format!("{mins}:{rem:02}")
 }
 
-fn visual_media_preview<'a>(
-    app: &'a App,
+fn visual_media_preview(
+    app: &App,
     msg: &ChatMessage,
     file: &cursus_core::FileInfo,
     state: FileTransferState,
     d: Density,
-) -> Option<Element<'a, Message>> {
+) -> Option<Element<'static, Message>> {
     if !matches!(state, FileTransferState::Complete) {
         return None;
     }
@@ -3136,7 +3236,7 @@ fn visual_media_preview<'a>(
     } else {
         app.image_preview_for(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)
     };
-    let (w, h, face): (f32, f32, Element<'a, Message>) = if let Some((display_path, pw, ph)) =
+    let (w, h, face): (f32, f32, Element<'static, Message>) = if let Some((display_path, pw, ph)) =
         prepared
     {
         let w = pw as f32;
@@ -7409,6 +7509,29 @@ fn create_chat_overlay(app: &App) -> Element<'_, Message> {
 #[cfg(test)]
 mod tests {
     use super::truncate_graphemes;
+
+    #[test]
+    fn epoch_timestamps_get_no_day_divider() {
+        let msg = |ts: &str| cursus_core::ChatMessage {
+            item_id: 1,
+            text: String::new(),
+            segments: Vec::new(),
+            outgoing: false,
+            created_at: Some(ts.into()),
+            delivery: cursus_core::DeliveryStatus::Delivered,
+            file: None,
+            reactions: Vec::new(),
+            quote: None,
+            deleted: None,
+            sender: None,
+            is_announcement: true,
+            group_invitation: None,
+            edited: false,
+            editable: false,
+        };
+        assert!(super::divider_time(&msg("1970-01-01T00:00:00Z")).is_none());
+        assert!(super::divider_time(&msg("2026-11-05T10:00:00Z")).is_some());
+    }
 
     #[test]
     fn truncation_keeps_emoji_sequences_whole() {

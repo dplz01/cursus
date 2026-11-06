@@ -12,7 +12,7 @@ pub const SHORT_EMOJI_MAX: usize = 5;
 /// Under this count → 48px; otherwise medium 36px (official `EmojiItemView`).
 pub const LARGE_EMOJI_MAX: usize = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextStyle {
     Plain,
     Bold,
@@ -29,7 +29,7 @@ pub enum TextStyle {
     Command,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FormatColor {
     Red,
     Green,
@@ -58,7 +58,7 @@ impl FormatColor {
 }
 
 /// What a SimpleX link connects to (official `SimplexLinkType`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SimplexLinkKind {
     Invitation,
     Address,
@@ -218,7 +218,7 @@ pub fn humanize_simplex_links(s: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TextSegment {
     pub text: String,
     pub style: TextStyle,

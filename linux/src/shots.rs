@@ -453,3 +453,91 @@ fn frame_bench() {
         );
     }
 }
+
+/// One headless frame through a persistent UI cache (like the real event
+/// loop), returning the pixels and the cache for the next frame.
+fn frame_pixels(
+    app: &App,
+    size: Size,
+    renderer: &mut iced::Renderer,
+    cache: Cache,
+) -> (Vec<u8>, Cache) {
+    let theme = app.iced_theme();
+    let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), size, cache, renderer);
+    let mut msgs: Vec<Message> = Vec::new();
+    let _ = ui.update(
+        &[iced::Event::Window(iced::window::Event::RedrawRequested(iced::time::Instant::now()))],
+        iced::mouse::Cursor::Unavailable,
+        renderer,
+        &mut iced::advanced::clipboard::Null,
+        &mut msgs,
+    );
+    let base = iced::theme::Base::base(&theme);
+    ui.draw(
+        renderer,
+        &theme,
+        &iced::advanced::renderer::Style { text_color: base.text_color },
+        iced::mouse::Cursor::Unavailable,
+    );
+    let cache = ui.into_cache();
+    let px = iced::Size::new(size.width as u32, size.height as u32);
+    (renderer.screenshot(px, 1.0, base.background_color), cache)
+}
+
+/// The cached message column must never show stale content: after each kind
+/// of change, a frame rendered through the warm cache has to match a frame
+/// rendered from scratch.
+#[test]
+fn history_cache_never_goes_stale() {
+    load_fonts();
+    let new_renderer = || {
+        iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+            iced::Font::with_name("Noto Sans"),
+            iced::Pixels(16.0),
+            Some("tiny-skia"),
+        ))
+        .unwrap()
+    };
+    type Mutation = (&'static str, fn(&mut App));
+    let mutations: &[Mutation] = &[
+        ("delivery tick", |a| a.messages[1].delivery = DeliveryStatus::Sent),
+        ("edited text", |a| {
+            a.messages[2].text = "Edited: make it two coffees".into();
+            a.messages[2].edited = true;
+        }),
+        ("new reaction", |a| {
+            a.messages[4].reactions.push(ReactionCount { emoji: "👍".into(), user_reacted: false, total: 2 })
+        }),
+        ("new message", |a| a.messages.push(msg(50, "Just arrived 🚆", false, "09:30"))),
+        ("selection mode", |a| {
+            a.selection_mode = true;
+            a.selected_items.insert(3);
+        }),
+        ("focus", |a| a.focus_item = Some(4)),
+        ("reveal deleted", |a| {
+            a.messages[0].deleted = Some(cursus_core::DeletedState::Marked);
+            a.revealed_deleted.insert(a.messages[0].item_id);
+        }),
+        ("theme switch", |a| {
+            a.desktop_prefs.theme = ThemePreference::Light;
+        }),
+        ("narrower window", |a| a.width = 900.0),
+        ("epoch timestamp", |a| {
+            let mut m = msg(51, "Group event without a real date", false, "00:00");
+            m.created_at = Some("1970-01-01T00:00:00Z".into());
+            a.messages.insert(0, m);
+        }),
+    ];
+    for (label, mutate) in mutations {
+        let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+        select(&mut app, 0);
+        let mut warm = new_renderer();
+        let (_, cache) = frame_pixels(&app, DESKTOP, &mut warm, Cache::default());
+        let (_, cache) = frame_pixels(&app, DESKTOP, &mut warm, cache);
+        mutate(&mut app);
+        let (cached, _) = frame_pixels(&app, DESKTOP, &mut warm, cache);
+        let mut cold = new_renderer();
+        let (fresh, _) = frame_pixels(&app, DESKTOP, &mut cold, Cache::default());
+        assert!(cached == fresh, "stale history after: {label}");
+    }
+}

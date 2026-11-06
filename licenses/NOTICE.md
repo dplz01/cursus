@@ -10,7 +10,6 @@ Every Cursus package (Flatpak, AppImage) ships this folder.
 | **Noto Sans** (Regular, Bold, Italic) — Copyright 2022 The Noto Project Authors | SIL Open Font License 1.1 — [`OFL-1.1-Noto.txt`](OFL-1.1-Noto.txt) | https://github.com/notofonts/latin-greek-cyrillic |
 | **Noto Color Emoji** (AppImage; Flatpak uses the runtime's copy) — Copyright 2013 Google LLC | SIL Open Font License 1.1 — [`OFL-1.1-Noto.txt`](OFL-1.1-Noto.txt) | https://github.com/googlefonts/noto-emoji |
 | **UI icons** | MIT, CC BY, CC0, Public Domain (per icon) | [`ICONS-ATTRIBUTION.md`](ICONS-ATTRIBUTION.md) |
-| **Cursus logo** | © the Cursus authors | — |
 
 The Flatpak runtime (org.freedesktop.Platform) and the AppImage runtime are
 not part of these packages' own code; they carry their own licenses.

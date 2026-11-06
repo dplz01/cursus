@@ -30,7 +30,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `back.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `paste.svg` | [svgrepo/521781](https://www.svgrepo.com/svg/521781/paste) | Gentlecons Interface Icons / Konstantin Filatov | **CC Attribution** — attribution required | Yes (with credit) |
 | `address-card.svg` | [svgrepo/533175](https://www.svgrepo.com/svg/533175/address-card) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |
-| `repeat-once.svg` | [svgrepo/435404](https://www.svgrepo.com/svg/435404/repeat-once) | Nuiverse Sharp Interface Icons / Nuiverse Design | **BSD License** — keep copyright notice | Yes (with credit) |
+| `repeat-once.svg` | [svgrepo/364795](https://www.svgrepo.com/svg/364795/repeat-once-fill) | Phosphor Filled Icons / phosphor | **MIT License** | Yes |
 | `timer.svg` | [svgrepo/521887](https://www.svgrepo.com/svg/521887/timer) | Gentlecons Interface Icons / Konstantin Filatov | **CC Attribution** — attribution required | Yes (with credit) |
 | `reaction-emoji-add.svg` | [svgrepo/440786](https://www.svgrepo.com/svg/440786/reaction-emoji-add) | Classjob Ff Game Icons / xivapi | **MIT License** | Yes |
 | `user-alt-1.svg` | [svgrepo/532363](https://www.svgrepo.com/svg/532363/user-alt-1) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |
@@ -117,4 +117,4 @@ Suggested credit line (also shown in Settings):
 
 License metadata for `438285`, `524804`, and `524954` was confirmed against the public SVG Repo icon index (HuggingFace mirror `nyuuzyou/svgrepo`). `50042` was not present in that mirror snapshot; it is used under SVG Repo’s default open license terms for icons hosted on the site (commercial inclusion in an application is allowed; redistribution as a competing icon library is not). `533306` license metadata was confirmed on the SVG Repo icon page (Dazzle Line Icons / CC Attribution). `509899` confirmed as Zest Interface Icons under MIT on SVG Repo.
 
-Repeat-once (one-time invite) icon: **Nuiverse Sharp Interface Icons** by Nuiverse Design, BSD License, via [SVG Repo](https://www.svgrepo.com/svg/435404/repeat-once).
+Repeat-once (one-time invite) icon: **Phosphor Filled Icons** by phosphor, MIT License, via [SVG Repo](https://www.svgrepo.com/svg/364795/repeat-once-fill).

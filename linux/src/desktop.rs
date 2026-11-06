@@ -55,11 +55,11 @@ impl ThemePreference {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TextSizePreference {
-    /// Below the default “Small” mid size.
     ExtraSmall,
-    /// Mid option and app default (former “Small” scale).
-    #[default]
     Small,
+    /// Between Small and Large; the app default.
+    #[default]
+    Medium,
     /// Former “Default” / mid-large.
     #[serde(alias = "default")]
     Large,
@@ -73,9 +73,10 @@ impl std::fmt::Display for TextSizePreference {
 }
 
 impl TextSizePreference {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::ExtraSmall,
         Self::Small,
+        Self::Medium,
         Self::Large,
         Self::ExtraLarge,
     ];
@@ -84,6 +85,7 @@ impl TextSizePreference {
         match self {
             Self::ExtraSmall => "Extra small",
             Self::Small => "Small",
+            Self::Medium => "Medium",
             Self::Large => "Large",
             Self::ExtraLarge => "Extra large",
         }
@@ -92,7 +94,8 @@ impl TextSizePreference {
     pub fn cycle(self) -> Self {
         match self {
             Self::ExtraSmall => Self::Small,
-            Self::Small => Self::Large,
+            Self::Small => Self::Medium,
+            Self::Medium => Self::Large,
             Self::Large => Self::ExtraLarge,
             Self::ExtraLarge => Self::ExtraSmall,
         }
@@ -100,11 +103,12 @@ impl TextSizePreference {
 
     /// Multiplier applied to layout density text sizes (title / body / meta).
     ///
-    /// `Small` (default) sits in the middle of the four steps.
+    /// `Medium` (default) sits in the middle of the five steps.
     pub fn scale(self) -> f32 {
         match self {
             Self::ExtraSmall => 0.75,
             Self::Small => 0.875,
+            Self::Medium => 0.96,
             Self::Large => 1.05,
             Self::ExtraLarge => 1.25,
         }
@@ -136,7 +140,7 @@ impl Default for DesktopPrefs {
             tray: true,
             close_to_tray: true,
             theme: ThemePreference::System,
-            text_size: TextSizePreference::Small,
+            text_size: TextSizePreference::Medium,
             auto_accept_address: false,
         }
     }
@@ -300,6 +304,8 @@ mod tests {
         p = p.cycle();
         assert_eq!(p, TextSizePreference::Small);
         p = p.cycle();
+        assert_eq!(p, TextSizePreference::Medium);
+        p = p.cycle();
         assert_eq!(p, TextSizePreference::Large);
         p = p.cycle();
         assert_eq!(p, TextSizePreference::ExtraLarge);
@@ -310,17 +316,20 @@ mod tests {
     #[test]
     fn text_size_scale_ordered() {
         assert!(TextSizePreference::ExtraSmall.scale() < TextSizePreference::Small.scale());
-        assert!(TextSizePreference::Small.scale() < TextSizePreference::Large.scale());
+        assert!(TextSizePreference::Small.scale() < TextSizePreference::Medium.scale());
+        assert!(TextSizePreference::Medium.scale() < TextSizePreference::Large.scale());
         assert!(TextSizePreference::Large.scale() < TextSizePreference::ExtraLarge.scale());
-        // Small is the mid step of four.
-        assert_eq!(TextSizePreference::Small.scale(), 0.875);
+        // Medium renders distinct font sizes from both neighbours.
+        let body = |t: TextSizePreference| (15.0 * t.scale()).round();
+        assert!(body(TextSizePreference::Small) < body(TextSizePreference::Medium));
+        assert!(body(TextSizePreference::Medium) < body(TextSizePreference::Large));
     }
 
     #[test]
     fn prefs_deserialize_without_text_size() {
         let raw = r#"{"notifications":true,"tray":true,"close_to_tray":true,"theme":"system","auto_accept_address":false}"#;
         let prefs: DesktopPrefs = serde_json::from_str(raw).unwrap();
-        assert_eq!(prefs.text_size, TextSizePreference::Small);
+        assert_eq!(prefs.text_size, TextSizePreference::Medium);
     }
 
     #[test]

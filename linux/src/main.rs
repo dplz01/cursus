@@ -17,6 +17,7 @@ mod touch_mouse;
 mod trail_row;
 #[cfg(test)]
 mod shots;
+mod tap;
 mod ui;
 
 use std::cell::RefCell;
@@ -1904,7 +1905,8 @@ impl App {
                 Task::perform(open_local_file(path), Message::FileReceived)
             }
             Message::OpenUrl(url) => {
-                if !self.tap_allowed() {
+                // In multi-select a tap toggles the bubble, not its links.
+                if !self.tap_allowed() || self.selection_mode {
                     return Task::none();
                 }
                 let simplex = cursus_core::SimplexLinkKind::from_uri(&url);
@@ -1912,7 +1914,7 @@ impl App {
                 Task::none()
             }
             Message::OpenSimplexLink { uri, kind } => {
-                if !self.tap_allowed() {
+                if !self.tap_allowed() || self.selection_mode {
                     return Task::none();
                 }
                 self.pending_url = Some(PendingLink {

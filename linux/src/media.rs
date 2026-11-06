@@ -28,16 +28,19 @@ pub fn extract_waveform_peaks(path: &Path, bars: usize) -> Result<Vec<f32>, Stri
 pub fn analyze_audio(path: &Path, bars: usize) -> Result<WaveformInfo, String> {
     let bars = bars.max(8);
     let raw = path.with_extension("peaks.f32");
+    // High-pass strips DC offset / handling rumble: phone mics often sit on a
+    // constant offset that made every bar read as full ("||||||").
     let status = Command::new("ffmpeg")
         .args([
             "-hide_banner",
             "-loglevel",
             "error",
+            "-nostdin",
             "-y",
             "-i",
         ])
         .arg(path)
-        .args(["-ac", "1", "-ar", "8000", "-f", "f32le"])
+        .args(["-af", "highpass=f=80", "-ac", "1", "-ar", "8000", "-f", "f32le"])
         .arg(&raw)
         .status()
         .map_err(|e| format!("ffmpeg waveform: {e}"))?;
@@ -53,26 +56,48 @@ pub fn analyze_audio(path: &Path, bars: usize) -> Result<WaveformInfo, String> {
     let samples: Vec<f32> = bytes
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .map(|v| if v.is_finite() { v } else { 0.0 })
         .collect();
     let duration_secs = samples.len() as f32 / 8000.0;
-    let chunk = (samples.len() / bars).max(1);
-    let mut peaks = Vec::with_capacity(bars);
-    for i in 0..bars {
-        let start = i * chunk;
-        let end = (start + chunk).min(samples.len());
-        let peak = samples[start..end]
-            .iter()
-            .map(|s| s.abs())
-            .fold(0.0_f32, f32::max);
-        peaks.push(peak);
-    }
-    let raw_peak = peaks.iter().copied().fold(0.0_f32, f32::max);
-    let max = raw_peak.max(1e-6);
     Ok(WaveformInfo {
-        peaks: peaks.into_iter().map(|p| (p / max).clamp(0.05, 1.0)).collect(),
+        peaks: waveform_bars(&samples, bars),
         duration_secs,
-        raw_peak,
+        raw_peak: samples.iter().fold(0.0_f32, |m, s| m.max(s.abs())),
     })
+}
+
+/// Loudness bars (0.05–1.0) from mono samples: per-bar RMS with the DC
+/// offset removed, the noise floor (10th percentile) subtracted, and a
+/// gentle curve so speech reads as peaks and pauses as dips.
+pub fn waveform_bars(samples: &[f32], bars: usize) -> Vec<f32> {
+    const MIN_BAR: f32 = 0.05;
+    let bars = bars.max(1);
+    if samples.is_empty() {
+        return vec![MIN_BAR; bars];
+    }
+    let mean = samples.iter().map(|&s| s as f64).sum::<f64>() / samples.len() as f64;
+    let mean = mean as f32;
+    let rms: Vec<f32> = (0..bars)
+        .map(|i| {
+            let start = i * samples.len() / bars;
+            let end = ((i + 1) * samples.len() / bars).max(start + 1).min(samples.len());
+            let chunk = &samples[start.min(samples.len() - 1)..end];
+            let sq = chunk.iter().map(|&s| (s - mean) * (s - mean)).sum::<f32>();
+            (sq / chunk.len() as f32).sqrt()
+        })
+        .collect();
+    let mut sorted = rms.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let floor = sorted[sorted.len() / 10];
+    let max = *sorted.last().unwrap_or(&0.0);
+    let span = max - floor;
+    if span <= 1e-5 {
+        // Flat signal (silence or constant hum): draw a low, even line.
+        return vec![if max > 1e-4 { 0.2 } else { MIN_BAR }; bars];
+    }
+    rms.into_iter()
+        .map(|r| (((r - floor) / span).clamp(0.0, 1.0)).powf(0.7).max(MIN_BAR))
+        .collect()
 }
 
 /// Duration of a captured voice file. Prefers WAV PCM size, then ffprobe.
@@ -713,6 +738,28 @@ mod tests {
         std::fs::write(&path, jpeg_with_orientation(1)).unwrap();
         assert!(upright_copy_for_send(&path, &dir.join("out2")).unwrap().is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn waveform_ignores_dc_offset_and_noise_floor() {
+        // Constant offset + hiss, with two louder "words".
+        let mut samples = Vec::new();
+        for i in 0..8000 {
+            let hiss = ((i * 7919) % 13) as f32 / 13.0 * 0.02 - 0.01;
+            let word = if (2000..3000).contains(&i) || (5000..6500).contains(&i) {
+                0.4 * ((i as f32) * 0.3).sin()
+            } else {
+                0.0
+            };
+            samples.push(0.5 + hiss + word);
+        }
+        let bars = waveform_bars(&samples, 16);
+        let full = bars.iter().filter(|b| **b > 0.9).count();
+        let low = bars.iter().filter(|b| **b < 0.2).count();
+        assert!(full >= 1 && full < 8, "only the words should peak: {bars:?}");
+        assert!(low >= 6, "pauses should dip: {bars:?}");
+        // Flat input → even low line, not maxed.
+        assert!(waveform_bars(&vec![0.7; 800], 8).iter().all(|b| *b <= 0.2));
     }
 
     #[test]

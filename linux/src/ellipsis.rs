@@ -94,10 +94,8 @@ pub fn ellipsize_to_lines(s: &str, max_w: f32, size: f32, lines: usize) -> Strin
             })
             .count()
             .min(ends.len());
-        (0..=upper)
-            .rev()
+        longest_fitting(upper, |n| fits(&candidate(n)))
             .map(candidate)
-            .find(|c| fits(c))
             .unwrap_or_else(|| "…".to_string())
     };
 
@@ -111,6 +109,32 @@ pub fn ellipsize_to_lines(s: &str, max_w: f32, size: f32, lines: usize) -> Strin
     out
 }
 
+/// Extra prefixes probed above the binary-search result. Fit is only locally
+/// non-monotonic (a word jumping lines), so a short downward scan from just
+/// above the bisected boundary finds the same answer as a full scan with
+/// ~log2(n) + WINDOW paragraph layouts instead of up to n (lag on ARM when a
+/// page of uncached chat rows appears).
+const WINDOW: usize = 10;
+
+/// Largest `n` in `0..=upper` with `fits(n)` (approximately — exact whenever
+/// non-monotonic dips are narrower than [`WINDOW`]).
+fn longest_fitting(upper: usize, mut fits: impl FnMut(usize) -> bool) -> Option<usize> {
+    let (mut lo, mut hi) = (0usize, upper);
+    if !fits(0) {
+        return None;
+    }
+    // Invariant: fits(lo) is true; answer in [lo, hi].
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if fits(mid) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let top = (lo + WINDOW).min(upper);
+    (lo + 1..=top).rev().find(|&n| fits(n)).or(Some(lo))
+}
 
 /// Single- or multi-line text that ellipsizes to fit its width.
 pub fn ellipsis_text<'a>(
@@ -275,5 +299,48 @@ mod ellipsize_tests {
         load_fonts();
         let out = ellipsize_to_lines("a\nb\nc", 200.0, 12.0, 2);
         assert!(out.starts_with('a') && out.ends_with('…'), "{out}");
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    /// Old exhaustive scan, for comparison.
+    fn exhaustive(upper: usize, fits: impl Fn(usize) -> bool) -> Option<usize> {
+        (0..=upper).rev().find(|&n| fits(n))
+    }
+
+    #[test]
+    fn search_matches_exhaustive_on_real_layouts() {
+        let samples = [
+            "Sunday: Arco, meet 8:00 at the parking lot near the crag, then lunch at the hut",
+            "https://smp9.simplex.im/i#3iqO73eh1l09QmQfRwMyM2MplnycyJT7/HzD4YSRIOBK_Bvi1gZiXI1BY",
+            "Bob: the invite page looks great now — merging after lunch 🎉🎉 ok?",
+            "a bb ccc dddd eeeee ffffff ggggggg hhhhhhhh iiiiiiiii jjjjjjjjjj kkkkkkkkkkk",
+            "Supercalifragilisticexpialidocious antidisestablishmentarianism words",
+        ];
+        for s in samples {
+            for w in [90.0f32, 140.0, 200.0, 260.0] {
+                for lines in [1usize, 2] {
+                    let size = 13.0;
+                    let line_px = size * LINE_HEIGHT;
+                    let wrapping = preview_wrapping(s);
+                    let ends: Vec<usize> =
+                        s.grapheme_indices(true).map(|(i, g)| i + g.len()).collect();
+                    let cand = |n: usize| {
+                        let head = if n == 0 { "" } else { &s[..ends[n - 1]] };
+                        format!("{}…", head.trim_end())
+                    };
+                    let fits = |n: usize| measured_lines(&cand(n), w, size, line_px, wrapping) <= lines;
+                    let upper = ends.len();
+                    assert_eq!(
+                        longest_fitting(upper, fits),
+                        exhaustive(upper, fits),
+                        "{s:?} w={w} lines={lines}"
+                    );
+                }
+            }
+        }
     }
 }

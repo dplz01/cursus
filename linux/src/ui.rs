@@ -115,7 +115,7 @@ const PAGE_MAX: f32 = 760.0;
 
 /// Scrolling page body: standard insets, centred column capped at [`PAGE_MAX`].
 fn page_scroll<'a>(body: impl Into<Element<'a, Message>>, d: Density) -> Element<'a, Message> {
-    scroll_y(
+    page_scroll_y(
         container(container(body).max_width(PAGE_MAX).width(Length::Fill))
             .width(Length::Fill)
             .center_x(Length::Fill)
@@ -131,6 +131,12 @@ fn page_scroll<'a>(body: impl Into<Element<'a, Message>>, d: Density) -> Element
 fn scroll_y<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     // Default list/settings scroll — kinetic fling on touch (GTK-like).
     kinetic_scroll("page-scroll", content)
+}
+
+/// Scroll for pages full of buttons/toggles: a swipe that starts on a control
+/// still scrolls (touch presses are deferred until they prove to be taps).
+fn page_scroll_y<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    kinetic_scroll("page-scroll", crate::tap::defer_touch(content))
 }
 
 fn kinetic_scroll<'a>(
@@ -2111,12 +2117,16 @@ fn message_text_content(app: &App, msg: &ChatMessage, d: Density) -> Element<'st
             styled_span(seg, d.body, item_id, index, revealed)
         })
         .collect();
-    rich_text(spans)
+    let rich = rich_text(spans)
         .on_link_click(|msg: Message| msg)
         .size(d.body)
         .color(theme::t().text_primary)
-        .wrapping(Wrapping::WordOrGlyph)
-        .into()
+        .wrapping(Wrapping::WordOrGlyph);
+    if msg.segments.iter().any(|s| s.link.is_some()) {
+        crate::tap::tap_links(rich)
+    } else {
+        rich.into()
+    }
 }
 
 fn styled_span(
@@ -3188,13 +3198,13 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 .style(theme::list_row(selected, hover)),
             );
         }
-        return scroll_y(col.padding(Padding::from([0, 8])));
+        return page_scroll_y(col.padding(Padding::from([0, 8])));
     }
     let mut col = Column::new().spacing(PAGE_GAP).width(Length::Fill);
     for section in crate::SettingsSection::ALL {
         col = col.push(settings_section_card(app, section));
     }
-    scroll_y(col.padding(Padding {
+    page_scroll_y(col.padding(Padding {
         top: 0.0,
         right: d.pad,
         bottom: d.pad,
@@ -5069,7 +5079,7 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
             );
         }
     }
-    scroll_y(col)
+    page_scroll_y(col)
 }
 
 fn calls_detail(app: &App) -> Element<'_, Message> {
@@ -5848,7 +5858,7 @@ fn group_members_list<'a>(
         {
             let mid = m.group_member_id;
             let name = if m.is_me {
-                format!("YOU ({})", m.public_name)
+                format!("You ({})", m.public_name)
             } else {
                 m.display_name.clone()
             };
@@ -5872,7 +5882,17 @@ fn group_members_list<'a>(
                 .push(profile_avatar(m.image.as_deref(), &m.public_name, MEMBER_AVATAR))
                 .push(names);
             let mut actions = Row::new().spacing(4).align_y(Alignment::Center);
-            if !m.is_me {
+            if m.is_me {
+                // Own role, read-only, in the same column as the others' role
+                // buttons (admins) or their actions menu (everyone else).
+                actions = actions.push(composer_inert_hit(
+                    icons::role_tool(&m.role, PROFILE_HEADER_ICON, false),
+                    PROFILE_HEADER_ICON,
+                ));
+                if admin {
+                    actions = actions.push(Space::new().width(PROFILE_HEADER_ICON));
+                }
+            } else {
                 if admin {
                     // Role button shows this member's current privilege glyph.
                     actions = actions.push(composer_hit(

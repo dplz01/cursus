@@ -79,12 +79,12 @@ elif [[ -f "$TMP/extract/libsimplex.so" || -f "$TMP/extract/libsimplex.dylib" ]]
   cp -a "$TMP/extract/." "$OUT/"
 else
   # Nested single directory (parentheses required for find -o precedence).
-  inner="$(find "$TMP/extract" -maxdepth 3 \( -name 'libsimplex.so' -o -name 'libsimplex.dylib' \) | head -n1)"
+  inner="$(find "$TMP/extract" -maxdepth 3 \( -name 'libsimplex.so' -o -name 'libsimplex.dylib' \) -print -quit)"
   if [[ -n "$inner" ]]; then
     cp -a "$(dirname "$inner")/." "$OUT/"
   else
     echo "Could not find libsimplex in zip; contents:" >&2
-    find "$TMP/extract" | head -n 50 >&2
+    find "$TMP/extract" | head -n 50 >&2 || true
     exit 1
   fi
 fi
@@ -96,7 +96,7 @@ elif [[ -f "$OUT/libsimplex.dylib" ]]; then
   lib="$OUT/libsimplex.dylib"
 else
   echo "Install incomplete: no libsimplex shared library under $OUT" >&2
-  ls -la "$OUT" | head -n 30 >&2
+  ls -la "$OUT" | head -n 30 >&2 || true
   exit 1
 fi
 
@@ -127,7 +127,9 @@ printf '%s\n' "$SIMPLEX_LIBS_TAG" > "$OUT/INSTALLED_TAG"
 printf '%s\n' "$plat" > "$OUT/INSTALLED_PLAT"
 
 echo "Installed libsimplex into $OUT"
-ls -la "$OUT" | head -n 20
+# No `ls | head` here: with pipefail, head closing the pipe early (168
+# files) fails the script with "Broken pipe" — a summary is enough.
+echo "$(find "$OUT" -maxdepth 1 -name '*.so*' | wc -l) libraries, $(du -sh "$OUT" | cut -f1) total"
 echo
 echo "Pinned SimpleX libs tag: ${SIMPLEX_LIBS_TAG} ($plat)"
-echo "Source correspondence: https://github.com/simplex-chat/simplex-chat (matching this libs release)"
+echo "Source correspondence: see licenses/NOTICE.md (core-7.1.0.17 = simplex-chat 1fd7ed8327d8)"

@@ -1,0 +1,90 @@
+# Flatpak build of Cursus — one package per architecture (x86_64, aarch64)
+# that runs on any Linux distro, glibc or musl (postmarketOS included): the
+# Freedesktop runtime brings its own glibc, so the official glibc libsimplex
+# loads without the musl compat layer.
+#
+# Build + install for the current user:
+#   flatpak run org.flatpak.Builder --user --install --install-deps-from=flathub \
+#     --force-clean build-dir flatpak/chat.cursus.Cursus.yml
+# Run:
+#   flatpak run chat.cursus.Cursus
+#
+# After changing Cargo.lock: ./scripts/flatpak-cargo-sources.py
+id: chat.cursus.Cursus
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: cursus
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Voice messages: pw-record / pw-play (PipeWire) with paplay / parecord fallback.
+  - --socket=pulseaudio
+  - --filesystem=xdg-run/pipewire-0:ro
+  # Desktop notifications and the tray icon (StatusNotifierItem).
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # Tray item names are org.kde.StatusNotifierItem-<pid>-<n>; Flatpak only
+  # accepts wildcards after a dot.
+  - --own-name=org.kde.*
+  # File picker, "Save as", opening files/links, keyring and theme go through
+  # xdg-desktop-portal — no host filesystem access needed.
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/cursus/cargo
+    CARGO_NET_OFFLINE: 'true'
+
+modules:
+  - name: cursus
+    buildsystem: simple
+    build-commands:
+      - cargo --offline build --release --locked -p cursus-linux
+      - install -Dm755 target/release/cursus /app/bin/cursus
+      # Official SimpleX core (+ its libHS*.so, found via $ORIGIN RUNPATH).
+      - install -d /app/lib/cursus
+      - cp -a libsimplex/. /app/lib/cursus/
+      # UI fonts (colour emoji comes from the runtime's Noto Color Emoji).
+      - install -Dm644 -t /app/share/cursus/fonts fonts/*.ttf
+      - install -Dm644 flatpak/chat.cursus.Cursus.desktop /app/share/applications/chat.cursus.Cursus.desktop
+      - install -Dm644 flatpak/chat.cursus.Cursus.metainfo.xml /app/share/metainfo/chat.cursus.Cursus.metainfo.xml
+      - install -Dm644 flatpak/chat.cursus.Cursus.svg /app/share/icons/hicolor/scalable/apps/chat.cursus.Cursus.svg
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - target
+          - third_party
+          - build-dir
+          - .flatpak-builder
+          - linux/assets/fonts
+      - cargo-sources.json
+      - type: archive
+        only-arches: [x86_64]
+        url: https://github.com/simplex-chat/simplex-chat-libs/releases/download/core-7.1.0.17/simplex-chat-libs-linux-x86_64.zip
+        sha256: 77589d2d1ec3cd87f5e41c3dfd6ea1a9cd543e93be50973978754820ea7e74f4
+        dest: libsimplex
+      - type: archive
+        only-arches: [aarch64]
+        url: https://github.com/simplex-chat/simplex-chat-libs/releases/download/core-7.1.0.17/simplex-chat-libs-linux-aarch64.zip
+        sha256: 2876b8c3c083cfd00121c1fa8d0a1a9a6dc7d78f2a3d9e190a8624618c5ac2ca
+        dest: libsimplex
+      - type: file
+        url: https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-2026.11.01/fonts/NotoSans/full/ttf/NotoSans-Regular.ttf
+        sha256: f5f552c8c5edb61fe6efb824baf4d4de47b1a8689ab4925ff43f7bd6a4ebece5
+        dest: fonts
+      - type: file
+        url: https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-2026.11.01/fonts/NotoSans/full/ttf/NotoSans-Bold.ttf
+        sha256: 3a08a47daa00cade516425c15c57615aef2fd418ec9811a7b9f465088f92cc05
+        dest: fonts
+      - type: file
+        url: https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-2026.11.01/fonts/NotoSans/full/ttf/NotoSans-Italic.ttf
+        sha256: 126522ae1bb9cd92120287fc47dfc74ef981e73931d93e52c565fb7e09b2d74a
+        dest: fonts

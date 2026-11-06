@@ -104,8 +104,20 @@ pub fn plaintext_cache_path(encrypted: &Path, key: &str, nonce: &str) -> PathBuf
     temp_dir().join("plain").join(plaintext_cache_name(encrypted, key, nonce))
 }
 
-/// Default location for downloaded/built native libraries inside the repo.
+/// Where `libsimplex` lives. In order: `$CURSUS_LIBS_DIR`; an installed
+/// layout next to the binary (`<prefix>/bin/cursus` → `<prefix>/lib/cursus`,
+/// used by the Flatpak and distro packages); the repo's `third_party/`.
 pub fn default_libs_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("CURSUS_LIBS_DIR").filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    if let Some(installed) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent()?.parent().map(|p| p.join("lib").join("cursus")))
+        .filter(|dir| dir.join(lib_filename()).is_file())
+    {
+        return installed;
+    }
     workspace_root()
         .map(|root| root.join("third_party").join("libsimplex"))
         .unwrap_or_else(|| PathBuf::from("third_party/libsimplex"))

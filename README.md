@@ -72,6 +72,35 @@ cargo install --path linux
 
 The old `--features musl-glibc-compat` flag still builds but does nothing.
 
+### Flatpak (one package per architecture, any distro)
+
+The Flatpak brings its own glibc runtime, so the same package runs on glibc
+distros **and** musl ones like postmarketOS — no compat layer, no on-device
+compile. Build and install for your user (needs `org.flatpak.Builder` from
+Flathub):
+
+```bash
+flatpak install --user flathub org.flatpak.Builder
+flatpak run org.flatpak.Builder --user --install --install-deps-from=flathub \
+  --force-clean build-dir flatpak/chat.cursus.Cursus.yml
+flatpak run chat.cursus.Cursus
+```
+
+On the phone, run the same commands there (aarch64), or export a bundle from
+an aarch64 build and copy it over:
+
+```bash
+flatpak run org.flatpak.Builder --repo=repo --force-clean build-dir flatpak/chat.cursus.Cursus.yml
+flatpak build-bundle repo cursus.flatpak chat.cursus.Cursus
+flatpak install --user cursus.flatpak
+```
+
+The build is offline: crates come from `flatpak/cargo-sources.json`
+(regenerate with `./scripts/flatpak-cargo-sources.py` after `Cargo.lock`
+changes); `libsimplex` and fonts are pinned by sha256 in the manifest.
+Flatpak data lives in `~/.var/app/chat.cursus.Cursus/` — separate from a
+native install's `~/.local/share/cursus`.
+
 Data is stored under `$XDG_DATA_HOME/cursus` (or `~/.local/share/cursus`), separate from the official SimpleX desktop app.
 
 ## Documentation

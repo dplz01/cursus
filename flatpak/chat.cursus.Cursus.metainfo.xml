@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>chat.cursus.Cursus</id>
+  <name>Cursus</name>
+  <summary>Private SimpleX messenger for Linux desktops and phones</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <description>
+    <p>
+      Cursus is a native client for the SimpleX Chat network, built on the
+      official SimpleX core. It adapts to desktop windows and phone screens
+      (touch, on-screen keyboard).
+    </p>
+    <ul>
+      <li>End-to-end encrypted chats, groups and channels without user IDs</li>
+      <li>Encrypted local database and attachments</li>
+      <li>App lock, hidden notification text and IP protection for file downloads</li>
+    </ul>
+  </description>
+  <developer id="io.github.notfatnotfunny">
+    <name>notfatnotfunny</name>
+  </developer>
+  <launchable type="desktop-id">chat.cursus.Cursus.desktop</launchable>
+  <url type="homepage">https://github.com/notfatnotfunny/cursus</url>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+  </content_rating>
+  <recommends>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </recommends>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <releases>
+    <release version="0.1.0" date="2026-11-06"/>
+  </releases>
+</component>

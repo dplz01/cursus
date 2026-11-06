@@ -18,3 +18,9 @@
 # Local bug / layout checklist (not tracked)
 .bugs.txt
 .bug.txt
+
+# Flatpak builds
+build-dir/
+.flatpak-builder/
+repo/
+*.flatpak

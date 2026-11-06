@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Cursus
+GenericName=Private messenger
+Comment=SimpleX Chat client for Linux desktops and phones
+Exec=cursus
+Icon=chat.cursus.Cursus
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=SimpleX;chat;messenger;private;encrypted;
+StartupNotify=true
+StartupWMClass=cursus
+X-Purism-FormFactor=Workstation;Mobile;

@@ -778,11 +778,15 @@ pub fn main() -> iced::Result {
     {
         roots.push(dir.join("assets/fonts"));
         roots.push(dir.join("../assets/fonts"));
+        // Installed layout (Flatpak / distro): <prefix>/share/cursus/fonts.
+        roots.push(dir.join("../share/cursus/fonts"));
     }
     roots.push(PathBuf::from("linux/assets/fonts"));
     roots.push(PathBuf::from("/usr/share/fonts/noto"));
     roots.push(PathBuf::from("/usr/share/fonts/truetype/noto"));
     roots.push(PathBuf::from("/usr/share/fonts/NotoColorEmoji"));
+    // Freedesktop runtime (Flatpak) and some distros.
+    roots.push(PathBuf::from("/usr/share/fonts/noto-emoji"));
     for file in [
         "NotoSans-Regular.ttf",
         "NotoSans-Bold.ttf",
@@ -7814,7 +7818,9 @@ fn main_window_settings() -> iced::window::Settings {
         exit_on_close_request: false,
         // Wayland app id / X11 class — lets users write compositor rules.
         platform_specific: iced::window::settings::PlatformSpecific {
-            application_id: "cursus".into(),
+            // Matches the .desktop file (icon, taskbar): the Flatpak id inside
+            // the sandbox, plain `cursus` for native installs (window rules).
+            application_id: std::env::var("FLATPAK_ID").unwrap_or_else(|_| "cursus".into()),
             ..Default::default()
         },
         ..Default::default()

@@ -73,7 +73,21 @@ pub fn install() {
     }
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        cursus_core::wipe_plaintext_cache();
+        // Into cursus.log too: launched from a launcher / Flatpak, stderr is
+        // lost and a crash would leave no trace.
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("<unnamed>");
+        tracing::error!(
+            thread = name,
+            "panic: {info}\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+        // Only the event-loop thread takes the app down; a panic in a tokio
+        // worker / blocking task is caught there, and wiping the plaintext
+        // cache under the still-running UI would break open media.
+        if name == "main" {
+            cursus_core::wipe_plaintext_cache();
+        }
         previous(info);
     }));
 }

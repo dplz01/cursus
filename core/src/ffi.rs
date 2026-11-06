@@ -5,7 +5,7 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::ptr;
 use std::sync::Once;
 #[cfg(target_env = "musl")]
@@ -68,8 +68,9 @@ impl LibSimplex {
             });
         }
 
-        // Ensure dependent libHS*.so resolve from the same directory.
-        set_library_path(&dir);
+        // Dependent libHS*.so resolve via libsimplex's RUNPATH ($ORIGIN).
+        // (Setting LD_LIBRARY_PATH here would be useless — ld.so reads it only
+        // at process start — and racy: setenv while other threads run is UB.)
 
         #[cfg(target_env = "musl")]
         {
@@ -275,29 +276,6 @@ unsafe fn init_haskell(hs_init: HsInit) {
     let mut argc = (ptrs.len() - 1) as c_int;
     let mut argv = ptrs.as_mut_ptr();
     hs_init(&mut argc, &mut argv);
-}
-
-fn set_library_path(dir: &Path) {
-    #[cfg(unix)]
-    {
-        let key = if cfg!(target_os = "macos") {
-            "DYLD_LIBRARY_PATH"
-        } else {
-            "LD_LIBRARY_PATH"
-        };
-        let dir = dir.display().to_string();
-        match std::env::var_os(key) {
-            Some(existing) => {
-                let mut paths = std::env::split_paths(&existing).collect::<Vec<_>>();
-                paths.insert(0, PathBuf::from(&dir));
-                let joined = std::env::join_paths(paths).ok();
-                if let Some(joined) = joined {
-                    std::env::set_var(key, joined);
-                }
-            }
-            None => std::env::set_var(key, &dir),
-        }
-    }
 }
 
 fn is_musl_host() -> bool {

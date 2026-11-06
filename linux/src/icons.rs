@@ -9,6 +9,16 @@ use iced::{Alignment, Background, Border, Color, ContentFit, Element, Length};
 use crate::theme;
 use crate::Message;
 
+/// Static handle per icon: `from_memory` hashes the SVG bytes for its id,
+/// and `view()` builds these for every visible row on every rebuild.
+macro_rules! svg_handle {
+    ($path:literal) => {{
+        static HANDLE: std::sync::LazyLock<svg::Handle> =
+            std::sync::LazyLock::new(|| svg::Handle::from_memory(include_bytes!($path).as_slice()));
+        HANDLE.clone()
+    }};
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum NavIcon {
     Chats,
@@ -29,7 +39,7 @@ pub fn nav_icon<'a>(kind: NavIcon, active: bool, size: f32) -> Element<'a, Messa
 /// Admin / “Chat with admins” — Instructure UI Line Icons (MIT via SVG Repo).
 pub fn admin_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/admin.svg").as_slice()),
+        svg_handle!("../assets/icons/admin.svg"),
         color,
         size,
     )
@@ -39,7 +49,7 @@ pub fn admin_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Attach / plus glyph (Zest Interface Icons / MIT).
 pub fn plus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/plus.svg").as_slice()),
+        svg_handle!("../assets/icons/plus.svg"),
         color,
         size,
     )
@@ -58,7 +68,7 @@ pub fn centered_hit<'a>(icon: Element<'a, Message>, hit: f32) -> Element<'a, Mes
 /// Expand control (Zest Interface Icons / MIT).
 pub fn chevron_down<'a>(size: f32) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/chevron-down.svg").as_slice()),
+        svg_handle!("../assets/icons/chevron-down.svg"),
         theme::t().text_secondary,
         size,
     )
@@ -67,7 +77,7 @@ pub fn chevron_down<'a>(size: f32) -> Element<'a, Message> {
 /// Single check — sent (Coolicons / CC Attribution).
 pub fn check_sent<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/check.svg").as_slice()),
+        svg_handle!("../assets/icons/check.svg"),
         color,
         size,
     )
@@ -76,7 +86,7 @@ pub fn check_sent<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Double check — delivered/read (Solar Icons / CC Attribution).
 pub fn check_read<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/check-read.svg").as_slice()),
+        svg_handle!("../assets/icons/check-read.svg"),
         color,
         size,
     )
@@ -85,7 +95,7 @@ pub fn check_read<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Download / save glyph (Solar Bold Icons / CC Attribution).
 pub fn download_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/download.svg").as_slice()),
+        svg_handle!("../assets/icons/download.svg"),
         color,
         size,
     )
@@ -94,7 +104,7 @@ pub fn download_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Image / media glyph (Solar Icons / CC Attribution).
 pub fn image_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/image-square.svg").as_slice()),
+        svg_handle!("../assets/icons/image-square.svg"),
         color,
         size,
     )
@@ -108,7 +118,7 @@ pub fn file_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Microphone — Cursus original (CC0).
 pub fn mic_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/mic.svg").as_slice()),
+        svg_handle!("../assets/icons/mic.svg"),
         color,
         size,
     )
@@ -117,7 +127,7 @@ pub fn mic_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Play triangle — Cursus original (CC0).
 pub fn play_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/play.svg").as_slice()),
+        svg_handle!("../assets/icons/play.svg"),
         color,
         size,
     )
@@ -126,7 +136,7 @@ pub fn play_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Stop square — Cursus original (CC0).
 pub fn stop_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/stop.svg").as_slice()),
+        svg_handle!("../assets/icons/stop.svg"),
         color,
         size,
     )
@@ -135,7 +145,7 @@ pub fn stop_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Cancel / close — Interface Line Icons / kreevstudio (CC Attribution via SVG Repo).
 pub fn cancel_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/cancel.svg").as_slice()),
+        svg_handle!("../assets/icons/cancel.svg"),
         color,
         size,
     )
@@ -144,7 +154,7 @@ pub fn cancel_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Trash / marked-deleted — Wave Oval Interface Icons / Arthur Kazais (Public Domain via SVG Repo).
 pub fn trash_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/trash-delete.svg").as_slice()),
+        svg_handle!("../assets/icons/trash-delete.svg"),
         color,
         size,
     )
@@ -153,7 +163,7 @@ pub fn trash_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Copy to clipboard — Solar Linear Icons / Solar Icons (CC Attribution via SVG Repo).
 pub fn copy_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/copy.svg").as_slice()),
+        svg_handle!("../assets/icons/copy.svg"),
         color,
         size,
     )
@@ -162,7 +172,7 @@ pub fn copy_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Edit / pencil — Generica Tiny Interface Icons / Vlad Cristea (CC Attribution via SVG Repo).
 pub fn edit_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/edit-3.svg").as_slice()),
+        svg_handle!("../assets/icons/edit-3.svg"),
         color,
         size,
     )
@@ -171,7 +181,7 @@ pub fn edit_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Reply — Solar Outline Icons / Solar Icons (CC Attribution via SVG Repo).
 pub fn reply_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/reply.svg").as_slice()),
+        svg_handle!("../assets/icons/reply.svg"),
         color,
         size,
     )
@@ -180,7 +190,7 @@ pub fn reply_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Forward — Solar Outline Icons / Solar Icons (CC Attribution via SVG Repo).
 pub fn forward_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/forward.svg").as_slice()),
+        svg_handle!("../assets/icons/forward.svg"),
         color,
         size,
     )
@@ -189,7 +199,7 @@ pub fn forward_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Info circle — Solar Linear Icons / Solar Icons (CC Attribution via SVG Repo).
 pub fn info_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/info-circle.svg").as_slice()),
+        svg_handle!("../assets/icons/info-circle.svg"),
         color,
         size,
     )
@@ -198,9 +208,7 @@ pub fn info_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Select multiple — Coolicons Line Oval Icons / krystonschwarze (CC Attribution via SVG Repo).
 pub fn select_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(
-            include_bytes!("../assets/icons/select-multiple.svg").as_slice(),
-        ),
+        svg_handle!("../assets/icons/select-multiple.svg"),
         color,
         size,
     )
@@ -209,7 +217,7 @@ pub fn select_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Leave / exit session — Gitlab Interface Icons / Gitlab (MIT via SVG Repo).
 pub fn leave_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/session-leave.svg").as_slice()),
+        svg_handle!("../assets/icons/session-leave.svg"),
         color,
         size,
     )
@@ -218,7 +226,7 @@ pub fn leave_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Clear all — Keyicons Interface Icons / Elnodos (CC Attribution via SVG Repo).
 pub fn clear_all_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/clear-all.svg").as_slice()),
+        svg_handle!("../assets/icons/clear-all.svg"),
         color,
         size,
     )
@@ -227,9 +235,7 @@ pub fn clear_all_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Mute notifications — Element Plus Line Interface Icons / element-plus (MIT via SVG Repo).
 pub fn mute_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(
-            include_bytes!("../assets/icons/mute-notification.svg").as_slice(),
-        ),
+        svg_handle!("../assets/icons/mute-notification.svg"),
         color,
         size,
     )
@@ -238,7 +244,7 @@ pub fn mute_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Group preferences / tools — Element Plus Line Interface Icons / element-plus (MIT).
 pub fn preferences_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/preferences.svg").as_slice()),
+        svg_handle!("../assets/icons/preferences.svg"),
         color,
         size,
     )
@@ -247,7 +253,7 @@ pub fn preferences_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Favorite star — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
 pub fn star_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/star.svg").as_slice()),
+        svg_handle!("../assets/icons/star.svg"),
         color,
         size,
     )
@@ -256,7 +262,7 @@ pub fn star_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Disappearing-messages timer — Gentlecons Interface Icons (CC Attribution via SVG Repo).
 pub fn timer_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/timer.svg").as_slice()),
+        svg_handle!("../assets/icons/timer.svg"),
         color,
         size,
     )
@@ -265,7 +271,7 @@ pub fn timer_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Direct messages — Framework7 Line Icons / framework7io (MIT via SVG Repo).
 pub fn paperplane_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/paperplane.svg").as_slice()),
+        svg_handle!("../assets/icons/paperplane.svg"),
         color,
         size,
     )
@@ -275,7 +281,7 @@ pub fn paperplane_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Padlock — Orchid Line Interface Icons (MIT), app lock screen / Lock button.
 pub fn lock_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/lock.svg").as_slice()),
+        svg_handle!("../assets/icons/lock.svg"),
         color,
         size,
     )
@@ -283,7 +289,7 @@ pub fn lock_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 
 pub fn shield_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/shield-check.svg").as_slice()),
+        svg_handle!("../assets/icons/shield-check.svg"),
         color,
         size,
     )
@@ -291,9 +297,7 @@ pub fn shield_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 
 pub fn link_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(
-            include_bytes!("../assets/icons/link-minimalistic-2.svg").as_slice(),
-        ),
+        svg_handle!("../assets/icons/link-minimalistic-2.svg"),
         color,
         size,
     )
@@ -302,7 +306,7 @@ pub fn link_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Recent history — Solar Linear Icons (CC Attribution via SVG Repo).
 pub fn history_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/history.svg").as_slice()),
+        svg_handle!("../assets/icons/history.svg"),
         color,
         size,
     )
@@ -311,7 +315,7 @@ pub fn history_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Review members before join — Iconship Interface Icons / Giovana (CC Attribution via SVG Repo).
 pub fn review_file_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/review-file.svg").as_slice()),
+        svg_handle!("../assets/icons/review-file.svg"),
         color,
         size,
     )
@@ -320,9 +324,7 @@ pub fn review_file_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Message reactions — Classjob Ff Game Icons / xivapi (MIT via SVG Repo).
 pub fn reaction_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(
-            include_bytes!("../assets/icons/reaction-emoji-add.svg").as_slice(),
-        ),
+        svg_handle!("../assets/icons/reaction-emoji-add.svg"),
         color,
         size,
     )
@@ -331,7 +333,7 @@ pub fn reaction_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Peer / contact allow indicator — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
 pub fn user_alt_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/user-alt-1.svg").as_slice()),
+        svg_handle!("../assets/icons/user-alt-1.svg"),
         color,
         size,
     )
@@ -340,7 +342,7 @@ pub fn user_alt_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Phone / calls — Solar Linear Icons (CC BY via SVG Repo); same asset as nav Calls.
 pub fn phone_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/calls.svg").as_slice()),
+        svg_handle!("../assets/icons/calls.svg"),
         color,
         size,
     )
@@ -349,7 +351,7 @@ pub fn phone_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Edit / set profile picture — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
 pub fn image_pen_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/image-pen.svg").as_slice()),
+        svg_handle!("../assets/icons/image-pen.svg"),
         color,
         size,
     )
@@ -383,7 +385,7 @@ pub fn avatar_initial<'a>(label: &str, size: f32) -> Element<'a, Message> {
 /// Default group avatar disk — Jtb Variety Oval Icons / jtblabs (MIT via SVG Repo).
 pub fn group_avatar_disk<'a>(size: f32) -> Element<'a, Message> {
     avatar_icon_disk(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/user-group.svg").as_slice()),
+        svg_handle!("../assets/icons/user-group.svg"),
         size,
         theme::t().text_secondary,
     )
@@ -392,7 +394,7 @@ pub fn group_avatar_disk<'a>(size: f32) -> Element<'a, Message> {
 /// Default contact avatar disk — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
 pub fn contact_avatar_disk<'a>(size: f32) -> Element<'a, Message> {
     avatar_icon_disk(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/user-alt-1.svg").as_slice()),
+        svg_handle!("../assets/icons/user-alt-1.svg"),
         size,
         theme::t().text_secondary,
     )
@@ -401,7 +403,7 @@ pub fn contact_avatar_disk<'a>(size: f32) -> Element<'a, Message> {
 /// Default channel avatar disk — CFPB Design System (Public Domain via SVG Repo).
 pub fn channel_avatar_disk<'a>(size: f32) -> Element<'a, Message> {
     avatar_icon_disk(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/channels.svg").as_slice()),
+        svg_handle!("../assets/icons/channels.svg"),
         size,
         theme::t().text_secondary,
     )
@@ -434,7 +436,7 @@ pub fn avatar_icon_disk<'a>(
 /// Group / people — Jtb Variety Oval Icons / jtblabs (MIT via SVG Repo).
 pub fn user_group_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/user-group.svg").as_slice()),
+        svg_handle!("../assets/icons/user-group.svg"),
         color,
         size,
     )
@@ -443,22 +445,19 @@ pub fn user_group_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Contact request — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
 pub fn user_question_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(
-            include_bytes!("../assets/icons/user-question-alt-1.svg").as_slice(),
-        ),
+        svg_handle!("../assets/icons/user-question-alt-1.svg"),
         color,
         size,
     )
 }
 
 fn handle_for(kind: NavIcon) -> svg::Handle {
-    let bytes: &'static [u8] = match kind {
-        NavIcon::Chats => include_bytes!("../assets/icons/chats.svg"),
-        NavIcon::Channels => include_bytes!("../assets/icons/channels.svg"),
-        NavIcon::Calls => include_bytes!("../assets/icons/calls.svg"),
-        NavIcon::Settings => include_bytes!("../assets/icons/settings.svg"),
-    };
-    svg::Handle::from_memory(bytes)
+    match kind {
+        NavIcon::Chats => svg_handle!("../assets/icons/chats.svg"),
+        NavIcon::Channels => svg_handle!("../assets/icons/channels.svg"),
+        NavIcon::Calls => svg_handle!("../assets/icons/calls.svg"),
+        NavIcon::Settings => svg_handle!("../assets/icons/settings.svg"),
+    }
 }
 
 fn tinted<'a>(handle: svg::Handle, color: Color, size: f32) -> Element<'a, Message> {
@@ -532,7 +531,7 @@ pub fn profile_tool_icon<'a>(
 
 pub fn plus_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     composer_tool_icon(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/plus.svg").as_slice()),
+        svg_handle!("../assets/icons/plus.svg"),
         hit,
         theme::t().text_secondary,
         theme::t().text_primary,
@@ -542,7 +541,7 @@ pub fn plus_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
 
 pub fn mic_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     composer_tool_icon(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/mic.svg").as_slice()),
+        svg_handle!("../assets/icons/mic.svg"),
         hit,
         theme::t().text_secondary,
         theme::t().text_primary,
@@ -553,7 +552,7 @@ pub fn mic_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
 /// Header chrome tools — same optical size / stroke as the main-page settings gear.
 pub fn back_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     profile_tool_icon(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/back.svg").as_slice()),
+        svg_handle!("../assets/icons/back.svg"),
         hit,
         theme::t().text_secondary,
         theme::t().text_primary,
@@ -563,7 +562,7 @@ pub fn back_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
 
 pub fn phone_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     profile_tool_icon(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/calls.svg").as_slice()),
+        svg_handle!("../assets/icons/calls.svg"),
         hit,
         theme::t().text_secondary,
         theme::t().text_primary,
@@ -578,7 +577,7 @@ pub fn star_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mess
         theme::t().text_secondary
     };
     profile_tool_icon(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/star.svg").as_slice()),
+        svg_handle!("../assets/icons/star.svg"),
         hit,
         idle,
         theme::t().text_primary,
@@ -593,7 +592,7 @@ pub fn mute_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mess
         theme::t().text_secondary
     };
     profile_tool_icon(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/mute-notification.svg").as_slice()),
+        svg_handle!("../assets/icons/mute-notification.svg"),
         hit,
         idle,
         theme::t().text_primary,
@@ -603,7 +602,7 @@ pub fn mute_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mess
 
 pub fn settings_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     profile_tool_icon(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/settings.svg").as_slice()),
+        svg_handle!("../assets/icons/settings.svg"),
         hit,
         theme::t().text_secondary,
         theme::t().text_primary,
@@ -618,7 +617,7 @@ pub fn admin_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mes
         theme::t().text_secondary
     };
     profile_tool_icon(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/admin.svg").as_slice()),
+        svg_handle!("../assets/icons/admin.svg"),
         hit,
         idle,
         theme::t().text_primary,
@@ -628,7 +627,7 @@ pub fn admin_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mes
 
 pub fn user_member_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/user-member.svg").as_slice()),
+        svg_handle!("../assets/icons/user-member.svg"),
         color,
         size,
     )
@@ -636,15 +635,15 @@ pub fn user_member_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 
 /// Role-button glyph matching the member's current privilege.
 pub fn role_tool<'a>(role: &str, hit: f32, hover_ok: bool) -> Element<'a, Message> {
-    let bytes: &'static [u8] = match role.to_ascii_lowercase().as_str() {
-        "observer" => include_bytes!("../assets/icons/eye-observer.svg"),
-        "moderator" => include_bytes!("../assets/icons/shield-check.svg"),
-        "admin" => include_bytes!("../assets/icons/admin-role.svg"),
-        "owner" => include_bytes!("../assets/icons/owner.svg"),
-        _ => include_bytes!("../assets/icons/user-member.svg"),
+    let handle = match role.to_ascii_lowercase().as_str() {
+        "observer" => svg_handle!("../assets/icons/eye-observer.svg"),
+        "moderator" => svg_handle!("../assets/icons/shield-check.svg"),
+        "admin" => svg_handle!("../assets/icons/admin-role.svg"),
+        "owner" => svg_handle!("../assets/icons/owner.svg"),
+        _ => svg_handle!("../assets/icons/user-member.svg"),
     };
     profile_tool_icon(
-        svg::Handle::from_memory(bytes),
+        handle,
         hit,
         theme::t().text_secondary,
         theme::t().text_primary,
@@ -654,9 +653,7 @@ pub fn role_tool<'a>(role: &str, hit: f32, hover_ok: bool) -> Element<'a, Messag
 
 pub fn actions_menu_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     profile_tool_icon(
-        svg::Handle::from_memory(
-            include_bytes!("../assets/icons/actions-new-window.svg").as_slice(),
-        ),
+        svg_handle!("../assets/icons/actions-new-window.svg"),
         hit,
         theme::t().text_secondary,
         theme::t().text_primary,
@@ -666,7 +663,7 @@ pub fn actions_menu_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
 
 pub fn user_plus_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     profile_tool_icon(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/user-plus-alt-1.svg").as_slice()),
+        svg_handle!("../assets/icons/user-plus-alt-1.svg"),
         hit,
         theme::t().text_secondary,
         theme::t().text_primary,
@@ -676,9 +673,7 @@ pub fn user_plus_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
 
 pub fn pending_status_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(
-            include_bytes!("../assets/icons/system-pending-line.svg").as_slice(),
-        ),
+        svg_handle!("../assets/icons/system-pending-line.svg"),
         color,
         size,
     )
@@ -686,7 +681,7 @@ pub fn pending_status_icon<'a>(size: f32, color: Color) -> Element<'a, Message> 
 
 pub fn observer_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/eye-observer.svg").as_slice()),
+        svg_handle!("../assets/icons/eye-observer.svg"),
         color,
         size,
     )
@@ -698,7 +693,7 @@ pub fn member_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 
 pub fn moderator_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/shield-check.svg").as_slice()),
+        svg_handle!("../assets/icons/shield-check.svg"),
         color,
         size,
     )
@@ -706,7 +701,7 @@ pub fn moderator_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> 
 
 pub fn admin_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/admin-role.svg").as_slice()),
+        svg_handle!("../assets/icons/admin-role.svg"),
         color,
         size,
     )
@@ -714,7 +709,7 @@ pub fn admin_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 
 pub fn owner_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/owner.svg").as_slice()),
+        svg_handle!("../assets/icons/owner.svg"),
         color,
         size,
     )
@@ -732,9 +727,7 @@ pub fn role_icon<'a>(role: &str, size: f32, color: Color) -> Element<'a, Message
 
 pub fn block_prohibited_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(
-            include_bytes!("../assets/icons/block-prohibited.svg").as_slice(),
-        ),
+        svg_handle!("../assets/icons/block-prohibited.svg"),
         color,
         size,
     )
@@ -742,7 +735,7 @@ pub fn block_prohibited_icon<'a>(size: f32, color: Color) -> Element<'a, Message
 
 pub fn remove_profile_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/remove-profile.svg").as_slice()),
+        svg_handle!("../assets/icons/remove-profile.svg"),
         color,
         size,
     )
@@ -750,7 +743,7 @@ pub fn remove_profile_icon<'a>(size: f32, color: Color) -> Element<'a, Message> 
 
 pub fn send_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Message> {
     let handle =
-        svg::Handle::from_memory(include_bytes!("../assets/icons/send.svg").as_slice());
+        svg_handle!("../assets/icons/send.svg");
     if active {
         // Solid accent button — fixed on-accent glyph, no hover swap needed.
         composer_tool_icon(
@@ -774,7 +767,7 @@ pub fn send_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mess
 /// Paste-from-clipboard — Gentlecons (Konstantin Filatov, CC BY), same chrome as other icon-only tools.
 pub fn paste_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     profile_tool_icon(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/paste.svg").as_slice()),
+        svg_handle!("../assets/icons/paste.svg"),
         hit,
         theme::t().text_secondary,
         theme::t().text_primary,
@@ -784,7 +777,7 @@ pub fn paste_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
 
 pub fn user_plus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/user-plus-alt-1.svg").as_slice()),
+        svg_handle!("../assets/icons/user-plus-alt-1.svg"),
         color,
         size,
     )
@@ -792,9 +785,7 @@ pub fn user_plus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 
 /// Chevron pointing right (navigation rows) — chevron-down rotated −90°.
 pub fn chevron_right<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    let icon: Svg<'a, iced::Theme> = svg(svg::Handle::from_memory(
-        include_bytes!("../assets/icons/chevron-down.svg").as_slice(),
-    ))
+    let icon: Svg<'a, iced::Theme> = svg(svg_handle!("../assets/icons/chevron-down.svg"))
     .width(Length::Fixed(size))
     .height(Length::Fixed(size))
     .rotation(iced::Radians(-std::f32::consts::FRAC_PI_2))
@@ -810,7 +801,7 @@ pub fn chevron_right<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// Plain tinted gear (no hover states) for icon discs.
 pub fn settings_icon_plain<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/settings.svg").as_slice()),
+        svg_handle!("../assets/icons/settings.svg"),
         color,
         size,
     )
@@ -819,7 +810,7 @@ pub fn settings_icon_plain<'a>(size: f32, color: Color) -> Element<'a, Message> 
 /// “My address” — Dazzle Line Icons address-card (CC BY).
 pub fn address_card_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/address-card.svg").as_slice()),
+        svg_handle!("../assets/icons/address-card.svg"),
         color,
         size,
     )
@@ -828,7 +819,7 @@ pub fn address_card_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 /// “One-time invite” — Phosphor repeat-once-fill (MIT).
 pub fn repeat_once_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/repeat-once.svg").as_slice()),
+        svg_handle!("../assets/icons/repeat-once.svg"),
         color,
         size,
     )

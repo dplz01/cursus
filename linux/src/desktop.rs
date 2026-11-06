@@ -322,9 +322,11 @@ pub struct AppTray {
 impl AppTray {
     pub fn try_new() -> Option<Self> {
         let menu = Menu::new();
-        let show = MenuItem::new("Show Cursus", true, None);
-        let hide = MenuItem::new("Hide", true, None);
-        let quit = MenuItem::new("Quit", true, None);
+        // Fixed ids: the menu event handler is installed once per process and
+        // must still match after the tray is recreated.
+        let show = MenuItem::with_id("cursus-show", "Show Cursus", true, None);
+        let hide = MenuItem::with_id("cursus-hide", "Hide", true, None);
+        let quit = MenuItem::with_id("cursus-quit", "Quit", true, None);
         let show_id = show.id().clone();
         let hide_id = hide.id().clone();
         let quit_id = quit.id().clone();

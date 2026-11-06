@@ -792,6 +792,8 @@ pub fn main() -> iced::Result {
     // musl builds: re-exec once with the glibc compat shim in LD_PRELOAD.
     #[cfg(target_env = "musl")]
     cursus_core::ensure_ld_preload_reexec();
+    // Before logging/iced/tokio spawn threads (setenv is not thread-safe).
+    cursus_core::init_process_env();
 
     init_file_logging();
     // AppImage / cargo installs: make sure Cursus shows up in the launcher.
@@ -1328,6 +1330,9 @@ struct App {
     voice_playback: Option<VoicePlayback>,
     /// Cached waveform peaks keyed by absolute path.
     waveforms: std::collections::HashMap<PathBuf, Vec<f32>>,
+    /// Waveform extractions in flight (one ffmpeg/decoder run per file).
+    waveforms_pending: HashSet<PathBuf>,
+    waveforms_failed: HashSet<PathBuf>,
     /// Cached rounded still-image previews (UI thread must not decode).
     image_previews: std::collections::HashMap<PathBuf, (PathBuf, u32, u32)>,
     image_previews_pending: HashSet<PathBuf>,
@@ -1553,6 +1558,8 @@ impl App {
                 voice_draft: None,
                 voice_playback: None,
                 waveforms: std::collections::HashMap::new(),
+                waveforms_pending: HashSet::new(),
+                waveforms_failed: HashSet::new(),
                 image_previews: HashMap::new(),
                 image_previews_pending: HashSet::new(),
                 image_previews_failed: HashSet::new(),
@@ -5174,11 +5181,16 @@ impl App {
                 Task::none()
             }
             Message::WaveformReady { path, peaks } => {
+                self.waveforms_pending.remove(&path);
                 match peaks {
                     Ok(peaks) => {
                         self.waveforms.insert(path, peaks);
                     }
-                    Err(err) => tracing::warn!(%err, path = %path.display(), "waveform"),
+                    Err(err) => {
+                        tracing::warn!(%err, path = %path.display(), "waveform");
+                        // No endless retries of a file the decoder can't read.
+                        self.waveforms_failed.insert(path);
+                    }
                 }
                 Task::none()
             }
@@ -6490,10 +6502,14 @@ impl App {
         }
         // Newest media first, limited parallelism — decrypting every CryptoFile
         // in a 100-message history blocked the UI when opening a chat.
+        // The cap counts jobs already in flight: every completion and chat
+        // event calls this again, and a per-call cap stacked dozens of
+        // concurrent decrypts on phones.
         const MAX_DECRYPTS: usize = 8;
+        let budget = MAX_DECRYPTS.saturating_sub(self.decrypts_pending.len());
         let mut jobs = Vec::new();
         for msg in self.messages.iter().rev() {
-            if jobs.len() >= MAX_DECRYPTS {
+            if jobs.len() >= budget {
                 break;
             }
             let Some(file) = msg.file.as_ref() else {
@@ -6678,25 +6694,20 @@ impl App {
         }
     }
 
-    fn load_waveform(&self, path: PathBuf) -> Task<Message> {
+    fn load_waveform(&mut self, path: PathBuf) -> Task<Message> {
+        if self.waveforms_failed.contains(&path) || !self.waveforms_pending.insert(path.clone()) {
+            return Task::none();
+        }
         Task::perform(
             async move {
+                let work = path.clone();
                 let peaks = tokio::task::spawn_blocking(move || {
-                    let path2 = path.clone();
-                    (
-                        path2,
-                        media::extract_waveform_peaks(&path, media::WAVEFORM_BARS),
-                    )
+                    media::extract_waveform_peaks(&work, media::WAVEFORM_BARS)
                 })
                 .await
-                .map_err(|e| e.to_string());
-                match peaks {
-                    Ok((path, peaks)) => Message::WaveformReady { path, peaks },
-                    Err(e) => Message::WaveformReady {
-                        path: PathBuf::new(),
-                        peaks: Err(e),
-                    },
-                }
+                .map_err(|e| e.to_string())
+                .and_then(|r| r);
+                Message::WaveformReady { path, peaks }
             },
             |m| m,
         )
@@ -6740,10 +6751,17 @@ impl App {
         const PREVIEW_MAX_W: u32 = 220;
         const PREVIEW_MAX_H: u32 = 280;
         const RADIUS: f32 = 12.0;
+        // In-flight budget (completions call this again to refill).
+        let budget = MAX.saturating_sub(self.image_previews_pending.len());
+        if budget == 0 {
+            return Task::none();
+        }
         // Snapshot paths first — avoids cloning ChatMessage rows and borrow fights.
+        // Only images still lacking a preview count, so older images get theirs
+        // once the newest are done.
         let mut candidates = Vec::new();
         for msg in self.messages.iter().rev() {
-            if candidates.len() >= MAX * 2 {
+            if candidates.len() >= budget * 2 {
                 break;
             }
             let Some(file) = msg.file.as_ref() else {
@@ -6765,11 +6783,17 @@ impl App {
             let Some(path) = self.plaintext_path_for(file) else {
                 continue;
             };
+            if self.image_previews.contains_key(&path)
+                || self.image_previews_pending.contains(&path)
+                || self.image_previews_failed.contains(&path)
+            {
+                continue;
+            }
             candidates.push(path);
         }
         let mut tasks = Vec::new();
         for path in candidates {
-            if tasks.len() >= MAX {
+            if tasks.len() >= budget {
                 break;
             }
             if !path.is_file() {
@@ -6779,12 +6803,6 @@ impl App {
                 media::cached_rounded_fitted_preview(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)
             {
                 self.image_previews.insert(path, cached);
-                continue;
-            }
-            if self.image_previews.contains_key(&path)
-                || self.image_previews_pending.contains(&path)
-                || self.image_previews_failed.contains(&path)
-            {
                 continue;
             }
             self.image_previews_pending.insert(path.clone());
@@ -6811,12 +6829,13 @@ impl App {
         Task::batch(tasks)
     }
 
-    fn enqueue_missing_waveforms(&self) -> Task<Message> {
+    fn enqueue_missing_waveforms(&mut self) -> Task<Message> {
         // Cap like video thumbs — waveform extract is also spawn_blocking/ffmpeg.
         const MAX_WAVES: usize = 6;
+        let budget = MAX_WAVES.saturating_sub(self.waveforms_pending.len());
         let mut paths = Vec::new();
         for msg in self.messages.iter().rev() {
-            if paths.len() >= MAX_WAVES {
+            if paths.len() >= budget {
                 break;
             }
             let Some(file) = msg.file.as_ref() else {
@@ -6828,7 +6847,13 @@ impl App {
             let Some(path) = self.plaintext_path_for(file) else {
                 continue;
             };
-            if !path.is_file() || self.waveforms.contains_key(&path) {
+            if self.waveforms.contains_key(&path)
+                || self.waveforms_pending.contains(&path)
+                || self.waveforms_failed.contains(&path)
+            {
+                continue;
+            }
+            if !path.is_file() {
                 continue;
             }
             paths.push(path);
@@ -7008,6 +7033,8 @@ impl App {
         self.image_previews_pending.clear();
         self.image_previews_failed.clear();
         self.waveforms.clear();
+        self.waveforms_pending.clear();
+        self.waveforms_failed.clear();
         self.blurred_previews.clear();
         self.blur_pending.clear();
         self.revealed_media.clear();
@@ -8060,35 +8087,58 @@ fn core_event_stream(
     })
 }
 
-/// Poll tray/menu channels; only emit when there is work (avoids a 5 Hz full UI rebuild).
+/// Where the tray/menu event handlers forward to. The handlers can be set
+/// only once per process (tray-icon/muda use a `OnceCell`), so they read the
+/// current sender from here and a restarted stream just swaps it.
+static TRAY_EVENTS: Mutex<Option<tokio::sync::mpsc::UnboundedSender<desktop::TrayAction>>> =
+    Mutex::new(None);
+
+fn forward_tray_action(action: desktop::TrayAction) {
+    if let Ok(guard) = TRAY_EVENTS.lock() {
+        if let Some(tx) = guard.as_ref() {
+            let _ = tx.send(action);
+        }
+    }
+}
+
+/// Tray/menu clicks, pushed by tray-icon's handlers (no polling: a 5 Hz
+/// wake-up kept phones out of deep idle).
 fn tray_action_stream(
     ids: &(tray_icon::menu::MenuId, tray_icon::menu::MenuId, tray_icon::menu::MenuId),
 ) -> impl stream::Stream<Item = Message> + Send + 'static {
     let (show_id, hide_id, quit_id) = ids.clone();
     iced::stream::channel(8, move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            let mut actions = Vec::new();
-            while let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        if let Ok(mut guard) = TRAY_EVENTS.lock() {
+            *guard = Some(tx);
+        }
+        static HANDLERS: std::sync::Once = std::sync::Once::new();
+        HANDLERS.call_once(move || {
+            tray_icon::TrayIconEvent::set_event_handler(Some(|event| {
                 if matches!(
                     event,
-                    tray_icon::TrayIconEvent::DoubleClick { .. }
-                        | tray_icon::TrayIconEvent::Click { .. }
+                    tray_icon::TrayIconEvent::DoubleClick { .. } | tray_icon::TrayIconEvent::Click { .. }
                 ) {
-                    actions.push(desktop::TrayAction::Show);
+                    forward_tray_action(desktop::TrayAction::Show);
                 }
-            }
-            while let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
-                if event.id == show_id {
-                    actions.push(desktop::TrayAction::Show);
+            }));
+            tray_icon::menu::MenuEvent::set_event_handler(Some(move |event: tray_icon::menu::MenuEvent| {
+                let action = if event.id == show_id {
+                    desktop::TrayAction::Show
                 } else if event.id == hide_id {
-                    actions.push(desktop::TrayAction::Hide);
+                    desktop::TrayAction::Hide
                 } else if event.id == quit_id {
-                    actions.push(desktop::TrayAction::Quit);
-                }
-            }
-            if actions.is_empty() {
-                continue;
+                    desktop::TrayAction::Quit
+                } else {
+                    return;
+                };
+                forward_tray_action(action);
+            }));
+        });
+        while let Some(first) = rx.recv().await {
+            let mut actions = vec![first];
+            while let Ok(more) = rx.try_recv() {
+                actions.push(more);
             }
             if output.send(Message::TrayActions(actions)).await.is_err() {
                 break;
@@ -8102,7 +8152,21 @@ async fn connect_session(
     req: ConnectRequest,
 ) -> Result<String, String> {
     const UNLOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+    // A timed-out open keeps running on its blocking thread; a retry must not
+    // open a second controller on the same SQLCipher database meanwhile.
+    static OPENING: AtomicBool = AtomicBool::new(false);
+    struct OpeningGuard;
+    impl Drop for OpeningGuard {
+        fn drop(&mut self) {
+            OPENING.store(false, Ordering::Release);
+        }
+    }
+    if OPENING.swap(true, Ordering::AcqRel) {
+        return Err("The previous unlock is still running — wait a moment and try again.".into());
+    }
+    let guard = OpeningGuard;
     let work = tokio::task::spawn_blocking(move || {
+        let _guard = guard;
         tracing::info!("unlock: Session::open");
         let cfg = SessionConfig {
             db_key: req.password.0.clone(),
@@ -9513,6 +9577,13 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
         }
         if alive && (grew || !recipe.needs_growth) {
             tracing::info!(backend = recipe.label, "voice capture started");
+            // Keep draining stderr: once its 64 KB pipe fills (xrun warnings
+            // on a busy phone) the recorder would block and the take stall.
+            if let Some(mut err) = child.stderr.take() {
+                let _ = std::thread::Builder::new()
+                    .name("rec-stderr".into())
+                    .spawn(move || std::io::copy(&mut err, &mut std::io::sink()));
+            }
             return Ok(VoiceRec {
                 path: wav,
                 child,

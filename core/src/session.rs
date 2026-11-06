@@ -70,20 +70,17 @@ pub struct Session {
     encrypt_local_files: std::sync::atomic::AtomicBool,
 }
 
-/// Opaque chat controller pointer. Official clients use it concurrently from
-/// a command thread and a receive thread.
-#[derive(Copy, Clone)]
-struct CtrlHandle(*mut std::ffi::c_void);
-unsafe impl Send for CtrlHandle {}
-unsafe impl Sync for CtrlHandle {}
-
 // Session moves / shares between the UI runtime and blocking tasks after connect.
+// The chat controller is used concurrently from command and receive threads,
+// as in the official clients.
 unsafe impl Send for Session {}
 unsafe impl Sync for Session {}
 
 struct ReceiveWorker {
-    lib: Arc<LibSimplex>,
-    ctrl: CtrlHandle,
+    /// Owning the session keeps `Drop` (→ `chat_close_store`) from running
+    /// while this thread is still inside `chat_recv_msg_wait`: the store is
+    /// closed only after the loop has exited.
+    session: Arc<Session>,
     tx: mpsc::UnboundedSender<Event>,
 }
 
@@ -96,7 +93,7 @@ impl ReceiveWorker {
             if self.tx.is_closed() {
                 break;
             }
-            match self.lib.recv_msg_wait(self.ctrl.0, 1_000_000) {
+            match self.session.lib.recv_msg_wait(self.session.ctrl, 1_000_000) {
                 Ok(None) => continue,
                 Ok(Some(raw)) => match serde_json::from_str::<ApiEnvelope>(&raw) {
                     Ok(env) => match env.into_result() {
@@ -147,15 +144,7 @@ impl Session {
         }
         ensure_private_dir(&tmp)?;
         ensure_private_dir(&tmp.join("plain"))?;
-        // Agent XFTP decrypts under getTemporaryDirectory(); pin TMPDIR so the
-        // subsequent rename into files_dir stays on one filesystem (see temp_dir
-        // + docs/architecture.md).
-        // SAFETY: single-threaded init before libsimplex / agent threads start.
-        unsafe {
-            std::env::set_var("TMPDIR", &tmp);
-            std::env::set_var("TMP", &tmp);
-            std::env::set_var("TEMP", &tmp);
-        }
+        // TMPDIR was pinned to `tmp` by `init_process_env` at startup.
         if let Some(parent) = config.db_prefix.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -992,8 +981,7 @@ Create a new channel — private-group style links won’t join."
     pub fn spawn_receiver(self: &Arc<Self>) -> mpsc::UnboundedReceiver<Event> {
         let (tx, rx) = mpsc::unbounded_channel();
         let worker = ReceiveWorker {
-            lib: Arc::clone(&self.lib),
-            ctrl: CtrlHandle(self.ctrl),
+            session: Arc::clone(self),
             tx,
         };
         tokio::task::spawn_blocking(move || worker.run());

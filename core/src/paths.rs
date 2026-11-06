@@ -28,6 +28,24 @@ pub fn temp_dir() -> PathBuf {
     data_dir().join("tmp")
 }
 
+/// Process-wide environment for libsimplex. Call first thing in `main`,
+/// **before any thread exists**: `setenv` racing a `getenv` on another thread
+/// (tokio, winit, tray, the Haskell RTS) is undefined behaviour and crashes
+/// sporadically inside libc.
+///
+/// The agent decrypts XFTP downloads under getTemporaryDirectory(); pinning
+/// TMPDIR keeps the following rename into files_dir on one filesystem (see
+/// docs/architecture.md).
+pub fn init_process_env() {
+    let tmp = temp_dir();
+    // SAFETY: documented precondition — still single-threaded.
+    unsafe {
+        std::env::set_var("TMPDIR", &tmp);
+        std::env::set_var("TMP", &tmp);
+        std::env::set_var("TEMP", &tmp);
+    }
+}
+
 /// Resolve a core `fileSource.filePath` (absolute or files-folder-relative).
 pub fn resolve_local_file(stored: &str) -> PathBuf {
     let path = Path::new(stored);

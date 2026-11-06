@@ -14,16 +14,18 @@ use crate::models::{
     ReactionMember, UserProfile, KNOWN_REACTIONS,
 };
 use crate::paths::{
-    data_dir, db_prefix, default_libs_dir, files_dir, plaintext_cache_path, resolve_local_file,
+    data_dir, db_prefix, default_libs_dir, files_dir, fits_in_ram_cache, free_bytes,
+    plaintext_cache_name, plaintext_cache_path, resolve_local_file, runtime_cache_dir,
     temp_dir,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SessionConfig {
     pub libs_dir: PathBuf,
     pub db_prefix: PathBuf,
-    /// SQLCipher key chosen at welcome / unlock (never written to disk by Cursus).
-    pub db_key: String,
+    /// SQLCipher key chosen at welcome / unlock (never written to disk by
+    /// Cursus). Wiped from memory when the config is dropped.
+    pub db_key: zeroize::Zeroizing<String>,
     pub migration_confirm: String,
     /// Display name for a brand-new active user (welcome wizard).
     pub initial_display_name: String,
@@ -31,12 +33,26 @@ pub struct SessionConfig {
     pub encrypt_local_files: bool,
 }
 
+/// Never print the database key (logs, panics, debuggers).
+impl std::fmt::Debug for SessionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionConfig")
+            .field("libs_dir", &self.libs_dir)
+            .field("db_prefix", &self.db_prefix)
+            .field("db_key", &"***")
+            .field("migration_confirm", &self.migration_confirm)
+            .field("initial_display_name", &self.initial_display_name)
+            .field("encrypt_local_files", &self.encrypt_local_files)
+            .finish()
+    }
+}
+
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             libs_dir: default_libs_dir(),
             db_prefix: db_prefix(),
-            db_key: String::new(),
+            db_key: zeroize::Zeroizing::new(String::new()),
             migration_confirm: "yesUp".into(),
             initial_display_name: "Cursus".into(),
             encrypt_local_files: true,
@@ -51,7 +67,7 @@ pub struct Session {
     /// Cached active user; mutex so profile updates work through `Arc<Session>`.
     user: Mutex<Option<UserProfile>>,
     /// Mirror of `/_files_encrypt` — encrypt outgoing attachments before send.
-    encrypt_local_files: bool,
+    encrypt_local_files: std::sync::atomic::AtomicBool,
 }
 
 /// Opaque chat controller pointer. Official clients use it concurrently from
@@ -89,7 +105,10 @@ impl ReceiveWorker {
                                 break;
                             }
                         }
-                        Err(err) => tracing::warn!("event envelope error: {err}"),
+                        Err(err) => {
+                            let brief = truncate_chars(&err.to_string(), 160);
+                            tracing::warn!("event envelope error: {brief}");
+                        }
                     },
                     Err(err) => match serde_json::from_str::<Value>(&raw) {
                         Ok(value) => {
@@ -99,7 +118,8 @@ impl ReceiveWorker {
                                 let _ = self.tx.send(Event::Raw(value));
                             }
                         }
-                        Err(_) => tracing::warn!("bad event JSON: {err}; raw={raw}"),
+                        // Never log `raw`: events carry message text and profiles.
+                        Err(_) => tracing::warn!("bad event JSON: {err} ({} bytes)", raw.len()),
                     },
                 },
                 Err(err) => {
@@ -114,13 +134,17 @@ impl ReceiveWorker {
 impl Session {
     pub fn open(config: SessionConfig) -> Result<Self> {
         tracing::info!("session open: prepare dirs");
-        std::fs::create_dir_all(data_dir())?;
+        // Owner-only data dir: SQLCipher DBs, log and prefs live here.
+        ensure_private_dir(&data_dir())?;
         ensure_private_dir(&files_dir())?;
         let tmp = temp_dir();
-        // Drop stale XFTP staging trees left after crashes (architecture.md).
-        // Keep `tmp/plain/` — wiping it forced re-decrypt of every CryptoFile
-        // on unlock and made media-heavy chats feel stuck after every relaunch.
-        wipe_tmp_staging(&tmp);
+        // Drop everything left in tmp/: XFTP staging after crashes and, above
+        // all, the `plain/` decrypt cache. Decrypted attachments must not
+        // outlive the session that needed them (at-rest encryption).
+        wipe_dir_contents(&tmp);
+        if let Some(ram) = runtime_cache_dir() {
+            wipe_dir_contents(&ram);
+        }
         ensure_private_dir(&tmp)?;
         ensure_private_dir(&tmp.join("plain"))?;
         // Agent XFTP decrypts under getTemporaryDirectory(); pin TMPDIR so the
@@ -153,7 +177,7 @@ impl Session {
             lib,
             ctrl,
             user: Mutex::new(None),
-            encrypt_local_files: config.encrypt_local_files,
+            encrypt_local_files: std::sync::atomic::AtomicBool::new(config.encrypt_local_files),
         };
         let name = if config.initial_display_name.trim().is_empty() {
             "Cursus"
@@ -191,7 +215,8 @@ impl Session {
         let _ = self.send(&Commands::set_temp_folder(&tmp));
         let _ = self.send(&Commands::set_files_folder(&files));
         // Official default: encrypt files at rest (CryptoFile). Keys live in SQLCipher.
-        self.encrypt_local_files = encrypt_local_files;
+        self.encrypt_local_files
+            .store(encrypt_local_files, std::sync::atomic::Ordering::Relaxed);
         let _ = self.send(&Commands::set_encrypt_local_files(encrypt_local_files));
         // Activate / resubscribe run after the UI receive loop is up — doing them
         // here has hung unlock when the agent blocked before any recv thread.
@@ -207,26 +232,52 @@ impl Session {
         Ok(())
     }
 
-    /// Decrypt a CryptoFile into `tmp/plain/…` (cached). Returns the plaintext path.
+    /// Decrypt a CryptoFile for viewing (cached for the session). Returns the
+    /// plaintext path: in the RAM-backed runtime dir when it has room
+    /// ([`runtime_cache_dir`]), else under `tmp/plain/` on disk.
     pub fn ensure_plaintext_file(
         &self,
         encrypted: &std::path::Path,
         key: &str,
         nonce: &str,
     ) -> Result<PathBuf> {
-        let out = plaintext_cache_path(encrypted, key, nonce);
-        if out.is_file() {
-            if let Ok(meta) = std::fs::metadata(&out) {
-                if meta.len() > 0 {
-                    return Ok(out);
+        let name = plaintext_cache_name(encrypted, key, nonce);
+        let ram = runtime_cache_dir().map(|d| d.join("plain").join(&name));
+        let disk = plaintext_cache_path(encrypted, key, nonce);
+        for cached in ram.iter().chain(std::iter::once(&disk)) {
+            if std::fs::metadata(cached).is_ok_and(|m| m.is_file() && m.len() > 0) {
+                return Ok(cached.clone());
+            }
+        }
+        let size = std::fs::metadata(encrypted).map(|m| m.len()).unwrap_or(u64::MAX);
+        if let Some(ram) = ram {
+            let room = ram
+                .parent()
+                .and_then(free_bytes)
+                .is_some_and(|free| fits_in_ram_cache(size, free));
+            if room {
+                if let Some(parent) = ram.parent() {
+                    ensure_private_dir(parent.parent().unwrap_or(parent))?;
+                    ensure_private_dir(parent)?;
+                }
+                match self.lib.decrypt_file(encrypted, key, nonce, &ram) {
+                    Ok(()) => return Ok(ram),
+                    // e.g. tmpfs filled up meanwhile: drop the partial file, use disk.
+                    Err(err) => {
+                        let _ = std::fs::remove_file(&ram);
+                        tracing::warn!(%err, "RAM decrypt failed; using disk cache");
+                    }
                 }
             }
         }
-        if let Some(parent) = out.parent() {
+        if let Some(parent) = disk.parent() {
             ensure_private_dir(parent)?;
         }
-        self.lib.decrypt_file(encrypted, key, nonce, &out)?;
-        Ok(out)
+        if let Err(err) = self.lib.decrypt_file(encrypted, key, nonce, &disk) {
+            let _ = std::fs::remove_file(&disk);
+            return Err(err);
+        }
+        Ok(disk)
     }
 
     pub fn list_chats(&self) -> Result<Vec<ChatPreview>> {
@@ -327,7 +378,7 @@ impl Session {
         src: &std::path::Path,
         preferred_name: &str,
     ) -> Result<PreparedOutgoingFile> {
-        if !self.encrypt_local_files {
+        if !self.encrypt_local_files.load(std::sync::atomic::Ordering::Relaxed) {
             return Ok(PreparedOutgoingFile {
                 cmd_path: src.to_string_lossy().into_owned(),
                 crypto: None,
@@ -361,9 +412,21 @@ impl Session {
         })
     }
 
-    pub fn receive_file(&self, file_id: i64) -> Result<Value> {
+    /// Accept an incoming file. With `approved_relays` false the core refuses
+    /// file servers we don't use; that comes back as
+    /// [`ReceiveOutcome::NeedsApproval`] instead of an error.
+    pub fn receive_file(&self, file_id: i64, approved_relays: bool) -> Result<ReceiveOutcome> {
         std::fs::create_dir_all(files_dir()).map_err(|e| Error::Command(e.to_string()))?;
-        self.send(&Commands::receive_file(file_id))
+        let cmd = Commands::receive_file(file_id, approved_relays);
+        let raw = self.lib.send_cmd(self.ctrl, &cmd)?;
+        let env: ApiEnvelope = serde_json::from_str(&raw)?;
+        if let Some(servers) = env.error.as_ref().and_then(file_not_approved_servers) {
+            return Ok(ReceiveOutcome::NeedsApproval { servers });
+        }
+        env.into_result().map(|_| ReceiveOutcome::Accepted).map_err(|err| {
+            tracing::warn!(cmd = %redact_command(&cmd), error = %err, "receive failed");
+            err
+        })
     }
 
     /// Toggle a reaction on a chat item (`add` true → on, false → off).
@@ -552,6 +615,21 @@ impl Session {
         self.user.lock().ok().and_then(|g| g.clone())
     }
 
+    /// Switch at-rest encryption for files received / sent from now on.
+    pub fn set_encrypt_local_files(&self, on: bool) -> Result<()> {
+        self.send(&Commands::set_encrypt_local_files(on))?;
+        self.encrypt_local_files
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Delivery receipts for all contacts (`groups` false) or small groups.
+    pub fn set_delivery_receipts(&self, groups: bool, on: bool) -> Result<UserProfile> {
+        let user_id = self.user_id()?;
+        self.send(&Commands::set_delivery_receipts(user_id, groups, on))?;
+        self.refresh_user()
+    }
+
     /// Refresh `/u` into the session cache.
     pub fn refresh_user(&self) -> Result<UserProfile> {
         let value = self.send(Commands::show_active_user())?;
@@ -570,6 +648,8 @@ impl Session {
                     let mut u = self.active_profile().unwrap_or(UserProfile {
                         user_id,
                         profile: ProfileFields::default(),
+                        send_rcpts_contacts: true,
+                        send_rcpts_small_groups: true,
                     });
                     u.profile = parse_profile_fields(Some(p));
                     Ok(u)
@@ -880,7 +960,7 @@ Create a new channel — private-group style links won’t join."
     }
 
     pub fn send(&self, cmd: &str) -> Result<Value> {
-        tracing::debug!(cmd, "chat_send_cmd");
+        tracing::debug!(cmd = %redact_command(cmd), "chat_send_cmd");
         let raw = self.lib.send_cmd(self.ctrl, cmd)?;
         let env: ApiEnvelope = serde_json::from_str(&raw)?;
         env.into_result().map_err(|err| match err {
@@ -888,7 +968,7 @@ Create a new channel — private-group style links won’t join."
                 // SimpleX error payloads embed full group/contact JSON — keep a
                 // short summary so opening chats/settings does not flood the log.
                 let brief = truncate_chars(message.as_str(), 160);
-                tracing::warn!(cmd, error = %brief, "chat command failed");
+                tracing::warn!(cmd = %redact_command(cmd), error = %brief, "chat command failed");
                 Error::Command(message)
             }
             other => other,
@@ -942,7 +1022,13 @@ fn parse_user(value: &Value) -> Result<UserProfile> {
         .and_then(|v| v.as_i64())
         .ok_or_else(|| Error::Command("user.userId missing".into()))?;
     let profile = parse_profile_fields(user.get("profile"));
-    Ok(UserProfile { user_id, profile })
+    let flag = |k: &str| user.get(k).and_then(|v| v.as_bool()).unwrap_or(true);
+    Ok(UserProfile {
+        user_id,
+        profile,
+        send_rcpts_contacts: flag("sendRcptsContacts"),
+        send_rcpts_small_groups: flag("sendRcptsSmallGroups"),
+    })
 }
 
 fn parse_profile_fields(value: Option<&Value>) -> ProfileFields {
@@ -2168,25 +2254,151 @@ fn ensure_private_dir(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Best-effort wipe of XFTP decrypt staging under [`temp_dir`].
-///
-/// Preserves the `plain/` decrypt cache so unlock does not re-decrypt every
-/// attachment (see `plaintext_cache_path`).
-fn wipe_tmp_staging(path: &std::path::Path) {
+/// Command for logs: the verb plus chat / item references (`@5`, `#3`,
+/// numbers, `key=value` flags), never free text, JSON, links or file paths.
+/// Commands carry message bodies, profiles, invite links and file names.
+pub(crate) fn redact_command(cmd: &str) -> String {
+    let mut out = String::new();
+    let mut hidden = 0usize;
+    for (i, tok) in cmd.split_whitespace().enumerate() {
+        let is_ref = |t: &str| {
+            let body = t.trim_start_matches(['@', '#', '*', ':']);
+            !body.is_empty() && body.chars().all(|c| c.is_ascii_digit() || c == ',' || c == '(' || c == ')')
+        };
+        let is_flag = |t: &str| {
+            t.split_once('=').is_some_and(|(k, v)| {
+                k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    && v.len() <= 8
+                    && v.chars().all(|c| c.is_ascii_alphanumeric())
+            })
+        };
+        let keep = i == 0 || (hidden == 0 && (is_ref(tok) || is_flag(tok) || tok == "json" || tok == "chat"));
+        if keep {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(tok);
+        } else {
+            hidden += tok.len() + 1;
+        }
+    }
+    if hidden > 0 {
+        out.push_str(&format!(" …({hidden} bytes hidden)"));
+    }
+    out
+}
+
+/// Result of [`Session::receive_file`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiveOutcome {
+    Accepted,
+    /// The file sits on servers we don't use (hostnames). Downloading would
+    /// show them our IP address; ask the user, then retry approved.
+    NeedsApproval { servers: Vec<String> },
+}
+
+/// Hostnames from a `fileNotApproved` chat error, if that's what this is.
+fn file_not_approved_servers(err: &Value) -> Option<Vec<String>> {
+    let et = err.get("errorType").unwrap_or(err);
+    if et.get("type").and_then(|v| v.as_str()) != Some("fileNotApproved") {
+        return None;
+    }
+    let servers = et
+        .get("unknownServers")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str())
+                .map(|s| {
+                    // `xftp://fingerprint@host:port` → `host`
+                    let host = s.rsplit('@').next().unwrap_or(s);
+                    host.split([':', '/', ',']).next().unwrap_or(host).to_string()
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some(servers)
+}
+
+/// Best-effort removal of everything inside `path` (the directory stays).
+fn wipe_dir_contents(path: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(path) else {
         return;
     };
     for entry in entries.flatten() {
-        let name = entry.file_name();
-        if name == "plain" {
-            continue;
-        }
         let p = entry.path();
-        if p.is_dir() {
+        // `symlink_metadata`: never follow a link out of our directory.
+        let is_dir = std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir());
+        if is_dir {
             let _ = std::fs::remove_dir_all(&p);
         } else {
             let _ = std::fs::remove_file(&p);
         }
+    }
+}
+
+/// Delete decrypted attachments, playback transcodes and unsent voice
+/// recordings (`tmp/plain`, `tmp/play`, `tmp/rec`). Call when the session ends
+/// so plaintext media never stays on disk after the app quits. XFTP staging
+/// is left alone (may be mid-transfer); it is wiped on the next session open.
+pub fn wipe_plaintext_cache() {
+    let tmp = temp_dir();
+    for sub in ["plain", "play", "rec"] {
+        wipe_dir_contents(&tmp.join(sub));
+    }
+    if let Some(ram) = runtime_cache_dir() {
+        wipe_dir_contents(&ram);
+    }
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::redact_command;
+
+    #[test]
+    fn file_not_approved_lists_server_hosts() {
+        let err = serde_json::json!({"type": "error", "errorType": {
+            "type": "fileNotApproved", "fileId": 9,
+            "unknownServers": ["xftp://abc=@files.evil.example:443", "xftp://k@other.org"]
+        }});
+        assert_eq!(
+            super::file_not_approved_servers(&err),
+            Some(vec!["files.evil.example".to_string(), "other.org".to_string()])
+        );
+        let other = serde_json::json!({"type": "error", "errorType": {"type": "fileCancelled"}});
+        assert_eq!(super::file_not_approved_servers(&other), None);
+    }
+
+    #[test]
+    fn wipe_empties_dir_without_following_symlinks() {
+        let root = std::env::temp_dir().join(format!("cursus-wipe-{}", std::process::id()));
+        let inside = root.join("plain");
+        let outside = root.join("keep");
+        std::fs::create_dir_all(inside.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(inside.join("photo.jpg"), b"x").unwrap();
+        std::fs::write(inside.join("sub/voice.wav"), b"x").unwrap();
+        std::fs::write(outside.join("precious.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink(&outside, inside.join("link")).unwrap();
+        super::wipe_dir_contents(&inside);
+        assert_eq!(std::fs::read_dir(&inside).unwrap().count(), 0);
+        assert!(outside.join("precious.txt").is_file(), "followed a symlink");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn logged_commands_never_contain_content() {
+        let send = r#"/_send @5 json [{"msgContent":{"type":"text","text":"my secret"}}]"#;
+        let r = redact_command(send);
+        assert!(r.starts_with("/_send @5 json"), "{r}");
+        assert!(!r.contains("secret"), "{r}");
+        let link = redact_command("/connect https://smp9.simplex.im/i#abcdef");
+        assert!(!link.contains("simplex.im"), "{link}");
+        assert_eq!(redact_command("/_get chat #3 count=100"), "/_get chat #3 count=100");
+        let alias = redact_command("/_set alias @7 Mum");
+        assert!(!alias.contains("Mum"), "{alias}");
+        let profile = redact_command(r#"/_profile 1 {"displayName":"Davide"}"#);
+        assert!(!profile.contains("Davide"), "{profile}");
     }
 }
 

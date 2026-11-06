@@ -37,11 +37,12 @@ pub use rich_text::{
 #[cfg(feature = "musl-glibc-compat")]
 pub use musl_compat::{compat_status_line, ensure_ld_preload_reexec, is_musl_host};
 pub use paths::{
-    data_dir, db_prefix, default_libs_dir, files_dir, plaintext_cache_path, resolve_local_file,
+    data_dir, db_prefix, default_libs_dir, files_dir, plaintext_cache_path, private_cache_dir,
+    resolve_local_file, runtime_cache_dir,
     temp_dir,
 };
 pub use session::{
-    auto_receive_candidates, auto_receive_from_chat_item, is_channel_short_link, is_short_conn_link,
+    auto_receive_candidates, auto_receive_from_chat_item, wipe_plaintext_cache, ReceiveOutcome, is_channel_short_link, is_short_conn_link,
     shareable_conn_uri, Session, SessionConfig,
 };
 
@@ -57,7 +58,7 @@ mod smoke {
         let cfg = SessionConfig {
             libs_dir: default_libs_dir(),
             db_prefix: dir.join("simplex_v1"),
-            db_key: "smoke".into(),
+            db_key: zeroize::Zeroizing::new("smoke".to_string()),
             migration_confirm: "yesUp".into(),
             initial_display_name: "Smoke".into(),
             encrypt_local_files: true,
@@ -269,7 +270,11 @@ mod smoke {
         assert!(voice.contains(r#""fileNonce":"n""#));
         assert!(voice.contains(r#""filePath":"voice.m4a""#));
         assert_eq!(
-            Commands::receive_file(3),
+            Commands::receive_file(3, false),
+            "/freceive 3 approved_relays=off encrypt=on"
+        );
+        assert_eq!(
+            Commands::receive_file(3, true),
             "/freceive 3 approved_relays=on encrypt=on"
         );
         assert_eq!(Commands::set_encrypt_local_files(true), "/_files_encrypt on");

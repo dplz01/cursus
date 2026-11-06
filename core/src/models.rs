@@ -92,6 +92,10 @@ pub struct ProfileFields {
 pub struct UserProfile {
     pub user_id: i64,
     pub profile: ProfileFields,
+    /// `sendRcptsContacts`: delivery receipts to contacts (official default on).
+    pub send_rcpts_contacts: bool,
+    /// `sendRcptsSmallGroups`: delivery receipts in small groups (default on).
+    pub send_rcpts_small_groups: bool,
 }
 
 impl UserProfile {

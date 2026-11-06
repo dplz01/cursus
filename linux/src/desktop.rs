@@ -115,6 +115,57 @@ impl TextSizePreference {
     }
 }
 
+/// Inactivity before the app lock asks for the password again. Hiding the
+/// window to the tray always locks (when the lock is on).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LockAfter {
+    /// As soon as the window loses focus.
+    Immediately,
+    #[default]
+    Seconds30,
+    Minute1,
+    Minutes5,
+    Minutes15,
+}
+
+impl LockAfter {
+    pub const ALL: [Self; 5] = [
+        Self::Immediately,
+        Self::Seconds30,
+        Self::Minute1,
+        Self::Minutes5,
+        Self::Minutes15,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Immediately => "Immediately",
+            Self::Seconds30 => "After 30 seconds",
+            Self::Minute1 => "After 1 minute",
+            Self::Minutes5 => "After 5 minutes",
+            Self::Minutes15 => "After 15 minutes",
+        }
+    }
+
+    /// Idle seconds before locking (`0` = on focus loss).
+    pub fn secs(self) -> u64 {
+        match self {
+            Self::Immediately => 0,
+            Self::Seconds30 => 30,
+            Self::Minute1 => 60,
+            Self::Minutes5 => 300,
+            Self::Minutes15 => 900,
+        }
+    }
+}
+
+impl std::fmt::Display for LockAfter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DesktopPrefs {
@@ -131,17 +182,57 @@ pub struct DesktopPrefs {
     pub text_size: TextSizePreference,
     /// UI mirror of libsimplex address `autoAccept` (core is source of truth).
     pub auto_accept_address: bool,
+    /// Notifications show only the chat name and "New message", never the
+    /// text (notification daemons may keep a history). On by default.
+    pub hide_notification_text: bool,
+    /// Ask before downloading from file servers the sender chose (they would
+    /// see your IP address). On by default, like the official app.
+    pub protect_ip: bool,
+    /// Ask for the password again after inactivity / when hidden to tray.
+    pub app_lock: bool,
+    /// When the app lock kicks in.
+    pub lock_after: LockAfter,
+    /// Last-message text under each chat in the list (official default on).
+    pub chat_previews: bool,
+    /// Blur photos and video posters in chats until tapped.
+    pub blur_media: bool,
+    /// Download images, voice and short videos automatically (official
+    /// "Auto-accept images", default on).
+    pub auto_download: bool,
+    /// Remove tracking parameters (`utm_*`, `fbclid`…) before opening links.
+    pub clean_links: bool,
+    /// Unlock at start with the password stored in the system keyring.
+    pub keyring_unlock: bool,
+    /// Prefs schema version — lets new privacy defaults reach old files.
+    /// Missing in files written before versioning → 0.
+    #[serde(default)]
+    pub version: u32,
 }
+
+/// Current [`DesktopPrefs::version`].
+const PREFS_VERSION: u32 = 1;
 
 impl Default for DesktopPrefs {
     fn default() -> Self {
         Self {
             notifications: true,
             tray: true,
-            close_to_tray: true,
+            // Hidden in the tray the app keeps running with decrypted media
+            // cached; quitting is the safe default.
+            close_to_tray: false,
             theme: ThemePreference::System,
             text_size: TextSizePreference::Medium,
             auto_accept_address: false,
+            hide_notification_text: true,
+            protect_ip: true,
+            app_lock: false,
+            lock_after: LockAfter::default(),
+            chat_previews: true,
+            blur_media: false,
+            auto_download: true,
+            clean_links: true,
+            keyring_unlock: false,
+            version: PREFS_VERSION,
         }
     }
 }
@@ -153,7 +244,19 @@ fn prefs_path() -> PathBuf {
 pub fn load_prefs() -> DesktopPrefs {
     let path = prefs_path();
     match fs::read_to_string(&path) {
-        Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
+        Ok(raw) => {
+            let mut prefs: DesktopPrefs = serde_json::from_str(&raw).unwrap_or_default();
+            // Files written before v1 stored the old `close_to_tray: true`
+            // default, not a choice; the new privacy defaults apply once.
+            if prefs.version < 1 {
+                prefs.close_to_tray = false;
+                prefs.hide_notification_text = true;
+                prefs.protect_ip = true;
+                prefs.version = PREFS_VERSION;
+                save_prefs(&prefs);
+            }
+            prefs
+        }
         Err(_) => DesktopPrefs::default(),
     }
 }
@@ -164,7 +267,17 @@ pub fn save_prefs(prefs: &DesktopPrefs) {
         let _ = fs::create_dir_all(parent);
     }
     if let Ok(raw) = serde_json::to_string_pretty(prefs) {
-        let _ = fs::write(path, raw);
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        if let Ok(mut f) = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+        {
+            let _ = f.write_all(raw.as_bytes());
+        }
     }
 }
 
@@ -291,6 +404,17 @@ pub enum TrayAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_prefs_get_new_privacy_defaults() {
+        let raw = r#"{"notifications":true,"tray":true,"close_to_tray":true,"theme":"system"}"#;
+        let prefs: DesktopPrefs = serde_json::from_str(raw).unwrap();
+        assert_eq!(prefs.version, 0, "pre-versioning files must migrate");
+        assert!(prefs.hide_notification_text && prefs.protect_ip);
+        let fresh = DesktopPrefs::default();
+        assert!(!fresh.close_to_tray && fresh.hide_notification_text && fresh.protect_ip);
+        assert_eq!(fresh.version, PREFS_VERSION);
+    }
 
     #[test]
     fn text_size_cycles_all_steps() {

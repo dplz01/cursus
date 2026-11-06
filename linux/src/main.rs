@@ -2,10 +2,12 @@
 //!
 //! Responsive shell + SimpleX session wiring.
 
+mod app_lock;
 mod avatar_cache;
 mod desktop;
 mod edit_menu;
 mod emoji_font;
+mod exit_wipe;
 mod ellipsis;
 mod float_open;
 mod hover;
@@ -579,11 +581,15 @@ pub enum SettingsSection {
     Profile,
     Address,
     Appearance,
+    Privacy,
     Desktop,
 }
 
 impl SettingsSection {
-    pub const ALL: [Self; 4] = [Self::Profile, Self::Address, Self::Appearance, Self::Desktop];
+    /// Order in the settings list: who you are, how people reach you, what
+    /// protects you, how Cursus behaves on the desktop, how it looks.
+    pub const ALL: [Self; 5] =
+        [Self::Profile, Self::Address, Self::Privacy, Self::Desktop, Self::Appearance];
 }
 
 /// Overlay menu for settings that used to be iced `pick_list`s.
@@ -591,6 +597,7 @@ impl SettingsSection {
 pub enum PrefMenu {
     Theme,
     TextSize,
+    LockAfter,
     ContactTimed,
     ContactTtl,
     ContactChatItemTtl,
@@ -629,6 +636,34 @@ pub struct ItemInfoData {
     pub text: String,
 }
 
+/// A password in memory: wiped when dropped (every clone too) and never
+/// printed by `Debug` — `Message` / `AuthScreen` derive `Debug`, and iced's
+/// debug tooling can record messages.
+#[derive(Clone, Default)]
+pub struct Secret(zeroize::Zeroizing<String>);
+
+impl Secret {
+    pub fn new(s: String) -> Self {
+        Self(zeroize::Zeroizing::new(s))
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl PartialEq for Secret {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(***)")
+    }
+}
+
 /// Pre-session gate: welcome (first run) or unlock (SQLCipher password).
 #[derive(Debug, Clone)]
 pub enum AuthScreen {
@@ -637,31 +672,60 @@ pub enum AuthScreen {
     },
     WelcomePassword {
         name: String,
-        password: String,
-        confirm: String,
+        password: Secret,
+        confirm: Secret,
     },
     Unlock {
         display_name: String,
-        password: String,
+        password: Secret,
     },
 }
 
 #[derive(Debug, Clone)]
 struct ConnectRequest {
-    password: String,
+    password: Secret,
     display_name: String,
     encrypt_local_files: bool,
     /// Persist `account.json` after a successful open (welcome only).
     save_account: bool,
 }
 
+/// Log files above this size start over (the old one is kept once as `.1`).
+const LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Owner-only data dir and files. The SQLCipher DBs, log, prefs and media
+/// used to be world-readable (0755 dir, 0644 files) — readable by any other
+/// account on the machine.
+fn harden_data_dir() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = data_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.path().symlink_metadata() else {
+                continue;
+            };
+            let mode = if meta.is_dir() { 0o700 } else if meta.is_file() { 0o600 } else { continue };
+            if meta.permissions().mode() & 0o077 != 0 {
+                let _ = std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(mode));
+            }
+        }
+    }
+}
+
 fn init_file_logging() {
     let log_path = data_dir().join("cursus.log");
-    let _ = std::fs::create_dir_all(data_dir());
+    harden_data_dir();
+    if std::fs::metadata(&log_path).is_ok_and(|m| m.len() > LOG_MAX_BYTES) {
+        let _ = std::fs::rename(&log_path, log_path.with_extension("log.1"));
+    }
     let env = EnvFilter::from_default_env().add_directive("cursus=info".parse().unwrap());
+    use std::os::unix::fs::OpenOptionsExt;
     match std::fs::OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(0o600)
         .open(&log_path)
     {
         Ok(file) => {
@@ -688,6 +752,8 @@ pub fn main() -> iced::Result {
     cursus_core::ensure_ld_preload_reexec();
 
     init_file_logging();
+    // Logout / shutdown / Ctrl+C / panic: wipe decrypted media on the way out.
+    exit_wipe::install();
 
     // Prefer Noto Sans as UI font (no dingbat ❤) and register color emoji for
     // Advanced shaping fallback — otherwise hearts render as ugly text glyphs.
@@ -780,6 +846,43 @@ pub enum Message {
     },
     ConfirmOpenUrl,
     CancelOpenUrl,
+    /// Privacy settings that weaken protection ask first.
+    SetHideNotificationText(bool),
+    SetProtectIp(bool),
+    // App lock.
+    SetAppLock(bool),
+    SetLockAfter(crate::desktop::LockAfter),
+    LockNow,
+    LockTick,
+    LockPasswordChanged(Secret),
+    LockToggleReveal,
+    LockSubmit,
+    LockVerified(bool),
+    // Other privacy & security settings.
+    SetChatPreviews(bool),
+    SetBlurMedia(bool),
+    RevealMedia(i64),
+    BlurReady { path: PathBuf, blurred: Option<PathBuf> },
+    SetAutoDownload(bool),
+    SetCleanLinks(bool),
+    SetEncryptFiles(bool),
+    EncryptFilesSet(Result<bool, String>),
+    SetReceipts { groups: bool, on: bool },
+    ReceiptsSet(Result<(bool, bool), String>),
+    SetKeyringUnlock(bool),
+    KeyringPasswordChanged(Secret),
+    KeyringStored(Result<(), String>),
+    KeyringDeleted(Result<(), String>),
+    KeyringLoaded(Result<Option<Secret>, String>),
+    /// A download hit file servers we don't use (see [`ReceiveMode`]).
+    FileNeedsRelayApproval {
+        file_id: i64,
+        file_name: String,
+        servers: Vec<String>,
+        ask: bool,
+    },
+    ConfirmPrivacy,
+    CancelPrivacy,
     /// Add or remove a reaction (`emoji` is a protocol char / display form).
     ToggleReaction { item_id: i64, emoji: String },
     ReactionDone(Result<(), String>),
@@ -822,11 +925,11 @@ pub enum Message {
     /// First-run / unlock gate.
     WelcomeNameChanged(String),
     WelcomeNameNext,
-    WelcomePasswordChanged(String),
-    WelcomeConfirmChanged(String),
+    WelcomePasswordChanged(Secret),
+    WelcomeConfirmChanged(Secret),
     WelcomeBack,
     WelcomeSubmit,
-    UnlockPasswordChanged(String),
+    UnlockPasswordChanged(Secret),
     UnlockSubmit,
     /// Decrypt CryptoFile → `tmp/plain` for preview / open.
     DecryptFileDone {
@@ -1109,6 +1212,12 @@ struct App {
     messages: Vec<ChatMessage>,
     /// Encrypted attachment path → decrypted cache under `tmp/plain/`.
     plaintext_files: HashMap<PathBuf, PathBuf>,
+    /// Decrypts in flight (never run two jobs writing the same plaintext file).
+    decrypts_pending: HashSet<PathBuf>,
+    /// Decrypts that failed since the last history load — not retried in a
+    /// loop (a bad file used to re-queue itself endlessly). Cleared when the
+    /// conversation reloads, e.g. after a download completes.
+    decrypts_failed: HashSet<PathBuf>,
     composer: text_editor::Content,
     connecting: bool,
     invite_input: String,
@@ -1137,6 +1246,8 @@ struct App {
     last_pointer: (f32, f32),
     /// File ids already auto-/manually receiving this session (dedupe freceive).
     receiving_files: HashSet<i64>,
+    /// Files whose servers need the user's approval (auto-receive skips them).
+    relay_unapproved: HashSet<i64>,
     /// Auto-receive queue deferred until after the first chat paint.
     pending_auto_receives: Vec<(i64, String)>,
     /// Active ffmpeg/arecord voice capture, if any.
@@ -1160,6 +1271,21 @@ struct App {
     pin_history_end: bool,
     /// Link waiting for “Open link?” confirmation.
     pending_url: Option<PendingLink>,
+    /// Privacy warning awaiting confirmation (see [`PrivacyConfirm`]).
+    privacy_confirm: Option<PrivacyConfirm>,
+    /// Engaged app lock (content hidden, decrypted media wiped).
+    locked: Option<LockState>,
+    /// Delivery receipts (contacts, small groups) of the active profile.
+    receipts: (bool, bool),
+    /// At-rest encryption for new attachments (mirrors account.json + core).
+    encrypt_files: bool,
+    /// Blurred bubble previews keyed by media path, and in-flight jobs.
+    blurred_previews: HashMap<PathBuf, PathBuf>,
+    blur_pending: HashSet<PathBuf>,
+    /// Media items tapped to un-blur (this session / until locked).
+    revealed_media: HashSet<i64>,
+    /// Keyring auto-unlock is attempted once per launch.
+    keyring_tried: bool,
     /// Highlighted row in the `:shortcode` autocomplete list.
     emoji_suggest_index: usize,
     /// Per-message context menu (reactions + actions).
@@ -1290,7 +1416,7 @@ impl App {
                 .unwrap_or_else(|| "Cursus".into());
             Some(AuthScreen::Unlock {
                 display_name: name,
-                password: String::new(),
+                password: Secret::default(),
             })
         } else {
             Some(AuthScreen::WelcomeName {
@@ -1319,6 +1445,8 @@ impl App {
                 selected_id: None,
                 messages: Vec::new(),
                 plaintext_files: HashMap::new(),
+                decrypts_pending: HashSet::new(),
+                decrypts_failed: HashSet::new(),
                 composer: text_editor::Content::new(),
                 connecting: false,
                 invite_input: String::new(),
@@ -1341,6 +1469,7 @@ impl App {
                 press_moved: false,
                 last_pointer: (0.0, 0.0),
                 receiving_files: HashSet::new(),
+                relay_unapproved: HashSet::new(),
                 pending_auto_receives: Vec::new(),
                 voice_rec: None,
                 voice_arming: false,
@@ -1355,6 +1484,14 @@ impl App {
                 messages_load_gen: 0,
                 chats_refresh_gen: 0,
                 pending_url: None,
+                privacy_confirm: None,
+                locked: None,
+                receipts: (true, true),
+                encrypt_files: load_account().map(|a| a.encrypt_local_files).unwrap_or(true),
+                blurred_previews: HashMap::new(),
+                blur_pending: HashSet::new(),
+                revealed_media: HashSet::new(),
+                keyring_tried: false,
                 emoji_suggest_index: 0,
                 message_menu: None,
                 msg_long_press_generation: 0,
@@ -1426,6 +1563,7 @@ impl App {
                 Some(Message::WindowCloseRequested)
             }
             iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                app_lock::touch();
                 POINTER_GATE.filter_move(position.x, position.y)
             }
             iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
@@ -1439,6 +1577,7 @@ impl App {
             // Publishing on every finger-down rebuilds the whole view and is
             // the “tap vs swipe” stall on ARM scrollables.
             iced::Event::Touch(iced::touch::Event::FingerPressed { position, .. }) => {
+                app_lock::touch();
                 POINTER_GATE.begin_press(position.x, position.y);
                 if hover_target_hot() {
                     POINTER_GATE
@@ -1488,8 +1627,12 @@ impl App {
                     None
                 }
             }
-            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, .. }) => {
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
                 use iced::keyboard::key::Named;
+                app_lock::touch();
+                if modifiers.control() && matches!(key.as_ref(), iced::keyboard::Key::Character("l")) {
+                    return Some(Message::LockNow);
+                }
                 match key {
                     // Handlers no-op when the matching overlay is closed.
                     // Emoji suggest Tab/Shift+Tab/Enter are handled in the
@@ -1499,6 +1642,7 @@ impl App {
                 }
             }
             iced::Event::Mouse(iced::mouse::Event::WheelScrolled { delta }) => {
+                app_lock::touch();
                 if wheel_scrolls_up(delta) {
                     HISTORY_AWAY_GATE
                         .mark_away()
@@ -1548,7 +1692,18 @@ impl App {
             Subscription::none()
         };
 
-        Subscription::batch([window, events, voice_tick, fling_tick, tray_tick])
+        // Idle check for the app lock (cheap; only while it could fire).
+        let lock_tick = if self.desktop_prefs.app_lock
+            && self.locked.is_none()
+            && self.session.is_some()
+            && self.desktop_prefs.lock_after.secs() > 0
+        {
+            iced::time::every(std::time::Duration::from_secs(5)).map(|_| Message::LockTick)
+        } else {
+            Subscription::none()
+        };
+
+        Subscription::batch([window, events, voice_tick, fling_tick, tray_tick, lock_tick])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -1641,6 +1796,10 @@ impl App {
                 if let Ok(mut guard) = self.pending_session.lock() {
                     self.session = guard.take();
                 }
+                if let Some(user) = self.session.as_ref().and_then(|s| s.active_profile()) {
+                    self.receipts = (user.send_rcpts_contacts, user.send_rcpts_small_groups);
+                }
+                app_lock::touch();
                 self.status = format!("Connected as {name}.");
                 if let Some(session) = self.session.clone() {
                     if let Some(user) = session.active_profile() {
@@ -1877,7 +2036,18 @@ impl App {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
-                self.enqueue_receive(file_id, file_name)
+                self.enqueue_receive(file_id, file_name, ReceiveMode::Manual)
+            }
+            Message::FileNeedsRelayApproval { file_id, file_name, servers, ask } => {
+                self.receiving_files.remove(&file_id);
+                self.relay_unapproved.insert(file_id);
+                if ask {
+                    self.privacy_confirm = Some(PrivacyConfirm::UnknownFileServers {
+                        files: vec![(file_id, file_name)],
+                        servers,
+                    });
+                }
+                Task::none()
             }
             Message::FileReceived(Ok(summary)) => {
                 self.status = summary;
@@ -1908,6 +2078,18 @@ impl App {
                     return Task::none();
                 }
                 let simplex = cursus_core::SimplexLinkKind::from_uri(&url);
+                let url = if simplex.is_some() {
+                    url
+                } else if let Some(safe) = safe_external_url(&url) {
+                    if self.desktop_prefs.clean_links {
+                        strip_tracking_params(&safe)
+                    } else {
+                        safe
+                    }
+                } else {
+                    self.status = "This kind of link can't be opened from Cursus.".into();
+                    return Task::none();
+                };
                 self.pending_url = Some(PendingLink { url, simplex });
                 Task::none()
             }
@@ -1935,6 +2117,359 @@ impl App {
                 let url = pending.url;
                 self.status = format!("Opening {url}…");
                 Task::perform(open_url(url), Message::FileReceived)
+            }
+            Message::SetHideNotificationText(hide) => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
+                if hide {
+                    self.desktop_prefs.hide_notification_text = true;
+                    desktop::save_prefs(&self.desktop_prefs);
+                } else {
+                    self.privacy_confirm = Some(PrivacyConfirm::ShowNotificationText);
+                }
+                Task::none()
+            }
+            Message::SetProtectIp(on) => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
+                if on {
+                    self.desktop_prefs.protect_ip = true;
+                    desktop::save_prefs(&self.desktop_prefs);
+                } else {
+                    self.privacy_confirm = Some(PrivacyConfirm::StopProtectingIp);
+                }
+                Task::none()
+            }
+            Message::SetAppLock(on) => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
+                if on {
+                    self.desktop_prefs.app_lock = true;
+                    desktop::save_prefs(&self.desktop_prefs);
+                    app_lock::touch();
+                    self.status = "App lock on.".into();
+                } else {
+                    self.privacy_confirm = Some(PrivacyConfirm::DisableAppLock);
+                }
+                Task::none()
+            }
+            Message::SetLockAfter(after) => {
+                self.pref_menu = None;
+                self.desktop_prefs.lock_after = after;
+                desktop::save_prefs(&self.desktop_prefs);
+                Task::none()
+            }
+            Message::LockNow => {
+                if self.desktop_prefs.app_lock {
+                    self.lock_app()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::LockTick => {
+                let after = self.desktop_prefs.lock_after.secs();
+                if after > 0 && app_lock::idle_secs() >= after {
+                    return self.lock_app();
+                }
+                Task::none()
+            }
+            Message::LockPasswordChanged(pw) => {
+                if let Some(lock) = self.locked.as_mut() {
+                    lock.password = pw;
+                    lock.error = None;
+                }
+                Task::none()
+            }
+            Message::LockToggleReveal => {
+                if let Some(lock) = self.locked.as_mut() {
+                    lock.reveal = !lock.reveal;
+                }
+                Task::none()
+            }
+            Message::LockSubmit => {
+                let Some(lock) = self.locked.as_mut() else {
+                    return Task::none();
+                };
+                if lock.checking || lock.password.as_str().is_empty() {
+                    return Task::none();
+                }
+                if let Some(at) = lock.retry_at {
+                    if std::time::Instant::now() < at {
+                        let left = at.saturating_duration_since(std::time::Instant::now()).as_secs() + 1;
+                        lock.error = Some(format!("Too many attempts. Try again in {left} s."));
+                        return Task::none();
+                    }
+                }
+                lock.checking = true;
+                let pw = lock.password.clone();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || app_lock::verify(pw.as_str()))
+                            .await
+                            .unwrap_or(false)
+                    },
+                    Message::LockVerified,
+                )
+            }
+            Message::LockVerified(ok) => {
+                if ok {
+                    self.locked = None;
+                    app_lock::touch();
+                    // Bring media back: decrypt + previews for the open chat.
+                    return Task::batch([
+                        self.enqueue_decrypts(),
+                        self.enqueue_missing_waveforms(),
+                        self.enqueue_missing_image_previews(),
+                    ]);
+                }
+                if let Some(lock) = self.locked.as_mut() {
+                    lock.checking = false;
+                    lock.failures += 1;
+                    lock.password = Secret::default();
+                    let wait = app_lock::retry_delay_secs(lock.failures);
+                    lock.retry_at = (wait > 0)
+                        .then(|| std::time::Instant::now() + std::time::Duration::from_secs(wait));
+                    lock.error = Some(if wait > 0 {
+                        format!("Wrong password. Try again in {wait} s.")
+                    } else {
+                        "Wrong password.".into()
+                    });
+                }
+                iced::widget::operation::focus(iced::widget::Id::new("lock-password"))
+            }
+            Message::SetChatPreviews(on) => {
+                if on {
+                    self.privacy_confirm = Some(PrivacyConfirm::ShowChatPreviews);
+                } else {
+                    self.desktop_prefs.chat_previews = false;
+                    desktop::save_prefs(&self.desktop_prefs);
+                }
+                Task::none()
+            }
+            Message::SetBlurMedia(on) => {
+                if on {
+                    self.desktop_prefs.blur_media = true;
+                    self.revealed_media.clear();
+                    desktop::save_prefs(&self.desktop_prefs);
+                    return self.enqueue_missing_blurs();
+                }
+                self.privacy_confirm = Some(PrivacyConfirm::UnblurMedia);
+                Task::none()
+            }
+            Message::RevealMedia(item_id) => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
+                self.revealed_media.insert(item_id);
+                Task::none()
+            }
+            Message::BlurReady { path, blurred } => {
+                self.blur_pending.remove(&path);
+                if let Some(b) = blurred {
+                    if self.locked.is_some() || !self.desktop_prefs.blur_media {
+                        let _ = std::fs::remove_file(b);
+                    } else {
+                        self.blurred_previews.insert(path, b);
+                    }
+                }
+                Task::none()
+            }
+            Message::SetAutoDownload(on) => {
+                if on {
+                    self.privacy_confirm = Some(PrivacyConfirm::AutoDownload);
+                } else {
+                    self.desktop_prefs.auto_download = false;
+                    desktop::save_prefs(&self.desktop_prefs);
+                }
+                Task::none()
+            }
+            Message::SetCleanLinks(on) => {
+                if on {
+                    self.desktop_prefs.clean_links = true;
+                    desktop::save_prefs(&self.desktop_prefs);
+                } else {
+                    self.privacy_confirm = Some(PrivacyConfirm::KeepTrackingLinks);
+                }
+                Task::none()
+            }
+            Message::SetEncryptFiles(on) => {
+                if on {
+                    return self.apply_encrypt_files(true);
+                }
+                self.privacy_confirm = Some(PrivacyConfirm::StopEncryptingFiles);
+                Task::none()
+            }
+            Message::EncryptFilesSet(result) => {
+                match result {
+                    Ok(on) => {
+                        self.encrypt_files = on;
+                        if let Some(mut meta) = load_account() {
+                            meta.encrypt_local_files = on;
+                            let _ = cursus_core::save_account(&meta);
+                        }
+                        self.status = if on {
+                            "New files are stored encrypted.".into()
+                        } else {
+                            "New files are stored unencrypted.".into()
+                        };
+                    }
+                    Err(err) => self.status = err,
+                }
+                Task::none()
+            }
+            Message::SetReceipts { groups, on } => {
+                if on {
+                    self.privacy_confirm = Some(PrivacyConfirm::SendReceipts { groups });
+                    return Task::none();
+                }
+                self.apply_receipts(groups, false)
+            }
+            Message::ReceiptsSet(result) => {
+                match result {
+                    Ok(r) => self.receipts = r,
+                    Err(err) => self.status = err,
+                }
+                Task::none()
+            }
+            Message::SetKeyringUnlock(on) => {
+                if on {
+                    self.privacy_confirm = Some(PrivacyConfirm::EnableKeyringUnlock {
+                        password: Secret::default(),
+                        checking: false,
+                        error: None,
+                    });
+                    return iced::widget::operation::focus(iced::widget::Id::new("keyring-password"));
+                }
+                self.desktop_prefs.keyring_unlock = false;
+                desktop::save_prefs(&self.desktop_prefs);
+                Task::perform(app_lock::keyring_delete(), Message::KeyringDeleted)
+            }
+            Message::KeyringPasswordChanged(pw) => {
+                if let Some(PrivacyConfirm::EnableKeyringUnlock { password, error, .. }) =
+                    self.privacy_confirm.as_mut()
+                {
+                    *password = pw;
+                    *error = None;
+                }
+                Task::none()
+            }
+            Message::KeyringStored(result) => {
+                match result {
+                    Ok(()) => {
+                        self.privacy_confirm = None;
+                        self.desktop_prefs.keyring_unlock = true;
+                        desktop::save_prefs(&self.desktop_prefs);
+                        self.status = "Cursus will unlock with your system keyring.".into();
+                    }
+                    Err(err) => {
+                        if let Some(PrivacyConfirm::EnableKeyringUnlock { checking, error, .. }) =
+                            self.privacy_confirm.as_mut()
+                        {
+                            *checking = false;
+                            *error = Some(err);
+                        } else {
+                            self.status = err;
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::KeyringDeleted(result) => {
+                self.status = match result {
+                    Ok(()) => "Password removed from the system keyring.".into(),
+                    Err(err) => format!("Could not remove the keyring entry: {err}"),
+                };
+                Task::none()
+            }
+            Message::KeyringLoaded(result) => {
+                let Some(AuthScreen::Unlock { display_name, .. }) = self.auth.clone() else {
+                    return Task::none();
+                };
+                match result {
+                    Ok(Some(password)) => {
+                        self.status = "Unlocking with the system keyring…".into();
+                        let encrypt = load_account().map(|a| a.encrypt_local_files).unwrap_or(true);
+                        self.begin_connect(ConnectRequest {
+                            password,
+                            display_name,
+                            encrypt_local_files: encrypt,
+                            save_account: false,
+                        })
+                    }
+                    Ok(None) => {
+                        self.status = "No password in the system keyring — enter it to unlock.".into();
+                        Task::none()
+                    }
+                    Err(err) => {
+                        self.status = format!("{err} — enter your password to unlock.");
+                        Task::none()
+                    }
+                }
+            }
+            Message::CancelPrivacy => {
+                self.privacy_confirm = None;
+                Task::none()
+            }
+            Message::ConfirmPrivacy => {
+                let Some(confirm) = self.privacy_confirm.take() else {
+                    return Task::none();
+                };
+                match confirm {
+                    PrivacyConfirm::ShowNotificationText => {
+                        self.desktop_prefs.hide_notification_text = false;
+                        self.status = "Notifications will show message text.".into();
+                    }
+                    PrivacyConfirm::CloseToTray => {
+                        self.desktop_prefs.close_to_tray = true;
+                        self.status = "Close hides to tray.".into();
+                    }
+                    PrivacyConfirm::StopProtectingIp => {
+                        self.desktop_prefs.protect_ip = false;
+                        self.status = "Files download from any server.".into();
+                    }
+                    PrivacyConfirm::UnknownFileServers { files, .. } => {
+                        return self.enqueue_approved_receives(files);
+                    }
+                    PrivacyConfirm::DisableAppLock => {
+                        self.desktop_prefs.app_lock = false;
+                        self.status = "App lock off.".into();
+                    }
+                    PrivacyConfirm::ShowChatPreviews => self.desktop_prefs.chat_previews = true,
+                    PrivacyConfirm::UnblurMedia => {
+                        self.desktop_prefs.blur_media = false;
+                        self.blurred_previews.clear();
+                    }
+                    PrivacyConfirm::AutoDownload => self.desktop_prefs.auto_download = true,
+                    PrivacyConfirm::KeepTrackingLinks => self.desktop_prefs.clean_links = false,
+                    PrivacyConfirm::StopEncryptingFiles => return self.apply_encrypt_files(false),
+                    PrivacyConfirm::SendReceipts { groups } => return self.apply_receipts(groups, true),
+                    PrivacyConfirm::EnableKeyringUnlock { password, .. } => {
+                        // Keep the sheet up while we check + store.
+                        self.privacy_confirm = Some(PrivacyConfirm::EnableKeyringUnlock {
+                            password: password.clone(),
+                            checking: true,
+                            error: None,
+                        });
+                        return Task::perform(
+                            async move {
+                                let pw = password.clone();
+                                let ok = tokio::task::spawn_blocking(move || app_lock::verify(pw.as_str()))
+                                    .await
+                                    .unwrap_or(false);
+                                if !ok {
+                                    return Err("Wrong password.".to_string());
+                                }
+                                app_lock::keyring_store(password.as_str().to_string()).await
+                            },
+                            Message::KeyringStored,
+                        );
+                    }
+                }
+                desktop::save_prefs(&self.desktop_prefs);
+                Task::none()
             }
             Message::CancelOpenUrl => {
                 self.pending_url = None;
@@ -2202,6 +2737,10 @@ impl App {
                 }
                 if on && !self.desktop_prefs.tray {
                     self.status = "Enable the tray first.".into();
+                    return Task::none();
+                }
+                if on && !self.desktop_prefs.close_to_tray {
+                    self.privacy_confirm = Some(PrivacyConfirm::CloseToTray);
                     return Task::none();
                 }
                 self.desktop_prefs.close_to_tray = on;
@@ -3993,6 +4532,9 @@ impl App {
             }
             Message::WindowFocused(focused) => {
                 self.window_focused = focused;
+                if !focused && self.desktop_prefs.lock_after == crate::desktop::LockAfter::Immediately {
+                    return self.lock_app();
+                }
                 Task::none()
             }
             Message::WindowCloseRequested => {
@@ -4011,10 +4553,21 @@ impl App {
                 self.main_window = Some(id);
                 self.window_focused = true;
                 // Do not open libsimplex until welcome/unlock succeeds (SQLCipher key).
-                Task::batch([
-                    iced::window::gain_focus(id),
-                    refresh_window_metrics_for(id),
-                ])
+                let mut tasks = vec![iced::window::gain_focus(id), refresh_window_metrics_for(id)];
+                // Opt-in: fetch the DB password from the system keyring once.
+                if !self.keyring_tried
+                    && self.desktop_prefs.keyring_unlock
+                    && matches!(self.auth, Some(AuthScreen::Unlock { .. }))
+                    && !self.connecting
+                {
+                    self.keyring_tried = true;
+                    self.status = "Opening the system keyring…".into();
+                    tasks.push(Task::perform(app_lock::keyring_load(), Message::KeyringLoaded));
+                }
+                if self.locked.is_some() {
+                    tasks.push(iced::widget::operation::focus(iced::widget::Id::new("lock-password")));
+                }
+                Task::batch(tasks)
             }
             Message::WelcomeNameChanged(name) => {
                 if let Some(AuthScreen::WelcomeName { name: n }) = self.auth.as_mut() {
@@ -4033,8 +4586,8 @@ impl App {
                 }
                 self.auth = Some(AuthScreen::WelcomePassword {
                     name,
-                    password: String::new(),
-                    confirm: String::new(),
+                    password: Secret::default(),
+                    confirm: Secret::default(),
                 });
                 self.status = "Choose a password that unlocks your encrypted database.".into();
                 Task::none()
@@ -4067,7 +4620,7 @@ impl App {
                 else {
                     return Task::none();
                 };
-                if password.len() < 8 {
+                if password.as_str().chars().count() < 8 {
                     self.status = "Password must be at least 8 characters.".into();
                     return Task::none();
                 }
@@ -4096,7 +4649,7 @@ impl App {
                 else {
                     return Task::none();
                 };
-                if password.is_empty() {
+                if password.as_str().is_empty() {
                     self.status = "Enter your password.".into();
                     return Task::none();
                 }
@@ -4112,6 +4665,16 @@ impl App {
             }
             Message::DecryptFileDone { encrypted, result } => {
                 let mut tasks = Vec::new();
+                self.decrypts_pending.remove(&encrypted);
+                if self.locked.is_some() {
+                    if let Ok(plain) = result {
+                        let _ = std::fs::remove_file(plain);
+                    }
+                    return Task::none();
+                }
+                if result.is_err() {
+                    self.decrypts_failed.insert(encrypted.clone());
+                }
                 match result {
                     Ok(plain) => {
                         if plain.is_file() && !self.waveforms.contains_key(&plain) {
@@ -4157,10 +4720,15 @@ impl App {
                     return Task::none();
                 };
                 self.window_focused = false;
+                // Hidden in the tray = unattended: lock (wipes decrypted media).
+                let _ = self.lock_app();
                 // Close (don't Mode::Hidden) — Wayland ignores set_visible(false).
                 iced::window::close(id)
             }
             Message::QuitApp => {
+                // Decrypted attachments must not outlive the app (at rest they
+                // exist only as ciphertext under files/).
+                cursus_core::wipe_plaintext_cache();
                 // Watchdog: iced::exit() lets tokio join its blocking pool, and a
                 // libsimplex call (receive wait, close_store, ffmpeg reader…) can
                 // keep that from finishing — the window vanished but the process
@@ -4492,6 +5060,7 @@ impl App {
                 }
                 match result {
                     Ok(messages) => {
+                        self.decrypts_failed.clear();
                         // Defer auto-receive until WarmChatMedia so first paint /
                         // scroll aren't competing with a burst of XFTP starts.
                         self.pending_auto_receives = auto_receive_from_messages(&messages);
@@ -4544,8 +5113,16 @@ impl App {
             Message::WarmChatVisuals => self.enqueue_missing_image_previews(),
             Message::ImagePreviewReady { path, preview } => {
                 self.image_previews_pending.remove(&path);
+                if self.locked.is_some() {
+                    // Finished after the lock wiped everything: drop it too.
+                    if let Some((png, _, _)) = preview {
+                        let _ = std::fs::remove_file(png);
+                    }
+                    return Task::none();
+                }
                 if let Some(preview) = preview {
                     self.image_previews.insert(path, preview);
+                    return Task::batch([self.enqueue_missing_blurs(), self.enqueue_missing_image_previews()]);
                 } else {
                     // Don't re-decode a broken file on every enqueue.
                     self.image_previews_failed.insert(path);
@@ -4885,6 +5462,9 @@ impl App {
                 }
             }
             Message::Escape => {
+                if self.privacy_confirm.take().is_some() {
+                    return Task::none();
+                }
                 if self.pref_menu.take().is_some() {
                     return Task::none();
                 }
@@ -5432,25 +6012,49 @@ impl App {
         Task::batch(tasks)
     }
 
+    /// Automatic downloads (images / voice / small video). Files on servers
+    /// we don't use are skipped silently when "Protect IP address" is on —
+    /// tapping download later asks first.
     fn enqueue_receives(&mut self, files: Vec<(i64, String)>) -> Task<Message> {
+        if !self.desktop_prefs.auto_download {
+            return Task::none();
+        }
         let mut tasks = Vec::new();
         for (file_id, file_name) in files {
-            tasks.push(self.enqueue_receive(file_id, file_name));
+            if self.relay_unapproved.contains(&file_id) {
+                continue;
+            }
+            tasks.push(self.enqueue_receive(file_id, file_name, ReceiveMode::Auto));
         }
         Task::batch(tasks)
     }
 
-    fn enqueue_receive(&mut self, file_id: i64, file_name: String) -> Task<Message> {
+    /// Downloads the user confirmed despite unknown file servers.
+    fn enqueue_approved_receives(&mut self, files: Vec<(i64, String)>) -> Task<Message> {
+        let tasks: Vec<_> = files
+            .into_iter()
+            .map(|(id, name)| {
+                self.relay_unapproved.remove(&id);
+                self.enqueue_receive(id, name, ReceiveMode::Approved)
+            })
+            .collect();
+        Task::batch(tasks)
+    }
+
+    fn enqueue_receive(&mut self, file_id: i64, file_name: String, mode: ReceiveMode) -> Task<Message> {
         let Some(session) = self.session.clone() else {
             return Task::none();
         };
         if !self.receiving_files.insert(file_id) {
             return Task::none();
         }
-        self.status = format!("Downloading {file_name}…");
+        let approved = matches!(mode, ReceiveMode::Approved) || !self.desktop_prefs.protect_ip;
+        if !matches!(mode, ReceiveMode::Auto) {
+            self.status = format!("Downloading {file_name}…");
+        }
         Task::perform(
-            receive_file(session, file_id, file_name),
-            Message::FileReceived,
+            receive_file(session, file_id, file_name, approved, mode),
+            |r| r,
         )
     }
 
@@ -5689,10 +6293,13 @@ impl App {
         Task::perform(connect_session(slot, req), Message::Connected)
     }
 
-    fn enqueue_decrypts(&self) -> Task<Message> {
+    fn enqueue_decrypts(&mut self) -> Task<Message> {
         let Some(session) = self.session.clone() else {
             return Task::none();
         };
+        if self.locked.is_some() {
+            return Task::none();
+        }
         // Newest media first, limited parallelism — decrypting every CryptoFile
         // in a 100-message history blocked the UI when opening a chat.
         const MAX_DECRYPTS: usize = 8;
@@ -5710,7 +6317,10 @@ impl App {
             let Some(path) = file.local_path.clone() else {
                 continue;
             };
-            if self.plaintext_files.contains_key(&path) {
+            if self.plaintext_files.contains_key(&path)
+                || self.decrypts_pending.contains(&path)
+                || self.decrypts_failed.contains(&path)
+            {
                 continue;
             }
             let Some(key) = file.crypto_key.clone() else {
@@ -5720,6 +6330,9 @@ impl App {
                 continue;
             };
             jobs.push((path, key, nonce));
+        }
+        for (path, _, _) in &jobs {
+            self.decrypts_pending.insert(path.clone());
         }
         let tasks = jobs
             .into_iter()
@@ -5901,7 +6514,40 @@ impl App {
         )
     }
 
+    /// Blurred copies of ready previews (only while "Blur media" is on).
+    fn enqueue_missing_blurs(&mut self) -> Task<Message> {
+        if !self.desktop_prefs.blur_media || self.locked.is_some() {
+            return Task::none();
+        }
+        let jobs: Vec<(PathBuf, PathBuf)> = self
+            .image_previews
+            .iter()
+            .filter(|(p, _)| !self.blurred_previews.contains_key(*p) && !self.blur_pending.contains(*p))
+            .map(|(p, (png, _, _))| (p.clone(), png.clone()))
+            .collect();
+        let tasks: Vec<_> = jobs
+            .into_iter()
+            .map(|(path, png)| {
+                self.blur_pending.insert(path.clone());
+                Task::perform(
+                    async move {
+                        let blurred = tokio::task::spawn_blocking(move || media::blurred_copy(&png).ok())
+                            .await
+                            .ok()
+                            .flatten();
+                        Message::BlurReady { path, blurred }
+                    },
+                    |m| m,
+                )
+            })
+            .collect();
+        Task::batch(tasks)
+    }
+
     fn enqueue_missing_image_previews(&mut self) -> Task<Message> {
+        if self.locked.is_some() {
+            return Task::none();
+        }
         const MAX: usize = 4;
         const PREVIEW_MAX_W: u32 = 220;
         const PREVIEW_MAX_H: u32 = 280;
@@ -6065,6 +6711,109 @@ impl App {
     pub(crate) fn chat_menu(&self) -> Option<&ChatContextMenu> {
         self.chat_menu.as_ref()
     }
+    pub(crate) fn privacy_confirm(&self) -> Option<&PrivacyConfirm> {
+        self.privacy_confirm.as_ref()
+    }
+
+    pub(crate) fn lock_state(&self) -> Option<&LockState> {
+        self.locked.as_ref()
+    }
+
+    pub(crate) fn receipts(&self) -> (bool, bool) {
+        self.receipts
+    }
+
+    pub(crate) fn encrypt_files(&self) -> bool {
+        self.encrypt_files
+    }
+
+    /// Blurred preview to show instead of `path` (None: not ready / not needed).
+    pub(crate) fn blurred_preview_for(&self, path: &std::path::Path) -> Option<&PathBuf> {
+        self.blurred_previews.get(path)
+    }
+
+    pub(crate) fn media_revealed(&self, item_id: i64) -> bool {
+        self.revealed_media.contains(&item_id)
+    }
+
+    fn apply_encrypt_files(&mut self, on: bool) -> Task<Message> {
+        let Some(session) = self.session.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    session.set_encrypt_local_files(on).map(|_| on).map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r)
+            },
+            Message::EncryptFilesSet,
+        )
+    }
+
+    fn apply_receipts(&mut self, groups: bool, on: bool) -> Task<Message> {
+        let Some(session) = self.session.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    session
+                        .set_delivery_receipts(groups, on)
+                        .map(|u| (u.send_rcpts_contacts, u.send_rcpts_small_groups))
+                        .map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r)
+            },
+            Message::ReceiptsSet,
+        )
+    }
+
+    /// Lock the app now: hide everything, drop decrypted media from disk and
+    /// memory, and ask for the password again. No-op unless the lock is on.
+    fn lock_app(&mut self) -> Task<Message> {
+        if self.locked.is_some()
+            || !self.desktop_prefs.app_lock
+            || self.session.is_none()
+            || !app_lock::has_verifier()
+        {
+            return Task::none();
+        }
+        self.stop_voice_playback();
+        if let Some(mut rec) = self.voice_rec.take() {
+            let _ = rec.child.kill();
+            let _ = rec.child.wait();
+        }
+        self.voice_arming = false;
+        if let Some(draft) = self.voice_draft.take() {
+            let _ = std::fs::remove_file(&draft.path);
+        }
+        cursus_core::wipe_plaintext_cache();
+        self.plaintext_files.clear();
+        self.decrypts_pending.clear();
+        self.image_previews.clear();
+        self.image_previews_pending.clear();
+        self.image_previews_failed.clear();
+        self.waveforms.clear();
+        self.blurred_previews.clear();
+        self.blur_pending.clear();
+        self.revealed_media.clear();
+        self.revealed_secrets.clear();
+        self.revealed_deleted.clear();
+        self.chat_menu = None;
+        self.message_menu = None;
+        self.pending_url = None;
+        self.privacy_confirm = None;
+        self.pref_menu = None;
+        self.reaction_members = None;
+        self.locked = Some(LockState::default());
+        iced::widget::operation::focus(iced::widget::Id::new("lock-password"))
+    }
+
     pub(crate) fn pending_url(&self) -> Option<&PendingLink> {
         self.pending_url.as_ref()
     }
@@ -6773,13 +7522,22 @@ impl App {
             {
                 continue;
             }
+            if self.locked.is_some() {
+                // Locked: not even the chat name.
+                desktop::notify_message("Cursus", "New message");
+                continue;
+            }
             let title = chat_title_from_info(info).unwrap_or_else(|| "Cursus".into());
-            let body = item
-                .pointer("/meta/itemText")
-                .and_then(|v| v.as_str())
-                .or_else(|| item.pointer("/content/msgContent/text").and_then(|v| v.as_str()))
-                .unwrap_or("New message")
-                .to_string();
+            // Privacy default: the daemon (and its history) never sees text.
+            let body = if self.desktop_prefs.hide_notification_text {
+                "New message".to_string()
+            } else {
+                item.pointer("/meta/itemText")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| item.pointer("/content/msgContent/text").and_then(|v| v.as_str()))
+                    .unwrap_or("New message")
+                    .to_string()
+            };
             desktop::notify_message(&title, &body);
         }
     }
@@ -7091,12 +7849,15 @@ async fn connect_session(
     let work = tokio::task::spawn_blocking(move || {
         tracing::info!("unlock: Session::open");
         let cfg = SessionConfig {
-            db_key: req.password.clone(),
+            db_key: req.password.0.clone(),
             initial_display_name: req.display_name.clone(),
             encrypt_local_files: req.encrypt_local_files,
             ..SessionConfig::default()
         };
         let mut session = Session::open(cfg).map_err(|e| e.to_string())?;
+        // The password just opened the DB: keep an in-memory verifier for the
+        // lock screen (see app_lock.rs). Never written anywhere.
+        app_lock::remember(req.password.as_str());
         tracing::info!("unlock: start_chat");
         session
             .start_chat_with_options(req.encrypt_local_files)
@@ -7373,24 +8134,43 @@ async fn attach_and_send_file(session: Arc<Session>, chat: ChatPreview) -> Resul
     .map_err(|e| e.to_string())?
 }
 
+/// How a download was started (decides what happens on unknown servers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReceiveMode {
+    /// Auto-receive: skip quietly if servers need approval.
+    Auto,
+    /// The user tapped download: ask if servers need approval.
+    Manual,
+    /// The user already approved the servers.
+    Approved,
+}
+
 async fn receive_file(
     session: Arc<Session>,
     file_id: i64,
     file_name: String,
-) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .receive_file(file_id)
-            .map(|_| {
-                format!(
-                    "Downloading {file_name}… (saving under {})",
-                    files_dir().display()
-                )
-            })
-            .map_err(|e| format!("file_id:{file_id}:{e}"))
+    approved_relays: bool,
+    mode: ReceiveMode,
+) -> Message {
+    let result = tokio::task::spawn_blocking(move || {
+        session.receive_file(file_id, approved_relays).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+    .and_then(|r| r);
+    match result {
+        Ok(cursus_core::ReceiveOutcome::Accepted) => Message::FileReceived(Ok(format!(
+            "Downloading {file_name}… (saving under {})",
+            files_dir().display()
+        ))),
+        Ok(cursus_core::ReceiveOutcome::NeedsApproval { servers }) => Message::FileNeedsRelayApproval {
+            file_id,
+            file_name,
+            servers,
+            ask: mode != ReceiveMode::Auto,
+        },
+        Err(e) => Message::FileReceived(Err(format!("file_id:{file_id}:{e}"))),
+    }
 }
 
 fn auto_receive_from_messages(messages: &[ChatMessage]) -> Vec<(i64, String)> {
@@ -7408,10 +8188,33 @@ fn auto_receive_from_messages(messages: &[ChatMessage]) -> Vec<(i64, String)> {
         .collect()
 }
 
+/// File types whose default handler may *run* them (Wine `.exe`, Java
+/// `.jar`, `.desktop` launchers, scripts, installers). The name is chosen by
+/// the sender, so these are never opened with a tap — Save as… still works.
+fn is_risky_to_open(path: &std::path::Path) -> bool {
+    const RISKY: &[&str] = &[
+        "exe", "msi", "bat", "cmd", "com", "scr", "pif", "cpl", "lnk", "reg", "vbs", "vbe",
+        "js", "jse", "wsf", "ps1", "jar", "desktop", "sh", "bash", "zsh", "fish", "csh", "ksh",
+        "command", "py", "pyw", "pl", "rb", "php", "lua", "appimage", "run", "bin", "elf", "so",
+        "deb", "rpm", "apk", "flatpak", "flatpakref", "flatpakrepo", "snap", "xpi", "crx",
+        "application", "msix", "dmg", "pkg",
+    ];
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .is_some_and(|e| RISKY.contains(&e.as_str()))
+}
+
 async fn open_local_file(path: PathBuf) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         if !path.is_file() {
             return Err(format!("File missing: {}", path.display()));
+        }
+        if is_risky_to_open(&path) {
+            return Err(
+                "This file type could run code, so Cursus won't open it. Use Save as… if you trust it."
+                    .into(),
+            );
         }
         // Prefer mpv for video — xdg-open often picks a sluggish default player.
         // Both paths float the viewer on tiling compositors (float_open.rs).
@@ -7444,8 +8247,123 @@ async fn open_local_file(path: PathBuf) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Lock screen state while the app lock is engaged.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LockState {
+    pub password: Secret,
+    pub failures: u32,
+    pub retry_at: Option<std::time::Instant>,
+    pub checking: bool,
+    pub error: Option<String>,
+    /// Show the typed password (helps on phone keyboards).
+    pub reveal: bool,
+}
+
+/// A change that lowers privacy, shown as a warning sheet before applying.
+#[derive(Debug, Clone)]
+pub(crate) enum PrivacyConfirm {
+    /// Turning the app lock off.
+    DisableAppLock,
+    /// Showing last-message text in the chat list again.
+    ShowChatPreviews,
+    /// Turning media blur off.
+    UnblurMedia,
+    /// Turning automatic downloads on.
+    AutoDownload,
+    /// Opening links with their tracking parameters.
+    KeepTrackingLinks,
+    /// Storing new attachments unencrypted.
+    StopEncryptingFiles,
+    /// Sending delivery receipts (to contacts, or small groups).
+    SendReceipts { groups: bool },
+    /// Keeping the DB password in the system keyring (needs the password).
+    EnableKeyringUnlock {
+        password: Secret,
+        checking: bool,
+        error: Option<String>,
+    },
+    /// Turning off "Hide message text in notifications".
+    ShowNotificationText,
+    /// Turning on "Close window hides to tray".
+    CloseToTray,
+    /// Turning off "Protect IP address".
+    StopProtectingIp,
+    /// A download needs file servers the sender picked (not yours).
+    UnknownFileServers {
+        files: Vec<(i64, String)>,
+        servers: Vec<String>,
+    },
+}
+
+/// Links from messages are attacker-controlled (markdown `[text](uri)` can
+/// carry any scheme). Only web, mail and phone links may reach `xdg-open`;
+/// `file:`, `smb:`, `javascript:`, app protocols (`vscode:`, `steam:`…) etc.
+/// would hand the URL to whatever local handler is registered.
+/// `mailto:` keeps only the address — query fields like `?attach=` let some
+/// mail clients attach local files.
+pub(crate) fn safe_external_url(raw: &str) -> Option<String> {
+    let url = raw.trim();
+    if url.is_empty() || url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return None;
+    }
+    let (scheme, rest) = url.split_once(':')?;
+    match scheme.to_ascii_lowercase().as_str() {
+        "http" | "https" if rest.starts_with("//") && rest.len() > 2 => Some(url.to_string()),
+        "mailto" => {
+            let addr = rest.split(['?', '#']).next().unwrap_or("");
+            (addr.contains('@') && !addr.starts_with('-')).then(|| format!("mailto:{addr}"))
+        }
+        "tel" => {
+            let digits: String = rest.chars().filter(|c| c.is_ascii_digit() || *c == '+').collect();
+            (!digits.is_empty()).then(|| format!("tel:{digits}"))
+        }
+        _ => None,
+    }
+}
+
+/// Drop well-known tracking parameters (`utm_*`, `fbclid`, `gclid`, …) from
+/// a web link before opening it — the official app offers the same "clean
+/// link". The rest of the URL, including its fragment, is kept as-is.
+pub(crate) fn strip_tracking_params(url: &str) -> String {
+    const EXACT: &[&str] = &[
+        "fbclid", "gclid", "dclid", "gbraid", "wbraid", "msclkid", "mc_eid", "mc_cid",
+        "igshid", "igsh", "yclid", "twclid", "ttclid", "_hsenc", "_hsmi", "mkt_tok", "oly_enc_id",
+        "oly_anon_id", "vero_id", "rb_clickid", "s_cid", "ref_src", "ref_url",
+    ];
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return url.to_string();
+    }
+    let (before_frag, frag) = match url.split_once('#') {
+        Some((a, f)) => (a, Some(f)),
+        None => (url, None),
+    };
+    let Some((base, query)) = before_frag.split_once('?') else {
+        return url.to_string();
+    };
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|kv| !kv.is_empty())
+        .filter(|kv| {
+            let key = kv.split('=').next().unwrap_or("").to_ascii_lowercase();
+            !(key.starts_with("utm_") || EXACT.contains(&key.as_str()))
+        })
+        .collect();
+    let mut out = base.to_string();
+    if !kept.is_empty() {
+        out.push('?');
+        out.push_str(&kept.join("&"));
+    }
+    if let Some(f) = frag {
+        out.push('#');
+        out.push_str(f);
+    }
+    out
+}
+
 async fn open_url(url: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
+        let url = safe_external_url(&url).ok_or("This kind of link can't be opened.")?;
         Command::new("xdg-open")
             .arg(&url)
             .stdin(Stdio::null())
@@ -8428,7 +9346,8 @@ fn playback_wav_path(path: &std::path::Path) -> PathBuf {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("voice");
-    cursus_core::temp_dir().join("play").join(format!("{stem}.play.wav"))
+    // RAM-backed when possible: transcoded voice is plaintext too.
+    cursus_core::private_cache_dir().join("play").join(format!("{stem}.play.wav"))
 }
 
 fn spawn_audio_player(path: &PathBuf) -> Result<Child, String> {
@@ -8720,6 +9639,73 @@ async fn accept_invite(session: Arc<Session>, link: String) -> Result<String, St
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod secret_tests {
+    #[test]
+    fn passwords_never_appear_in_debug_output() {
+        let msg = super::Message::UnlockPasswordChanged(super::Secret::new("hunter2-pass".into()));
+        let shown = format!("{msg:?}");
+        assert!(!shown.contains("hunter2"), "{shown}");
+        let auth = super::AuthScreen::Unlock {
+            display_name: "D".into(),
+            password: super::Secret::new("hunter2-pass".into()),
+        };
+        assert!(!format!("{auth:?}").contains("hunter2"));
+    }
+}
+
+#[cfg(test)]
+mod link_safety_tests {
+    use super::safe_external_url;
+
+    #[test]
+    fn only_web_mail_and_phone_links_open() {
+        assert_eq!(safe_external_url("https://simplex.chat/docs").as_deref(), Some("https://simplex.chat/docs"));
+        assert!(safe_external_url("http://example.com").is_some());
+        for bad in [
+            "file:///etc/passwd",
+            "smb://evil/share",
+            "javascript:alert(1)",
+            "vscode://cmd",
+            "steam://run/1",
+            "data:text/html,x",
+            "https://a.b/\nfile:///x",
+            "--help",
+            "https:no-slashes",
+        ] {
+            assert!(safe_external_url(bad).is_none(), "{bad}");
+        }
+        assert_eq!(
+            safe_external_url("mailto:me@x.org?attach=/home/me/.ssh/id_rsa").as_deref(),
+            Some("mailto:me@x.org")
+        );
+        assert_eq!(safe_external_url("tel:+39 123").as_deref(), None);
+        assert_eq!(safe_external_url("tel:+39123").as_deref(), Some("tel:+39123"));
+    }
+
+    #[test]
+    fn tracking_parameters_are_removed() {
+        use super::strip_tracking_params as clean;
+        assert_eq!(
+            clean("https://shop.example/item?id=7&utm_source=nl&utm_medium=mail&fbclid=XYZ#top"),
+            "https://shop.example/item?id=7#top"
+        );
+        assert_eq!(clean("https://a.b/?gclid=1"), "https://a.b/");
+        assert_eq!(clean("https://a.b/search?q=utm_source"), "https://a.b/search?q=utm_source");
+        assert_eq!(clean("mailto:x@y.z"), "mailto:x@y.z");
+    }
+
+    #[test]
+    fn executable_attachments_are_not_opened() {
+        use std::path::Path;
+        assert!(super::is_risky_to_open(Path::new("/x/holiday.jpg.EXE")));
+        assert!(super::is_risky_to_open(Path::new("/x/run.desktop")));
+        assert!(super::is_risky_to_open(Path::new("/x/tool.AppImage")));
+        assert!(!super::is_risky_to_open(Path::new("/x/photo.jpg")));
+        assert!(!super::is_risky_to_open(Path::new("/x/notes.pdf")));
+    }
 }
 
 #[cfg(test)]

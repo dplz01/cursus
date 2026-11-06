@@ -335,6 +335,44 @@ fn shots() {
             app.set_composer_text("love you :he");
             render(&app, MOBILE, &format!("emoji-suggest-{t}"));
         }
+        if want("lock") {
+            for (size, name) in [(DESKTOP, "lock"), (MOBILE, "mlock")] {
+                let mut app = demo_app(dark, size.width, size.height);
+                app.locked = Some(crate::LockState::default());
+                render(&app, size, &format!("{name}-{t}"));
+                app.locked = Some(crate::LockState {
+                    password: crate::Secret::new("wrong".into()),
+                    failures: 3,
+                    error: Some("Wrong password. Try again in 2 s.".into()),
+                    ..Default::default()
+                });
+                render(&app, size, &format!("{name}-error-{t}"));
+            }
+        }
+        if want("msettings-privacy") {
+            let mut app = demo_app(dark, MOBILE.width, MOBILE.height);
+            app.nav = NavSection::Settings;
+            app.desktop_prefs.app_lock = true;
+            render(&app, Size::new(MOBILE.width, 2200.0), &format!("msettings-privacy-{t}"));
+        }
+        if want("privacy") {
+            let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);
+            app.desktop_prefs.app_lock = true;
+            app.nav = NavSection::Settings;
+            app.settings_section = crate::SettingsSection::Privacy;
+            render(&app, DESKTOP, &format!("privacy-{t}"));
+            app.privacy_confirm = Some(crate::PrivacyConfirm::UnknownFileServers {
+                files: vec![(1, "photo.jpg".into())],
+                servers: vec!["files.example.org".into()],
+            });
+            render(&app, DESKTOP, &format!("privacy-servers-{t}"));
+            app.privacy_confirm = Some(crate::PrivacyConfirm::EnableKeyringUnlock {
+                password: crate::Secret::default(),
+                checking: false,
+                error: None,
+            });
+            render(&app, DESKTOP, &format!("privacy-keyring-{t}"));
+        }
         if want("new") {
             let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);
             app.compose_open = true;
@@ -522,6 +560,8 @@ fn history_cache_never_goes_stale() {
             a.desktop_prefs.theme = ThemePreference::Light;
         }),
         ("narrower window", |a| a.width = 900.0),
+        ("blur media on", |a| a.desktop_prefs.blur_media = true),
+        ("chat previews off", |a| a.desktop_prefs.chat_previews = false),
         ("epoch timestamp", |a| {
             let mut m = msg(51, "Group event without a real date", false, "00:00");
             m.created_at = Some("1970-01-01T00:00:00Z".into());
@@ -540,4 +580,24 @@ fn history_cache_never_goes_stale() {
         let (fresh, _) = frame_pixels(&app, DESKTOP, &mut cold, Cache::default());
         assert!(cached == fresh, "stale history after: {label}");
     }
+}
+
+/// Wrong passwords back off; the right one unlocks and clears the state.
+#[test]
+fn lock_screen_backs_off_then_unlocks() {
+    let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+    app.locked = Some(crate::LockState::default());
+    for _ in 0..3 {
+        let _ = app.update(Message::LockVerified(false));
+    }
+    let lock = app.locked.as_ref().expect("still locked");
+    assert_eq!(lock.failures, 3);
+    assert!(lock.retry_at.is_some(), "third failure must start a delay");
+    assert!(lock.password.as_str().is_empty(), "field cleared after a miss");
+    // Submitting during the delay does not start a check.
+    app.locked.as_mut().unwrap().password = crate::Secret::new("x".into());
+    let _ = app.update(Message::LockSubmit);
+    assert!(!app.locked.as_ref().unwrap().checking);
+    let _ = app.update(Message::LockVerified(true));
+    assert!(app.locked.is_none());
 }

@@ -23,6 +23,8 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 unicode-segmentation.workspace = true
+zeroize.workspace = true
+libc = "0.2"
 
 [build-dependencies]
 cc = { version = "1", optional = true }

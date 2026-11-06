@@ -38,10 +38,53 @@ pub fn resolve_local_file(stored: &str) -> PathBuf {
     }
 }
 
-/// Cache path for a decrypted CryptoFile (under `tmp/plain/`).
+/// RAM-backed private directory for plaintext caches:
+/// `$XDG_RUNTIME_DIR/cursus`. The runtime dir is a per-user tmpfs (`0700`)
+/// that the system empties at logout and reboot, so decrypted media there
+/// never reaches persistent storage — not even after a crash or power loss.
+/// `None` when there is no private runtime dir (then the disk cache is used).
+pub fn runtime_cache_dir() -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let base = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?);
+    let meta = std::fs::metadata(&base).ok()?;
+    if !meta.is_dir() || meta.permissions().mode() & 0o077 != 0 {
+        return None;
+    }
+    Some(base.join("cursus"))
+}
+
+/// Where short-lived plaintext (playback transcodes) goes: RAM if possible.
+pub fn private_cache_dir() -> PathBuf {
+    runtime_cache_dir().unwrap_or_else(temp_dir)
+}
+
+/// Free bytes on the filesystem holding `path` (or its nearest parent).
+pub fn free_bytes(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut probe = path;
+    while !probe.exists() {
+        probe = probe.parent()?;
+    }
+    let c = std::ffi::CString::new(probe.as_os_str().as_bytes()).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: valid C string and out-pointer.
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    Some(st.f_bavail as u64 * st.f_frsize as u64)
+}
+
+/// Whether a `size`-byte plaintext should go to the RAM-backed cache: only
+/// with plenty of room left (tmpfs is shared with other apps and is memory).
+pub fn fits_in_ram_cache(size: u64, free: u64) -> bool {
+    const RESERVE: u64 = 64 * 1024 * 1024;
+    size.saturating_mul(4) <= free && size.saturating_add(RESERVE) < free
+}
+
+/// File name of a decrypted CryptoFile in either cache directory.
 ///
 /// Keyed by source path + key + nonce so re-decrypt is a cache hit.
-pub fn plaintext_cache_path(encrypted: &Path, key: &str, nonce: &str) -> PathBuf {
+pub fn plaintext_cache_name(encrypted: &Path, key: &str, nonce: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
@@ -52,9 +95,13 @@ pub fn plaintext_cache_path(encrypted: &Path, key: &str, nonce: &str) -> PathBuf
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("file");
-    temp_dir()
-        .join("plain")
-        .join(format!("{:016x}_{stem}", h.finish()))
+    format!("{:016x}_{stem}", h.finish())
+}
+
+/// On-disk cache path for a decrypted CryptoFile (under `tmp/plain/`), used
+/// when the RAM cache is unavailable or too small.
+pub fn plaintext_cache_path(encrypted: &Path, key: &str, nonce: &str) -> PathBuf {
+    temp_dir().join("plain").join(plaintext_cache_name(encrypted, key, nonce))
 }
 
 /// Default location for downloaded/built native libraries inside the repo.
@@ -88,6 +135,15 @@ pub fn lib_filename() -> &'static str {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn ram_cache_only_with_room_to_spare() {
+        const MB: u64 = 1024 * 1024;
+        assert!(fits_in_ram_cache(5 * MB, 1500 * MB));
+        assert!(!fits_in_ram_cache(100 * MB, 300 * MB), "would take a third of tmpfs");
+        assert!(!fits_in_ram_cache(10 * MB, 70 * MB), "must keep the reserve free");
+        assert!(!fits_in_ram_cache(u64::MAX, u64::MAX));
+    }
 
     #[test]
     fn plaintext_cache_path_stable_and_keyed() {

@@ -346,8 +346,19 @@ impl Commands {
     /// official clients and keeps relative paths inside the app files dir.
     ///
     /// `encrypt=on` stores CryptoFile ciphertext under `files/` (keys in DB).
-    pub fn receive_file(file_id: i64) -> String {
-        format!("/freceive {file_id} approved_relays=on encrypt=on")
+    /// `approved_relays=off` makes the core refuse file servers that are not
+    /// ours (`fileNotApproved`), so the sender can't learn our IP address
+    /// without consent — the official "Protect IP address" default.
+    /// `/_set receipts contacts|groups <userId> on|off` (keeps per-chat overrides).
+    pub fn set_delivery_receipts(user_id: i64, groups: bool, on: bool) -> String {
+        let scope = if groups { "groups" } else { "contacts" };
+        let flag = if on { "on" } else { "off" };
+        format!("/_set receipts {scope} {user_id} {flag}")
+    }
+
+    pub fn receive_file(file_id: i64, approved_relays: bool) -> String {
+        let relays = if approved_relays { "on" } else { "off" };
+        format!("/freceive {file_id} approved_relays={relays} encrypt=on")
     }
 
     /// Toggle core `encryptLocalFiles` (`/_files_encrypt on|off`).

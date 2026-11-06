@@ -138,6 +138,8 @@ impl LibSimplex {
         let raw = unsafe {
             (self.chat_migrate_init)(prefix.as_ptr(), key.as_ptr(), confirm.as_ptr(), &mut ctrl)
         };
+        // Our copy of the key is no longer needed: wipe it before freeing.
+        zeroize::Zeroize::zeroize(&mut key.into_bytes_with_nul());
         let json = take_c_string(raw)?;
         let value: serde_json::Value = serde_json::from_str(&json)?;
         let ty = value.get("type").and_then(|v| v.as_str()).unwrap_or("");

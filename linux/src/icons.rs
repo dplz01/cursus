@@ -280,6 +280,14 @@ pub fn paperplane_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 }
 
 /// SimpleX links — Solar Broken Line Icons (CC Attribution via SVG Repo).
+pub fn shield_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/shield-check.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
 pub fn link_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
         svg::Handle::from_memory(

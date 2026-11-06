@@ -318,12 +318,36 @@ pub fn exif_orientation(path: &Path) -> Option<Orientation> {
     decoder.orientation().ok()
 }
 
+/// Decode budget for received photos. A tiny file can claim gigantic
+/// dimensions ("decompression bomb"); the `image` default allows 512 MiB per
+/// decode, too much on phones where several previews decode at once.
+/// 128 MiB covers ~40 MP RGB photos; larger ones fall back to the placeholder
+/// (sending such a photo still works — it goes out untouched).
+fn photo_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    limits.max_image_width = Some(12_000);
+    limits.max_image_height = Some(12_000);
+    limits
+}
+
+/// Profile pictures are at most a few hundred pixels; anything bigger is junk.
+fn avatar_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(16 * 1024 * 1024);
+    limits.max_image_width = Some(2_048);
+    limits.max_image_height = Some(2_048);
+    limits
+}
+
 /// Decode an image file with EXIF orientation applied.
 pub fn open_upright(path: &Path) -> Result<image::DynamicImage, String> {
     use image::ImageDecoder;
-    let mut decoder = image::ImageReader::open(path)
+    let mut reader = image::ImageReader::open(path)
         .and_then(|r| r.with_guessed_format())
-        .map_err(|e| format!("open image: {e}"))?
+        .map_err(|e| format!("open image: {e}"))?;
+    reader.limits(photo_limits());
+    let mut decoder = reader
         .into_decoder()
         .map_err(|e| format!("decode image: {e}"))?;
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
@@ -379,6 +403,26 @@ pub fn upright_copy_for_send(path: &Path, out_dir: &Path) -> Result<Option<PathB
         .write_with_encoder(enc)
         .map_err(|e| format!("jpeg encode: {e}"))?;
     Ok(Some(out))
+}
+
+/// Heavily blurred copy of a (small, already rounded) chat preview, written
+/// next to it as `*.blur.png` — same private cache dir, wiped with it.
+/// Rounded-corner transparency is preserved: alpha comes from the original.
+pub fn blurred_copy(preview: &Path) -> Result<PathBuf, String> {
+    let out = preview.with_extension("blur.png");
+    if out.is_file() {
+        return Ok(out);
+    }
+    let img = image::open(preview).map_err(|e| format!("blur: {e}"))?.to_rgba8();
+    let (w, h) = img.dimensions();
+    // Strong enough that faces / text are unreadable at bubble size.
+    let sigma = (w.max(h) as f32 / 12.0).max(8.0);
+    let mut blurred = image::imageops::fast_blur(&img, sigma);
+    for (b, o) in blurred.pixels_mut().zip(img.pixels()) {
+        b.0[3] = o.0[3];
+    }
+    blurred.save(&out).map_err(|e| format!("blur: {e}"))?;
+    Ok(out)
 }
 
 /// Return a cached rounded preview if one already exists (never decodes).
@@ -541,7 +585,11 @@ pub fn round_profile_avatar_rgba(
 ) -> Result<(u32, u32, Vec<u8>), String> {
     let size = size_px.max(16);
     let raw = decode_profile_image_bytes(data_url)?;
-    let img = image::load_from_memory(&raw).map_err(|e| format!("decode profile image: {e}"))?;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(&raw))
+        .with_guessed_format()
+        .map_err(|e| format!("decode profile image: {e}"))?;
+    reader.limits(avatar_limits());
+    let img = reader.decode().map_err(|e| format!("decode profile image: {e}"))?;
     let rgba = img.to_rgba8();
     let (sw, sh) = rgba.dimensions();
     if sw == 0 || sh == 0 {
@@ -627,6 +675,56 @@ mod tests {
         std::fs::write(&path, jpeg_with_orientation(1)).unwrap();
         assert!(upright_copy_for_send(&path, &dir.join("out2")).unwrap().is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn blurred_copy_hides_detail() {
+        let dir = std::env::temp_dir().join(format!("cursus-blur-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("p.png");
+        // Sharp black/white stripes.
+        let img = image::RgbaImage::from_fn(120, 80, |x, _| {
+            if (x / 4) % 2 == 0 { image::Rgba([0, 0, 0, 255]) } else { image::Rgba([255, 255, 255, 255]) }
+        });
+        img.save(&src).unwrap();
+        let out = blurred_copy(&src).unwrap();
+        let b = image::open(&out).unwrap().to_rgba8();
+        let row: Vec<u8> = (20..100).map(|x| b.get_pixel(x, 40).0[0]).collect();
+        let (lo, hi) = (*row.iter().min().unwrap(), *row.iter().max().unwrap());
+        assert!(hi - lo < 60, "stripes should wash out, range {lo}..{hi}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn oversized_images_are_refused_not_decoded() {
+        // 20000x20000 PNG header: tiny file, would need ~1.2 GB to decode.
+        let dir = std::env::temp_dir().join(format!("cursus-bomb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bomb.png");
+        let mut png = Vec::new();
+        image::ImageEncoder::write_image(image::codecs::png::PngEncoder::new(&mut png),
+            &[0u8; 3], 1, 1, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        // Patch IHDR width/height (bytes 16..24) and its CRC.
+        png[16..20].copy_from_slice(&20_000u32.to_be_bytes());
+        png[20..24].copy_from_slice(&20_000u32.to_be_bytes());
+        let crc = crc32(&png[12..29]);
+        png[29..33].copy_from_slice(&crc.to_be_bytes());
+        std::fs::write(&path, &png).unwrap();
+        let err = open_upright(&path).unwrap_err();
+        assert!(err.to_lowercase().contains("limit"), "must be refused by the memory limit: {err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &b in data {
+            crc ^= b as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
     }
 
     #[test]

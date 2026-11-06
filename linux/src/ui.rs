@@ -236,6 +236,10 @@ pub fn shell(app: &App) -> Element<'_, Message> {
     if app.auth().is_some() {
         return auth_gate(app);
     }
+    // App lock: nothing of the chats is even built while locked.
+    if let Some(lock) = app.lock_state() {
+        return lock_screen(app, lock);
+    }
     let base: Element<'_, Message> = match app.layout() {
         LayoutMode::Desktop => desktop_shell(app),
         LayoutMode::Compact | LayoutMode::Mobile => stacked_shell(app),
@@ -246,6 +250,9 @@ pub fn shell(app: &App) -> Element<'_, Message> {
     }
     if app.pending_url().is_some() {
         stack = stack.push(open_url_confirm_overlay(app));
+    }
+    if app.privacy_confirm().is_some() {
+        stack = stack.push(privacy_confirm_overlay(app));
     }
     if app.message_menu().is_some() {
         stack = stack.push(message_menu_overlay(app));
@@ -260,6 +267,122 @@ pub fn shell(app: &App) -> Element<'_, Message> {
         stack = stack.push(pref_menu_overlay(app));
     }
     stack.into()
+}
+
+/// Lock screen: one centered card that works with a mouse + keyboard (field
+/// focused, Enter unlocks) and on phones (full-width field and a large Unlock
+/// button above the on-screen keyboard, Show/Hide for typing long passwords).
+fn lock_screen<'a>(app: &'a App, lock: &'a crate::LockState) -> Element<'a, Message> {
+    let d = app.density();
+    let hover = app.hover_ok();
+    let narrow = !matches!(app.layout(), LayoutMode::Desktop);
+    let waiting = lock
+        .retry_at
+        .is_some_and(|t| std::time::Instant::now() < t);
+    let field = text_input("Database password", lock.password.as_str())
+        .id(iced::widget::Id::new("lock-password"))
+        .secure(!lock.reveal)
+        .on_input(|s| Message::LockPasswordChanged(crate::Secret::new(s)))
+        .on_submit(Message::LockSubmit)
+        .padding(Padding::from([14, 16]))
+        .size(d.body + 1.0)
+        .width(Length::Fill)
+        .style(theme::rounded_field());
+    let reveal = button(
+        text(if lock.reveal { "Hide" } else { "Show" })
+            .size(d.meta)
+            .color(theme::t().accent),
+    )
+    .on_press(Message::LockToggleReveal)
+    .padding(Padding::from([14, 12]))
+    .style(theme::ghost_tile(hover));
+    let can_submit = !lock.checking && !lock.password.as_str().is_empty();
+    let unlock = button(
+        container(
+            text(if lock.checking { "Checking…" } else { "Unlock" })
+                .size(d.body)
+                .font(BOLD),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill),
+    )
+    .on_press_maybe(can_submit.then_some(Message::LockSubmit))
+    .padding(Padding::from([14, 18]))
+    .width(Length::Fill)
+    .style(theme::primary_action(hover));
+
+    let mut card = column![
+        container(icons::shield_icon(44.0, theme::t().accent))
+            .width(Length::Fill)
+            .center_x(Length::Fill),
+        container(
+            text("Cursus is locked")
+                .size(d.title + 4.0)
+                .font(BOLD)
+                .color(theme::t().text_primary),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill),
+        container(
+            text("Enter your database password to continue.")
+                .size(d.meta)
+                .color(theme::t().text_secondary),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill),
+        row![field, reveal].spacing(6).align_y(Alignment::Center),
+    ]
+    .spacing(14)
+    .width(Length::Fill);
+    if let Some(err) = lock.error.as_ref() {
+        card = card.push(text(err.clone()).size(d.meta).color(theme::t().danger));
+    } else if waiting {
+        card = card.push(
+            text("Too many attempts — wait a moment.")
+                .size(d.meta)
+                .color(theme::t().danger),
+        );
+    }
+    card = card.push(unlock);
+    if !narrow {
+        card = card.push(
+            container(
+                text("Press Enter to unlock · Ctrl+L locks again")
+                    .size(d.meta)
+                    .color(theme::t().text_muted),
+            )
+            .width(Length::Fill)
+            .center_x(Length::Fill),
+        );
+    }
+    let panel = container(card)
+        .width(Length::Fill)
+        .max_width(400)
+        .padding(if narrow { Padding::from([24, 18]) } else { Padding::from([32, 32]) })
+        .style(|_| {
+            let c = theme::t();
+            container::Style {
+                background: Some(iced::Background::Color(c.bg_elevated)),
+                border: iced::Border {
+                    radius: 20.0.into(),
+                    ..Default::default()
+                },
+                ..container::Style::default()
+            }
+        });
+    // Phones: keep the card in the upper part so the keyboard doesn't cover it.
+    let outer = container(panel)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .padding(Padding::from([if narrow { 48 } else { 0 }, 16]));
+    let outer = if narrow { outer.align_y(Alignment::Start) } else { outer.center_y(Length::Fill) };
+    outer
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().bg_panel)),
+            ..container::Style::default()
+        })
+        .into()
 }
 
 fn auth_gate(app: &App) -> Element<'_, Message> {
@@ -315,16 +438,16 @@ fn auth_gate(app: &App) -> Element<'_, Message> {
             ))
             .size(d.meta)
             .color(theme::t().text_secondary),
-            text_input("Password (min 8 characters)", password)
+            text_input("Password (min 8 characters)", password.as_str())
                 .secure(true)
-                .on_input(Message::WelcomePasswordChanged)
+                .on_input(|s| Message::WelcomePasswordChanged(crate::Secret::new(s)))
                 .padding(d.composer)
                 .size(d.body)
                 .width(Length::Fill)
                 .style(theme::composer_input()),
-            text_input("Confirm password", confirm)
+            text_input("Confirm password", confirm.as_str())
                 .secure(true)
-                .on_input(Message::WelcomeConfirmChanged)
+                .on_input(|s| Message::WelcomeConfirmChanged(crate::Secret::new(s)))
                 .on_submit(Message::WelcomeSubmit)
                 .padding(d.composer)
                 .size(d.body)
@@ -362,9 +485,9 @@ fn auth_gate(app: &App) -> Element<'_, Message> {
             text(format!("Welcome back, {display_name}."))
                 .size(d.body)
                 .color(theme::t().text_secondary),
-            text_input("Database password", password)
+            text_input("Database password", password.as_str())
                 .secure(true)
-                .on_input(Message::UnlockPasswordChanged)
+                .on_input(|s| Message::UnlockPasswordChanged(crate::Secret::new(s)))
                 .on_submit(Message::UnlockSubmit)
                 .padding(d.composer)
                 .size(d.body)
@@ -403,7 +526,8 @@ fn auth_gate(app: &App) -> Element<'_, Message> {
         card
     };
     let panel = container(card)
-        .width(Length::Fixed(420.0))
+        .width(Length::Fill)
+        .max_width(420)
         .padding(Padding::from([28, 28]))
         .style(|_| {
             let c = theme::t();
@@ -768,7 +892,9 @@ fn chat_list(app: &App) -> Element<'_, Message> {
         }
 
         // Line 2: preview (fitted to two lines with "…") · badges.
-        let preview: Element<'_, Message> = if chat.preview.is_empty() {
+        let preview: Element<'_, Message> = if chat.preview.is_empty()
+            || !app.desktop_prefs().chat_previews
+        {
             Space::new().height(0).width(Length::Fill).into()
         } else {
             container(ellipsis_text(
@@ -1598,6 +1724,9 @@ fn history_key(app: &App, d: Density) -> u64 {
         chat.is_channel.hash(&mut h);
     }
 
+    // Media blur.
+    app.desktop_prefs().blur_media.hash(&mut h);
+
     // Selection, focus and reveal state.
     app.selection_mode().hash(&mut h);
     app.focus_item().hash(&mut h);
@@ -1620,6 +1749,8 @@ fn history_key(app: &App, d: Density) -> u64 {
             if let Some(p) = plain.as_ref() {
                 p.is_file().hash(&mut h);
                 app.image_preview_for(p, 0, 0).hash(&mut h);
+                app.blurred_preview_for(p).hash(&mut h);
+                app.media_revealed(msg.item_id).hash(&mut h);
                 if let Some(peaks) = app.waveform_for(p) {
                     for v in peaks {
                         f(&mut h, *v);
@@ -3236,6 +3367,14 @@ fn visual_media_preview(
     } else {
         app.image_preview_for(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)
     };
+    // "Blur photos": show the blurred copy until this item is tapped; never
+    // the sharp preview while the blurred one is still being made.
+    let blur = app.desktop_prefs().blur_media && !app.media_revealed(msg.item_id);
+    let prepared = match prepared {
+        // Placeholder until the blurred copy exists.
+        Some((_, pw, ph)) if blur => app.blurred_preview_for(&path).map(|b| (b.clone(), pw, ph)),
+        other => other,
+    };
     let (w, h, face): (f32, f32, Element<'static, Message>) = if let Some((display_path, pw, ph)) =
         prepared
     {
@@ -3292,11 +3431,16 @@ fn visual_media_preview(
         .width(Length::Fixed(w))
         .height(Length::Fixed(h))
         .clip(true);
-    // Single tap opens the file. Double-tap is handled by the bubble HoverArea
-    // (menu) — do not swallow it here.
+    // Single tap opens the file (or, while blurred, reveals it). Double-tap
+    // is handled by the bubble HoverArea (menu) — do not swallow it here.
+    let tap = if blur && !is_video {
+        Message::RevealMedia(msg.item_id)
+    } else {
+        Message::OpenLocalFile(path)
+    };
     Some(
         mouse_area(framed)
-            .on_release(Message::OpenLocalFile(path))
+            .on_release(tap)
             .interaction(mouse::Interaction::Pointer)
             .into(),
     )
@@ -3563,7 +3707,8 @@ fn settings_section_meta(section: crate::SettingsSection) -> (Element<'static, M
         crate::SettingsSection::Profile => (icons::user_alt_icon(18.0, a), "Profile", "Name, bio and picture"),
         crate::SettingsSection::Address => (icons::link_icon(18.0, a), "Address", "How people reach you"),
         crate::SettingsSection::Appearance => (icons::image_icon(18.0, a), "Appearance", "Theme and text size"),
-        crate::SettingsSection::Desktop => (icons::settings_icon_plain(18.0, a), "Desktop", "Notifications and tray"),
+        crate::SettingsSection::Privacy => (icons::shield_icon(18.0, a), "Privacy & security", "Lock, screen, files and receipts"),
+        crate::SettingsSection::Desktop => (icons::settings_icon_plain(18.0, a), "Notifications & tray", "Alerts and background running"),
     }
 }
 
@@ -3662,13 +3807,123 @@ fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<
                 hover,
             ));
         }
+        crate::SettingsSection::Privacy => {
+            let (rcpt_contacts, rcpt_groups) = app.receipts();
+            // Lock — who can open Cursus.
+            col = col.push(pref_section("Lock", false, d));
+            col = col.push(settings_toggle_row("App lock", prefs.app_lock, Message::SetAppLock, d));
+            col = col.push(pref_note(
+                "Asks for your database password after inactivity or when hidden to the tray, and clears decrypted media.",
+                d,
+            ));
+            if prefs.app_lock {
+                col = col.push(settings_choice_row(
+                    "Lock",
+                    prefs.lock_after.label(),
+                    Message::OpenPrefMenu(PrefMenu::LockAfter),
+                    d,
+                    hover,
+                ));
+                col = col.push(pref_row(
+                    None,
+                    "Lock now",
+                    button(text("Lock").size(d.meta).color(theme::t().accent_on))
+                        .on_press(Message::LockNow)
+                        .padding(Padding::from([6, 14]))
+                        .style(theme::primary_action(hover))
+                        .into(),
+                    PrefTrail::None,
+                    d,
+                ));
+            }
+            col = col.push(settings_toggle_row(
+                "Unlock automatically at start",
+                prefs.keyring_unlock,
+                Message::SetKeyringUnlock,
+                d,
+            ));
+            col = col.push(pref_note(
+                if prefs.keyring_unlock {
+                    "Your password is in your desktop keyring; Cursus opens without asking."
+                } else {
+                    "Cursus asks for your password every time it starts."
+                },
+                d,
+            ));
+
+            // On screen — what someone looking at it sees.
+            col = col.push(pref_section("On screen", false, d));
+            col = col.push(settings_toggle_row(
+                "Message previews in chat list",
+                prefs.chat_previews,
+                Message::SetChatPreviews,
+                d,
+            ));
+            col = col.push(settings_toggle_row("Blur photos and videos", prefs.blur_media, Message::SetBlurMedia, d));
+            if prefs.blur_media {
+                col = col.push(pref_note("Tap a photo to reveal it.", d));
+            }
+            col = col.push(settings_toggle_row(
+                "Hide message text in notifications",
+                prefs.hide_notification_text,
+                Message::SetHideNotificationText,
+                d,
+            ));
+
+            // Files & network — what reaches the disk and other servers.
+            col = col.push(pref_section("Files & network", false, d));
+            col = col.push(settings_toggle_row("Protect IP address", prefs.protect_ip, Message::SetProtectIp, d));
+            col = col.push(pref_note(
+                if prefs.protect_ip {
+                    "Asks before downloading from file servers chosen by the sender."
+                } else {
+                    "Without Tor or VPN, file servers you download from see your IP address."
+                },
+                d,
+            ));
+            col = col.push(settings_toggle_row(
+                "Download images and voice automatically",
+                prefs.auto_download,
+                Message::SetAutoDownload,
+                d,
+            ));
+            col = col.push(settings_toggle_row(
+                "Encrypt stored files",
+                app.encrypt_files(),
+                Message::SetEncryptFiles,
+                d,
+            ));
+            col = col.push(settings_toggle_row(
+                "Remove tracking from links",
+                prefs.clean_links,
+                Message::SetCleanLinks,
+                d,
+            ));
+
+            // What contacts see.
+            col = col.push(pref_section("What contacts see", false, d));
+            col = col.push(settings_toggle_row(
+                "Delivery receipts to contacts",
+                rcpt_contacts,
+                |on| Message::SetReceipts { groups: false, on },
+                d,
+            ));
+            col = col.push(settings_toggle_row(
+                "Delivery receipts in small groups",
+                rcpt_groups,
+                |on| Message::SetReceipts { groups: true, on },
+                d,
+            ));
+        }
         crate::SettingsSection::Desktop => {
+            col = col.push(pref_section("Notifications", false, d));
             col = col.push(settings_toggle_row(
                 "Desktop notifications",
                 prefs.notifications,
                 Message::SetDesktopNotifications,
                 d,
             ));
+            col = col.push(pref_section("Background", false, d));
             col = col.push(settings_toggle_row("System tray icon", prefs.tray, Message::SetTray, d));
             col = col.push(settings_toggle_row(
                 "Close window hides to tray",
@@ -4119,6 +4374,16 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
                 crate::desktop::ThemePreference::ALL
                     .into_iter()
                     .map(|t| (t.label().to_string(), t == cur, Message::SetThemePreference(t)))
+                    .collect(),
+            )
+        }
+        PrefMenu::LockAfter => {
+            let cur = app.desktop_prefs().lock_after;
+            (
+                "Lock",
+                crate::desktop::LockAfter::ALL
+                    .into_iter()
+                    .map(|t| (t.label().to_string(), t == cur, Message::SetLockAfter(t)))
                     .collect(),
             )
         }
@@ -5179,6 +5444,175 @@ fn open_url_confirm_overlay(app: &App) -> Element<'_, Message> {
         .center_y(Length::Fill)
         .padding(Padding::from([24, 20]));
 
+    iced::widget::opaque(
+        Stack::new()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .push(backdrop)
+            .push(sheet),
+    )
+}
+
+/// Warning sheet for settings / downloads that lower privacy.
+fn privacy_confirm_overlay(app: &App) -> Element<'_, Message> {
+    let d = app.density();
+    let hover = app.hover_ok();
+    let Some(confirm) = app.privacy_confirm() else {
+        return vertical().height(0).into();
+    };
+    let (title, body, action): (&str, String, &str) = match confirm {
+        crate::PrivacyConfirm::ShowNotificationText => (
+            "Show message text in notifications?",
+            "Anyone who can see your screen will be able to read incoming messages, \
+             and many desktops keep notifications in a history that stays after Cursus closes."
+                .into(),
+            "Show text",
+        ),
+        crate::PrivacyConfirm::CloseToTray => (
+            "Keep Cursus running in the tray?",
+            "Closing the window will hide Cursus instead of quitting. It stays unlocked, and \
+             decrypted photos, videos and voice messages you opened stay in its private cache \
+             until you quit from the tray."
+                .into(),
+            "Hide to tray",
+        ),
+        crate::PrivacyConfirm::StopProtectingIp => (
+            "Stop protecting your IP address?",
+            "Files will download from any server the sender chooses, including automatic \
+             downloads. Without Tor or VPN, those servers see your IP address."
+                .into(),
+            "Turn off",
+        ),
+        crate::PrivacyConfirm::DisableAppLock => (
+            "Turn off app lock?",
+            "Anyone with access to this computer while Cursus is running can read your chats, \
+             including when it's hidden in the tray."
+                .into(),
+            "Turn off",
+        ),
+        crate::PrivacyConfirm::ShowChatPreviews => (
+            "Show message previews?",
+            "The last message of every chat will be visible in the chat list to anyone who can \
+             see your screen."
+                .into(),
+            "Show previews",
+        ),
+        crate::PrivacyConfirm::UnblurMedia => (
+            "Stop blurring media?",
+            "Photos and videos will be shown in full in your chats, visible to anyone who can see \
+             your screen."
+                .into(),
+            "Show media",
+        ),
+        crate::PrivacyConfirm::AutoDownload => (
+            "Download media automatically?",
+            "Images, voice messages and short videos from anyone who writes to you will download \
+             without asking — including from strangers in groups."
+                .into(),
+            "Download automatically",
+        ),
+        crate::PrivacyConfirm::KeepTrackingLinks => (
+            "Keep tracking codes in links?",
+            "Links will open exactly as sent, including codes like utm_source or fbclid that let \
+             websites track where you came from."
+                .into(),
+            "Keep codes",
+        ),
+        crate::PrivacyConfirm::StopEncryptingFiles => (
+            "Store new files unencrypted?",
+            "Photos, videos, voice messages and files you send or receive from now on will be saved \
+             readable on disk. Files already stored stay encrypted."
+                .into(),
+            "Store unencrypted",
+        ),
+        crate::PrivacyConfirm::SendReceipts { groups } => (
+            "Send delivery receipts?",
+            if *groups {
+                "Members of small groups will see when their messages reach this device.".into()
+            } else {
+                "Your contacts will see when their messages reach this device.".into()
+            },
+            "Send receipts",
+        ),
+        crate::PrivacyConfirm::EnableKeyringUnlock { .. } => (
+            "Unlock automatically?",
+            "Your database password will be kept in your desktop's keyring (GNOME Keyring, KWallet…), \
+             which is unlocked when you log in. Cursus will then open without asking — anyone \
+             using your logged-in session can read your chats. Enter your password to confirm."
+                .into(),
+            "Store in keyring",
+        ),
+        crate::PrivacyConfirm::UnknownFileServers { servers, .. } => (
+            "Download from unknown servers?",
+            format!(
+                "This file is on servers you don't use. Without Tor or VPN, your IP address will be \
+                 visible to: {}.",
+                if servers.is_empty() { "unknown".to_string() } else { servers.join(", ") }
+            ),
+            "Download",
+        ),
+    };
+    let mut content = column![
+        text(title).size(d.body).font(BOLD).color(theme::t().text_primary),
+        text(body)
+            .size(d.meta)
+            .color(theme::t().text_secondary)
+            .wrapping(Wrapping::WordOrGlyph),
+    ]
+    .spacing(12)
+    .max_width(420);
+    let mut busy = false;
+    if let crate::PrivacyConfirm::EnableKeyringUnlock { password, checking, error } = confirm {
+        busy = *checking;
+        content = content.push(
+            text_input("Database password", password.as_str())
+                .id(iced::widget::Id::new("keyring-password"))
+                .on_input(|s| Message::KeyringPasswordChanged(crate::Secret::new(s)))
+                .on_submit(Message::ConfirmPrivacy)
+                .secure(true)
+                .padding(Padding::from([12, 14]))
+                .size(d.body)
+                .style(theme::rounded_field()),
+        );
+        if let Some(err) = error {
+            content = content.push(text(err.clone()).size(d.meta).color(theme::t().danger));
+        }
+    }
+    let confirm_btn = button(text(if busy { "Checking…" } else { action }).size(d.meta))
+        .padding(Padding::from([10, 14]))
+        .style(theme::danger_action(hover));
+    let confirm_btn = if busy {
+        confirm_btn
+    } else {
+        confirm_btn.on_press(Message::ConfirmPrivacy)
+    };
+    content = content.push(
+        row![
+            button(text("Cancel").size(d.meta))
+                .on_press(Message::CancelPrivacy)
+                .padding(Padding::from([10, 14]))
+                .style(theme::secondary_action(hover)),
+            confirm_btn,
+        ]
+        .spacing(8),
+    );
+    let card = menu_card(content.into(), d);
+    let backdrop = mouse_area(
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.45))),
+                ..container::Style::default()
+            }),
+    )
+    .on_press(Message::CancelPrivacy);
+    let sheet = container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .padding(Padding::from([24, 20]));
     iced::widget::opaque(
         Stack::new()
             .width(Length::Fill)

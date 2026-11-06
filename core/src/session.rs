@@ -1165,6 +1165,18 @@ fn parse_one_chat(chat: &Value) -> Option<ChatPreview> {
         .pointer("/chatStats/unreadChat")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let last_ts = chat
+        .get("chatItems")
+        .and_then(|v| v.as_array())
+        .and_then(|items| items.first())
+        .and_then(|item| item.pointer("/meta/itemTs"))
+        .or_else(|| info.pointer("/contact/chatTs"))
+        .or_else(|| info.pointer("/groupInfo/chatTs"))
+        .or_else(|| info.pointer("/contact/updatedAt"))
+        .or_else(|| info.pointer("/groupInfo/updatedAt"))
+        .or_else(|| info.pointer("/noteFolder/chatTs"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let chat_item_ttl = info
         .pointer("/contact/chatItemTTL")
         .or_else(|| info.pointer("/groupInfo/chatItemTTL"))
@@ -1193,6 +1205,7 @@ fn parse_one_chat(chat: &Value) -> Option<ChatPreview> {
         members_require_attention,
         membership_support_unread,
         membership_has_support_chat,
+        last_ts,
     })
 }
 

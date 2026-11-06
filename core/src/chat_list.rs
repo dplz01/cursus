@@ -66,6 +66,7 @@ mod tests {
             members_require_attention: 0,
             membership_support_unread: 0,
             membership_has_support_chat: false,
+            last_ts: None,
         }
     }
 

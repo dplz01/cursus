@@ -209,6 +209,8 @@ pub struct ChatPreview {
     pub membership_support_unread: i64,
     /// Whether `membership.supportChat` exists (thread already opened).
     pub membership_has_support_chat: bool,
+    /// Last activity (`itemTs` of the newest item, else `chatTs`/`updatedAt`), ISO 8601.
+    pub last_ts: Option<String>,
 }
 
 /// Editable group profile payload for `/_group_profile` (full round-trip).

@@ -67,6 +67,8 @@ pub struct HoverArea<'a, Message, Theme, Renderer> {
     redraw_on_hover: bool,
     radius: f32,
     double_tap_ms: u64,
+    /// Show the hand cursor over the area (desktop) when content has none.
+    pointer: bool,
 }
 
 impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
@@ -84,7 +86,14 @@ impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
             redraw_on_hover: false,
             radius: 10.0,
             double_tap_ms: 320,
+            pointer: false,
         }
+    }
+
+    /// Hand cursor on hover, like a button.
+    pub fn pointer(mut self) -> Self {
+        self.pointer = true;
+        self
     }
 
     pub fn on_release(mut self, msg: Message) -> Self {
@@ -316,13 +325,21 @@ where
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        self.content.as_widget().mouse_interaction(
+        let inner = self.content.as_widget().mouse_interaction(
             &tree.children[0],
             layout,
             cursor,
             viewport,
             renderer,
-        )
+        );
+        if self.pointer
+            && inner == mouse::Interaction::None
+            && cursor.is_over(layout.bounds())
+        {
+            mouse::Interaction::Pointer
+        } else {
+            inner
+        }
     }
 
     fn draw(
@@ -413,6 +430,7 @@ pub fn chat_row<'a, Message: Clone + 'a>(
     let chat_slot = Rc::clone(&slots.chat);
     let chat_slot_exit = Rc::clone(&slots.chat);
     HoverArea::new(content)
+        .pointer()
         .on_release(on_release)
         .on_right_press(on_right_press)
         .on_hover_slots(
@@ -472,6 +490,7 @@ pub fn track_reaction<'a, Message: Clone + 'a>(
     let exit_slot = Rc::clone(&slots.reaction);
     let emoji_enter = emoji.clone();
     HoverArea::new(content)
+        .pointer()
         .on_release(on_release)
         .on_right_press(on_right_press)
         .on_hover_slots(

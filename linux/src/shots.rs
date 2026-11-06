@@ -66,6 +66,7 @@ fn chat(id: i64, kind: ChatType, title: &str, preview: &str, unread: i64) -> Cha
         members_require_attention: 0,
         membership_support_unread: 0,
         membership_has_support_chat: false,
+        last_ts: None,
     }
 }
 
@@ -134,19 +135,31 @@ fn demo_app(dark: bool, width: f32, height: f32) -> App {
     fav.settings.favorite = true;
     let mut muted = chat(4, ChatType::Group, "Climbing club", "Sunday: Arco, meet 8:00 at the parking lot near the crag", 0);
     muted.settings.enable_ntfs = cursus_core::NtfFilter::None;
-    let notes = chat(5, ChatType::Local, "Notes", "Buy oat milk", 0);
+    let mut notes = chat(5, ChatType::Local, "Notes", "Buy oat milk", 0);
     let mut chan = chat(6, ChatType::Group, "SimpleX news", "v6.5 is out: channels, relays and more", 1);
     chan.is_channel = true;
+    let stamp = |c: &mut ChatPreview, ts: &str| c.last_ts = Some(ts.into());
+    stamp(&mut alice, "2026-11-06T09:06:00Z");
+    stamp(&mut team, "2026-11-06T08:41:00Z");
+    stamp(&mut fav, "2026-11-05T18:20:00Z");
+    stamp(&mut muted, "2026-11-03T07:15:00Z");
+    stamp(&mut notes, "2026-10-12T12:00:00Z");
+    stamp(&mut chan, "2026-11-06T07:30:00Z");
     app.chats = vec![alice, team, fav, muted, notes, chan];
 
     app.messages = vec![
-        msg(1, "Hey! Are we still on for tomorrow?", false, "08:58"),
+        {
+            let mut m = msg(1, "Hey! Are we still on for tomorrow?", false, "21:58");
+            m.created_at = Some("2026-11-05T21:58:00Z".into());
+            m
+        },
         msg(2, "Yes 🙂 train at 9:12", true, "09:01"),
         {
             let mut m = msg(3, "Perfect. I'll grab coffee for both of us ☕", false, "09:02");
             m.reactions = vec![ReactionCount { emoji: "❤".into(), user_reacted: true, total: 1 }];
             m
         },
+        msg(7, "Also bringing the rope", true, "09:03"),
         msg(4, "You're the best. Also: did you see the new Cursus build? The group invite page is really nice now.", true, "09:05"),
         msg(5, "See you at the station at 9 — bring the tickets!", false, "09:06"),
     ];

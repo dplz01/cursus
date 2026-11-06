@@ -49,64 +49,85 @@ pub struct Tokens {
     pub disabled_fill: Color,
     /// Quiet chrome hover (secondary buttons, idle nav).
     pub bg_hover: Color,
+    /// Text fields, composer pill and quiet buttons.
+    pub bg_field: Color,
+    /// Incoming / outgoing message bubbles.
+    pub bubble_in: Color,
+    pub bubble_out: Color,
+    /// Time + secondary text inside outgoing bubbles.
+    pub bubble_out_meta: Color,
+    /// Delivered tick inside outgoing bubbles (accent may vanish on them).
+    pub bubble_out_tick: Color,
 }
 
 impl Tokens {
     pub fn dark() -> Self {
         let accent = Color::from_rgb(0.357, 0.549, 1.0); // #5B8CFF
         Self {
-            bg_app: Color::from_rgb(0.071, 0.078, 0.102),       // #12141A
-            bg_sidebar: Color::from_rgb(0.094, 0.106, 0.133),   // #181B22
-            bg_list: Color::from_rgb(0.110, 0.125, 0.157),      // #1C2028
-            bg_panel: Color::from_rgb(0.110, 0.125, 0.157),
-            bg_elevated: Color::from_rgb(0.149, 0.169, 0.212),  // #262B36
-            text_primary: Color::from_rgb(0.949, 0.953, 0.961), // #F2F3F5
-            text_secondary: Color::from_rgb(0.627, 0.651, 0.702), // #A0A6B3
-            text_muted: Color::from_rgb(0.431, 0.459, 0.522),   // #6E7585
+            bg_app: rgb(0x0E1015),
+            // Rail + list read as one sidebar; conversation sits a step darker
+            // so bubbles and cards carry the hierarchy (no borders needed).
+            bg_sidebar: rgb(0x15181E),
+            bg_list: rgb(0x15181E),
+            bg_panel: rgb(0x0E1015),
+            bg_elevated: rgb(0x1C2028),
+            text_primary: rgb(0xF2F3F5),
+            text_secondary: rgb(0xA0A6B3),
+            text_muted: rgb(0x6E7585),
             accent,
-            accent_on: Color::from_rgb(0.043, 0.063, 0.125), // #0B1020
-            accent_soft: Color::from_rgba(0.357, 0.549, 1.0, 0.18),
-            accent_soft_hover: Color::from_rgba(0.357, 0.549, 1.0, 0.30),
-            accent_soft_press: Color::from_rgba(0.357, 0.549, 1.0, 0.40),
-            border: Color::from_rgb(0.180, 0.204, 0.251), // #2E3440
-            danger: Color::from_rgb(1.0, 0.420, 0.420),   // #FF6B6B
-            success: Color::from_rgb(0.420, 0.796, 0.467), // #6BCB77
-            always: Color::from_rgb(0.925, 0.757, 0.310), // #ECD04F gold
+            accent_on: rgb(0x0B1020),
+            accent_soft: Color::from_rgba(0.357, 0.549, 1.0, 0.16),
+            accent_soft_hover: Color::from_rgba(0.357, 0.549, 1.0, 0.26),
+            accent_soft_press: Color::from_rgba(0.357, 0.549, 1.0, 0.36),
+            border: rgb(0x252A33),
+            danger: rgb(0xFF6B6B),
+            success: rgb(0x6BCB77),
+            always: Color::from_rgb(0.925, 0.757, 0.310), // gold
             accent_hover: Color::from_rgb(0.42, 0.60, 1.0),
             accent_press: Color::from_rgb(0.30, 0.48, 0.92),
             danger_hover: Color::from_rgb(0.85, 0.28, 0.28),
             danger_press: Color::from_rgb(0.70, 0.20, 0.20),
             disabled_fill: Color::from_rgb(0.25, 0.30, 0.40),
-            bg_hover: Color::from_rgb(0.149, 0.169, 0.212), // elevated
+            bg_hover: rgb(0x20242D),
+            bg_field: rgb(0x111318),
+            bubble_in: rgb(0x1C2028),
+            bubble_out: rgb(0x243A63),
+            bubble_out_meta: rgb(0xA7B6D6),
+            bubble_out_tick: rgb(0x9CBBFF),
         }
     }
 
     pub fn light() -> Self {
         let accent = Color::from_rgb(0.184, 0.435, 0.929); // #2F6FED
         Self {
-            bg_app: Color::from_rgb(0.957, 0.961, 0.969),       // #F4F5F7
-            bg_sidebar: Color::from_rgb(0.922, 0.929, 0.941),   // #EBEDF0
-            bg_list: Color::WHITE,                              // #FFFFFF
-            bg_panel: Color::WHITE,
+            bg_app: rgb(0xEEF0F4),
+            bg_sidebar: Color::WHITE,
+            bg_list: Color::WHITE,
+            bg_panel: rgb(0xEEF0F4),
             bg_elevated: Color::WHITE,
-            text_primary: Color::from_rgb(0.071, 0.078, 0.102), // #12141A
-            text_secondary: Color::from_rgb(0.361, 0.388, 0.439), // #5C6370
-            text_muted: Color::from_rgb(0.545, 0.569, 0.612),   // #8B919C
+            text_primary: rgb(0x12141A),
+            text_secondary: rgb(0x5C6370),
+            text_muted: rgb(0x8B919C),
             accent,
             accent_on: Color::WHITE,
-            accent_soft: Color::from_rgba(0.184, 0.435, 0.929, 0.16),
-            accent_soft_hover: Color::from_rgba(0.184, 0.435, 0.929, 0.26),
-            accent_soft_press: Color::from_rgba(0.184, 0.435, 0.929, 0.36),
-            border: Color::from_rgb(0.843, 0.859, 0.886), // #D7DBE2
-            danger: Color::from_rgb(0.776, 0.157, 0.157), // #C62828
-            success: Color::from_rgb(0.180, 0.490, 0.196), // #2E7D32
-            always: Color::from_rgb(0.710, 0.545, 0.060), // #B58B0F gold
+            accent_soft: Color::from_rgba(0.184, 0.435, 0.929, 0.12),
+            accent_soft_hover: Color::from_rgba(0.184, 0.435, 0.929, 0.20),
+            accent_soft_press: Color::from_rgba(0.184, 0.435, 0.929, 0.30),
+            border: rgb(0xDDE1E7),
+            danger: rgb(0xC62828),
+            success: rgb(0x2E7D32),
+            always: Color::from_rgb(0.710, 0.545, 0.060), // gold
             accent_hover: Color::from_rgb(0.145, 0.365, 0.820),
             accent_press: Color::from_rgb(0.110, 0.300, 0.720),
             danger_hover: Color::from_rgb(0.690, 0.110, 0.110),
             danger_press: Color::from_rgb(0.580, 0.080, 0.080),
             disabled_fill: Color::from_rgb(0.820, 0.835, 0.855),
-            bg_hover: Color::from_rgb(0.886, 0.898, 0.918), // #E2E5EA
+            bg_hover: rgb(0xEDEFF3),
+            bg_field: rgb(0xF2F4F7),
+            bubble_in: Color::WHITE,
+            bubble_out: rgb(0xD8E5FF),
+            bubble_out_meta: rgb(0x5A6C8F),
+            bubble_out_tick: accent,
         }
     }
 
@@ -136,6 +157,14 @@ impl Tokens {
             "Cursus Dark".into()
         }
     }
+}
+
+const fn rgb(hex: u32) -> Color {
+    Color::from_rgb(
+        ((hex >> 16) & 0xFF) as f32 / 255.0,
+        ((hex >> 8) & 0xFF) as f32 / 255.0,
+        (hex & 0xFF) as f32 / 255.0,
+    )
 }
 
 /// Active tokens (follows [`set_light_active`]).
@@ -256,16 +285,6 @@ pub fn panel_style() -> impl Fn(&iced::Theme) -> container::Style {
     }
 }
 
-pub fn list_style() -> impl Fn(&iced::Theme) -> container::Style {
-    |_| {
-        let c = t();
-        container::Style {
-            background: Some(Background::Color(c.bg_list)),
-            ..container::Style::default()
-        }
-    }
-}
-
 pub fn sidebar_style() -> impl Fn(&iced::Theme) -> container::Style {
     |_| {
         let c = t();
@@ -374,7 +393,7 @@ pub fn secondary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status)
         let background = match status {
             button::Status::Hovered if hover_ok => c.bg_hover,
             button::Status::Pressed => c.bg_hover,
-            _ => c.bg_sidebar,
+            _ => c.bg_field,
         };
         button::Style {
             background: Some(Background::Color(background)),
@@ -487,9 +506,9 @@ pub fn reaction_chip(
                 c.text_primary
             },
             border: Border {
-                color: c.border,
-                width: 1.0,
-                radius: 14.0.into(),
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 999.0.into(),
             },
             ..button::Style::default()
         }
@@ -650,7 +669,7 @@ pub fn rounded_field() -> impl Fn(&iced::Theme, text_input::Status) -> text_inpu
             _ => c.border,
         };
         text_input::Style {
-            background: Background::Color(c.bg_sidebar),
+            background: Background::Color(c.bg_field),
             border: Border {
                 color: border_color,
                 width: 1.0,
@@ -694,7 +713,7 @@ pub fn composer_input() -> impl Fn(&iced::Theme, text_input::Status) -> text_inp
             _ => c.border,
         };
         text_input::Style {
-            background: Background::Color(c.bg_sidebar),
+            background: Background::Color(c.bg_field),
             border: Border {
                 color: border_color,
                 width: 1.0,
@@ -712,7 +731,8 @@ pub fn composer_editor() -> impl Fn(&iced::Theme, text_editor::Status) -> text_e
     |_, _| {
         let c = t();
         text_editor::Style {
-            background: Background::Color(c.bg_sidebar),
+            // The surrounding pill paints the field.
+            background: Background::Color(Color::TRANSPARENT),
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,

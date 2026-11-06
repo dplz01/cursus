@@ -33,14 +33,33 @@ pub fn preview_wrapping(s: &str) -> Wrapping {
 
 /// Number of lines `s` occupies when laid out exactly like the text widget
 /// (Noto Sans, advanced shaping, given wrap) at width `max_w`.
+#[cfg(test)]
 pub fn measured_lines(s: &str, max_w: f32, size: f32, line_px: f32, wrapping: Wrapping) -> usize {
+    measured_lines_font(s, max_w, size, line_px, wrapping, false)
+}
+
+fn ui_font(bold: bool) -> Font {
+    Font {
+        weight: if bold { iced::font::Weight::Bold } else { iced::font::Weight::Normal },
+        ..Font::with_name("Noto Sans")
+    }
+}
+
+fn measured_lines_font(
+    s: &str,
+    max_w: f32,
+    size: f32,
+    line_px: f32,
+    wrapping: Wrapping,
+    bold: bool,
+) -> usize {
     use iced::advanced::text::Paragraph as _;
     let paragraph = iced::advanced::graphics::text::Paragraph::with_text(iced::advanced::Text {
         content: s,
         bounds: Size::new(max_w, f32::INFINITY),
         size: size.into(),
         line_height: iced::widget::text::LineHeight::Absolute(line_px.into()),
-        font: Font::with_name("Noto Sans"),
+        font: ui_font(bold),
         align_x: iced::advanced::text::Alignment::Default,
         align_y: iced::alignment::Vertical::Top,
         shaping: Shaping::Advanced,
@@ -52,7 +71,7 @@ pub fn measured_lines(s: &str, max_w: f32, size: f32, line_px: f32, wrapping: Wr
 thread_local! {
     /// (text, width, size, lines) → fitted preview. Layout is not free and the
     /// chat list re-renders often; previews rarely change.
-    static ELLIPSIS_CACHE: std::cell::RefCell<std::collections::HashMap<(String, u32, u32, usize), String>> =
+    static ELLIPSIS_CACHE: std::cell::RefCell<std::collections::HashMap<(String, u32, u32, usize, bool), String>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -60,17 +79,22 @@ thread_local! {
 /// anything had to be cut. Uses the real text layout (same font, shaping and
 /// wrap rules as the widget), so long links / unbroken strings get an ellipsis
 /// instead of being clipped mid-glyph.
+#[cfg(test)]
 pub fn ellipsize_to_lines(s: &str, max_w: f32, size: f32, lines: usize) -> String {
+    ellipsize_to_lines_font(s, max_w, size, lines, false)
+}
+
+fn ellipsize_to_lines_font(s: &str, max_w: f32, size: f32, lines: usize, bold: bool) -> String {
     let line_px = size * LINE_HEIGHT;
     // Hair of slack for sub-pixel differences between measure and draw.
     let max_w = (max_w - 2.0).max(10.0);
-    let key = (s.to_string(), max_w.to_bits(), size.to_bits(), lines);
+    let key = (s.to_string(), max_w.to_bits(), size.to_bits(), lines, bold);
     if let Some(hit) = ELLIPSIS_CACHE.with(|c| c.borrow().get(&key).cloned()) {
         return hit;
     }
 
     let wrapping = preview_wrapping(s);
-    let fits = |t: &str| measured_lines(t, max_w, size, line_px, wrapping) <= lines;
+    let fits = |t: &str| measured_lines_font(t, max_w, size, line_px, wrapping, bold) <= lines;
     let out = if fits(s) {
         s.to_string()
     } else {
@@ -143,24 +167,42 @@ pub fn ellipsis_text<'a>(
     color: Color,
     lines: usize,
 ) -> Element<'a, Message> {
+    ellipsis_text_weight(content, size, color, lines, false)
+}
+
+/// [`ellipsis_text`] in Noto Sans Bold when `bold` (chat names).
+pub fn ellipsis_text_weight<'a>(
+    content: impl Into<String>,
+    size: f32,
+    color: Color,
+    lines: usize,
+    bold: bool,
+) -> Element<'a, Message> {
     let full = content.into();
     let wrapping = preview_wrapping(&full);
     Element::new(Ellipsis {
-        inner: make_text(full.clone(), size, color, wrapping),
+        inner: make_text(full.clone(), size, color, wrapping, bold),
         full,
         size,
         color,
         lines: lines.max(1),
         wrapping,
+        bold,
         fitted_for: None,
     })
 }
 
-fn make_text(s: String, size: f32, color: Color, wrapping: Wrapping) -> iced::widget::Text<'static, Theme, iced::Renderer> {
+fn make_text(
+    s: String,
+    size: f32,
+    color: Color,
+    wrapping: Wrapping,
+    bold: bool,
+) -> iced::widget::Text<'static, Theme, iced::Renderer> {
     iced::widget::text(s)
         .size(size)
         .color(color)
-        .font(Font::with_name("Noto Sans"))
+        .font(ui_font(bold))
         .shaping(Shaping::Advanced)
         .line_height(LineHeight::Absolute((size * LINE_HEIGHT).into()))
         .wrapping(wrapping)
@@ -172,6 +214,7 @@ struct Ellipsis {
     color: Color,
     lines: usize,
     wrapping: Wrapping,
+    bold: bool,
     inner: iced::widget::Text<'static, Theme, iced::Renderer>,
     /// Width the inner text was last fitted for.
     fitted_for: Option<f32>,
@@ -193,8 +236,8 @@ impl Widget<Message, Theme, iced::Renderer> for Ellipsis {
     fn layout(&mut self, tree: &mut Tree, renderer: &iced::Renderer, limits: &layout::Limits) -> layout::Node {
         let max_w = limits.max().width;
         if self.fitted_for != Some(max_w) && max_w.is_finite() {
-            let fitted = ellipsize_to_lines(&self.full, max_w, self.size, self.lines);
-            self.inner = make_text(fitted, self.size, self.color, self.wrapping);
+            let fitted = ellipsize_to_lines_font(&self.full, max_w, self.size, self.lines, self.bold);
+            self.inner = make_text(fitted, self.size, self.color, self.wrapping, self.bold);
             self.fitted_for = Some(max_w);
         }
         <iced::widget::Text<'static, Theme, iced::Renderer> as Widget<Message, Theme, iced::Renderer>>::layout(

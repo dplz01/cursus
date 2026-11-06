@@ -487,6 +487,9 @@ pub struct SupportOverlay {
     pub pane: SupportPane,
     pub members: Vec<GroupMemberInfo>,
     pub members_loading: bool,
+    /// Opened from the group / channel page: closing returns there (Back),
+    /// not to the group chat.
+    pub return_to_settings: bool,
 }
 
 /// Group / channel settings page state.
@@ -1069,6 +1072,8 @@ pub enum Message {
     OpenSettingsSection(SettingsSection),
     /// Text-field context menu (Select all / Cut / Copy / Paste).
     FieldMenu(edit_menu::FieldMenuAction),
+    /// Chat composer context menu (Select all / Cut / Copy / Paste).
+    ComposerMenu(edit_menu::ComposerMenuAction),
 }
 
 struct App {
@@ -1214,6 +1219,9 @@ struct App {
     demo: bool,
     /// Selected Settings category (desktop two-pane settings).
     settings_section: SettingsSection,
+    /// Composer selection just before the latest tap: a long-press starts with
+    /// a tap that clears it, so the edit menu restores this when it opens.
+    composer_pre_click: Option<text_editor::Cursor>,
 }
 
 struct VoiceRec {
@@ -1376,6 +1384,7 @@ impl App {
                 open_after_reload: None,
                 demo: false,
                 settings_section: SettingsSection::Profile,
+                composer_pre_click: None,
             },
             // Daemon runs App::new tasks before the wgpu compositor boots.
             // Loading libsimplex that early exports Haskell ZSTD_* symbols that
@@ -1698,6 +1707,15 @@ impl App {
                 ])
             }
             Message::ComposerEdit(action) => {
+                match &action {
+                    text_editor::Action::Click(_) => {
+                        self.composer_pre_click =
+                            self.composer.selection().map(|_| self.composer.cursor());
+                    }
+                    // A held finger produces drags; keep the saved selection.
+                    text_editor::Action::Drag(_) | text_editor::Action::Scroll { .. } => {}
+                    _ => self.composer_pre_click = None,
+                }
                 let before = cursus_core::pending_shortcode_query(&self.composer_text())
                     .map(str::to_owned);
                 self.composer.perform(action);
@@ -4655,7 +4673,6 @@ impl App {
             Message::CopyInviteLink => {
                 if let Some(link) = self.invite_link.clone() {
                     self.status = "Invite link copied.".into();
-                    self.close_compose_to_chats();
                     iced::clipboard::write(link)
                 } else {
                     Task::none()
@@ -4831,6 +4848,40 @@ impl App {
                 }
                 edit_menu::FieldMenuAction::Paste(then) => self.update(*then),
             },
+            Message::ComposerMenu(action) => {
+                use edit_menu::ComposerMenuAction as A;
+                let focus = iced::widget::operation::focus(iced::widget::Id::new("composer-input"));
+                match action {
+                    A::Opened { by_touch } => {
+                        if let Some(cursor) = self.composer_pre_click.take() {
+                            if by_touch {
+                                self.composer.move_to(cursor);
+                            }
+                        }
+                        Task::none()
+                    }
+                    A::SelectAll => {
+                        self.composer.perform(text_editor::Action::SelectAll);
+                        focus
+                    }
+                    A::Copy => match self.composer.selection() {
+                        Some(sel) => iced::clipboard::write(sel),
+                        None => Task::none(),
+                    },
+                    A::Cut => match self.composer.selection() {
+                        Some(sel) => {
+                            self.composer
+                                .perform(text_editor::Action::Edit(text_editor::Edit::Backspace));
+                            Task::batch([iced::clipboard::write(sel), focus])
+                        }
+                        None => Task::none(),
+                    },
+                    A::Paste(clip) => {
+                        let task = self.update(Message::ComposerInsert(clip));
+                        Task::batch([task, focus])
+                    }
+                }
+            }
             Message::Escape => {
                 if self.pref_menu.take().is_some() {
                     return Task::none();
@@ -6304,12 +6355,18 @@ impl App {
     }
 
     fn open_support_list(&mut self, group_id: i64) -> Task<Message> {
-        self.group_settings = None;
+        // Coming from the group page (or back from a thread that did).
+        let return_to_settings = self.group_settings.take().is_some()
+            || self
+                .support
+                .as_ref()
+                .is_some_and(|s| s.group_id == group_id && s.return_to_settings);
         self.support = Some(SupportOverlay {
             group_id,
             pane: SupportPane::List,
             members: Vec::new(),
             members_loading: true,
+            return_to_settings,
         });
         // Keep main group selected for list context, unscoped.
         if let Some(id) = self.selected_id.as_mut() {
@@ -6330,9 +6387,13 @@ impl App {
     ) -> Task<Message> {
         // Opened from the group page's member menu: reuse that member list so
         // a pending joiner's thread shows Accept / Reject right away.
-        let from_group = self
-            .group_settings
-            .take()
+        let settings = self.group_settings.take();
+        let return_to_settings = settings.is_some()
+            || self
+                .support
+                .as_ref()
+                .is_some_and(|s| s.group_id == group_id && s.return_to_settings);
+        let from_group = settings
             .filter(|g| g.group_id == group_id)
             .map(|g| g.members);
         let members = self
@@ -6352,6 +6413,7 @@ impl App {
             },
             members,
             members_loading: false,
+            return_to_settings,
         });
         self.selected_id = Some(ChatId::with_support(group_id, member_id));
         self.messages.clear();
@@ -6372,12 +6434,19 @@ impl App {
 
     fn close_support_overlay(&mut self) -> Task<Message> {
         let group_id = self.support.as_ref().map(|s| s.group_id);
+        let back_to_settings = self.support.as_ref().is_some_and(|s| s.return_to_settings);
         self.support = None;
         if let Some(gid) = group_id {
             self.selected_id = Some(ChatId::new(ChatType::Group, gid));
             self.messages.clear();
             self.pin_history_end = true;
-            return Task::batch([self.mark_selected_read(), self.reload_messages()]);
+            let reload = Task::batch([self.mark_selected_read(), self.reload_messages()]);
+            if back_to_settings {
+                // Back = the page we came from: the group / channel page.
+                self.rebind_selection();
+                return Task::batch([reload, self.open_group_settings()]);
+            }
+            return reload;
         }
         Task::none()
     }
@@ -6943,6 +7012,11 @@ fn main_window_settings() -> iced::window::Settings {
     iced::window::Settings {
         size: iced::Size::new(1180.0, 720.0),
         exit_on_close_request: false,
+        // Wayland app id / X11 class — lets users write compositor rules.
+        platform_specific: iced::window::settings::PlatformSpecific {
+            application_id: "cursus".into(),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -7299,6 +7373,7 @@ fn truncate_preview(s: &str, max: usize) -> String {
 
 async fn attach_and_send_file(session: Arc<Session>, chat: ChatPreview) -> Result<(), String> {
     let path = tokio::task::spawn_blocking(|| {
+        float_open::float_next_dialog("Attach file");
         rfd::FileDialog::new()
             .set_title("Attach file")
             .pick_file()
@@ -8052,7 +8127,9 @@ fn parse_call_invitation(body: &serde_json::Value, outgoing: bool) -> Option<Cal
 
 async fn pick_and_encode_profile_image() -> Result<String, String> {
     tokio::task::spawn_blocking(|| {
+        float_open::float_next_dialog("Choose a picture");
         let path = rfd::FileDialog::new()
+            .set_title("Choose a picture")
             .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif", "bmp"])
             .pick_file()
             .ok_or_else(|| "No image selected.".to_string())?;
@@ -8421,6 +8498,7 @@ async fn save_media_as(src: PathBuf, file_name: String) -> Result<String, String
         if !src.is_file() {
             return Err(format!("File missing: {}", src.display()));
         }
+        float_open::float_next_dialog("Save as");
         let dest = rfd::FileDialog::new()
             .set_title("Save as")
             .set_file_name(&file_name)

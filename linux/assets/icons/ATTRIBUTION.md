@@ -29,6 +29,8 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `stop.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `back.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `paste.svg` | [svgrepo/521781](https://www.svgrepo.com/svg/521781/paste) | Gentlecons Interface Icons / Konstantin Filatov | **CC Attribution** — attribution required | Yes (with credit) |
+| `address-card.svg` | [svgrepo/533175](https://www.svgrepo.com/svg/533175/address-card) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |
+| `repeat-once.svg` | [svgrepo/435404](https://www.svgrepo.com/svg/435404/repeat-once) | Nuiverse Sharp Interface Icons / Nuiverse Design | **BSD License** — keep copyright notice | Yes (with credit) |
 | `timer.svg` | [svgrepo/521887](https://www.svgrepo.com/svg/521887/timer) | Gentlecons Interface Icons / Konstantin Filatov | **CC Attribution** — attribution required | Yes (with credit) |
 | `reaction-emoji-add.svg` | [svgrepo/440786](https://www.svgrepo.com/svg/440786/reaction-emoji-add) | Classjob Ff Game Icons / xivapi | **MIT License** | Yes |
 | `user-alt-1.svg` | [svgrepo/532363](https://www.svgrepo.com/svg/532363/user-alt-1) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |
@@ -49,7 +51,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 
 Phone and Settings icons: **Solar Icons** by 480 Design, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Sourced via SVG Repo.
 
-Send, star, image-pen, and user-alt-1 icons: **Dazzle Line Icons** by Dazzle UI, CC Attribution license via [SVG Repo](https://www.svgrepo.com/svg/533306/send) / [star](https://www.svgrepo.com/svg/533052/star) / [image-pen](https://www.svgrepo.com/svg/532570/image-pen) / [user-alt-1](https://www.svgrepo.com/svg/532363/user-alt-1).
+Send, star, image-pen, user-alt-1 and address-card icons: **Dazzle Line Icons** by Dazzle UI, CC Attribution license via [SVG Repo](https://www.svgrepo.com/svg/533306/send) / [star](https://www.svgrepo.com/svg/533052/star) / [image-pen](https://www.svgrepo.com/svg/532570/image-pen) / [user-alt-1](https://www.svgrepo.com/svg/532363/user-alt-1).
 
 Timer and paste icons: **Gentlecons Interface Icons** by Konstantin Filatov, CC Attribution via [SVG Repo](https://www.svgrepo.com/svg/521887/timer) / [paste](https://www.svgrepo.com/svg/521781/paste).
 
@@ -114,3 +116,5 @@ Suggested credit line (also shown in Settings):
 ## Verification notes
 
 License metadata for `438285`, `524804`, and `524954` was confirmed against the public SVG Repo icon index (HuggingFace mirror `nyuuzyou/svgrepo`). `50042` was not present in that mirror snapshot; it is used under SVG Repo’s default open license terms for icons hosted on the site (commercial inclusion in an application is allowed; redistribution as a competing icon library is not). `533306` license metadata was confirmed on the SVG Repo icon page (Dazzle Line Icons / CC Attribution). `509899` confirmed as Zest Interface Icons under MIT on SVG Repo.
+
+Repeat-once (one-time invite) icon: **Nuiverse Sharp Interface Icons** by Nuiverse Design, BSD License, via [SVG Repo](https://www.svgrepo.com/svg/435404/repeat-once).

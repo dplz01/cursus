@@ -1226,6 +1226,13 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
                 app.composer().trim().is_empty(),
             )),
     );
+    // Right-click / long-press: Select all · Cut · Copy · Paste.
+    let editor = crate::edit_menu::composer_menu(
+        editor,
+        app.composer_content().selection().is_some(),
+        app.composer().is_empty(),
+        app.hover_ok(),
+    );
 
     // Always End: equal-height single-line looks centered; multi-line grows up.
     let input_row = row![attach, mic, editor, send]
@@ -3013,7 +3020,7 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
         d,
     ));
     connect = connect.push(nav_row(
-        icons::paperplane_icon(18.0, theme::t().accent),
+        icons::repeat_once_icon(18.0, theme::t().accent),
         "One-time invite",
         Some("A single-use link for one person".to_string()),
         Message::CreateInvitation,
@@ -3022,7 +3029,7 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
         hover,
     ));
     connect = connect.push(nav_row(
-        icons::user_alt_icon(18.0, theme::t().accent),
+        icons::address_card_icon(18.0, theme::t().accent),
         "My address",
         Some("Your reusable contact link".to_string()),
         Message::EnsureAddress,
@@ -6093,7 +6100,7 @@ fn contact_danger_actions(
     action_tile_row(
         vec![
             group_action_tile(
-                icons::clear_all_icon(18.0, theme::t().text_secondary),
+                icons::clear_all_icon(18.0, theme::t().accent),
                 "Clear chat",
                 Message::ContactProfileClear,
                 theme::ghost_tile(hover),
@@ -6134,7 +6141,7 @@ fn group_danger_actions(
         "Delete group"
     };
     let mut tiles = vec![group_action_tile(
-        icons::clear_all_icon(18.0, theme::t().text_secondary),
+        icons::clear_all_icon(18.0, theme::t().accent),
         "Clear chat",
         Message::ClearGroupChat,
         theme::ghost_tile(hover),
@@ -6144,7 +6151,7 @@ fn group_danger_actions(
     )];
     if can_leave {
         tiles.push(group_action_tile(
-            icons::leave_icon(18.0, theme::t().text_secondary),
+            icons::leave_icon(18.0, theme::t().accent),
             leave_label,
             Message::OpenLeaveGroupConfirm,
             theme::ghost_tile(hover),
@@ -6177,33 +6184,34 @@ fn group_action_tile<'a>(
     narrow: bool,
     danger: bool,
 ) -> iced::widget::Button<'a, Message> {
+    // Same sizes as the page's navigation rows: 32px icon disc, body label.
     let label_color = if danger {
         theme::t().danger
     } else {
         theme::t().text_primary
     };
+    let disc = if danger {
+        danger_disc(icon, 32.0)
+    } else {
+        icon_disc(icon, 32.0)
+    };
     let body: Element<'_, Message> = if narrow {
         row![
-            icons::centered_hit(icon, 28.0),
+            disc,
             text(label)
-                .size(d.meta)
+                .size(d.body)
                 .color(label_color)
                 .width(Length::Fill),
         ]
-        .spacing(10)
+        .spacing(12)
         .align_y(Alignment::Center)
         .into()
     } else {
-        column![
-            icons::centered_hit(icon, 28.0),
-            text(label)
-                .size(d.meta)
-                .color(label_color),
-        ]
-        .spacing(6)
-        .align_x(Alignment::Center)
-        .width(Length::Fill)
-        .into()
+        column![disc, text(label).size(d.body).color(label_color)]
+            .spacing(8)
+            .align_x(Alignment::Center)
+            .width(Length::Fill)
+            .into()
     };
 
     button(
@@ -6212,13 +6220,30 @@ fn group_action_tile<'a>(
             .center_x(Length::Fill),
     )
     .on_press(on_press)
-    .padding(if narrow {
-        Padding::from([8, 10])
-    } else {
-        Padding::from([10, 8])
-    })
+    .padding(Padding::from([10, 8]))
     .width(Length::Fill)
     .style(style)
+}
+
+/// Red-tinted disc for destructive actions (pairs with [`icon_disc`]).
+fn danger_disc<'a>(icon: Element<'a, Message>, size: f32) -> Element<'a, Message> {
+    container(icon)
+        .width(size)
+        .height(size)
+        .center_x(size)
+        .center_y(size)
+        .style(move |_| container::Style {
+            background: Some(iced::Background::Color(Color {
+                a: 0.14,
+                ..theme::t().danger
+            })),
+            border: iced::Border {
+                radius: (size / 2.0).into(),
+                ..Default::default()
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// Rounded blue box showing a link; the whole box copies, copy glyph at the end.

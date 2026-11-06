@@ -93,6 +93,77 @@ pub fn spawn_floating(program: &str, args: &[&str], hints: Vec<String>) -> std::
     }
 }
 
+/// Float the file-chooser dialog titled `title` that is about to open.
+///
+/// rfd talks to the XDG desktop portal, so the dialog window belongs to the
+/// portal process (`xdg-desktop-portal-gnome` / `-gtk` / `-kde` / cosmic),
+/// not to Cursus. Call this right before showing the dialog: it watches for a
+/// new window with that title, or from a portal app, and floats it centred.
+pub fn float_next_dialog(title: &str) {
+    let title = title.to_string();
+    match detect() {
+        Compositor::Hyprland => {
+            let Some(before) = hypr_clients().map(|c| c.into_iter().map(|w| w.id).collect::<HashSet<_>>()) else {
+                return;
+            };
+            std::thread::spawn(move || {
+                if let Some(addr) = wait_dialog(&before, &title, hypr_clients) {
+                    hypr_float_sized(&addr, 0.60, 0.70);
+                }
+            });
+        }
+        c @ (Compositor::Sway | Compositor::I3) => {
+            let msg = if c == Compositor::Sway { "swaymsg" } else { "i3-msg" };
+            let Some(before) = window_ids(msg) else { return };
+            std::thread::spawn(move || {
+                let list = || {
+                    let tree = get_tree(msg)?;
+                    let mut all = Vec::new();
+                    leaves(&tree, &mut all);
+                    Some(all)
+                };
+                if let Some(id) = wait_dialog(&before, &title, list) {
+                    let _ = quiet(Command::new(msg).arg(format!(
+                        "[con_id={id}] floating enable, resize set width 60 ppt height 70 ppt, move position center"
+                    )))
+                    .status();
+                }
+            });
+        }
+        Compositor::Other => {}
+    }
+}
+
+fn is_portal_app(app: &str) -> bool {
+    let a = app.to_ascii_lowercase();
+    a.contains("xdg-desktop-portal") || a.contains("portal")
+}
+
+fn pick_dialog<Id: Eq + std::hash::Hash + Clone>(all: &[Win<Id>], before: &HashSet<Id>, title: &str) -> Option<Id> {
+    let fresh: Vec<&Win<Id>> = all.iter().filter(|w| !before.contains(&w.id)).collect();
+    fresh
+        .iter()
+        .find(|w| w.title == title)
+        .or_else(|| fresh.iter().find(|w| is_portal_app(&w.app)))
+        .map(|w| w.id.clone())
+}
+
+/// Dialogs may take a moment (portal start-up); wait up to 15s.
+fn wait_dialog<Id: Eq + std::hash::Hash + Clone>(
+    before: &HashSet<Id>,
+    title: &str,
+    list: impl Fn() -> Option<Vec<Win<Id>>>,
+) -> Option<Id> {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(120));
+        if let Some(id) = pick_dialog(&list()?, before, title) {
+            return Some(id);
+        }
+    }
+    None
+}
+
 fn stdout_of(cmd: &mut Command) -> Option<String> {
     let out = cmd.stderr(Stdio::null()).output().ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -168,7 +239,8 @@ fn leaves(node: &serde_json::Value, out: &mut Vec<Win<i64>>) {
                 .unwrap_or_default()
                 .to_string();
             let focused = node.get("focused").and_then(|v| v.as_bool()).unwrap_or(false);
-            out.push(Win { id, pid, app, focused });
+            let title = node.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            out.push(Win { id, pid, app, focused, title });
         }
     }
     for k in kids {
@@ -222,6 +294,8 @@ struct Win<Id> {
     app: String,
     /// Has keyboard focus (new windows normally get it on tiling WMs).
     focused: bool,
+    /// Window title (dialogs are matched by it).
+    title: String,
 }
 
 /// Poll `list` until a window that was not in `before` appears and belongs to
@@ -299,6 +373,7 @@ fn hypr_clients() -> Option<Vec<Win<String>>> {
             .filter_map(|c| {
                 let id = c.get("address")?.as_str()?.to_string();
                 Some(Win {
+                    title: c.get("title").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
                     focused: active.as_deref() == Some(id.as_str()),
                     id,
                     pid: c.get("pid").and_then(|p| p.as_i64()).filter(|p| *p > 0).map(|p| p as u32),
@@ -315,8 +390,8 @@ fn hypr_clients() -> Option<Vec<Win<String>>> {
     )
 }
 
-/// 70% × 75% of the focused monitor in logical px.
-fn hypr_target_size() -> (i64, i64) {
+/// `fw` × `fh` of the focused monitor in logical px.
+fn hypr_target_size(fw: f64, fh: f64) -> (i64, i64) {
     let mon = hypr_json("monitors").and_then(|m| {
         m.as_array()?
             .iter()
@@ -332,7 +407,7 @@ fn hypr_target_size() -> (i64, i64) {
             )
         })
         .unwrap_or((1920.0, 1080.0, 1.0));
-    ((w / scale * 0.70).round() as i64, (h / scale * 0.75).round() as i64)
+    ((w / scale * fw).round() as i64, (h / scale * fh).round() as i64)
 }
 
 /// Lua dispatch that only runs if `addr` still exists (never the focused window).
@@ -343,7 +418,11 @@ fn hypr_lua_guarded(addr: &str, dispatcher: &str) -> String {
 }
 
 fn hypr_float(addr: &str) {
-    let (w, h) = hypr_target_size();
+    hypr_float_sized(addr, 0.70, 0.75);
+}
+
+fn hypr_float_sized(addr: &str, fw: f64, fh: f64) {
+    let (w, h) = hypr_target_size(fw, fh);
     let sel = format!("address:{addr}");
     let steps = [
         format!("hl.dsp.window.float({{ action = \"enable\", window = \"{sel}\" }})"),
@@ -382,7 +461,18 @@ mod tests {
     use super::*;
 
     fn win(id: u32, pid: u32, app: &str, focused: bool) -> Win<u32> {
-        Win { id, pid: Some(pid), app: app.into(), focused }
+        Win { id, pid: Some(pid), app: app.into(), focused, title: String::new() }
+    }
+
+    #[test]
+    fn dialog_matches_title_or_portal() {
+        let before: HashSet<u32> = [1].into();
+        let mut d = win(2, 50, "xdg-desktop-portal-gnome", false);
+        d.title = "Attach file".into();
+        let other = win(3, 51, "firefox", true);
+        assert_eq!(pick_dialog(&[other.clone(), d.clone()], &before, "Attach file"), Some(2));
+        d.title = "Something".into();
+        assert_eq!(pick_dialog(&[other, d], &before, "Attach file"), Some(2));
     }
 
     #[test]
@@ -457,5 +547,17 @@ mod live {
         eprintln!("handlers: {handler:?}");
         super::spawn_floating("xdg-open", &[&path], handler).unwrap();
         std::thread::sleep(std::time::Duration::from_secs(6));
+    }
+}
+
+#[cfg(test)]
+mod live_dialog {
+    /// Manual: `cargo test -p cursus-linux live_dialog -- --ignored` (close it by hand or via IPC).
+    #[test]
+    #[ignore]
+    fn live_dialog() {
+        super::float_next_dialog("Attach file");
+        let picked = rfd::FileDialog::new().set_title("Attach file").pick_file();
+        eprintln!("picked: {picked:?}");
     }
 }

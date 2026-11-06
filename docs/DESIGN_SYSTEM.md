@@ -110,8 +110,8 @@ Every button in Cursus is one of these. Pick by *role*, never by look.
 | **Primary** | `primary_action` | radius 10, padding 12×16 (8×12 small) | `accent` fill, `accent.on` text | `accent.hover` / `accent.press` | The one main action of a screen: Connect, Next, Accept, Create link |
 | **Secondary** | `secondary_action` | radius 10, 1px `border` | `bg.sidebar` fill | `bg.hover` | Neutral alternatives: Cancel, menu-choice chips (`Short ▾`, `Member ▾`), header “+” |
 | **Danger (solid)** | `danger_action` | radius 10 | `danger` fill, white text | darker red | Final confirmation of destruction (Leave / Delete confirm) |
-| **Action tile (ghost)** | `ghost_tile` | radius 12, padding 8×10 | **no fill, no border** | `bg.hover` / `accent.soft` | Chat actions (Clear, Leave), Support (“Chat with admins”), Invite, Subscribers — icon + label |
-| **Danger tile (ghost)** | `ghost_danger` | radius 12 | no fill, no border, red label + icon | `danger` @ 14% / 24% | Delete chat / group / channel / contact |
+| **Action tile (ghost)** | `ghost_tile` | radius 12, padding 10×8 | **no fill, no border**; 32px `accent.soft` icon disc + body-size label (same sizes as navigation rows) | `bg.hover` / `accent.soft` | Chat actions (Clear, Leave) |
+| **Danger tile (ghost)** | `ghost_danger` | radius 12 | no fill, no border; 32px red-tinted disc (`danger` @ 14%), red body label | `danger` @ 14% / 24% | Delete chat / group / channel / contact |
 | **Icon-only tool** | `composer_hit` + `*_tool` icon | 32×32 hit, 20px glyph | glyph `text.secondary` | glyph → `text.primary` | Back, paste, favourite, mute, settings, role, member actions, add contact |
 | **Round icon** | `round_icon` | pill | no fill | `bg.hover` / `accent.soft` | Floating round controls |
 | **Menu item** | `menu_item` | radius 8, padding 10×12, full width | transparent | `bg.hover` / `accent.soft` | Rows inside overlay menus and context menus; disabled = `text.muted` label, no press |
@@ -129,7 +129,7 @@ Placement rules: one primary per view; destructive actions are ghost-danger tile
 | Rounded inline field | `rounded_field` | radius 12 (= action tiles), padding 6×12, placeholder in `text.secondary` | Local name / alias under a profile name; side padding ≥ radius so corners never clip the placeholder |
 | Composer | `composer_editor` | radius 10, no border | Message composer |
 
-All editable fields (except passwords) offer the **edit menu**: right-click (desktop) or long-press (touch) → *Select all · Cut · Copy · Paste* backed by the system clipboard. Cut/Copy are disabled without a selection, Paste when the clipboard is empty, Select all when the field is empty. (Linux: `edit_menu::edit_field`, built on `iced_aw::ContextMenu`.) A field that accepts links has an icon-only **paste** tool beside it.
+All editable fields (except passwords) **and the chat composer** offer the **edit menu**: right-click (desktop) or long-press (touch) → *Select all · Cut · Copy · Paste* backed by the system clipboard. A long-press keeps an existing selection (the finger-down would otherwise clear it). Cut/Copy are disabled without a selection, Paste when the clipboard is empty, Select all when the field is empty. (Linux: `edit_menu::edit_field`, built on `iced_aw::ContextMenu`.) A field that accepts links has an icon-only **paste** tool beside it.
 
 ### Overlays and menus
 

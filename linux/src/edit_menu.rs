@@ -44,6 +44,19 @@ pub const LONG_PRESS: Duration = Duration::from_millis(520);
 /// Finger travel (logical px) that turns a press into a drag / scroll.
 const MOVE_SLOP: f32 = 14.0;
 
+/// Composer (multi-line `text_editor`) menu actions — the app owns the
+/// editor content, so it applies them directly.
+#[derive(Debug, Clone)]
+pub enum ComposerMenuAction {
+    /// The menu just opened; `by_touch` = long-press (restore the selection
+    /// the finger-down cleared).
+    Opened { by_touch: bool },
+    SelectAll,
+    Cut,
+    Copy,
+    Paste(String),
+}
+
 /// What a context-menu entry asks the app to do.
 #[derive(Debug, Clone)]
 pub enum FieldMenuAction {
@@ -112,6 +125,47 @@ pub fn edit_field<'a>(
         content: Element::new(context),
         key,
         value: value_for_snapshot,
+        on_open: None,
+    })
+}
+
+/// Composer key in [`SNAPSHOTS`].
+const COMPOSER_KEY: &str = "composer";
+
+/// Wrap the chat composer (`text_editor`) with the same menu. `has_selection`
+/// and `is_empty` come from the app's editor content at view time.
+pub fn composer_menu<'a>(
+    editor: impl Into<Element<'a, Message>>,
+    has_selection: bool,
+    is_empty: bool,
+    hover_ok: bool,
+) -> Element<'a, Message> {
+    let menu = move || {
+        let snap = SNAPSHOTS.with(|m| m.borrow().get(COMPOSER_KEY).cloned().unwrap_or_default());
+        let act = |a: ComposerMenuAction| Some(Message::ComposerMenu(a));
+        menu_items(
+            [
+                ("Select all", if is_empty { None } else { act(ComposerMenuAction::SelectAll) }),
+                ("Cut", if has_selection { act(ComposerMenuAction::Cut) } else { None }),
+                ("Copy", if has_selection { act(ComposerMenuAction::Copy) } else { None }),
+                (
+                    "Paste",
+                    snap.clipboard
+                        .filter(|c| !c.is_empty())
+                        .and_then(|c| act(ComposerMenuAction::Paste(c))),
+                ),
+            ],
+            hover_ok,
+        )
+    };
+    let context = iced_aw::ContextMenu::new(editor, menu).style(|_, _| iced_aw::style::context_menu::Style {
+        background: iced::Background::Color(iced::Color::TRANSPARENT),
+    });
+    Element::new(EditMenu {
+        content: Element::new(context),
+        key: COMPOSER_KEY.to_string(),
+        value: String::new(),
+        on_open: Some(|by_touch| Message::ComposerMenu(ComposerMenuAction::Opened { by_touch })),
     })
 }
 
@@ -147,29 +201,35 @@ fn menu_card<'a>(
         Message::FieldMenu(FieldMenuAction::Paste(Box::new(on_input(new))))
     });
 
-    let item = |label: &'static str, msg: Option<Message>| {
-        let enabled = msg.is_some();
-        button(
-            text(label)
-                .size(14)
-                .color(if enabled { theme::t().text_primary } else { theme::t().text_muted }),
-        )
-        .on_press_maybe(msg)
-        .padding(Padding::from([8, 14]))
-        .width(Length::Fill)
-        .style(theme::menu_item(hover_ok))
-    };
-
-    container(
-        column![
-            item("Select all", select_all),
-            item("Cut", cut),
-            item("Copy", copy),
-            item("Paste", paste),
-        ]
-        .spacing(2)
-        .width(160),
+    menu_items(
+        [
+            ("Select all", select_all),
+            ("Cut", cut),
+            ("Copy", copy),
+            ("Paste", paste),
+        ],
+        hover_ok,
     )
+}
+
+/// The popup card: four items, disabled ones greyed out (`on_press(None)`).
+fn menu_items<'a>(items: [(&'static str, Option<Message>); 4], hover_ok: bool) -> Element<'a, Message> {
+    let mut col = column![].spacing(2).width(160);
+    for (label, msg) in items {
+        let enabled = msg.is_some();
+        col = col.push(
+            button(
+                text(label)
+                    .size(14)
+                    .color(if enabled { theme::t().text_primary } else { theme::t().text_muted }),
+            )
+            .on_press_maybe(msg)
+            .padding(Padding::from([8, 14]))
+            .width(Length::Fill)
+            .style(theme::menu_item(hover_ok)),
+        );
+    }
+    container(col)
     .padding(4)
     .style(|_| container::Style {
         background: Some(iced::Background::Color(theme::t().bg_elevated)),
@@ -195,6 +255,8 @@ struct EditMenu<'a> {
     key: String,
     /// Current field text (cursor indices are graphemes into it).
     value: String,
+    /// Published when the menu opens (composer: restore selection).
+    on_open: Option<fn(bool) -> Message>,
 }
 
 #[derive(Default)]
@@ -203,6 +265,12 @@ struct PressState {
     /// Finger whose long-press opened the menu: its lift must not close it.
     /// Lives in the widget tree so it survives view rebuilds.
     opening_finger: Option<touch::Finger>,
+    /// Same finger, for this widget: its remaining moves / lift are not passed
+    /// to the text field (a held finger must not drag-change the selection).
+    swallow_finger: Option<touch::Finger>,
+    /// Text-input selection at finger-down: the press itself moves the caret,
+    /// so this is restored when the long-press opens the menu.
+    pre_selection: Option<(usize, usize)>,
 }
 
 struct Press {
@@ -211,7 +279,26 @@ struct Press {
     at: Instant,
 }
 
+fn input_tree(tree: &mut Tree) -> Option<&mut Tree> {
+    tree.children
+        .first_mut()
+        .and_then(|ctx| ctx.children.first_mut())
+        .filter(|t| t.tag == tree::Tag::of::<InputState>())
+}
+
 impl EditMenu<'_> {
+    /// Current text-input selection (grapheme range), if any.
+    fn input_selection(&self, tree: &mut Tree) -> Option<(usize, usize)> {
+        let value = text_input::Value::new(&self.value);
+        let input = input_tree(tree)?;
+        match input.state.downcast_ref::<InputState>().cursor().state(&value) {
+            text_input::cursor::State::Selection { start, end } if start != end => {
+                Some((start.min(end), start.max(end)))
+            }
+            _ => None,
+        }
+    }
+
     /// Capture selection / caret from the inner text_input and the clipboard.
     fn snapshot(&self, tree: &Tree, clipboard: &mut dyn Clipboard) {
         let mut snap = Snapshot {
@@ -308,12 +395,32 @@ impl Widget<Message, Theme, iced::Renderer> for EditMenu<'_> {
         viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
-        let mut long_press_at: Option<Point> = None;
+        let mut long_press_at: Option<(Point, touch::Finger)> = None;
+        let mut pre_press = false;
+        // Remaining events of the finger that opened the menu stay out of
+        // the text field.
+        {
+            let st = tree.state.downcast_mut::<PressState>();
+            if let Event::Touch(
+                touch::Event::FingerMoved { id, .. }
+                | touch::Event::FingerLifted { id, .. }
+                | touch::Event::FingerLost { id, .. },
+            ) = event
+            {
+                if st.swallow_finger == Some(*id) {
+                    if !matches!(event, Event::Touch(touch::Event::FingerMoved { .. })) {
+                        st.swallow_finger = None;
+                    }
+                    return;
+                }
+            }
+        }
         {
             let st = tree.state.downcast_mut::<PressState>();
             match event {
                 Event::Touch(touch::Event::FingerPressed { id, position }) if bounds.contains(*position) => {
                     let at = Instant::now();
+                    pre_press = true;
                     st.press = Some(Press {
                         finger: *id,
                         origin: *position,
@@ -336,8 +443,9 @@ impl Widget<Message, Theme, iced::Renderer> for EditMenu<'_> {
                 Event::Window(iced::window::Event::RedrawRequested(now)) => {
                     if let Some(p) = st.press.as_ref() {
                         if now.saturating_duration_since(p.at) >= LONG_PRESS {
-                            long_press_at = Some(p.origin);
+                            long_press_at = Some((p.origin, p.finger));
                             st.opening_finger = Some(p.finger);
+                            st.swallow_finger = Some(p.finger);
                             st.press = None;
                         } else {
                             shell.request_redraw_at(p.at + LONG_PRESS);
@@ -348,7 +456,33 @@ impl Widget<Message, Theme, iced::Renderer> for EditMenu<'_> {
             }
         }
 
-        if let Some(origin) = long_press_at {
+        if pre_press {
+            let sel = self.input_selection(tree);
+            tree.state.downcast_mut::<PressState>().pre_selection = sel;
+        }
+
+        if let Some((origin, finger)) = long_press_at {
+            // End the field's own press/drag for this finger…
+            let lift = Event::Touch(touch::Event::FingerLifted { id: finger, position: origin });
+            self.content.as_widget_mut().update(
+                &mut tree.children[0],
+                &lift,
+                layout,
+                mouse::Cursor::Available(origin),
+                renderer,
+                clipboard,
+                shell,
+                viewport,
+            );
+            // …and put back the selection the finger-down cleared.
+            if let Some((a, b)) = tree.state.downcast_mut::<PressState>().pre_selection.take() {
+                if let Some(input) = input_tree(tree) {
+                    input.state.downcast_mut::<InputState>().select_range(a, b);
+                }
+            }
+            if let Some(on_open) = self.on_open {
+                shell.publish(on_open(true));
+            }
             // Same trigger iced_aw's ContextMenu listens for, at the finger.
             self.snapshot(tree, clipboard);
             let right = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right));
@@ -366,6 +500,9 @@ impl Widget<Message, Theme, iced::Renderer> for EditMenu<'_> {
         } else if matches!(event, Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)))
             && cursor.is_over(bounds)
         {
+            if let Some(on_open) = self.on_open {
+                shell.publish(on_open(false));
+            }
             self.snapshot(tree, clipboard);
         }
 
@@ -676,6 +813,37 @@ mod tests {
         h.click(mouse::Button::Right, FIELD_POINT);
         h.click(mouse::Button::Left, item(FIELD_POINT, 2)); // Copy (disabled)
         assert!(h.take_field_actions().is_empty());
+    }
+
+    #[test]
+    fn long_press_keeps_existing_selection() {
+        let mut h = Harness::new("hello world");
+        h.click(mouse::Button::Left, FIELD_POINT);
+        h.select_all_keys(FIELD_POINT);
+        // Touch the selected text and hold: the finger-down moves the caret,
+        // the long-press must bring the selection back.
+        let finger = touch::Finger(7);
+        h.frame(
+            &[Event::Touch(touch::Event::FingerPressed { id: finger, position: FIELD_POINT })],
+            FIELD_POINT,
+        );
+        // A tiny wobble while holding must not drag-change the selection.
+        let wobble = Point::new(FIELD_POINT.x + 3.0, FIELD_POINT.y);
+        h.frame(&[Event::Touch(touch::Event::FingerMoved { id: finger, position: wobble })], wobble);
+        std::thread::sleep(LONG_PRESS + Duration::from_millis(30));
+        h.frame(
+            &[Event::Window(iced::window::Event::RedrawRequested(Instant::now()))],
+            FIELD_POINT,
+        );
+        h.frame(&[Event::Touch(touch::Event::FingerLifted { id: finger, position: wobble })], wobble);
+        let at = item(FIELD_POINT, 2); // Copy
+        h.frame(&[Event::Touch(touch::Event::FingerPressed { id: touch::Finger(8), position: at })], at);
+        h.frame(&[Event::Touch(touch::Event::FingerLifted { id: touch::Finger(8), position: at })], at);
+        let actions = h.take_field_actions();
+        assert!(
+            matches!(actions.as_slice(), [FieldMenuAction::Copy(s)] if s == "hello world"),
+            "{actions:?}"
+        );
     }
 
     #[test]

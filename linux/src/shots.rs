@@ -291,3 +291,51 @@ fn shots() {
         }
     }
 }
+
+#[test]
+fn composer_long_press_restores_selection() {
+    use crate::edit_menu::ComposerMenuAction;
+    use iced::widget::text_editor::{Action, Content};
+    let (mut app, _) = App::boot(
+        DesktopPrefs {
+            tray: false,
+            close_to_tray: false,
+            ..DesktopPrefs::default()
+        },
+        None,
+    );
+    app.composer = Content::with_text("hello world");
+    let _ = app.update(Message::ComposerEdit(Action::SelectAll));
+    assert_eq!(app.composer.selection().as_deref(), Some("hello world"));
+    // Finger-down on the text = a click, which clears the selection…
+    let _ = app.update(Message::ComposerEdit(Action::Click(iced::Point::new(5.0, 5.0))));
+    let _ = app.update(Message::ComposerEdit(Action::Drag(iced::Point::new(6.0, 5.0))));
+    assert_eq!(app.composer.selection(), None, "tap clears the selection");
+    // …and the long-press menu brings it back.
+    let _ = app.update(Message::ComposerMenu(ComposerMenuAction::Opened { by_touch: true }));
+    assert_eq!(app.composer.selection().as_deref(), Some("hello world"));
+    let _ = app.update(Message::ComposerMenu(ComposerMenuAction::Cut));
+    assert_eq!(app.composer.text().trim_end(), "");
+}
+
+#[test]
+fn support_back_returns_to_group_page() {
+    let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+    group_page(&mut app, GroupSettingsPane::Overview);
+    let _ = app.update(Message::OpenSupportChatList);
+    assert!(app.support.is_some() && app.group_settings.is_none());
+    // List → a member thread → Back (list) → Back (group page).
+    let _ = app.update(Message::OpenMemberSupportChat { member_id: 2, title: "Bob".into() });
+    let _ = app.update(Message::Back);
+    assert!(matches!(app.support.as_ref().map(|s| &s.pane), Some(crate::SupportPane::List)));
+    let _ = app.update(Message::Back);
+    assert!(app.support.is_none());
+    assert!(app.group_settings.is_some(), "Back must return to the group page");
+
+    // Opened from the chat header instead: Back returns to the chat.
+    let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+    select(&mut app, 1);
+    let _ = app.update(Message::OpenSupportChatList);
+    let _ = app.update(Message::Back);
+    assert!(app.support.is_none() && app.group_settings.is_none());
+}

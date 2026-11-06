@@ -828,3 +828,21 @@ pub fn settings_icon_plain<'a>(size: f32, color: Color) -> Element<'a, Message> 
         size,
     )
 }
+
+/// “My address” — Dazzle Line Icons address-card (CC BY).
+pub fn address_card_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/address-card.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
+/// “One-time invite” — Nuiverse repeat-once (BSD).
+pub fn repeat_once_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/repeat-once.svg").as_slice()),
+        color,
+        size,
+    )
+}

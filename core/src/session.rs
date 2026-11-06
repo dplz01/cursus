@@ -624,10 +624,23 @@ impl Session {
     }
 
     /// Delivery receipts for all contacts (`groups` false) or small groups.
+    ///
+    /// The core writes the DB but keeps serving its in-memory user from `/u`
+    /// until restart, so re-reading would show the old value: update our
+    /// cached profile instead (the official app does the same).
     pub fn set_delivery_receipts(&self, groups: bool, on: bool) -> Result<UserProfile> {
         let user_id = self.user_id()?;
         self.send(&Commands::set_delivery_receipts(user_id, groups, on))?;
-        self.refresh_user()
+        let mut user = self
+            .active_profile()
+            .ok_or_else(|| Error::Command("no active user".into()))?;
+        if groups {
+            user.send_rcpts_small_groups = on;
+        } else {
+            user.send_rcpts_contacts = on;
+        }
+        self.set_user(user.clone());
+        Ok(user)
     }
 
     /// Refresh `/u` into the session cache.

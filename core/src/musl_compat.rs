@@ -1,6 +1,7 @@
 //! Make official glibc-built `libsimplex` loadable on musl (Alpine / pmOS).
 //!
-//! Enabled only with `--features musl-glibc-compat` (off by default).
+//! Compiled automatically for musl targets (`target_env = "musl"`); glibc
+//! builds contain none of this.
 //!
 //! `dlopen(RTLD_GLOBAL)` alone is not enough: musl relocates `libHS*.so`
 //! before those globals are reliably visible. We therefore:
@@ -147,8 +148,8 @@ pub fn ensure_ld_preload_reexec() {
             preload.push(shim);
         } else {
             eprintln!(
-                "cursus: musl shim missing — run ./scripts/build-musl-compat.sh \
-                 then rebuild, or `apk add gcompat libucontext`"
+                "cursus: musl shim missing — `apk add build-base gcompat libucontext` \
+                 and rebuild Cursus on this device"
             );
         }
         for p in [

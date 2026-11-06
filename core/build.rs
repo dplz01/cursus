@@ -1,9 +1,12 @@
 fn main() {
-    #[cfg(feature = "musl-glibc-compat")]
-    musl_glibc_compat::build();
+    // musl targets always get the glibc compat shim (official libsimplex is
+    // glibc-only); glibc builds need nothing. No feature flag to remember.
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ENV");
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("musl") {
+        musl_glibc_compat::build();
+    }
 }
 
-#[cfg(feature = "musl-glibc-compat")]
 mod musl_glibc_compat {
     use std::env;
     use std::path::PathBuf;
@@ -77,14 +80,14 @@ mod musl_glibc_compat {
                     "cargo:warning=shared musl glibc compat shim failed ({cc_bin}): {stderr}"
                 );
                 if musl {
-                    panic!("musl-glibc-compat requires libcursus_musl_glibc_compat.so: {stderr}");
+                    panic!("musl build needs libcursus_musl_glibc_compat.so: {stderr}");
                 }
             }
             Err(err) => {
                 println!("cargo:warning=could not run {cc_bin} for shared musl shim: {err}");
                 if musl {
                     panic!(
-                        "musl-glibc-compat requires a C compiler to build the shim: {err}"
+                        "musl build needs a C compiler for the glibc shim (apk add build-base): {err}"
                     );
                 }
             }

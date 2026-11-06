@@ -602,6 +602,7 @@ pub enum PrefMenu {
     ContactTtl,
     ContactChatItemTtl,
     ContactRcpts,
+    GroupRcpts,
     ContactFullDelete,
     ContactReactions,
     ContactVoice,
@@ -747,8 +748,8 @@ fn init_file_logging() {
 }
 
 pub fn main() -> iced::Result {
-    // Behind `--features musl-glibc-compat`: re-exec with LD_PRELOAD shim.
-    #[cfg(feature = "musl-glibc-compat")]
+    // musl builds: re-exec once with the glibc compat shim in LD_PRELOAD.
+    #[cfg(target_env = "musl")]
     cursus_core::ensure_ld_preload_reexec();
 
     init_file_logging();
@@ -856,6 +857,7 @@ pub enum Message {
     LockTick,
     LockPasswordChanged(Secret),
     LockToggleReveal,
+    AuthToggleReveal,
     LockSubmit,
     LockVerified(bool),
     // Other privacy & security settings.
@@ -969,6 +971,8 @@ pub enum Message {
     /// Local “delete messages after” when disappearing is “for me” (`None` = Never).
     SetContactChatItemTtl(Option<i64>),
     SetContactSendRcpts(Option<bool>),
+    /// Your own "send receipts" for the open group (None = account default).
+    SetGroupSendRcpts(Option<bool>),
     SetContactFullDelete(FeatureAllow),
     SetContactReactions(FeatureAllow),
     SetContactVoice(FeatureAllow),
@@ -1286,6 +1290,10 @@ struct App {
     revealed_media: HashSet<i64>,
     /// Keyring auto-unlock is attempted once per launch.
     keyring_tried: bool,
+    /// Keyring auto-unlock under way: show a splash, not the password form.
+    auto_unlocking: bool,
+    /// Show typed passwords on the welcome / unlock screens.
+    auth_reveal: bool,
     /// Highlighted row in the `:shortcode` autocomplete list.
     emoji_suggest_index: usize,
     /// Per-message context menu (reactions + actions).
@@ -1492,6 +1500,8 @@ impl App {
                 blur_pending: HashSet::new(),
                 revealed_media: HashSet::new(),
                 keyring_tried: false,
+                auto_unlocking: prefs.keyring_unlock && setup_complete(),
+                auth_reveal: false,
                 emoji_suggest_index: 0,
                 message_menu: None,
                 msg_long_press_generation: 0,
@@ -1793,6 +1803,8 @@ impl App {
                 self.connecting = false;
                 self.core_connect_launched = true;
                 self.auth = None;
+                self.auto_unlocking = false;
+                self.auth_reveal = false;
                 if let Ok(mut guard) = self.pending_session.lock() {
                     self.session = guard.take();
                 }
@@ -1826,6 +1838,8 @@ impl App {
             }
             Message::Connected(Err(err)) => {
                 self.connecting = false;
+                // Keyring password no longer opens the DB: fall back to the form.
+                self.auto_unlocking = false;
                 // Stay on unlock/welcome so the user can retry.
                 self.status = if err.to_lowercase().contains("migrat")
                     || err.to_lowercase().contains("password")
@@ -2183,6 +2197,10 @@ impl App {
                 }
                 Task::none()
             }
+            Message::AuthToggleReveal => {
+                self.auth_reveal = !self.auth_reveal;
+                Task::none()
+            }
             Message::LockToggleReveal => {
                 if let Some(lock) = self.locked.as_mut() {
                     lock.reveal = !lock.reveal;
@@ -2400,12 +2418,14 @@ impl App {
                         })
                     }
                     Ok(None) => {
+                        self.auto_unlocking = false;
                         self.status = "No password in the system keyring — enter it to unlock.".into();
-                        Task::none()
+                        iced::widget::operation::focus(iced::widget::Id::new("unlock-password"))
                     }
                     Err(err) => {
+                        self.auto_unlocking = false;
                         self.status = format!("{err} — enter your password to unlock.");
-                        Task::none()
+                        iced::widget::operation::focus(iced::widget::Id::new("unlock-password"))
                     }
                 }
             }
@@ -3135,6 +3155,34 @@ impl App {
                     p.chat_item_ttl = secs.filter(|s| *s > 0);
                 }
                 self.save_contact_chat_item_ttl()
+            }
+            Message::SetGroupSendRcpts(value) => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
+                self.pref_menu = None;
+                let Some(group_id) = self.group_settings.as_ref().map(|g| g.group_id) else {
+                    return Task::none();
+                };
+                let Some(session) = self.session.clone() else {
+                    return Task::none();
+                };
+                let chat = ChatId::new(ChatType::Group, group_id);
+                let Some(c) = self.chats.iter_mut().find(|c| c.id == chat) else {
+                    return Task::none();
+                };
+                c.settings.send_rcpts = value;
+                let settings = c.settings.clone();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            session.set_chat_settings(&chat, &settings).map(|_| ()).map_err(|e| e.to_string())
+                        })
+                        .await
+                        .map_err(|e| e.to_string())?
+                    },
+                    Message::ContactPrefsSaved,
+                )
             }
             Message::SetContactSendRcpts(value) => {
                 if !self.tap_allowed() {
@@ -4566,6 +4614,9 @@ impl App {
                 }
                 if self.locked.is_some() {
                     tasks.push(iced::widget::operation::focus(iced::widget::Id::new("lock-password")));
+                }
+                if matches!(self.auth, Some(AuthScreen::Unlock { .. })) && !self.auto_unlocking {
+                    tasks.push(iced::widget::operation::focus(iced::widget::Id::new("unlock-password")));
                 }
                 Task::batch(tasks)
             }
@@ -6715,12 +6766,29 @@ impl App {
         self.privacy_confirm.as_ref()
     }
 
+    pub(crate) fn auto_unlocking(&self) -> bool {
+        self.auto_unlocking
+    }
+
+    pub(crate) fn auth_reveal(&self) -> bool {
+        self.auth_reveal
+    }
+
     pub(crate) fn lock_state(&self) -> Option<&LockState> {
         self.locked.as_ref()
     }
 
     pub(crate) fn receipts(&self) -> (bool, bool) {
         self.receipts
+    }
+
+    /// Your per-chat receipts override for the open group settings page.
+    pub(crate) fn group_send_rcpts(&self) -> Option<bool> {
+        let id = self.group_settings.as_ref()?.group_id;
+        self.chats
+            .iter()
+            .find(|c| c.id == ChatId::new(ChatType::Group, id))
+            .and_then(|c| c.settings.send_rcpts)
     }
 
     pub(crate) fn encrypt_files(&self) -> bool {

@@ -8,7 +8,7 @@ mod commands;
 mod error;
 mod ffi;
 mod models;
-#[cfg(feature = "musl-glibc-compat")]
+#[cfg(target_env = "musl")]
 mod musl_compat;
 mod paths;
 mod rich_text;
@@ -34,7 +34,7 @@ pub use rich_text::{
     suggest_emoji_shortcodes, humanize_simplex_links, link_host, simplex_link_label, EmojiSuggestion, FormatColor,
     SimplexLinkKind, TextSegment, TextStyle, LARGE_EMOJI_MAX,
 };
-#[cfg(feature = "musl-glibc-compat")]
+#[cfg(target_env = "musl")]
 pub use musl_compat::{compat_status_line, ensure_ld_preload_reexec, is_musl_host};
 pub use paths::{
     data_dir, db_prefix, default_libs_dir, files_dir, plaintext_cache_path, private_cache_dir,
@@ -350,5 +350,50 @@ mod smoke {
         );
         assert_eq!(Commands::set_chat_tags(&chat, &[1, 2]), "/_tags @9 1,2");
         assert_eq!(Commands::get_chat_tags(1), "/_get tags 1");
+    }
+}
+
+#[cfg(test)]
+mod receipts_probe {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn delivery_receipts_toggle_round_trip() {
+        let dir = std::env::temp_dir().join(format!("cursus-rcpt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = SessionConfig {
+            libs_dir: default_libs_dir(),
+            db_prefix: dir.join("simplex_v1"),
+            db_key: zeroize::Zeroizing::new("probe".to_string()),
+            migration_confirm: "yesUp".into(),
+            initial_display_name: "Probe".into(),
+            encrypt_local_files: true,
+        };
+        let mut session = Session::open(cfg).expect("open");
+        session.start_chat().expect("start");
+        let before = session.refresh_user().expect("user");
+        println!("before: contacts={} groups={}", before.send_rcpts_contacts, before.send_rcpts_small_groups);
+        let r = session.set_delivery_receipts(false, false);
+        println!("set contacts off -> {:?}", r.as_ref().map(|u| (u.send_rcpts_contacts, u.send_rcpts_small_groups)));
+        assert!(!r.unwrap().send_rcpts_contacts);
+        let g = session.set_delivery_receipts(true, false).unwrap();
+        assert!(!g.send_rcpts_contacts && !g.send_rcpts_small_groups);
+        drop(session);
+        // Reopen: the core reloads the user from the DB.
+        let cfg = SessionConfig {
+            libs_dir: default_libs_dir(),
+            db_prefix: dir.join("simplex_v1"),
+            db_key: zeroize::Zeroizing::new("probe".to_string()),
+            migration_confirm: "yesUp".into(),
+            initial_display_name: "Probe".into(),
+            encrypt_local_files: true,
+        };
+        let mut session = Session::open(cfg).expect("reopen");
+        session.start_chat().expect("restart");
+        let after = session.refresh_user().unwrap();
+        assert!(!after.send_rcpts_contacts && !after.send_rcpts_small_groups, "persisted");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -269,83 +269,44 @@ pub fn shell(app: &App) -> Element<'_, Message> {
     stack.into()
 }
 
-/// Lock screen: one centered card that works with a mouse + keyboard (field
-/// focused, Enter unlocks) and on phones (full-width field and a large Unlock
-/// button above the on-screen keyboard, Show/Hide for typing long passwords).
+/// Lock screen (same card as unlock): works with a mouse + keyboard (field
+/// focused, Enter unlocks) and on phones (wide field, large Unlock button
+/// above the on-screen keyboard, Show/Hide for typing long passwords).
 fn lock_screen<'a>(app: &'a App, lock: &'a crate::LockState) -> Element<'a, Message> {
     let d = app.density();
     let hover = app.hover_ok();
     let narrow = !matches!(app.layout(), LayoutMode::Desktop);
-    let waiting = lock
-        .retry_at
-        .is_some_and(|t| std::time::Instant::now() < t);
-    let field = text_input("Database password", lock.password.as_str())
-        .id(iced::widget::Id::new("lock-password"))
-        .secure(!lock.reveal)
-        .on_input(|s| Message::LockPasswordChanged(crate::Secret::new(s)))
-        .on_submit(Message::LockSubmit)
-        .padding(Padding::from([14, 16]))
-        .size(d.body + 1.0)
-        .width(Length::Fill)
-        .style(theme::rounded_field());
-    let reveal = button(
-        text(if lock.reveal { "Hide" } else { "Show" })
-            .size(d.meta)
-            .color(theme::t().accent),
-    )
-    .on_press(Message::LockToggleReveal)
-    .padding(Padding::from([14, 12]))
-    .style(theme::ghost_tile(hover));
-    let can_submit = !lock.checking && !lock.password.as_str().is_empty();
-    let unlock = button(
-        container(
-            text(if lock.checking { "Checking…" } else { "Unlock" })
-                .size(d.body)
-                .font(BOLD),
-        )
-        .width(Length::Fill)
-        .center_x(Length::Fill),
-    )
-    .on_press_maybe(can_submit.then_some(Message::LockSubmit))
-    .padding(Padding::from([14, 18]))
-    .width(Length::Fill)
-    .style(theme::primary_action(hover));
-
-    let mut card = column![
-        container(icons::shield_icon(44.0, theme::t().accent))
-            .width(Length::Fill)
-            .center_x(Length::Fill),
-        container(
-            text("Cursus is locked")
-                .size(d.title + 4.0)
-                .font(BOLD)
-                .color(theme::t().text_primary),
-        )
-        .width(Length::Fill)
-        .center_x(Length::Fill),
-        container(
-            text("Enter your database password to continue.")
-                .size(d.meta)
-                .color(theme::t().text_secondary),
-        )
-        .width(Length::Fill)
-        .center_x(Length::Fill),
-        row![field, reveal].spacing(6).align_y(Alignment::Center),
-    ]
-    .spacing(14)
-    .width(Length::Fill);
+    let waiting = lock.retry_at.is_some_and(|t| std::time::Instant::now() < t);
+    let mut body = Column::new().push(
+        row![
+            gate_field(
+                "Database password",
+                lock.password.as_str(),
+                !lock.reveal,
+                |s| Message::LockPasswordChanged(crate::Secret::new(s)),
+                Message::LockSubmit,
+                d,
+            )
+            .id(iced::widget::Id::new("lock-password")),
+            reveal_toggle(lock.reveal, Message::LockToggleReveal, d, hover),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+    );
     if let Some(err) = lock.error.as_ref() {
-        card = card.push(text(err.clone()).size(d.meta).color(theme::t().danger));
+        body = body.push(text(err.clone()).size(d.meta).color(theme::t().danger));
     } else if waiting {
-        card = card.push(
-            text("Too many attempts — wait a moment.")
-                .size(d.meta)
-                .color(theme::t().danger),
-        );
+        body = body.push(text("Too many attempts — wait a moment.").size(d.meta).color(theme::t().danger));
     }
-    card = card.push(unlock);
+    let can_submit = !lock.checking && !lock.password.as_str().is_empty();
+    body = body.push(gate_button(
+        if lock.checking { "Checking…" } else { "Unlock" },
+        can_submit.then_some(Message::LockSubmit),
+        d,
+        hover,
+    ));
     if !narrow {
-        card = card.push(
+        body = body.push(
             container(
                 text("Press Enter to unlock · Ctrl+L locks again")
                     .size(d.meta)
@@ -355,22 +316,68 @@ fn lock_screen<'a>(app: &'a App, lock: &'a crate::LockState) -> Element<'a, Mess
             .center_x(Length::Fill),
         );
     }
-    let panel = container(card)
+    gate_card(
+        app,
+        icons::lock_icon(40.0, theme::t().accent),
+        None,
+        "Cursus is locked".into(),
+        "Enter your database password to continue.".into(),
+        body,
+    )
+}
+
+/// Shared look of the welcome / unlock / lock cards: icon, centred title and
+/// subtitle, then the body. Phones keep the card high so the on-screen
+/// keyboard never covers the button; desktops centre it.
+fn gate_card<'a>(
+    app: &'a App,
+    icon: Element<'a, Message>,
+    eyebrow: Option<String>,
+    title: String,
+    subtitle: String,
+    body: Column<'a, Message>,
+) -> Element<'a, Message> {
+    let d = app.density();
+    let narrow = !matches!(app.layout(), LayoutMode::Desktop);
+    let centred = |e: Element<'a, Message>| -> Element<'a, Message> {
+        container(e).width(Length::Fill).center_x(Length::Fill).into()
+    };
+    let mut col = Column::new().spacing(12).width(Length::Fill);
+    col = col.push(centred(icon));
+    if let Some(eyebrow) = eyebrow {
+        col = col.push(centred(
+            text(eyebrow).size(d.meta).font(BOLD).color(theme::t().accent).into(),
+        ));
+    }
+    col = col.push(centred(
+        text(title)
+            .size(d.title + 4.0)
+            .font(BOLD)
+            .color(theme::t().text_primary)
+            .align_x(Alignment::Center)
+            .into(),
+    ));
+    col = col.push(centred(
+        text(subtitle)
+            .size(d.meta)
+            .color(theme::t().text_secondary)
+            .align_x(Alignment::Center)
+            .into(),
+    ));
+    col = col.push(vertical().height(4));
+    col = col.push(body.spacing(12).width(Length::Fill));
+    let panel = container(col)
         .width(Length::Fill)
         .max_width(400)
         .padding(if narrow { Padding::from([24, 18]) } else { Padding::from([32, 32]) })
-        .style(|_| {
-            let c = theme::t();
-            container::Style {
-                background: Some(iced::Background::Color(c.bg_elevated)),
-                border: iced::Border {
-                    radius: 20.0.into(),
-                    ..Default::default()
-                },
-                ..container::Style::default()
-            }
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().bg_elevated)),
+            border: iced::Border {
+                radius: 20.0.into(),
+                ..Default::default()
+            },
+            ..container::Style::default()
         });
-    // Phones: keep the card in the upper part so the keyboard doesn't cover it.
     let outer = container(panel)
         .width(Length::Fill)
         .height(Length::Fill)
@@ -385,172 +392,199 @@ fn lock_screen<'a>(app: &'a App, lock: &'a crate::LockState) -> Element<'a, Mess
         .into()
 }
 
+/// Wide rounded field used on the gate cards.
+fn gate_field<'a>(
+    placeholder: &'a str,
+    value: &'a str,
+    secure: bool,
+    on_input: impl Fn(String) -> Message + 'a,
+    on_submit: Message,
+    d: Density,
+) -> iced::widget::TextInput<'a, Message> {
+    text_input(placeholder, value)
+        .secure(secure)
+        .on_input(on_input)
+        .on_submit(on_submit)
+        .padding(Padding::from([14, 16]))
+        .size(d.body + 1.0)
+        .width(Length::Fill)
+        .style(theme::rounded_field())
+}
+
+/// Full-width main action of a gate card (disabled while `busy`).
+fn gate_button<'a>(label: &'a str, msg: Option<Message>, d: Density, hover: bool) -> Element<'a, Message> {
+    button(
+        container(text(label).size(d.body).font(BOLD))
+            .width(Length::Fill)
+            .center_x(Length::Fill),
+    )
+    .on_press_maybe(msg)
+    .padding(Padding::from([14, 18]))
+    .width(Length::Fill)
+    .style(theme::primary_action(hover))
+    .into()
+}
+
+/// "Show" / "Hide" next to a password field.
+fn reveal_toggle<'a>(revealed: bool, msg: Message, d: Density, hover: bool) -> Element<'a, Message> {
+    button(
+        text(if revealed { "Hide" } else { "Show" })
+            .size(d.meta)
+            .color(theme::t().accent),
+    )
+    .on_press(msg)
+    .padding(Padding::from([14, 12]))
+    .style(theme::ghost_tile(hover))
+    .into()
+}
+
 fn auth_gate(app: &App) -> Element<'_, Message> {
     let d = app.density();
     let hover = app.hover_ok();
     let busy = app.connecting();
+    let reveal = app.auth_reveal();
     let Some(auth) = app.auth() else {
         return vertical().height(0).into();
     };
-    let card: Element<'_, Message> = match auth {
-        AuthScreen::WelcomeName { name } => column![
-            text("Cursus")
-                .size(d.title).font(BOLD)
-                .color(theme::t().accent),
-            text("Choose a display name for this profile.")
-                .size(d.body)
-                .color(theme::t().text_secondary),
-            crate::edit_menu::edit_field(
-                text_input("Your name", name)
-                .id("edit-field-WelcomeNameChanged")
-                .on_input(Message::WelcomeNameChanged)
-                .on_submit(Message::WelcomeNameNext)
-                .padding(d.composer)
-                .size(d.body)
-                .width(Length::Fill)
-                .style(theme::composer_input()),
+    let lock = || icons::lock_icon(40.0, theme::t().accent);
+    // Errors from the last attempt, shown inline in the card.
+    let status = app.status_text().trim();
+    let lower = status.to_lowercase();
+    let error = (!status.is_empty()
+        && ["error", "fail", "wrong", "could not", "timed out", "keyring", "do not match", "at least", "enter a display name"]
+            .iter()
+            .any(|k| lower.contains(k)))
+    .then(|| text(status.to_string()).size(d.meta).color(theme::t().danger));
+
+    // Keyring auto-unlock: a calm splash instead of a form that flashes away.
+    if app.auto_unlocking() {
+        return gate_card(
+            app,
+            lock(),
+            None,
+            "Unlocking…".into(),
+            "Using the password in your system keyring.".into(),
+            Column::new(),
+        );
+    }
+
+    match auth {
+        AuthScreen::WelcomeName { name } => {
+            let mut body = Column::new().push(crate::edit_menu::edit_field(
+                gate_field("Your name", name, false, Message::WelcomeNameChanged, Message::WelcomeNameNext, d)
+                    .id("edit-field-WelcomeNameChanged"),
                 iced::widget::Id::new("edit-field-WelcomeNameChanged"),
                 name,
                 Message::WelcomeNameChanged,
                 true,
-            ),
-            button(text(if busy { "Working…" } else { "Next" }).size(d.body))
-                .on_press_maybe(if busy {
-                    None
-                } else {
-                    Some(Message::WelcomeNameNext)
-                })
-                .padding(Padding::from([12, 18]))
-                .style(theme::primary_action(hover)),
-        ]
-        .spacing(14)
-        .into(),
-        AuthScreen::WelcomePassword {
-            name,
-            password,
-            confirm,
-        } => column![
-            text("Set database password")
-                .size(d.title).font(BOLD)
-                .color(theme::t().text_primary),
-            text(format!(
-                "Hi {name}. This password encrypts your local chat database (SQLCipher). It is never stored — you will enter it each time you open Cursus."
-            ))
-            .size(d.meta)
-            .color(theme::t().text_secondary),
-            text_input("Password (min 8 characters)", password.as_str())
-                .secure(true)
-                .on_input(|s| Message::WelcomePasswordChanged(crate::Secret::new(s)))
-                .padding(d.composer)
-                .size(d.body)
-                .width(Length::Fill)
-                .style(theme::composer_input()),
-            text_input("Confirm password", confirm.as_str())
-                .secure(true)
-                .on_input(|s| Message::WelcomeConfirmChanged(crate::Secret::new(s)))
-                .on_submit(Message::WelcomeSubmit)
-                .padding(d.composer)
-                .size(d.body)
-                .width(Length::Fill)
-                .style(theme::composer_input()),
-            row![
-                button(text("Back").size(d.meta))
-                    .on_press_maybe(if busy {
-                        None
-                    } else {
-                        Some(Message::WelcomeBack)
-                    })
-                    .padding(Padding::from([10, 14]))
-                    .style(theme::secondary_action(hover)),
-                button(text(if busy { "Creating…" } else { "Create profile" }).size(d.meta))
-                    .on_press_maybe(if busy {
-                        None
-                    } else {
-                        Some(Message::WelcomeSubmit)
-                    })
-                    .padding(Padding::from([10, 14]))
-                    .style(theme::primary_action(hover)),
-            ]
-            .spacing(8),
-        ]
-        .spacing(14)
-        .into(),
-        AuthScreen::Unlock {
-            display_name,
-            password,
-        } => column![
-            text("Unlock Cursus")
-                .size(d.title).font(BOLD)
-                .color(theme::t().text_primary),
-            text(format!("Welcome back, {display_name}."))
-                .size(d.body)
-                .color(theme::t().text_secondary),
-            text_input("Database password", password.as_str())
-                .secure(true)
-                .on_input(|s| Message::UnlockPasswordChanged(crate::Secret::new(s)))
-                .on_submit(Message::UnlockSubmit)
-                .padding(d.composer)
-                .size(d.body)
-                .width(Length::Fill)
-                .style(theme::composer_input()),
-            button(text(if busy { "Unlocking…" } else { "Unlock" }).size(d.body))
-                .on_press_maybe(if busy {
-                    None
-                } else {
-                    Some(Message::UnlockSubmit)
-                })
-                .padding(Padding::from([12, 18]))
-                .style(theme::primary_action(hover)),
-        ]
-        .spacing(14)
-        .into(),
-    };
-    let status = app.status_text().trim();
-    let card: Element<'_, Message> = if !status.is_empty()
-        && (status.to_lowercase().contains("error")
-            || status.to_lowercase().contains("fail")
-            || status.to_lowercase().contains("password")
-            || status.to_lowercase().contains("wrong")
-            || status.to_lowercase().contains("could not")
-            || status.to_lowercase().contains("timed out"))
-    {
-        column![
-            card,
-            text(status.to_string())
-                .size(d.meta)
-                .color(theme::t().danger),
-        ]
-        .spacing(10)
-        .into()
-    } else {
-        card
-    };
-    let panel = container(card)
-        .width(Length::Fill)
-        .max_width(420)
-        .padding(Padding::from([28, 28]))
-        .style(|_| {
-            let c = theme::t();
-            container::Style {
-                background: Some(iced::Background::Color(c.bg_elevated)),
-                border: iced::Border {
-                    color: c.border,
-                    width: 1.0,
-                    radius: 16.0.into(),
-                },
-                ..container::Style::default()
+            ));
+            if let Some(e) = error {
+                body = body.push(e);
             }
-        });
-    container(panel)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().bg_app)),
-            ..container::Style::default()
-        })
-        .into()
+            body = body.push(gate_button(
+                if busy { "Working…" } else { "Continue" },
+                (!busy).then_some(Message::WelcomeNameNext),
+                d,
+                hover,
+            ));
+            gate_card(
+                app,
+                icons::user_alt_icon(40.0, theme::t().accent),
+                Some("Step 1 of 2".into()),
+                "Welcome to Cursus".into(),
+                "Pick the name your contacts will see. You can change it later.".into(),
+                body,
+            )
+        }
+        AuthScreen::WelcomePassword { name, password, confirm } => {
+            let mut body = Column::new()
+                .push(
+                    row![
+                        gate_field(
+                            "Password (at least 8 characters)",
+                            password.as_str(),
+                            !reveal,
+                            |s| Message::WelcomePasswordChanged(crate::Secret::new(s)),
+                            Message::WelcomeSubmit,
+                            d,
+                        ),
+                        reveal_toggle(reveal, Message::AuthToggleReveal, d, hover),
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+                )
+                .push(gate_field(
+                    "Repeat password",
+                    confirm.as_str(),
+                    !reveal,
+                    |s| Message::WelcomeConfirmChanged(crate::Secret::new(s)),
+                    Message::WelcomeSubmit,
+                    d,
+                ));
+            if let Some(e) = error {
+                body = body.push(e);
+            }
+            body = body.push(gate_button(
+                if busy { "Creating…" } else { "Create profile" },
+                (!busy).then_some(Message::WelcomeSubmit),
+                d,
+                hover,
+            ));
+            body = body.push(
+                container(
+                    button(text("Back").size(d.meta).color(theme::t().text_secondary))
+                        .on_press_maybe((!busy).then_some(Message::WelcomeBack))
+                        .padding(Padding::from([8, 14]))
+                        .style(theme::ghost_tile(hover)),
+                )
+                .width(Length::Fill)
+                .center_x(Length::Fill),
+            );
+            gate_card(
+                app,
+                lock(),
+                Some("Step 2 of 2".into()),
+                format!("Protect your chats, {name}"),
+                "This password encrypts everything Cursus stores. It is never saved — you'll enter it when Cursus starts, so keep it somewhere safe.".into(),
+                body,
+            )
+        }
+        AuthScreen::Unlock { display_name, password } => {
+            let mut body = Column::new().push(
+                row![
+                    gate_field(
+                        "Database password",
+                        password.as_str(),
+                        !reveal,
+                        |s| Message::UnlockPasswordChanged(crate::Secret::new(s)),
+                        Message::UnlockSubmit,
+                        d,
+                    )
+                    .id(iced::widget::Id::new("unlock-password")),
+                    reveal_toggle(reveal, Message::AuthToggleReveal, d, hover),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            );
+            if let Some(e) = error {
+                body = body.push(e);
+            }
+            body = body.push(gate_button(
+                if busy { "Unlocking…" } else { "Unlock" },
+                (!busy && !password.as_str().is_empty()).then_some(Message::UnlockSubmit),
+                d,
+                hover,
+            ));
+            gate_card(
+                app,
+                lock(),
+                None,
+                format!("Welcome back, {display_name}"),
+                "Enter your password to open your chats.".into(),
+                body,
+            )
+        }
+    }
 }
 
 fn desktop_shell(app: &App) -> Element<'_, Message> {
@@ -3827,7 +3861,14 @@ fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<
                 col = col.push(pref_row(
                     None,
                     "Lock now",
-                    button(text("Lock").size(d.meta).color(theme::t().accent_on))
+                    button(
+                        row![
+                            icons::lock_icon(14.0, theme::t().accent_on),
+                            text("Lock").size(d.meta).color(theme::t().accent_on),
+                        ]
+                        .spacing(6)
+                        .align_y(Alignment::Center),
+                    )
                         .on_press(Message::LockNow)
                         .padding(Padding::from([6, 14]))
                         .style(theme::primary_action(hover))
@@ -4456,17 +4497,29 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
             let cur = app
                 .contact_profile()
                 .map(|p| RcptChoice::from_opt(p.send_rcpts));
+            let default_on = app.receipts().0;
             (
                 "Send receipts",
                 RcptChoice::OPTIONS
                     .into_iter()
                     .map(|c| {
                         (
-                            c.to_string(),
+                            c.label(default_on),
                             Some(c) == cur,
                             Message::SetContactSendRcpts(c.to_opt()),
                         )
                     })
+                    .collect(),
+            )
+        }
+        PrefMenu::GroupRcpts => {
+            let cur = RcptChoice::from_opt(app.group_send_rcpts());
+            let default_on = app.receipts().1;
+            (
+                "Send receipts",
+                RcptChoice::OPTIONS
+                    .into_iter()
+                    .map(|c| (c.label(default_on), c == cur, Message::SetGroupSendRcpts(c.to_opt())))
                     .collect(),
             )
         }
@@ -5259,7 +5312,7 @@ fn contact_preferences_page<'a>(
         Some(icons::check_read(20.0, theme::t().text_secondary)),
         "Send receipts",
         choice_chip(
-            RcptChoice::from_opt(p.send_rcpts).to_string(),
+            RcptChoice::from_opt(p.send_rcpts).label(app.receipts().0),
             Message::OpenPrefMenu(PrefMenu::ContactRcpts),
             d,
             hover,
@@ -5968,7 +6021,7 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
 
     let body: Element<'_, Message> = match g.pane {
         GroupSettingsPane::AddMember => group_add_member_pane(app, g, d, hover),
-        GroupSettingsPane::Preferences => group_preferences_pane(g, d, hover),
+        GroupSettingsPane::Preferences => group_preferences_pane(app, g, d, hover),
         GroupSettingsPane::MemberInfo => group_member_info_pane(g, d, hover),
         GroupSettingsPane::ChannelMembers => {
             group_members_list(g, d, hover, !can_edit_group_profile(&g.my_role))
@@ -7472,11 +7525,12 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
     .into()
 }
 
-fn group_preferences_pane(
-    g: &crate::GroupSettingsOverlay,
+fn group_preferences_pane<'a>(
+    app: &'a App,
+    g: &'a crate::GroupSettingsOverlay,
     d: Density,
     hover: bool,
-) -> Element<'_, Message> {
+) -> Element<'a, Message> {
     let owner = can_edit_group_profile(&g.my_role);
     let prefs = g.group_preferences.as_ref();
     let mut col = Column::new().spacing(0).width(Length::Fill);
@@ -7563,7 +7617,35 @@ fn group_preferences_pane(
         PrefTrail::None,
         d,
     ));
-    column![card(col), card(members)].spacing(PAGE_GAP).into()
+    // Yours only (not a group feature): delivery receipts you send here.
+    let mut mine = Column::new().spacing(0).width(Length::Fill);
+    mine = mine.push(card_title(
+        icons::check_read(18.0, theme::t().accent),
+        "Your settings",
+        "Only for you — other members don't see these.",
+        d,
+    ));
+    mine = mine.push(pref_row(
+        Some(icons::check_read(20.0, theme::t().text_secondary)),
+        "Send receipts",
+        choice_chip(
+            RcptChoice::from_opt(app.group_send_rcpts()).label(app.receipts().1),
+            Message::OpenPrefMenu(PrefMenu::GroupRcpts),
+            d,
+            hover,
+        ),
+        PrefTrail::None,
+        d,
+    ));
+    mine = mine.push(pref_note(
+        "Receipts are only sent in groups with up to 20 members.",
+        d,
+    ));
+    let mut cards = column![card(col), card(members)].spacing(PAGE_GAP);
+    if !g.is_channel {
+        cards = cards.push(card(mine));
+    }
+    cards.into()
 }
 
 /// TTL pick_list entry — `Never` clears / disables disappearing messages.
@@ -7676,13 +7758,14 @@ impl RcptChoice {
     }
 }
 
-impl std::fmt::Display for RcptChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Default => "default",
-            Self::On => "on",
-            Self::Off => "off",
-        })
+impl RcptChoice {
+    /// "Default (on)" shows what the account-wide setting resolves to.
+    fn label(self, default_on: bool) -> String {
+        match self {
+            Self::Default => format!("Default ({})", if default_on { "on" } else { "off" }),
+            Self::On => "On".into(),
+            Self::Off => "Off".into(),
+        }
     }
 }
 

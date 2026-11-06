@@ -61,16 +61,16 @@ cargo install --path linux
 
 Works on **x86_64 and aarch64** Linux hosts (PinePhone, ARM laptops, Asahi, etc.) once the matching libs zip is installed.
 
-**Musl (Alpine / musl postmarketOS):** prebuilt `libsimplex` is glibc-linked. Opt in with the `musl-glibc-compat` feature (off by default) and build **on the device**:
+**Musl (Alpine / musl postmarketOS):** prebuilt `libsimplex` is glibc-linked. Building Cursus **on the device** includes the compat layer automatically (shim for `fcntl64`/`stat64`/fortify symbols + gcompat) — same commands as above:
 
 ```bash
 apk add gcompat libucontext build-base
-./scripts/build-musl-compat.sh
-cargo run -p cursus-linux --features musl-glibc-compat
-cargo install --path linux --features musl-glibc-compat
+./scripts/fetch-libs.sh
+cargo run -p cursus-linux
+cargo install --path linux
 ```
 
-`build-musl-compat.sh` must print `ok: exports fcntl64`. Do not copy that `.so` from a glibc PC.
+The old `--features musl-glibc-compat` flag still builds but does nothing.
 
 Data is stored under `$XDG_DATA_HOME/cursus` (or `~/.local/share/cursus`), separate from the official SimpleX desktop app.
 

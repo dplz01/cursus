@@ -335,6 +335,27 @@ fn shots() {
             app.set_composer_text("love you :he");
             render(&app, MOBILE, &format!("emoji-suggest-{t}"));
         }
+        if want("gate") {
+            for (size, name) in [(DESKTOP, "gate"), (MOBILE, "mgate")] {
+                let mut app = demo_app(dark, size.width, size.height);
+                app.auth = Some(crate::AuthScreen::WelcomeName { name: "Davide".into() });
+                render(&app, size, &format!("{name}-welcome-{t}"));
+                app.auth = Some(crate::AuthScreen::WelcomePassword {
+                    name: "Davide".into(),
+                    password: crate::Secret::new("hunter22".into()),
+                    confirm: crate::Secret::default(),
+                });
+                render(&app, size, &format!("{name}-password-{t}"));
+                app.auth = Some(crate::AuthScreen::Unlock {
+                    display_name: "Davide".into(),
+                    password: crate::Secret::default(),
+                });
+                app.status = "Could not open database (wrong password?).".into();
+                render(&app, size, &format!("{name}-unlock-{t}"));
+                app.auto_unlocking = true;
+                render(&app, size, &format!("{name}-auto-{t}"));
+            }
+        }
         if want("lock") {
             for (size, name) in [(DESKTOP, "lock"), (MOBILE, "mlock")] {
                 let mut app = demo_app(dark, size.width, size.height);

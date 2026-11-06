@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [features]
 default = []
-# Enable musl→glibc compat for Alpine / musl postmarketOS (see cursus-core).
+# Deprecated no-op: musl builds include the glibc compat layer automatically.
 musl-glibc-compat = ["cursus-core/musl-glibc-compat"]
 
 [dependencies]

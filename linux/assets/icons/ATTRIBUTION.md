@@ -38,6 +38,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `link-minimalistic-2.svg` | [svgrepo/529672](https://www.svgrepo.com/svg/529672/link-minimalistic-2) | Solar Broken Line Icons / Solar Icons | **CC Attribution** — attribution required | Yes (with credit) |
 | `history.svg` | [svgrepo/524639](https://www.svgrepo.com/svg/524639/history) | Solar Linear Icons / Solar Icons | **CC Attribution** — attribution required | Yes (with credit) |
 | `review-file.svg` | [svgrepo/521218](https://www.svgrepo.com/svg/521218/review-file) | Iconship Interface Icons / Giovana | **CC Attribution** — attribution required | Yes (with credit) |
+| `lock.svg` | [svgrepo/509149](https://www.svgrepo.com/svg/509149/lock) | Orchid Line Interface Icons / Orchid | **MIT License** | Yes |
 | `admin.svg` | [svgrepo/501805](https://www.svgrepo.com/svg/501805/admin) | Instructure UI Line Interface Icons / instructure-ui | **MIT License** | Yes |
 | `edit-3.svg` | [svgrepo/522527](https://www.svgrepo.com/svg/522527/edit-3) | Generica Tiny Interface Icons / Vlad Cristea | **CC Attribution** | Yes (with credit) |
 | `reply.svg` | [svgrepo/523002](https://www.svgrepo.com/svg/523002/reply) | Solar Outline Icons / Solar Icons | **CC Attribution** | Yes (with credit) |

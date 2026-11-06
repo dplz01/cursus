@@ -53,7 +53,7 @@ if [[ "$os" == "linux" ]]; then
   if [[ -e /lib/ld-musl-aarch64.so.1 || -e /lib/ld-musl-x86_64.so.1 || -e /usr/lib/ld-musl-aarch64.so.1 ]]; then
     echo "WARNING: musl detected. Official libsimplex is glibc-linked." >&2
     echo "  Install: apk add gcompat libucontext" >&2
-    echo "  Then rebuild Cursus (ships libcursus_musl_glibc_compat.so for fcntl64/stat64)." >&2
+    echo "  Then build Cursus on this device (musl builds include the glibc compat layer)." >&2
   elif [[ "$arch_norm" == "aarch64" && ! -e /lib/ld-linux-aarch64.so.1 && ! -e /lib64/ld-linux-aarch64.so.1 ]]; then
     echo "WARNING: /lib/ld-linux-aarch64.so.1 not found — glibc loader missing." >&2
   fi

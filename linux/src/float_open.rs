@@ -353,13 +353,45 @@ fn float_new_window(msg: &str, before: &HashSet<i64>, root_pid: u32, hints: &[St
     }
 }
 
+/// Hyprland's control socket (what `hyprctl` talks to). Speaking it directly
+/// works without the `hyprctl` binary — e.g. inside the Flatpak, once the user
+/// grants the socket (`flatpak override --filesystem=xdg-run/hypr`).
+fn hypr_socket() -> Option<std::path::PathBuf> {
+    let sig = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?;
+    let mut candidates = Vec::new();
+    if let Some(run) = std::env::var_os("XDG_RUNTIME_DIR") {
+        candidates.push(Path::new(&run).join("hypr").join(&sig).join(".socket.sock"));
+    }
+    // Hyprland < 0.40 kept it under /tmp.
+    candidates.push(Path::new("/tmp/hypr").join(&sig).join(".socket.sock"));
+    candidates.into_iter().find(|p| p.exists())
+}
+
+/// One request/reply on the Hyprland socket (`j/clients`, `dispatch …`,
+/// `[[BATCH]]…`). `None` when Hyprland is unreachable.
+fn hypr_request(request: &str) -> Option<String> {
+    use std::io::{Read, Write};
+    let mut stream = std::os::unix::net::UnixStream::connect(hypr_socket()?).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).ok()?;
+    Some(reply)
+}
+
+/// Flatpak on Hyprland without the compositor socket: viewers open tiled.
+/// Returns the one-time hint shown to the user. Granting the socket is the
+/// user's call — it also lets Cursus run commands through Hyprland.
+pub fn sandbox_float_hint() -> Option<&'static str> {
+    let flatpak = std::env::var_os("FLATPAK_ID").is_some();
+    (flatpak && detect() == Compositor::Hyprland && hypr_socket().is_none()).then_some(
+        "Opened tiled. To float viewers, allow Cursus to talk to Hyprland: \
+         flatpak override --user --filesystem=xdg-run/hypr:ro chat.cursus.Cursus",
+    )
+}
+
 fn hypr_json(what: &str) -> Option<serde_json::Value> {
-    let out = Command::new("hyprctl")
-        .args([what, "-j"])
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    serde_json::from_slice(&out.stdout).ok()
+    serde_json::from_str(&hypr_request(&format!("j/{what}"))?).ok()
 }
 
 fn hypr_clients() -> Option<Vec<Win<String>>> {
@@ -431,11 +463,7 @@ fn hypr_float_sized(addr: &str, fw: f64, fh: f64) {
     ];
     let mut lua_ok = true;
     for step in &steps {
-        let out = Command::new("hyprctl")
-            .args(["dispatch", &hypr_lua_guarded(addr, step)])
-            .stderr(Stdio::null())
-            .output();
-        let reply = out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+        let reply = hypr_request(&format!("dispatch {}", hypr_lua_guarded(addr, step))).unwrap_or_default();
         if reply.contains("window gone") {
             return;
         }
@@ -446,13 +474,9 @@ fn hypr_float_sized(addr: &str, fw: f64, fh: f64) {
         }
     }
     if !lua_ok {
-        let _ = quiet(Command::new("hyprctl").args([
-            "--batch",
-            &format!(
-                "dispatch setfloating {sel}; dispatch resizewindowpixel exact {w} {h},{sel}; dispatch centerwindow"
-            ),
-        ]))
-        .status();
+        let _ = hypr_request(&format!(
+            "[[BATCH]]dispatch setfloating {sel}; dispatch resizewindowpixel exact {w} {h},{sel}; dispatch centerwindow"
+        ));
     }
 }
 
@@ -494,6 +518,17 @@ mod tests {
         assert_eq!(pick_new_window(&all, &before, 4_000_000, 77, &[]), Some(3));
         let none = vec![win(1, 10, "firefox", true), win(3, 88, "x", false)];
         assert_eq!(pick_new_window(&none, &before, 4_000_000, 77, &[]), None);
+    }
+
+    /// Live: the socket client sees the same windows as `hyprctl`.
+    #[test]
+    #[ignore]
+    fn hypr_socket_matches_hyprctl() {
+        let ours = hypr_clients().expect("Hyprland socket reachable");
+        let cli = std::process::Command::new("hyprctl").args(["clients", "-j"]).output().unwrap();
+        let theirs: serde_json::Value = serde_json::from_slice(&cli.stdout).unwrap();
+        assert_eq!(ours.len(), theirs.as_array().unwrap().len());
+        assert!(hypr_json("monitors").is_some_and(|m| m.as_array().is_some_and(|a| !a.is_empty())));
     }
 
     #[test]

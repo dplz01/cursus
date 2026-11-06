@@ -356,6 +356,31 @@ fn shots() {
                 render(&app, size, &format!("{name}-auto-{t}"));
             }
         }
+        if want("voice") {
+            for (size, name) in [(DESKTOP, "voice"), (MOBILE, "mvoice")] {
+                let mut app = demo_app(dark, size.width, size.height);
+                select(&mut app, 0);
+                app.voice_draft = Some(crate::VoiceDraft {
+                    path: std::env::temp_dir().join("cursus-shot-voice.wav"),
+                    duration_secs: 7,
+                    peaks: (0..96).map(|i| (i as f32 * 0.37).sin().abs() * 0.9 + 0.1).collect(),
+                });
+                render(&app, size, &format!("{name}-draft-{t}"));
+                // Recording: a short-lived dummy process stands in for the recorder.
+                app.voice_draft = None;
+                let child = std::process::Command::new("sleep").arg("5").spawn().unwrap();
+                app.voice_rec = Some(crate::VoiceRec {
+                    path: std::env::temp_dir().join("cursus-shot-rec.wav"),
+                    child,
+                    started: std::time::Instant::now(),
+                });
+                render(&app, size, &format!("{name}-rec-{t}"));
+                if let Some(mut rec) = app.voice_rec.take() {
+                    let _ = rec.child.kill();
+                    let _ = rec.child.wait();
+                }
+            }
+        }
         if want("lock") {
             for (size, name) in [(DESKTOP, "lock"), (MOBILE, "mlock")] {
                 let mut app = demo_app(dark, size.width, size.height);
@@ -393,6 +418,9 @@ fn shots() {
                 error: None,
             });
             render(&app, DESKTOP, &format!("privacy-keyring-{t}"));
+            app.privacy_confirm = None;
+            app.setting_info = Some(crate::SettingInfo::ProtectIp);
+            render(&app, MOBILE, &format!("privacy-info-{t}"));
         }
         if want("new") {
             let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);
@@ -621,4 +649,130 @@ fn lock_screen_backs_off_then_unlocks() {
     assert!(!app.locked.as_ref().unwrap().checking);
     let _ = app.update(Message::LockVerified(true));
     assert!(app.locked.is_none());
+}
+
+/// Run a widget operation to completion, like the iced runtime does
+/// (`focus_next` first counts focusables, then chains the actual move).
+fn run_operation(
+    ui: &mut UserInterface<'_, Message, iced::Theme, iced::Renderer>,
+    renderer: &iced::Renderer,
+    op: Box<dyn iced::advanced::widget::Operation<()>>,
+) {
+    use iced::advanced::widget::operation::Outcome;
+    let mut op = op;
+    loop {
+        ui.operate(renderer, op.as_mut());
+        match op.finish() {
+            Outcome::Chain(next) => op = next,
+            _ => break,
+        }
+    }
+}
+
+/// Tab moves between the two welcome password fields: the focused field
+/// leaves Tab uncaptured (so the app's listener issues FocusNext), and
+/// focus_next lands on the confirmation field.
+#[test]
+fn tab_moves_between_password_fields() {
+    use iced::advanced::widget::operation::focusable;
+    load_fonts();
+    let mut app = demo_app(true, MOBILE.width, MOBILE.height);
+    app.auth = Some(crate::AuthScreen::WelcomePassword {
+        name: "D".into(),
+        password: crate::Secret::default(),
+        confirm: crate::Secret::default(),
+    });
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+        iced::Font::with_name("Noto Sans"),
+        iced::Pixels(16.0),
+        Some("tiny-skia"),
+    ))
+    .unwrap();
+    let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), MOBILE, Cache::default(), &mut renderer);
+    // Focus the first field, then press Tab.
+    run_operation(&mut ui, &renderer, Box::new(focusable::focus_next::<()>()));
+    let tab = iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+        key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
+        modified_key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
+        physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::Tab),
+        location: iced::keyboard::Location::Standard,
+        modifiers: iced::keyboard::Modifiers::default(),
+        text: Some("\t".into()),
+        repeat: false,
+    });
+    let mut msgs: Vec<Message> = Vec::new();
+    let (_, statuses) = ui.update(
+        std::slice::from_ref(&tab),
+        iced::mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut iced::advanced::clipboard::Null,
+        &mut msgs,
+    );
+    assert_eq!(statuses[0], iced::event::Status::Ignored, "field must not swallow Tab");
+    // What FocusNext does: the second (confirm) field gets focus — typing a
+    // letter now edits the confirmation, not the password.
+    run_operation(&mut ui, &renderer, Box::new(focusable::focus_next::<()>()));
+    let key_x = iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+        key: iced::keyboard::Key::Character("x".into()),
+        modified_key: iced::keyboard::Key::Character("x".into()),
+        physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyX),
+        location: iced::keyboard::Location::Standard,
+        modifiers: iced::keyboard::Modifiers::default(),
+        text: Some("x".into()),
+        repeat: false,
+    });
+    let mut msgs: Vec<Message> = Vec::new();
+    let _ = ui.update(
+        std::slice::from_ref(&key_x),
+        iced::mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut iced::advanced::clipboard::Null,
+        &mut msgs,
+    );
+    assert!(
+        matches!(msgs.as_slice(), [Message::WelcomeConfirmChanged(_)]),
+        "typing after Tab should edit the confirm field, got {msgs:?}"
+    );
+}
+
+
+/// Tab also walks the settings Profile fields (wrapped in the edit menu):
+/// display name → bio.
+#[test]
+fn tab_moves_between_profile_fields() {
+    use iced::advanced::widget::operation::focusable;
+    load_fonts();
+    let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+    app.nav = NavSection::Settings;
+    app.own_profile.fields = profile("Davide", "Building Cursus");
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+        iced::Font::with_name("Noto Sans"),
+        iced::Pixels(16.0),
+        Some("tiny-skia"),
+    ))
+    .unwrap();
+    let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), DESKTOP, Cache::default(), &mut renderer);
+    run_operation(&mut ui, &renderer, Box::new(focusable::focus_next::<()>()));
+    run_operation(&mut ui, &renderer, Box::new(focusable::focus_next::<()>()));
+    let key_x = iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+        key: iced::keyboard::Key::Character("x".into()),
+        modified_key: iced::keyboard::Key::Character("x".into()),
+        physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyX),
+        location: iced::keyboard::Location::Standard,
+        modifiers: iced::keyboard::Modifiers::default(),
+        text: Some("x".into()),
+        repeat: false,
+    });
+    let mut msgs: Vec<Message> = Vec::new();
+    let _ = ui.update(
+        std::slice::from_ref(&key_x),
+        iced::mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut iced::advanced::clipboard::Null,
+        &mut msgs,
+    );
+    assert!(
+        matches!(msgs.as_slice(), [Message::OwnProfileBio(_)]),
+        "second field should be the bio, got {msgs:?}"
+    );
 }

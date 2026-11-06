@@ -771,16 +771,19 @@ pub fn main() -> iced::Result {
         .subscription(App::subscription);
 
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut roots = vec![manifest.join("assets/fonts")];
+    let mut roots = Vec::new();
+    // Installed layouts first (Flatpak, AppImage, distro packages:
+    // <prefix>/share/cursus/fonts next to <prefix>/bin), then the source tree
+    // the binary was built from (development runs).
     if let Some(dir) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
     {
+        roots.push(dir.join("../share/cursus/fonts"));
         roots.push(dir.join("assets/fonts"));
         roots.push(dir.join("../assets/fonts"));
-        // Installed layout (Flatpak / distro): <prefix>/share/cursus/fonts.
-        roots.push(dir.join("../share/cursus/fonts"));
     }
+    roots.push(manifest.join("assets/fonts"));
     roots.push(PathBuf::from("linux/assets/fonts"));
     roots.push(PathBuf::from("/usr/share/fonts/noto"));
     roots.push(PathBuf::from("/usr/share/fonts/truetype/noto"));
@@ -862,6 +865,14 @@ pub enum Message {
     LockPasswordChanged(Secret),
     LockToggleReveal,
     AuthToggleReveal,
+    ShowSettingInfo(SettingInfo),
+    FocusNext,
+    FocusPrevious,
+    /// While recording: stop and send right away (no draft step).
+    SendVoiceNow,
+    /// While recording: stop and throw the recording away.
+    DiscardVoiceRecording,
+    CloseSettingInfo,
     LockSubmit,
     LockVerified(bool),
     // Other privacy & security settings.
@@ -1281,6 +1292,8 @@ struct App {
     pending_url: Option<PendingLink>,
     /// Privacy warning awaiting confirmation (see [`PrivacyConfirm`]).
     privacy_confirm: Option<PrivacyConfirm>,
+    /// Open setting explanation sheet.
+    setting_info: Option<SettingInfo>,
     /// Engaged app lock (content hidden, decrypted media wiped).
     locked: Option<LockState>,
     /// Delivery receipts (contacts, small groups) of the active profile.
@@ -1294,6 +1307,8 @@ struct App {
     revealed_media: HashSet<i64>,
     /// Keyring auto-unlock is attempted once per launch.
     keyring_tried: bool,
+    /// "Send" pressed while recording: send as soon as the draft is ready.
+    send_voice_when_ready: bool,
     /// Keyring auto-unlock under way: show a splash, not the password form.
     auto_unlocking: bool,
     /// Show typed passwords on the welcome / unlock screens.
@@ -1374,10 +1389,10 @@ pub struct PendingLink {
     pub simplex: Option<cursus_core::SimplexLinkKind>,
 }
 
-struct VoiceRec {
-    path: PathBuf,
-    child: Child,
-    started: Instant,
+pub(crate) struct VoiceRec {
+    pub(crate) path: PathBuf,
+    pub(crate) child: Child,
+    pub(crate) started: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -1497,6 +1512,7 @@ impl App {
                 chats_refresh_gen: 0,
                 pending_url: None,
                 privacy_confirm: None,
+                setting_info: None,
                 locked: None,
                 receipts: (true, true),
                 encrypt_files: load_account().map(|a| a.encrypt_local_files).unwrap_or(true),
@@ -1504,6 +1520,7 @@ impl App {
                 blur_pending: HashSet::new(),
                 revealed_media: HashSet::new(),
                 keyring_tried: false,
+                send_voice_when_ready: false,
                 auto_unlocking: prefs.keyring_unlock && setup_complete(),
                 auth_reveal: false,
                 emoji_suggest_index: 0,
@@ -1560,7 +1577,17 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let window = iced::event::listen_with(|event, _status, _id| match event {
+        let window = iced::event::listen_with(|event, status, _id| match event {
+            // Tab / Shift+Tab move between fields when no widget used the key
+            // (text fields ignore Tab; emoji suggestions capture it first).
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
+                modifiers,
+                ..
+            }) if status == iced::event::Status::Ignored => {
+                app_lock::touch();
+                Some(if modifiers.shift() { Message::FocusPrevious } else { Message::FocusNext })
+            }
             iced::Event::Window(iced::window::Event::Resized(size)) => {
                 Some(Message::WindowResized(size))
             }
@@ -2199,6 +2226,38 @@ impl App {
                     lock.password = pw;
                     lock.error = None;
                 }
+                Task::none()
+            }
+            Message::FocusNext => iced::widget::operation::focus_next(),
+            Message::FocusPrevious => iced::widget::operation::focus_previous(),
+            Message::SendVoiceNow => {
+                if !self.tap_allowed() || self.voice_rec.is_none() {
+                    return Task::none();
+                }
+                self.send_voice_when_ready = true;
+                self.stop_voice_to_draft()
+            }
+            Message::DiscardVoiceRecording => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
+                if let Some(mut rec) = self.voice_rec.take() {
+                    let _ = rec.child.kill();
+                    let _ = rec.child.wait();
+                    let _ = std::fs::remove_file(&rec.path);
+                }
+                self.send_voice_when_ready = false;
+                self.status = "Recording discarded.".into();
+                Task::none()
+            }
+            Message::ShowSettingInfo(info) => {
+                if self.tap_allowed() {
+                    self.setting_info = Some(info);
+                }
+                Task::none()
+            }
+            Message::CloseSettingInfo => {
+                self.setting_info = None;
                 Task::none()
             }
             Message::AuthToggleReveal => {
@@ -4959,10 +5018,14 @@ impl App {
                 self.waveforms
                     .insert(draft.path.clone(), draft.peaks.clone());
                 self.voice_draft = Some(draft);
+                if std::mem::take(&mut self.send_voice_when_ready) {
+                    return self.send_voice_draft();
+                }
                 self.status = "Voice ready — send or cancel.".into();
                 Task::none()
             }
             Message::VoiceDraftReady(Err(err)) => {
+                self.send_voice_when_ready = false;
                 self.status = err;
                 Task::none()
             }
@@ -5517,6 +5580,9 @@ impl App {
                 }
             }
             Message::Escape => {
+                if self.setting_info.take().is_some() {
+                    return Task::none();
+                }
                 if self.privacy_confirm.take().is_some() {
                     return Task::none();
                 }
@@ -6766,6 +6832,10 @@ impl App {
     pub(crate) fn chat_menu(&self) -> Option<&ChatContextMenu> {
         self.chat_menu.as_ref()
     }
+    pub(crate) fn setting_info(&self) -> Option<SettingInfo> {
+        self.setting_info
+    }
+
     pub(crate) fn privacy_confirm(&self) -> Option<&PrivacyConfirm> {
         self.privacy_confirm.as_ref()
     }
@@ -8315,10 +8385,58 @@ async fn open_local_file(path: PathBuf) -> Result<String, String> {
         let handler = float_open::handler_ids(&path);
         float_open::spawn_floating("xdg-open", &[&path_str], handler)
             .map_err(|e| format!("xdg-open failed: {e}"))?;
+        if let Some(hint) = float_open::sandbox_float_hint() {
+            return Ok(hint.to_string());
+        }
         Ok(format!("Opened {}", path.display()))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Settings whose explanation opens in an info sheet (ⓘ next to the name).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingInfo {
+    AppLock,
+    LockAfter,
+    KeyringUnlock,
+    ChatPreviews,
+    BlurMedia,
+    HideNotificationText,
+    ProtectIp,
+    AutoDownload,
+    EncryptFiles,
+    CleanLinks,
+    ReceiptsContacts,
+    ReceiptsGroups,
+    GroupReceipts,
+    DesktopNotifications,
+    Tray,
+    CloseToTray,
+}
+
+impl SettingInfo {
+    /// Sheet title and explanation (plain sentences, no jargon).
+    pub fn text(self) -> (&'static str, &'static str) {
+        match self {
+            Self::AppLock => ("App lock", "Cursus asks for your database password again after you leave it alone for a while, and always when it's hidden to the tray.\n\nWhile locked, nothing of your chats is shown, decrypted photos, videos and voice messages are deleted from the cache, and notifications show only \u{201c}New message\u{201d}.\n\nOn a keyboard, Ctrl+L locks right away."),
+            Self::LockAfter => ("Lock", "How long Cursus may stay unused before it locks.\n\n\u{201c}Immediately\u{201d} locks as soon as you switch to another window."),
+            Self::KeyringUnlock => ("Unlock automatically at start", "When on, your database password is kept in your desktop's keyring (GNOME Keyring, KWallet\u{2026}), which is unlocked when you log in, and Cursus opens without asking.\n\nWhen off, Cursus asks for the password every time it starts \u{2014} nobody using your logged-in computer can open your chats without it."),
+            Self::ChatPreviews => ("Message previews in chat list", "Shows the last message under each chat in the list. Turn it off so people who can see your screen only see chat names."),
+            Self::BlurMedia => ("Blur photos and videos", "Photos and video thumbnails in chats are blurred until you tap them. A tapped photo stays visible until Cursus locks or restarts."),
+            Self::HideNotificationText => ("Hide message text in notifications", "Notifications show the chat name and \u{201c}New message\u{201d} only.\n\nWith it off, the message text appears in the notification \u{2014} and many desktops keep notifications in a history that stays after Cursus closes."),
+            Self::ProtectIp => ("Protect IP address", "Files are stored on file servers. Your own servers are trusted; servers chosen by the person who sent the file are not.\n\nWhen on, Cursus asks before downloading from a server you don't use, and automatic downloads skip them. Without Tor or a VPN, any server you download from can see your IP address."),
+            Self::AutoDownload => ("Download images and voice automatically", "Images, voice messages and short videos download as soon as they arrive, so they are ready to view.\n\nWhen off, nothing downloads until you tap it \u{2014} useful to save data or to avoid files from strangers in groups."),
+            Self::EncryptFiles => ("Encrypt stored files", "Photos, videos, voice messages and files are saved encrypted on this device; Cursus decrypts them only while you view them.\n\nTurning it off affects new files only \u{2014} files already stored stay encrypted."),
+            Self::CleanLinks => ("Remove tracking from links", "Before opening a link, Cursus removes tracking codes such as utm_source or fbclid, which tell websites where you came from. The page itself is the same."),
+            Self::ReceiptsContacts => ("Delivery receipts to contacts", "Your contacts see a second tick when their messages reach this device. It does not tell them you read them.\n\nYou can choose differently for a single contact in its chat preferences."),
+            Self::ReceiptsGroups => ("Delivery receipts in small groups", "Members see when their messages reach this device. SimpleX only sends receipts in groups with up to 20 members.\n\nYou can choose differently for a single group in its preferences."),
+            Self::GroupReceipts => ("Send receipts", "Whether this group's members see when their messages reach this device. \u{201c}Default\u{201d} follows the setting in Privacy & security.\n\nSimpleX only sends receipts in groups with up to 20 members."),
+            Self::DesktopNotifications => ("Desktop notifications", "Shows a notification for new messages in chats you aren't looking at. Muted chats never notify."),
+            Self::Tray => ("System tray icon", "Puts a Cursus icon in your panel's system tray, with Show, Hide and Quit."),
+            Self::CloseToTray => ("Close window hides to tray", "Closing the window keeps Cursus running in the tray so messages keep arriving.\n\nIt stays unlocked unless the app lock is on, and decrypted media stays in its private cache until you quit."),
+        }
+    }
 }
 
 /// Lock screen state while the app lock is engaged.

@@ -1,0 +1,115 @@
+# Release build: on a version tag (v*), build every prebuilt package for
+# x86_64 and aarch64 and publish them in one GitHub release:
+#
+#   cursus-x86_64.flatpak   cursus-aarch64.flatpak    (any distro, glibc or musl)
+#   Cursus-x86_64.AppImage  Cursus-aarch64.AppImage   (glibc distros)
+#   SHA256SUMS
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  flatpak:
+    name: Flatpak (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: flatpak/chat.cursus.Cursus.yml
+          bundle: cursus-${{ matrix.arch }}.flatpak
+          arch: ${{ matrix.arch }}
+          upload-artifact: false
+          cache-key: flatpak-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cursus-${{ matrix.arch }}.flatpak
+          path: cursus-${{ matrix.arch }}.flatpak
+
+  appimage:
+    name: AppImage (${{ matrix.arch }})
+    # Oldest supported Ubuntu = oldest glibc the AppImage needs on the host.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-22.04 }
+          - { arch: aarch64, runner: ubuntu-22.04-arm }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build Cursus
+        run: cargo build --release --locked -p cursus-linux
+      - name: Fetch libsimplex and fonts
+        run: |
+          SIMPLEX_LIBS_PLAT=linux-${{ matrix.arch }} ./scripts/fetch-libs.sh
+          ./scripts/fetch-fonts.sh
+      - name: Assemble AppDir
+        run: |
+          D=AppDir
+          install -Dm755 target/release/cursus $D/usr/bin/cursus
+          install -d $D/usr/lib/cursus
+          cp -a third_party/libsimplex/. $D/usr/lib/cursus/
+          install -Dm644 -t $D/usr/share/cursus/fonts linux/assets/fonts/*.ttf
+          install -Dm644 flatpak/chat.cursus.Cursus.desktop $D/usr/share/applications/chat.cursus.Cursus.desktop
+          install -Dm644 flatpak/chat.cursus.Cursus.svg $D/usr/share/icons/hicolor/scalable/apps/chat.cursus.Cursus.svg
+          install -Dm644 flatpak/chat.cursus.Cursus.metainfo.xml $D/usr/share/metainfo/chat.cursus.Cursus.appdata.xml
+          cp flatpak/chat.cursus.Cursus.desktop flatpak/chat.cursus.Cursus.svg $D/
+          ln -s usr/bin/cursus $D/AppRun
+      - name: Pack AppImage
+        run: |
+          curl -fLo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.arch }}.AppImage
+          chmod +x appimagetool
+          ARCH=${{ matrix.arch }} ./appimagetool --appimage-extract-and-run AppDir Cursus-${{ matrix.arch }}.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cursus-${{ matrix.arch }}.AppImage
+          path: Cursus-${{ matrix.arch }}.AppImage
+
+  release:
+    needs: [flatpak, appimage]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and file list
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS
+          {
+            echo "## Downloads"
+            echo
+            echo "| File | For |"
+            echo "|---|---|"
+            echo "| \`cursus-x86_64.flatpak\` | Flatpak, x86_64 — any distro (glibc or musl) |"
+            echo "| \`cursus-aarch64.flatpak\` | Flatpak, ARM64 — phones (postmarketOS, Mobian…) and ARM laptops |"
+            echo "| \`Cursus-x86_64.AppImage\` | AppImage, x86_64 — glibc distros |"
+            echo "| \`Cursus-aarch64.AppImage\` | AppImage, ARM64 — glibc distros |"
+            echo "| \`SHA256SUMS\` | Checksums of all files above |"
+            echo
+            echo "Install instructions: see the README."
+          } > ../NOTES.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: NOTES.md
+          files: dist/*

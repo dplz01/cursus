@@ -35,73 +35,63 @@ cursus/
 
 Each platform directory is meant to be extractable into its own GitHub repository later.
 
-## Prerequisites (Linux milestone)
+## Install
 
-- Rust stable (1.88+ recommended)
-- Official SimpleX native library for your OS/arch
+Prebuilt packages for **x86_64** and **ARM64** are on the [releases page](https://github.com/dplz01/cursus/releases/latest). `$(uname -m)` picks the right one for your device.
 
-Fetch prebuilt libraries (same source as the official Python package). The script picks the zip from `uname -m` (`x86_64` or `aarch64` / `arm64`):
+### Flatpak
 
-```bash
-./scripts/fetch-libs.sh
-# ARM example: uname -m → aarch64 → simplex-chat-libs-linux-aarch64.zip
+Any distro, glibc or musl (postmarketOS included):
+
+```sh
+curl -LO https://github.com/dplz01/cursus/releases/latest/download/cursus-$(uname -m).flatpak
+flatpak install --user cursus-$(uname -m).flatpak
 ```
 
-Or build from [simplex-chat](https://github.com/simplex-chat/simplex-chat) with `scripts/desktop/build-lib-linux.sh` and copy `libs/linux-x86_64/` or `libs/linux-aarch64/` into `third_party/libsimplex/`. Do not copy an x86_64 `third_party/libsimplex` tree onto an ARM device.
+On Hyprland, let opened files float (gives Cursus access to the compositor):
+`flatpak override --user --filesystem=xdg-run/hypr:ro chat.cursus.Cursus`
 
-## Build and run (Linux)
+### AppImage
 
-Default build (glibc hosts — no musl compat layer):
+glibc distros:
 
-```bash
-./scripts/fetch-libs.sh
-cargo run -p cursus-linux
-cargo install --path linux
+```sh
+curl -LO https://github.com/dplz01/cursus/releases/latest/download/Cursus-$(uname -m).AppImage
+chmod +x Cursus-$(uname -m).AppImage
+./Cursus-$(uname -m).AppImage
 ```
 
-Works on **x86_64 and aarch64** Linux hosts (PinePhone, ARM laptops, Asahi, etc.) once the matching libs zip is installed.
+## Build from source
 
-**Musl (Alpine / musl postmarketOS):** prebuilt `libsimplex` is glibc-linked. Building Cursus **on the device** includes the compat layer automatically (shim for `fcntl64`/`stat64`/fortify symbols + gcompat) — same commands as above:
-
-```bash
-apk add gcompat libucontext build-base
-./scripts/fetch-libs.sh
-cargo run -p cursus-linux
-cargo install --path linux
+```sh
+git clone https://github.com/dplz01/cursus && cd cursus
 ```
 
-The old `--features musl-glibc-compat` flag still builds but does nothing.
+### Flatpak
 
-### Flatpak (one package per architecture, any distro)
-
-The Flatpak brings its own glibc runtime, so the same package runs on glibc
-distros **and** musl ones like postmarketOS — no compat layer, no on-device
-compile. Build and install for your user (needs `org.flatpak.Builder` from
-Flathub):
-
-```bash
+```sh
 flatpak install --user flathub org.flatpak.Builder
 flatpak run org.flatpak.Builder --user --install --install-deps-from=flathub \
   --force-clean build-dir flatpak/chat.cursus.Cursus.yml
-flatpak run chat.cursus.Cursus
 ```
 
-On the phone, run the same commands there (aarch64), or export a bundle from
-an aarch64 build and copy it over:
+To install on another device of the same architecture, export a bundle instead:
 
-```bash
+```sh
 flatpak run org.flatpak.Builder --repo=repo --force-clean build-dir flatpak/chat.cursus.Cursus.yml
 flatpak build-bundle repo cursus.flatpak chat.cursus.Cursus
 flatpak install --user cursus.flatpak
 ```
 
-The build is offline: crates come from `flatpak/cargo-sources.json`
-(regenerate with `./scripts/flatpak-cargo-sources.py` after `Cargo.lock`
-changes); `libsimplex` and fonts are pinned by sha256 in the manifest.
-Flatpak data lives in `~/.var/app/chat.cursus.Cursus/` — separate from a
-native install's `~/.local/share/cursus`.
+### Cargo
 
-Data is stored under `$XDG_DATA_HOME/cursus` (or `~/.local/share/cursus`), separate from the official SimpleX desktop app.
+```sh
+./scripts/fetch-libs.sh     # official libsimplex for this architecture
+./scripts/fetch-fonts.sh
+cargo install --path linux  # or: cargo run -p cursus-linux
+```
+
+On musl (Alpine, postmarketOS) first run `apk add gcompat libucontext build-base`.
 
 ## Documentation
 

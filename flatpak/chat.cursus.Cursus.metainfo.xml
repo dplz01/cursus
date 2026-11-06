@@ -21,7 +21,7 @@
     <name>notfatnotfunny</name>
   </developer>
   <launchable type="desktop-id">chat.cursus.Cursus.desktop</launchable>
-  <url type="homepage">https://github.com/notfatnotfunny/cursus</url>
+  <url type="homepage">https://github.com/dplz01/cursus</url>
   <content_rating type="oars-1.1">
     <content_attribute id="social-chat">intense</content_attribute>
   </content_rating>

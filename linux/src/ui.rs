@@ -254,6 +254,9 @@ pub fn shell(app: &App) -> Element<'_, Message> {
     if app.privacy_confirm().is_some() {
         stack = stack.push(privacy_confirm_overlay(app));
     }
+    if let Some(info) = app.setting_info() {
+        stack = stack.push(setting_info_overlay(app, info));
+    }
     if app.message_menu().is_some() {
         stack = stack.push(message_menu_overlay(app));
     }
@@ -1487,9 +1490,35 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             },
             ..container::Style::default()
         });
-    let trailing = if can_send && !recording { send } else { mic };
+    // Recording: ✕ discards, ■ stops to a draft you can review, and Send
+    // stops + sends in one tap (the send button must not vanish here).
+    let (leading, trailing): (Element<'_, Message>, Element<'_, Message>) = if recording {
+        (
+            composer_hit(
+                icons::centered_hit(icons::cancel_icon(icon_size, theme::t().text_secondary), send_size),
+                send_size,
+                Message::DiscardVoiceRecording,
+            ),
+            row![
+                mic,
+                composer_send_hit(
+                    icons::send_tool(send_size, true, hover_ok),
+                    send_size,
+                    true,
+                    Message::SendVoiceNow,
+                ),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into(),
+        )
+    } else if can_send {
+        (attach, send)
+    } else {
+        (attach, mic)
+    };
     // Always End: equal-height single-line looks centered; multi-line grows up.
-    let input_row = row![attach, pill, trailing]
+    let input_row = row![leading, pill, trailing]
         .spacing(6)
         .align_y(Alignment::End);
 
@@ -2685,8 +2714,7 @@ fn voice_draft_bar(
     .width(Length::Fill)
     .height(36.0);
 
-    let _ = hover;
-    container(
+    let bar = container(
         row![
             composer_hit(
                 icons::centered_hit(
@@ -2704,12 +2732,12 @@ fn voice_draft_bar(
             ]
             .spacing(4)
             .width(Length::Fill),
-            composer_hit(
-                icons::centered_hit(
-                    icons::send_icon(icon_size, Color::from_rgb(0.043, 0.063, 0.125)),
-                    send_size,
-                ),
+            // Same round accent Send as the text composer (the old bare navy
+            // arrow vanished on the dark bar).
+            composer_send_hit(
+                icons::send_tool(send_size, true, hover),
                 send_size,
+                true,
                 Message::SendVoiceDraft,
             ),
         ]
@@ -2717,22 +2745,17 @@ fn voice_draft_bar(
         .align_y(Alignment::Center),
     )
     .padding(Padding {
-        top: d.pad_tight,
+        top: 8.0,
         right: d.pad,
-        bottom: d.pad,
+        bottom: 8.0,
         left: d.pad,
     })
     .width(Length::Fill)
     .style(|_| container::Style {
         background: Some(iced::Background::Color(theme::t().bg_sidebar)),
-        border: iced::Border {
-            color: theme::t().border,
-            width: 1.0,
-            radius: 0.0.into(),
-        },
         ..container::Style::default()
-    })
-    .into()
+    });
+    column![hairline(), bar].width(Length::Fill).into()
 }
 
 /// Soft cap for bubble body text on wide desktops.
@@ -3842,33 +3865,24 @@ fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<
             ));
         }
         crate::SettingsSection::Privacy => {
+            use crate::SettingInfo as I;
             let (rcpt_contacts, rcpt_groups) = app.receipts();
             // Lock — who can open Cursus.
             col = col.push(pref_section("Lock", false, d));
-            col = col.push(settings_toggle_row("App lock", prefs.app_lock, Message::SetAppLock, d));
-            col = col.push(pref_note(
-                "Asks for your database password after inactivity or when hidden to the tray, and clears decrypted media.",
-                d,
-            ));
+            col = col.push(info_toggle("App lock", I::AppLock, prefs.app_lock, Message::SetAppLock, d, hover));
             if prefs.app_lock {
-                col = col.push(settings_choice_row(
+                col = col.push(info_row(
                     "Lock",
-                    prefs.lock_after.label(),
-                    Message::OpenPrefMenu(PrefMenu::LockAfter),
+                    I::LockAfter,
+                    choice_chip(prefs.lock_after.label(), Message::OpenPrefMenu(PrefMenu::LockAfter), d, hover),
                     d,
                     hover,
                 ));
                 col = col.push(pref_row(
                     None,
                     "Lock now",
-                    button(
-                        row![
-                            icons::lock_icon(14.0, theme::t().accent_on),
-                            text("Lock").size(d.meta).color(theme::t().accent_on),
-                        ]
-                        .spacing(6)
-                        .align_y(Alignment::Center),
-                    )
+                    // Icon only — the row already says "Lock now".
+                    button(icons::lock_icon(16.0, theme::t().accent_on))
                         .on_press(Message::LockNow)
                         .padding(Padding::from([6, 14]))
                         .style(theme::primary_action(hover))
@@ -3877,100 +3891,109 @@ fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<
                     d,
                 ));
             }
-            col = col.push(settings_toggle_row(
+            col = col.push(info_toggle(
                 "Unlock automatically at start",
+                I::KeyringUnlock,
                 prefs.keyring_unlock,
                 Message::SetKeyringUnlock,
                 d,
-            ));
-            col = col.push(pref_note(
-                if prefs.keyring_unlock {
-                    "Your password is in your desktop keyring; Cursus opens without asking."
-                } else {
-                    "Cursus asks for your password every time it starts."
-                },
-                d,
+                hover,
             ));
 
             // On screen — what someone looking at it sees.
             col = col.push(pref_section("On screen", false, d));
-            col = col.push(settings_toggle_row(
+            col = col.push(info_toggle(
                 "Message previews in chat list",
+                I::ChatPreviews,
                 prefs.chat_previews,
                 Message::SetChatPreviews,
                 d,
+                hover,
             ));
-            col = col.push(settings_toggle_row("Blur photos and videos", prefs.blur_media, Message::SetBlurMedia, d));
-            if prefs.blur_media {
-                col = col.push(pref_note("Tap a photo to reveal it.", d));
-            }
-            col = col.push(settings_toggle_row(
+            col = col.push(info_toggle(
+                "Blur photos and videos",
+                I::BlurMedia,
+                prefs.blur_media,
+                Message::SetBlurMedia,
+                d,
+                hover,
+            ));
+            col = col.push(info_toggle(
                 "Hide message text in notifications",
+                I::HideNotificationText,
                 prefs.hide_notification_text,
                 Message::SetHideNotificationText,
                 d,
+                hover,
             ));
 
             // Files & network — what reaches the disk and other servers.
             col = col.push(pref_section("Files & network", false, d));
-            col = col.push(settings_toggle_row("Protect IP address", prefs.protect_ip, Message::SetProtectIp, d));
-            col = col.push(pref_note(
-                if prefs.protect_ip {
-                    "Asks before downloading from file servers chosen by the sender."
-                } else {
-                    "Without Tor or VPN, file servers you download from see your IP address."
-                },
-                d,
-            ));
-            col = col.push(settings_toggle_row(
+            col = col.push(info_toggle("Protect IP address", I::ProtectIp, prefs.protect_ip, Message::SetProtectIp, d, hover));
+            col = col.push(info_toggle(
                 "Download images and voice automatically",
+                I::AutoDownload,
                 prefs.auto_download,
                 Message::SetAutoDownload,
                 d,
+                hover,
             ));
-            col = col.push(settings_toggle_row(
+            col = col.push(info_toggle(
                 "Encrypt stored files",
+                I::EncryptFiles,
                 app.encrypt_files(),
                 Message::SetEncryptFiles,
                 d,
+                hover,
             ));
-            col = col.push(settings_toggle_row(
+            col = col.push(info_toggle(
                 "Remove tracking from links",
+                I::CleanLinks,
                 prefs.clean_links,
                 Message::SetCleanLinks,
                 d,
+                hover,
             ));
 
             // What contacts see.
             col = col.push(pref_section("What contacts see", false, d));
-            col = col.push(settings_toggle_row(
+            col = col.push(info_toggle(
                 "Delivery receipts to contacts",
+                I::ReceiptsContacts,
                 rcpt_contacts,
                 |on| Message::SetReceipts { groups: false, on },
                 d,
+                hover,
             ));
-            col = col.push(settings_toggle_row(
+            col = col.push(info_toggle(
                 "Delivery receipts in small groups",
+                I::ReceiptsGroups,
                 rcpt_groups,
                 |on| Message::SetReceipts { groups: true, on },
                 d,
+                hover,
             ));
         }
         crate::SettingsSection::Desktop => {
+            use crate::SettingInfo as I;
             col = col.push(pref_section("Notifications", false, d));
-            col = col.push(settings_toggle_row(
+            col = col.push(info_toggle(
                 "Desktop notifications",
+                I::DesktopNotifications,
                 prefs.notifications,
                 Message::SetDesktopNotifications,
                 d,
+                hover,
             ));
             col = col.push(pref_section("Background", false, d));
-            col = col.push(settings_toggle_row("System tray icon", prefs.tray, Message::SetTray, d));
-            col = col.push(settings_toggle_row(
+            col = col.push(info_toggle("System tray icon", I::Tray, prefs.tray, Message::SetTray, d, hover));
+            col = col.push(info_toggle(
                 "Close window hides to tray",
+                I::CloseToTray,
                 prefs.close_to_tray,
                 Message::SetCloseToTray,
                 d,
+                hover,
             ));
         }
     }
@@ -4058,6 +4081,111 @@ fn pref_toggle<'a>(on: bool, to_msg: Option<Box<dyn Fn(bool) -> Message + 'a>>) 
 }
 
 /// Label + toggler — only the switch is interactive.
+/// Setting name with an ⓘ button that opens its explanation sheet.
+fn label_with_info<'a>(label: &'a str, info: crate::SettingInfo, d: Density, hover: bool) -> Element<'a, Message> {
+    row![
+        text(label).size(d.body).color(theme::t().text_primary),
+        button(icons::centered_hit(icons::info_icon(16.0, theme::t().text_muted), 28.0))
+            .on_press(Message::ShowSettingInfo(info))
+            .padding(0)
+            .style(theme::ghost_tile(hover)),
+    ]
+    .spacing(2)
+    .align_y(Alignment::Center)
+    .width(Length::Fill)
+    .into()
+}
+
+/// [`pref_row`] whose label carries an ⓘ explanation button.
+fn info_row<'a>(
+    label: &'a str,
+    info: crate::SettingInfo,
+    control: Element<'a, Message>,
+    d: Density,
+    hover: bool,
+) -> Element<'a, Message> {
+    let control_h = (d.meta * 1.3 + 14.0).max(PREF_CONTROL_H);
+    container(
+        row![
+            label_with_info(label, info, d, hover),
+            container(control).height(control_h).center_y(control_h),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .padding(Padding::from([6, 8])),
+    )
+    .width(Length::Fill)
+    .into()
+}
+
+fn info_toggle<'a>(
+    label: &'a str,
+    info: crate::SettingInfo,
+    on: bool,
+    to_msg: fn(bool) -> Message,
+    d: Density,
+    hover: bool,
+) -> Element<'a, Message> {
+    info_row(label, info, pref_toggle(on, Some(Box::new(to_msg))), d, hover)
+}
+
+/// Explanation sheet for one setting (opened from its ⓘ button).
+fn setting_info_overlay(app: &App, info: crate::SettingInfo) -> Element<'_, Message> {
+    let d = app.density();
+    let hover = app.hover_ok();
+    let (title, body) = info.text();
+    let mut content = column![row![
+        icons::info_icon(20.0, theme::t().accent),
+        text(title).size(d.body).font(BOLD).color(theme::t().text_primary),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)]
+    .spacing(12)
+    .max_width(440);
+    for para in body.split("\n\n") {
+        content = content.push(
+            text(para)
+                .size(d.meta + 1.0)
+                .color(theme::t().text_secondary)
+                .wrapping(Wrapping::WordOrGlyph),
+        );
+    }
+    content = content.push(
+        container(
+            button(text("Got it").size(d.meta).font(BOLD))
+                .on_press(Message::CloseSettingInfo)
+                .padding(Padding::from([10, 18]))
+                .style(theme::primary_action(hover)),
+        )
+        .width(Length::Fill)
+        .align_x(Alignment::End),
+    );
+    let card = menu_card(content.into(), d);
+    let backdrop = mouse_area(
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.45))),
+                ..container::Style::default()
+            }),
+    )
+    .on_press(Message::CloseSettingInfo);
+    let sheet = container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .padding(Padding::from([24, 20]));
+    iced::widget::opaque(
+        Stack::new()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .push(backdrop)
+            .push(sheet),
+    )
+}
+
 fn settings_toggle_row<'a>(
     label: &'a str,
     on: bool,
@@ -7625,21 +7753,17 @@ fn group_preferences_pane<'a>(
         "Only for you — other members don't see these.",
         d,
     ));
-    mine = mine.push(pref_row(
-        Some(icons::check_read(20.0, theme::t().text_secondary)),
+    mine = mine.push(info_row(
         "Send receipts",
+        crate::SettingInfo::GroupReceipts,
         choice_chip(
             RcptChoice::from_opt(app.group_send_rcpts()).label(app.receipts().1),
             Message::OpenPrefMenu(PrefMenu::GroupRcpts),
             d,
             hover,
         ),
-        PrefTrail::None,
         d,
-    ));
-    mine = mine.push(pref_note(
-        "Receipts are only sent in groups with up to 20 members.",
-        d,
+        hover,
     ));
     let mut cards = column![card(col), card(members)].spacing(PAGE_GAP);
     if !g.is_channel {

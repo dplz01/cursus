@@ -36,14 +36,6 @@ pub fn admin_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 }
 
 /// Paper-plane send glyph (Dazzle Line Icons / CC Attribution).
-pub fn send_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/send.svg").as_slice()),
-        color,
-        size,
-    )
-}
-
 /// Attach / plus glyph (Zest Interface Icons / MIT).
 pub fn plus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(

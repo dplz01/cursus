@@ -96,7 +96,7 @@ Rules:
 | `radius.pill` | 999 — round icon buttons, unread badge, avatars |
 
 - Page padding: 16px sides (`pad`), 8–10px between header and content (`pad_tight`).
-- **Settings-style lists** (contact page, group/channel page, app settings, preferences): rows have 6px vertical / 8px horizontal padding; lists of people (members, contacts to invite) sit **flush** (0 spacing, 2px row padding) with a 28px avatar before the name.
+- **Settings-style lists** (contact page, group/channel page, app settings, preferences): rows have 6px vertical / 8px horizontal padding; lists of people (members, contacts to invite) sit **flush** (0 spacing, 4px row padding) with a 40px avatar before the name.
 - Hit targets: ≥ 32×32 for icon buttons on desktop, ≥ 40–48 on mobile.
 
 ## Components
@@ -137,10 +137,47 @@ All editable fields (except passwords) offer the **edit menu**: right-click (des
 - **Context menu**: small card at the pointer, radius 12, soft shadow, no backdrop.
 - Confirmations live inside the same card (replace the actions with the question + Cancel / solid danger).
 
+### Profile header (one component everywhere)
+
+Contact, Group, Channel and Settings → My profile use the same header (Linux: `profile_identity`):
+
+- 72px avatar on the left; when the picture is editable, the **set photo / remove photo** buttons sit centred *under* the avatar.
+- On the right, stacked name lines: editable names (own name, group name, local name/alias) are rounded fields (radius 12, 6×12 padding, body size); a read-only name is title-size text inset 13px so it lines up with the text inside the fields.
+
+### Preference rows (one component everywhere)
+
+App Settings, chat (contact) preferences, group and channel preferences use the same row (Linux: `pref_row`):
+
+`[24px icon box] label (body, fills) ……… control [18px peer-glyph column]`
+
+- Padding 6×8, 10px gaps; controls are a toggler (size 18) or a secondary choice chip (`value ▾`).
+- The icon box is omitted on pages without icons (app Settings); a page that shows the peer-allow glyph reserves its column on every row so controls stay aligned.
+- Section label (`pref_section`): meta, `text.muted`, 14px above (none for the first), 4px below; optional note (`pref_note`) in `text.secondary`.
+
+### Cards and pages (the Cursus look)
+
+Every non-chat page — Settings, contact / group / channel pages, preferences, Invite, New — is a column of **cards** (Linux: `card`, `card_title`, `nav_row`, `page_scroll`):
+
+- Card: `bg.elevated`, 1px `border`, radius 12, 10px padding; 14px between cards (`PAGE_GAP`).
+- Card title: 36px `accent.soft` icon disc with an accent glyph, title (body) and one-line explanation (meta, `text.secondary`).
+- Navigation row (opens another page): 32px icon disc · title / subtitle · right chevron (or a `+` for create actions); ghost tile, so the shape only shows on hover.
+- Page content is a centred column capped at **760px** so rows never stretch across a wide window.
+- Chat actions (clear / leave / delete) sit in their own card at the bottom of the page.
+
+### Settings layout
+
+- Desktop: the list column shows a profile summary (avatar, name, bio) and the four categories (Profile, Address, Appearance, Desktop) as rows with icon discs; the selected one is `accent.soft`. The selected category opens as a card in the main pane.
+- Mobile / compact: one scrolling page with all four cards.
+
+### Panes
+
+Desktop panes are separated by a single 1px `border` hairline between the list and the main pane — no boxed borders around the rail or list.
+
 ### Lists and rows
 
-- Chat rows: 44px avatar, name (body), two-line preview (meta, `text.secondary`, ellipsised), trailing badges (favourite star, muted, unread pill in `accent` on `accent.soft`).
-- Member rows: 28px avatar, name (yourself: **`YOU (Public name)`**), then a **gold** pending clock right after the name for invited / connecting members, then role and actions tools on the right.
+- Names and previews never wrap past their budget: one line for names / bios in member lists, two lines for chat previews, ending in “…”. The fit happens at layout time with the real width (Linux: `ellipsis::ellipsis_text`).
+- Chat rows: 44px avatar in a fixed slot (with or without the group badge, so names line up), name (body), two-line preview (meta, `text.secondary`); text with long unbroken runs (links, keys) wraps by glyph so both lines fill. Trailing badges: favourite star, muted, unread pill in `accent` on `accent.soft`.
+- Member / contact rows: 40px avatar, name (yourself: **`YOU (Public name)`**) with the short bio under it, a fixed 16px **gold** pending clock right after invited / connecting names (its space is reserved first, so it never shrinks away), then role and actions tools on the right. Rows sit flush (4px vertical padding).
 
 ## Icons
 

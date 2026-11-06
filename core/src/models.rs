@@ -260,6 +260,8 @@ pub struct GroupMemberInfo {
     pub image: Option<String>,
     /// Public profile name (`memberProfile.displayName`), ignoring local alias.
     pub public_name: String,
+    /// Short bio (`memberProfile.shortDescr`), if set.
+    pub short_descr: Option<String>,
     /// True for the current user's own membership row.
     pub is_me: bool,
 }

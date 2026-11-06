@@ -22,7 +22,7 @@
 //! own `on_input` message with the new value, Select all runs the
 //! `select_all` widget operation on the field's id.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -65,6 +65,19 @@ struct Snapshot {
     clipboard: Option<String>,
 }
 
+thread_local! {
+    /// Snapshot per field (keyed by widget id), written when the menu opens.
+    /// It must outlive the view: the app rebuilds `view()` after nearly every
+    /// event, so anything stored in the widget value itself is gone by the time
+    /// the menu's contents are built.
+    static SNAPSHOTS: RefCell<std::collections::HashMap<String, Snapshot>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+fn snapshot_key(id: &widget::Id) -> String {
+    format!("{id:?}")
+}
+
 type InputState = text_input::State<<iced::Renderer as iced::advanced::text::Renderer>::Paragraph>;
 
 /// Build an editable field with the Select all / Cut / Copy / Paste menu.
@@ -78,14 +91,17 @@ pub fn edit_field<'a>(
     on_input: impl Fn(String) -> Message + 'a,
     hover_ok: bool,
 ) -> Element<'a, Message> {
-    let snap = Rc::new(RefCell::new(Snapshot::default()));
+    let key = snapshot_key(&id);
     let value = value.to_string();
     let value_for_snapshot = value.clone();
     let on_input = Rc::new(on_input);
 
     let menu = {
-        let snap = Rc::clone(&snap);
-        move || menu_card(&snap.borrow(), &value, &id, on_input.as_ref(), hover_ok)
+        let key = key.clone();
+        move || {
+            let snap = SNAPSHOTS.with(|m| m.borrow().get(&key).cloned().unwrap_or_default());
+            menu_card(&snap, &value, &id, on_input.as_ref(), hover_ok)
+        }
     };
     let context = iced_aw::ContextMenu::new(input, menu).style(|_, _| iced_aw::style::context_menu::Style {
         // No dimming backdrop — this is a small popup, not a modal.
@@ -94,9 +110,8 @@ pub fn edit_field<'a>(
 
     Element::new(EditMenu {
         content: Element::new(context),
-        snap,
+        key,
         value: value_for_snapshot,
-        opening_finger: Rc::new(Cell::new(None)),
     })
 }
 
@@ -176,16 +191,18 @@ fn menu_card<'a>(
 /// Outer widget: long-press detection + selection/clipboard snapshot.
 struct EditMenu<'a> {
     content: Element<'a, Message>,
-    snap: Rc<RefCell<Snapshot>>,
+    /// Key into [`SNAPSHOTS`].
+    key: String,
     /// Current field text (cursor indices are graphemes into it).
     value: String,
-    /// Finger whose long-press opened the menu: its lift must not close it.
-    opening_finger: Rc<Cell<Option<touch::Finger>>>,
 }
 
 #[derive(Default)]
 struct PressState {
     press: Option<Press>,
+    /// Finger whose long-press opened the menu: its lift must not close it.
+    /// Lives in the widget tree so it survives view rebuilds.
+    opening_finger: Option<touch::Finger>,
 }
 
 struct Press {
@@ -221,7 +238,7 @@ impl EditMenu<'_> {
                 }
             }
         }
-        *self.snap.borrow_mut() = snap;
+        SNAPSHOTS.with(|m| m.borrow_mut().insert(self.key.clone(), snap));
     }
 }
 
@@ -320,7 +337,7 @@ impl Widget<Message, Theme, iced::Renderer> for EditMenu<'_> {
                     if let Some(p) = st.press.as_ref() {
                         if now.saturating_duration_since(p.at) >= LONG_PRESS {
                             long_press_at = Some(p.origin);
-                            self.opening_finger.set(Some(p.finger));
+                            st.opening_finger = Some(p.finger);
                             st.press = None;
                         } else {
                             shell.request_redraw_at(p.at + LONG_PRESS);
@@ -385,13 +402,15 @@ impl Widget<Message, Theme, iced::Renderer> for EditMenu<'_> {
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, iced::Renderer>> {
+        let Tree { state, children, .. } = tree;
+        let press = state.downcast_mut::<PressState>();
         self.content
             .as_widget_mut()
-            .overlay(&mut tree.children[0], layout, renderer, viewport, translation)
+            .overlay(&mut children[0], layout, renderer, viewport, translation)
             .map(|inner| {
                 overlay::Element::new(Box::new(TouchClose {
                     inner,
-                    opening_finger: Rc::clone(&self.opening_finger),
+                    opening_finger: &mut press.opening_finger,
                 }))
             })
     }
@@ -402,7 +421,7 @@ impl Widget<Message, Theme, iced::Renderer> for EditMenu<'_> {
 /// releases for that).
 struct TouchClose<'a> {
     inner: overlay::Element<'a, Message, Theme, iced::Renderer>,
-    opening_finger: Rc<Cell<Option<touch::Finger>>>,
+    opening_finger: &'a mut Option<touch::Finger>,
 }
 
 impl overlay::Overlay<Message, Theme, iced::Renderer> for TouchClose<'_> {
@@ -439,8 +458,8 @@ impl overlay::Overlay<Message, Theme, iced::Renderer> for TouchClose<'_> {
             .update(event, layout, cursor, renderer, clipboard, shell);
         if let Event::Touch(touch::Event::FingerLifted { id, position }) = event {
             // Lifting the finger that long-pressed just finishes the gesture.
-            if self.opening_finger.get() == Some(*id) {
-                self.opening_finger.set(None);
+            if *self.opening_finger == Some(*id) {
+                *self.opening_finger = None;
                 return;
             }
             let release = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
@@ -469,5 +488,218 @@ impl overlay::Overlay<Message, Theme, iced::Renderer> for TouchClose<'_> {
 
     fn index(&self) -> f32 {
         self.inner.as_overlay().index()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Drives the real widget through iced's `UserInterface`, **rebuilding the
+    //! view between events** like the app does (most events produce a message
+    //! and a fresh `view()`), with a fake clipboard.
+    use super::*;
+    use iced::advanced::renderer::Headless;
+    use iced::keyboard;
+    use iced::widget::container;
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    struct FakeClipboard(Option<String>);
+    impl Clipboard for FakeClipboard {
+        fn read(&self, _: iced::advanced::clipboard::Kind) -> Option<String> {
+            self.0.clone()
+        }
+        fn write(&mut self, _: iced::advanced::clipboard::Kind, contents: String) {
+            self.0 = Some(contents);
+        }
+    }
+
+    struct Harness {
+        renderer: iced::Renderer,
+        cache: Option<Cache>,
+        value: String,
+        clipboard: FakeClipboard,
+        messages: Vec<Message>,
+    }
+
+    const FIELD: &str = "test-field";
+
+    impl Harness {
+        fn new(value: &str) -> Self {
+            let renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+                iced::Font::DEFAULT,
+                iced::Pixels(16.0),
+                Some("tiny-skia"),
+            ))
+            .expect("headless renderer");
+            Self {
+                renderer,
+                cache: Some(Cache::default()),
+                value: value.into(),
+                clipboard: FakeClipboard(Some("PASTED".into())),
+                messages: Vec::new(),
+            }
+        }
+
+        fn view(value: &str) -> Element<'_, Message> {
+            container(edit_field(
+                text_input("placeholder", value)
+                    .id(FIELD)
+                    .on_input(Message::InviteInputChanged)
+                    .width(300),
+                widget::Id::new(FIELD),
+                value,
+                Message::InviteInputChanged,
+                true,
+            ))
+            .padding(20)
+            .into()
+        }
+
+        /// One frame: build a fresh view from cache, feed events, draw, cache.
+        fn frame(&mut self, events: &[Event], at: Point) {
+            let value = self.value.clone();
+            let mut ui = UserInterface::build(
+                Self::view(&value),
+                Size::new(800.0, 600.0),
+                self.cache.take().unwrap(),
+                &mut self.renderer,
+            );
+            let _ = ui.update(
+                events,
+                mouse::Cursor::Available(at),
+                &mut self.renderer,
+                &mut self.clipboard,
+                &mut self.messages,
+            );
+            ui.draw(
+                &mut self.renderer,
+                &Theme::Dark,
+                &renderer::Style::default(),
+                mouse::Cursor::Available(at),
+            );
+            self.cache = Some(ui.into_cache());
+        }
+
+        fn click(&mut self, button: mouse::Button, at: Point) {
+            self.frame(&[Event::Mouse(mouse::Event::CursorMoved { position: at })], at);
+            self.frame(&[Event::Mouse(mouse::Event::ButtonPressed(button))], at);
+            self.frame(&[Event::Mouse(mouse::Event::ButtonReleased(button))], at);
+        }
+
+        fn select_all_keys(&mut self, at: Point) {
+            let key = keyboard::Key::Character("a".into());
+            self.frame(
+                &[Event::Keyboard(keyboard::Event::ModifiersChanged(keyboard::Modifiers::CTRL))],
+                at,
+            );
+            self.frame(
+                &[Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: key.clone(),
+                    modified_key: key.clone(),
+                    physical_key: keyboard::key::Physical::Code(keyboard::key::Code::KeyA),
+                    location: keyboard::Location::Standard,
+                    modifiers: keyboard::Modifiers::CTRL,
+                    text: None,
+                    repeat: false,
+                })],
+                at,
+            );
+            self.frame(
+                &[Event::Keyboard(keyboard::Event::ModifiersChanged(keyboard::Modifiers::empty()))],
+                at,
+            );
+        }
+
+        fn take_field_actions(&mut self) -> Vec<FieldMenuAction> {
+            std::mem::take(&mut self.messages)
+                .into_iter()
+                .filter_map(|m| match m {
+                    Message::FieldMenu(a) => Some(a),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
+    /// Menu item centres relative to where the menu opened (see `menu_card`).
+    fn item(at: Point, index: usize) -> Point {
+        Point::new(at.x + 40.0, at.y + 4.0 + 17.0 + index as f32 * 36.0)
+    }
+
+    const FIELD_POINT: Point = Point::new(60.0, 35.0);
+
+    #[test]
+    fn cut_copies_and_clears_selection() {
+        let mut h = Harness::new("hello world");
+        h.click(mouse::Button::Left, FIELD_POINT);
+        h.select_all_keys(FIELD_POINT);
+        h.click(mouse::Button::Right, FIELD_POINT);
+        h.click(mouse::Button::Left, item(FIELD_POINT, 1)); // Cut
+        let actions = h.take_field_actions();
+        let [FieldMenuAction::Cut { copied, then }] = actions.as_slice() else {
+            panic!("{actions:?}");
+        };
+        assert_eq!(copied, "hello world");
+        assert!(matches!(then.as_ref(), Message::InviteInputChanged(v) if v.is_empty()));
+    }
+
+    #[test]
+    fn right_click_copy_selection_survives_rebuilds() {
+        let mut h = Harness::new("hello world");
+        h.click(mouse::Button::Left, FIELD_POINT);
+        h.select_all_keys(FIELD_POINT);
+        h.click(mouse::Button::Right, FIELD_POINT);
+        h.click(mouse::Button::Left, item(FIELD_POINT, 2)); // Copy
+        let actions = h.take_field_actions();
+        assert!(
+            matches!(actions.as_slice(), [FieldMenuAction::Copy(s)] if s == "hello world"),
+            "{actions:?}"
+        );
+    }
+
+    #[test]
+    fn paste_inserts_clipboard_at_caret() {
+        let mut h = Harness::new("ab");
+        h.click(mouse::Button::Left, FIELD_POINT);
+        h.click(mouse::Button::Right, FIELD_POINT);
+        h.click(mouse::Button::Left, item(FIELD_POINT, 3)); // Paste
+        let actions = h.take_field_actions();
+        let [FieldMenuAction::Paste(then)] = actions.as_slice() else {
+            panic!("{actions:?}");
+        };
+        assert!(matches!(then.as_ref(), Message::InviteInputChanged(v) if v.contains("PASTED")), "{then:?}");
+    }
+
+    #[test]
+    fn copy_disabled_without_selection() {
+        let mut h = Harness::new("hello");
+        h.click(mouse::Button::Left, FIELD_POINT);
+        h.click(mouse::Button::Right, FIELD_POINT);
+        h.click(mouse::Button::Left, item(FIELD_POINT, 2)); // Copy (disabled)
+        assert!(h.take_field_actions().is_empty());
+    }
+
+    #[test]
+    fn long_press_opens_menu() {
+        let mut h = Harness::new("hello world");
+        let finger = touch::Finger(1);
+        h.frame(
+            &[Event::Touch(touch::Event::FingerPressed { id: finger, position: FIELD_POINT })],
+            FIELD_POINT,
+        );
+        std::thread::sleep(LONG_PRESS + Duration::from_millis(30));
+        h.frame(
+            &[Event::Window(iced::window::Event::RedrawRequested(Instant::now()))],
+            FIELD_POINT,
+        );
+        h.frame(
+            &[Event::Touch(touch::Event::FingerLifted { id: finger, position: FIELD_POINT })],
+            FIELD_POINT,
+        );
+        // Menu must still be open after lifting the long-press finger: tap Select all.
+        let at = item(FIELD_POINT, 0);
+        h.frame(&[Event::Touch(touch::Event::FingerPressed { id: touch::Finger(2), position: at })], at);
+        h.frame(&[Event::Touch(touch::Event::FingerLifted { id: touch::Finger(2), position: at })], at);
+        let actions = h.take_field_actions();
+        assert!(matches!(actions.as_slice(), [FieldMenuAction::SelectAll(_)]), "{actions:?}");
     }
 }

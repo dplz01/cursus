@@ -28,7 +28,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `play.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `stop.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `back.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
-| `paste.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
+| `paste.svg` | [svgrepo/521781](https://www.svgrepo.com/svg/521781/paste) | Gentlecons Interface Icons / Konstantin Filatov | **CC Attribution** — attribution required | Yes (with credit) |
 | `timer.svg` | [svgrepo/521887](https://www.svgrepo.com/svg/521887/timer) | Gentlecons Interface Icons / Konstantin Filatov | **CC Attribution** — attribution required | Yes (with credit) |
 | `reaction-emoji-add.svg` | [svgrepo/440786](https://www.svgrepo.com/svg/440786/reaction-emoji-add) | Classjob Ff Game Icons / xivapi | **MIT License** | Yes |
 | `user-alt-1.svg` | [svgrepo/532363](https://www.svgrepo.com/svg/532363/user-alt-1) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |
@@ -51,7 +51,7 @@ Phone and Settings icons: **Solar Icons** by 480 Design, licensed under [CC BY 4
 
 Send, star, image-pen, and user-alt-1 icons: **Dazzle Line Icons** by Dazzle UI, CC Attribution license via [SVG Repo](https://www.svgrepo.com/svg/533306/send) / [star](https://www.svgrepo.com/svg/533052/star) / [image-pen](https://www.svgrepo.com/svg/532570/image-pen) / [user-alt-1](https://www.svgrepo.com/svg/532363/user-alt-1).
 
-Timer icon: **Gentlecons Interface Icons** by Konstantin Filatov, CC Attribution via [SVG Repo](https://www.svgrepo.com/svg/521887/timer).
+Timer and paste icons: **Gentlecons Interface Icons** by Konstantin Filatov, CC Attribution via [SVG Repo](https://www.svgrepo.com/svg/521887/timer) / [paste](https://www.svgrepo.com/svg/521781/paste).
 
 Reaction emoji-add icon: **Classjob Ff Game Icons** by xivapi, MIT License via [SVG Repo](https://www.svgrepo.com/svg/440786/reaction-emoji-add).
 

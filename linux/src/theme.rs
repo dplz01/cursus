@@ -261,11 +261,6 @@ pub fn list_style() -> impl Fn(&iced::Theme) -> container::Style {
         let c = t();
         container::Style {
             background: Some(Background::Color(c.bg_list)),
-            border: Border {
-                color: c.border,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
             ..container::Style::default()
         }
     }
@@ -276,11 +271,6 @@ pub fn sidebar_style() -> impl Fn(&iced::Theme) -> container::Style {
         let c = t();
         container::Style {
             background: Some(Background::Color(c.bg_sidebar)),
-            border: Border {
-                color: c.border,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
             ..container::Style::default()
         }
     }
@@ -415,6 +405,32 @@ pub fn round_icon(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
                 color: iced::Color::TRANSPARENT,
                 width: 0.0,
                 radius: 999.0.into(),
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
+/// Selectable list row (settings categories): `accent.soft` when selected.
+pub fn list_row(selected: bool, hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let c = t();
+        let background = if selected {
+            Some(Background::Color(c.accent_soft))
+        } else {
+            match status {
+                button::Status::Hovered if hover_ok => Some(Background::Color(c.bg_hover)),
+                button::Status::Pressed => Some(Background::Color(c.accent_soft)),
+                _ => None,
+            }
+        };
+        button::Style {
+            background,
+            text_color: c.text_primary,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 12.0.into(),
             },
             ..button::Style::default()
         }

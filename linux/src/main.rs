@@ -5,6 +5,7 @@
 mod avatar_cache;
 mod desktop;
 mod edit_menu;
+mod ellipsis;
 mod float_open;
 mod hover;
 mod icons;
@@ -13,6 +14,9 @@ mod layout;
 mod media;
 mod theme;
 mod touch_mouse;
+mod trail_row;
+#[cfg(test)]
+mod shots;
 mod ui;
 
 use std::cell::RefCell;
@@ -562,6 +566,20 @@ pub enum MemberDropdown {
     Actions,
 }
 
+/// Settings categories (desktop: list column → section page in the main pane).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsSection {
+    #[default]
+    Profile,
+    Address,
+    Appearance,
+    Desktop,
+}
+
+impl SettingsSection {
+    pub const ALL: [Self; 4] = [Self::Profile, Self::Address, Self::Appearance, Self::Desktop];
+}
+
 /// Overlay menu for settings that used to be iced `pick_list`s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefMenu {
@@ -1048,6 +1066,7 @@ pub enum Message {
     ChatMenuDone(Result<String, String>),
     /// Esc — close media viewer first, else chat menu.
     Escape,
+    OpenSettingsSection(SettingsSection),
     /// Text-field context menu (Select all / Cut / Copy / Paste).
     FieldMenu(edit_menu::FieldMenuAction),
 }
@@ -1191,6 +1210,10 @@ struct App {
     incoming_call: Option<CallInfo>,
     /// Direct chat to open as soon as the next chat-list load contains it.
     open_after_reload: Option<ChatId>,
+    /// Render as connected without a live session (screenshot harness only).
+    demo: bool,
+    /// Selected Settings category (desktop two-pane settings).
+    settings_section: SettingsSection,
 }
 
 struct VoiceRec {
@@ -1235,6 +1258,10 @@ impl App {
             prefs.close_to_tray = false;
             desktop::save_prefs(&prefs);
         }
+        Self::boot(prefs, tray)
+    }
+
+    fn boot(prefs: desktop::DesktopPrefs, tray: Option<desktop::AppTray>) -> (Self, Task<Message>) {
         theme::set_light_active(prefs.theme.resolve_light());
         let pending_session = Arc::new(Mutex::new(None));
         let (main_window, open_window) = open_main_window();
@@ -1347,6 +1374,8 @@ impl App {
                 active_call: None,
                 incoming_call: None,
                 open_after_reload: None,
+                demo: false,
+                settings_section: SettingsSection::Profile,
             },
             // Daemon runs App::new tasks before the wgpu compositor boots.
             // Loading libsimplex that early exports Haskell ZSTD_* symbols that
@@ -4587,7 +4616,14 @@ impl App {
                 self.status = "Preparing contact address…".into();
                 Task::perform(ensure_address(session), Message::InviteReady)
             }
-            Message::AcceptInvite => self.accept_invite_link(self.invite_input.clone()),
+            Message::AcceptInvite => {
+                let task = self.accept_invite_link(self.invite_input.clone());
+                // Connecting started (non-empty link): leave the New page.
+                if !self.invite_input.trim().is_empty() {
+                    self.close_compose_to_chats();
+                }
+                task
+            }
             Message::PasteInviteLink => iced::clipboard::read().map(Message::InviteLinkPasted),
             Message::InviteLinkPasted(contents) => {
                 match contents.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
@@ -4619,6 +4655,7 @@ impl App {
             Message::CopyInviteLink => {
                 if let Some(link) = self.invite_link.clone() {
                     self.status = "Invite link copied.".into();
+                    self.close_compose_to_chats();
                     iced::clipboard::write(link)
                 } else {
                     Task::none()
@@ -4777,6 +4814,10 @@ impl App {
             }
             Message::OpenChatMenu(index) => {
                 self.open_chat_menu(index);
+                Task::none()
+            }
+            Message::OpenSettingsSection(section) => {
+                self.settings_section = section;
                 Task::none()
             }
             Message::FieldMenu(action) => match action {
@@ -5936,14 +5977,31 @@ impl App {
         Task::batch(paths.into_iter().map(|p| self.load_waveform(p)).collect::<Vec<_>>())
     }
 
+    pub(crate) fn settings_section(&self) -> SettingsSection {
+        self.settings_section
+    }
+
     pub(crate) fn connected(&self) -> bool {
-        self.session.is_some()
+        self.session.is_some() || self.demo
     }
     pub(crate) fn connecting(&self) -> bool {
         self.connecting
     }
     pub(crate) fn invite_input(&self) -> &str {
         &self.invite_input
+    }
+
+    /// Leave the New page and show the main Chats list.
+    fn close_compose_to_chats(&mut self) {
+        self.compose_open = false;
+        if self.nav != NavSection::Chats {
+            // Opened from Channels: a selected channel doesn't belong in Chats.
+            self.selected = None;
+            self.selected_id = None;
+            self.messages.clear();
+        }
+        self.nav = NavSection::Chats;
+        self.pref_menu = None;
     }
 
     fn accept_invite_link(&mut self, raw: String) -> Task<Message> {
@@ -7316,13 +7374,13 @@ async fn open_local_file(path: PathBuf) -> Result<String, String> {
                 "--",
                 &path_str,
             ],
-            Some("mpv".into()),
+            vec!["mpv".into()],
         )
         .is_ok()
         {
             return Ok(format!("Opened {}", path.display()));
         }
-        let handler = float_open::default_handler_id(&path);
+        let handler = float_open::handler_ids(&path);
         float_open::spawn_floating("xdg-open", &[&path_str], handler)
             .map_err(|e| format!("xdg-open failed: {e}"))?;
         Ok(format!("Opened {}", path.display()))

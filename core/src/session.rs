@@ -1256,6 +1256,8 @@ fn parse_one_group_member(m: &Value) -> Option<GroupMemberInfo> {
     let public_name = nonempty_str(m.pointer("/memberProfile/displayName"))
         .or_else(|| nonempty_str(m.pointer("/profile/displayName")))
         .unwrap_or_else(|| display_name.clone());
+    let short_descr = nonempty_str(m.pointer("/memberProfile/shortDescr"))
+        .or_else(|| nonempty_str(m.pointer("/profile/shortDescr")));
     Some(GroupMemberInfo {
         group_member_id: id,
         contact_id,
@@ -1267,6 +1269,7 @@ fn parse_one_group_member(m: &Value) -> Option<GroupMemberInfo> {
         support_chat,
         image,
         public_name,
+        short_descr,
         is_me: false,
     })
 }

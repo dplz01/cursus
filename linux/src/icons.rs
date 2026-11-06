@@ -629,16 +629,6 @@ pub fn admin_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mes
     )
 }
 
-pub fn receipt_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
-    profile_tool_icon(
-        svg::Handle::from_memory(include_bytes!("../assets/icons/check-read.svg").as_slice()),
-        hit,
-        theme::t().text_secondary,
-        theme::t().text_primary,
-        hover_ok,
-    )
-}
-
 pub fn user_member_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
         svg::Handle::from_memory(include_bytes!("../assets/icons/user-member.svg").as_slice()),
@@ -794,7 +784,7 @@ pub fn send_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mess
     }
 }
 
-/// Paste-from-clipboard — Cursus original (CC0), same chrome as other icon-only tools.
+/// Paste-from-clipboard — Gentlecons (Konstantin Filatov, CC BY), same chrome as other icon-only tools.
 pub fn paste_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     profile_tool_icon(
         svg::Handle::from_memory(include_bytes!("../assets/icons/paste.svg").as_slice()),
@@ -808,6 +798,32 @@ pub fn paste_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
 pub fn user_plus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
         svg::Handle::from_memory(include_bytes!("../assets/icons/user-plus-alt-1.svg").as_slice()),
+        color,
+        size,
+    )
+}
+
+/// Chevron pointing right (navigation rows) — chevron-down rotated −90°.
+pub fn chevron_right<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    let icon: Svg<'a, iced::Theme> = svg(svg::Handle::from_memory(
+        include_bytes!("../assets/icons/chevron-down.svg").as_slice(),
+    ))
+    .width(Length::Fixed(size))
+    .height(Length::Fixed(size))
+    .rotation(iced::Radians(-std::f32::consts::FRAC_PI_2))
+    .style(move |_, _| svg::Style { color: Some(color) });
+    container(icon)
+        .width(size)
+        .height(size)
+        .center_x(size)
+        .center_y(size)
+        .into()
+}
+
+/// Plain tinted gear (no hover states) for icon discs.
+pub fn settings_icon_plain<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg::Handle::from_memory(include_bytes!("../assets/icons/settings.svg").as_slice()),
         color,
         size,
     )

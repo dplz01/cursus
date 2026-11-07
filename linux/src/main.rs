@@ -1426,6 +1426,9 @@ struct App {
     pin_history_end: bool,
     /// "New messages" divider above this incoming item (id, timer generation).
     new_messages_marker: Option<(i64, u64)>,
+    /// Unread count of the chat being opened (its badge is cleared at once);
+    /// the first load puts the "New messages" divider above that many items.
+    open_unread: i64,
     /// Link waiting for “Open link?” confirmation.
     pending_url: Option<PendingLink>,
     /// Privacy warning awaiting confirmation (see [`PrivacyConfirm`]).
@@ -1653,6 +1656,7 @@ impl App {
                 image_previews_failed: HashSet::new(),
                 pin_history_end: false,
                 new_messages_marker: None,
+                open_unread: 0,
                 messages_load_gen: 0,
                 chats_refresh_gen: 0,
                 pending_url: None,
@@ -2063,7 +2067,9 @@ impl App {
                 self.hover.clear_all();
                 self.cancel_press_timers();
                 // Optimistic: clear badge immediately while core marks items read.
+                self.open_unread = 0;
                 if let Some(chat) = self.chats.get_mut(index) {
+                    self.open_unread = chat.unread;
                     chat.unread = 0;
                 }
                 self.messages.clear();
@@ -5457,10 +5463,31 @@ impl App {
                         // With Anchor::End, relative y=0 is the newest (visual bottom).
                         let pin = if self.pin_history_end {
                             self.pin_history_end = false;
-                            iced::widget::operation::snap_to(
-                                iced::widget::Id::new("chat-history"),
-                                RelativeOffset { x: 0.0, y: 0.0 },
-                            )
+                            let unread = std::mem::take(&mut self.open_unread);
+                            // Opened with unread messages: label the first one
+                            // and bring it into view; otherwise the newest.
+                            let first = first_unread_index(&self.messages, unread);
+                            let mut y = 0.0;
+                            let mut timer = Task::none();
+                            if let Some(index) = first {
+                                let gen = self.new_messages_marker.map_or(0, |(_, g)| g + 1);
+                                self.new_messages_marker = Some((self.messages[index].item_id, gen));
+                                y = unread_scroll_offset(self.messages.len(), index);
+                                timer = Task::perform(
+                                    async move {
+                                        tokio::time::sleep(NEW_MESSAGES_ON_OPEN_FOR).await;
+                                        gen
+                                    },
+                                    Message::ClearNewMessagesMarker,
+                                );
+                            }
+                            Task::batch([
+                                iced::widget::operation::snap_to(
+                                    iced::widget::Id::new("chat-history"),
+                                    RelativeOffset { x: 0.0, y },
+                                ),
+                                timer,
+                            ])
                         } else {
                             Task::none()
                         };
@@ -7596,6 +7623,7 @@ impl App {
         self.selected_id = Some(ChatId::with_support(group_id, member_id));
         self.messages.clear();
         self.pin_history_end = true;
+        self.open_unread = 0;
         self.reply_to = None;
         self.editing = None;
         self.selection_mode = false;
@@ -7618,6 +7646,7 @@ impl App {
             self.selected_id = Some(ChatId::new(ChatType::Group, gid));
             self.messages.clear();
             self.pin_history_end = true;
+            self.open_unread = 0;
             let reload = Task::batch([self.mark_selected_read(), self.reload_messages()]);
             if back_to_settings {
                 // Back = the page we came from: the group / channel page.
@@ -8450,6 +8479,41 @@ async fn connect_session(
 
 /// How long the "New messages" divider stays after the last arrival.
 const NEW_MESSAGES_LABEL_FOR: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// On open the divider stays longer: the reader is catching up.
+const NEW_MESSAGES_ON_OPEN_FOR: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Index of the oldest of the last `unread` incoming messages.
+fn first_unread_index(messages: &[ChatMessage], unread: i64) -> Option<usize> {
+    if unread <= 0 {
+        return None;
+    }
+    let mut left = unread;
+    let mut first = None;
+    for (i, m) in messages.iter().enumerate().rev() {
+        if m.outgoing || m.is_announcement {
+            continue;
+        }
+        first = Some(i);
+        left -= 1;
+        if left == 0 {
+            break;
+        }
+    }
+    first
+}
+
+/// Scroll position (Anchor::End: 0 = newest, 1 = oldest) that shows the
+/// first unread near the top; a short unread tail just stays at the bottom.
+fn unread_scroll_offset(len: usize, index: usize) -> f32 {
+    const FITS_ON_SCREEN: usize = 6;
+    let after = len.saturating_sub(index + 1);
+    if after < FITS_ON_SCREEN || len <= 1 {
+        0.0
+    } else {
+        (after as f32 / (len - 1) as f32).min(1.0)
+    }
+}
 
 /// Bubbles appended at the end of the open chat by a refresh: `None` when
 /// nothing new arrived, else `Some(first new incoming item, if any)`.

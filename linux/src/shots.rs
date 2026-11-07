@@ -955,3 +955,34 @@ fn shots_profile_cards() {
         }
     }
 }
+
+/// Opening a chat with unread messages labels the first unread one (counting
+/// incoming messages from the end) and scrolls to it; none → no label.
+#[test]
+fn opening_a_chat_labels_unread_messages() {
+    load_fonts();
+    let mut app = demo_app(true, MOBILE.width, MOBILE.height);
+    select(&mut app, 0);
+    let history = app.messages.clone(); // incoming: 1, 3, 5 (5 is newest)
+    let open = |app: &mut App, unread: i64| {
+        app.messages.clear();
+        app.pin_history_end = true;
+        app.open_unread = unread;
+        let gen = app.messages_load_gen;
+        let _ = app.update(Message::MessagesLoaded { gen, result: Ok(history.clone()) });
+    };
+
+    open(&mut app, 2);
+    assert_eq!(app.new_messages_from(), Some(3), "two unread: 3 and 5");
+    assert_eq!(app.open_unread, 0, "used once");
+    render(&app, MOBILE, "fix-open-unread-dark");
+
+    open(&mut app, 1);
+    assert_eq!(app.new_messages_from(), Some(5));
+
+    open(&mut app, 50);
+    assert_eq!(app.new_messages_from(), Some(1), "more unread than loaded: oldest incoming");
+
+    open(&mut app, 0);
+    assert_eq!(app.new_messages_from(), None);
+}

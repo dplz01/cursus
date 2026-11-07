@@ -203,6 +203,9 @@ pub struct DesktopPrefs {
     pub clean_links: bool,
     /// Unlock at start with the password stored in the system keyring.
     pub keyring_unlock: bool,
+    /// Enter sends the message (Shift+Enter: new line). Off: Enter adds a
+    /// new line and Ctrl+Enter / the send button send.
+    pub enter_sends: bool,
     /// Prefs schema version — lets new privacy defaults reach old files.
     /// Missing in files written before versioning → 0.
     #[serde(default)]
@@ -232,6 +235,7 @@ impl Default for DesktopPrefs {
             auto_download: true,
             clean_links: true,
             keyring_unlock: false,
+            enter_sends: true,
             version: PREFS_VERSION,
         }
     }

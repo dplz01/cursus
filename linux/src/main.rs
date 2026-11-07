@@ -1007,6 +1007,12 @@ pub enum Message {
     BlurReady { path: PathBuf, blurred: Option<PathBuf> },
     SetAutoDownload(bool),
     SetCleanLinks(bool),
+    /// Enter sends (on) or adds a new line (off).
+    SetEnterSends(bool),
+    /// Enter in the composer (keyboard / OSK): sends without the tap gate.
+    SendKey,
+    /// Internal: the send itself (shared by Send / SendKey).
+    SendComposerBody,
     SetEncryptFiles(bool),
     EncryptFilesSet(Result<bool, String>),
     SetReceipts { groups: bool, on: bool },
@@ -2160,9 +2166,25 @@ impl App {
                 Task::none()
             }
             Message::Send => {
+                // Send button: a tap that ends a swipe is not a press.
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                self.send_composer()
+            }
+            Message::SendKey => {
+                // Enter (hardware or on-screen keyboard): never gated by the
+                // touch gesture — after scrolling the history the last swipe
+                // stays "moved" until the next finger-down, which swallowed
+                // Enter while reading older messages.
+                self.send_composer()
+            }
+            Message::SetEnterSends(on) => {
+                self.desktop_prefs.enter_sends = on;
+                desktop::save_prefs(&self.desktop_prefs);
+                Task::none()
+            }
+            Message::SendComposerBody => {
                 if !self.emoji_suggestions().is_empty() {
                     self.accept_emoji_suggestion();
                     return Task::none();
@@ -5441,8 +5463,13 @@ impl App {
                         };
                         self.messages = messages;
                         let follow = match arrived {
-                            Some(first_incoming) => {
-                                let mut tasks = vec![self.update(Message::ScrollToLatest)];
+                            Some((sent, first_incoming)) => {
+                                // Your own message: jump to it. Incoming ones
+                                // only get the divider — reading stays put.
+                                let mut tasks = Vec::new();
+                                if sent {
+                                    tasks.push(self.update(Message::ScrollToLatest));
+                                }
                                 if let Some(id) = first_incoming {
                                     let gen = self.new_messages_marker.map_or(0, |(_, g)| g + 1);
                                     // Keep the oldest unseen one while the label shows.
@@ -7542,6 +7569,11 @@ impl App {
         POINTER_GATE.tap_ok()
     }
 
+    /// Send (or save the edit of) what's in the composer.
+    fn send_composer(&mut self) -> Task<Message> {
+        self.update(Message::SendComposerBody)
+    }
+
     fn clear_pointer_gesture(&mut self) {
         self.press_moved = false;
         self.press_anchor = None;
@@ -8516,19 +8548,21 @@ fn unread_scroll_offset(len: usize, index: usize) -> f32 {
 }
 
 /// Bubbles appended at the end of the open chat by a refresh: `None` when
-/// nothing new arrived, else `Some(first new incoming item, if any)`.
-fn new_tail(old: &[ChatMessage], new: &[ChatMessage]) -> Option<Option<i64>> {
+/// nothing new arrived, else `Some((any of them sent by me, first new
+/// incoming item))`.
+fn new_tail(old: &[ChatMessage], new: &[ChatMessage]) -> Option<(bool, Option<i64>)> {
     let last = old.last()?.item_id;
     let at = new.iter().rposition(|m| m.item_id == last)?;
     let tail = &new[at + 1..];
     if tail.is_empty() {
         return None;
     }
-    Some(
-        tail.iter()
-            .find(|m| !m.outgoing && !m.is_announcement)
-            .map(|m| m.item_id),
-    )
+    let sent = tail.iter().any(|m| m.outgoing);
+    let incoming = tail
+        .iter()
+        .find(|m| !m.outgoing && !m.is_announcement)
+        .map(|m| m.item_id);
+    Some((sent, incoming))
 }
 
 async fn activate_network(session: Arc<Session>) -> Result<(), String> {
@@ -8897,6 +8931,7 @@ pub enum SettingInfo {
     AutoDownload,
     EncryptFiles,
     CleanLinks,
+    EnterSends,
     ReceiptsContacts,
     ReceiptsGroups,
     GroupReceipts,
@@ -8918,6 +8953,7 @@ impl SettingInfo {
             Self::ProtectIp => ("Protect IP address", "Files are stored on file servers. Your own servers are trusted; servers chosen by the person who sent the file are not.\n\nWhen on, Cursus asks before downloading from a server you don't use, and automatic downloads skip them. Without Tor or a VPN, any server you download from can see your IP address."),
             Self::AutoDownload => ("Download images and voice automatically", "Images, voice messages and short videos download as soon as they arrive, so they are ready to view.\n\nWhen off, nothing downloads until you tap it \u{2014} useful to save data or to avoid files from strangers in groups."),
             Self::EncryptFiles => ("Encrypt stored files", "Photos, videos, voice messages and files are saved encrypted on this device; Cursus decrypts them only while you view them.\n\nTurning it off affects new files only \u{2014} files already stored stay encrypted."),
+            Self::EnterSends => ("Enter sends messages", "When on, Enter sends your message and Shift+Enter starts a new line.\n\nWhen off, Enter starts a new line; send with the send button or Ctrl+Enter."),
             Self::CleanLinks => ("Remove tracking from links", "Before opening a link, Cursus removes tracking codes such as utm_source or fbclid, which tell websites where you came from. The page itself is the same."),
             Self::ReceiptsContacts => ("Delivery receipts to contacts", "Your contacts see a second tick when their messages reach this device. It does not tell them you read them.\n\nYou can choose differently for a single contact in its chat preferences."),
             Self::ReceiptsGroups => ("Delivery receipts in small groups", "Members see when their messages reach this device. SimpleX only sends receipts in groups with up to 20 members.\n\nYou can choose differently for a single group in its preferences."),

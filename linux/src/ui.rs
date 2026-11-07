@@ -1304,6 +1304,7 @@ fn pending_member_actions_bar(
 fn composer_key_binding(
     has_suggestions: bool,
     composer_empty: bool,
+    enter_sends: bool,
 ) -> impl Fn(iced::widget::text_editor::KeyPress) -> Option<EditorBinding<Message>> {
     move |key_press| {
         // `:shortcode` list: Tab / Shift+Tab cycle, Enter accepts.
@@ -1327,13 +1328,24 @@ fn composer_key_binding(
             }
         }
 
-        // Enter sends (Shift+Enter = newline via default Binding::Enter).
+        // Enter sends (Shift+Enter = newline via default Binding::Enter);
+        // with "Enter sends" off, Enter is a newline and Ctrl+Enter sends.
         if matches!(
             key_press.key.as_ref(),
             keyboard::Key::Named(key::Named::Enter)
-        ) && !key_press.modifiers.shift()
-        {
-            return Some(EditorBinding::Custom(Message::Send));
+        ) {
+            let m = key_press.modifiers;
+            let send = if enter_sends {
+                !m.shift()
+            } else {
+                m.control() || m.command()
+            };
+            if send {
+                return Some(EditorBinding::Custom(Message::SendKey));
+            }
+            if !enter_sends {
+                return Some(EditorBinding::Enter);
+            }
         }
 
         // ArrowUp with an empty field edits the latest editable outgoing
@@ -1474,6 +1486,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             .key_binding(composer_key_binding(
                 !suggestions.is_empty(),
                 app.composer().trim().is_empty(),
+                app.desktop_prefs().enter_sends,
             )),
     );
     // Right-click / long-press: Select all · Cut · Copy · Paste.
@@ -3825,7 +3838,7 @@ fn settings_section_meta(section: crate::SettingsSection) -> (Element<'static, M
     match section {
         crate::SettingsSection::Profile => (icons::user_alt_icon(18.0, a), "Profile", "Name, bio and picture"),
         crate::SettingsSection::Address => (icons::link_icon(18.0, a), "Address", "How people reach you"),
-        crate::SettingsSection::Appearance => (icons::image_icon(18.0, a), "Appearance", "Theme and text size"),
+        crate::SettingsSection::Appearance => (icons::image_icon(18.0, a), "Appearance", "Theme, text size and typing"),
         crate::SettingsSection::Privacy => (icons::shield_icon(18.0, a), "Privacy & security", "Lock, screen, files and receipts"),
         crate::SettingsSection::Desktop => (icons::settings_icon_plain(18.0, a), "Notifications & tray", "Alerts and background running"),
     }
@@ -3922,6 +3935,15 @@ fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<
                 "Text size",
                 prefs.text_size.label(),
                 Message::OpenPrefMenu(PrefMenu::TextSize),
+                d,
+                hover,
+            ));
+            col = col.push(pref_section("Typing", false, d));
+            col = col.push(info_toggle(
+                "Enter sends messages",
+                crate::SettingInfo::EnterSends,
+                prefs.enter_sends,
+                Message::SetEnterSends,
                 d,
                 hover,
             ));
@@ -8608,6 +8630,49 @@ mod stamp_tests {
         let with = layout(&r, body(&big, d), 300.0).size().height;
         let without = layout(&r, emoji_message_text(&big.text, None), 300.0).size().height;
         assert_eq!(with, without, "big emoji line keeps its height");
+    }
+}
+
+#[cfg(test)]
+mod enter_tests {
+    use super::*;
+    use iced::widget::text_editor::{KeyPress, Status};
+
+    fn enter(modifiers: keyboard::Modifiers) -> KeyPress {
+        KeyPress {
+            key: keyboard::Key::Named(key::Named::Enter),
+            modified_key: keyboard::Key::Named(key::Named::Enter),
+            physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Enter),
+            modifiers,
+            text: Some("\r".into()),
+            status: Status::Focused { is_hovered: false },
+        }
+    }
+
+    fn sends(b: Option<EditorBinding<Message>>) -> bool {
+        matches!(b, Some(EditorBinding::Custom(Message::SendKey)))
+    }
+
+    fn newline(b: Option<EditorBinding<Message>>) -> bool {
+        matches!(b, Some(EditorBinding::Enter))
+    }
+
+    /// Enter sends through `SendKey`, which skips the touch-gesture gate
+    /// (`Send`, for the button, keeps it) — Enter used to be dropped after
+    /// scrolling the history on a touchscreen.
+    #[test]
+    fn enter_sends_by_default() {
+        let bind = composer_key_binding(false, false, true);
+        assert!(sends(bind(enter(keyboard::Modifiers::empty()))));
+        assert!(newline(bind(enter(keyboard::Modifiers::SHIFT))));
+    }
+
+    #[test]
+    fn enter_adds_a_line_when_the_setting_is_off() {
+        let bind = composer_key_binding(false, false, false);
+        assert!(newline(bind(enter(keyboard::Modifiers::empty()))));
+        assert!(newline(bind(enter(keyboard::Modifiers::SHIFT))));
+        assert!(sends(bind(enter(keyboard::Modifiers::CTRL))));
     }
 }
 

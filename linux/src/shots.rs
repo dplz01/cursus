@@ -881,8 +881,8 @@ fn shots_ui_fixes() {
     }
 }
 
-/// A refresh that appends bubbles scrolls to them; new incoming ones get a
-/// "New messages" divider that goes away on its timer. Opening a chat or a
+/// A refresh that appends your own bubble scrolls to it; new incoming ones
+/// only get a "New messages" divider that goes away on its timer. Opening a chat or a
 /// refresh with nothing new shows none.
 #[test]
 fn new_messages_follow_and_label() {
@@ -908,12 +908,13 @@ fn new_messages_follow_and_label() {
     assert!(!app.history_away_from_end, "scrolled to the new bubble");
     assert_eq!(app.new_messages_from(), None);
 
-    // Two incoming: label above the first; a third keeps it there.
+    // Two incoming: label above the first, but no jump — reading older
+    // messages stays where it is. A third keeps the label there.
     app.history_away_from_end = true;
     away.push(msg(31, "great!", false, "09:11"));
     away.push(msg(32, "I'm at platform 4", false, "09:11"));
     load(&mut app, away.clone());
-    assert!(!app.history_away_from_end);
+    assert!(app.history_away_from_end, "incoming messages don't scroll");
     assert_eq!(app.new_messages_from(), Some(31));
     render(&app, MOBILE, "fix-new-messages-dark");
     away.push(msg(33, "😄", false, "09:12"));

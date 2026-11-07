@@ -1228,7 +1228,12 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
             background: Some(iced::Background::Color(theme::t().bg_sidebar)),
             ..container::Style::default()
         });
-    column![header, hairline(), history, footer]
+    // Taps anywhere below the header keep the composer (and the on-screen
+    // keyboard) up; only the header and other panes dismiss it.
+    let body = crate::touch_mouse::keep_focus_zone(
+        column![history, footer].height(Length::Fill),
+    );
+    column![header, hairline(), body]
         .height(Length::Fill)
         .into()
 }
@@ -1471,9 +1476,9 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     let v_pad = ((send_size - line_px) / 2.0).max(0.0);
     let content_min = (send_size - 2.0 * v_pad).max(line_px);
 
-    use crate::touch_mouse::touch_as_mouse;
+    use crate::touch_mouse::touch_as_mouse_keeping_focus;
 
-    let editor = touch_as_mouse(
+    let editor = touch_as_mouse_keeping_focus(
         text_editor(app.composer_content())
             .id(iced::widget::Id::new("composer-input"))
             .placeholder(placeholder)
@@ -1819,6 +1824,7 @@ fn history_key(app: &App, d: Density) -> u64 {
     app.desktop_prefs().blur_media.hash(&mut h);
 
     // Selection, focus and reveal state.
+    app.new_messages_from().hash(&mut h);
     app.selection_mode().hash(&mut h);
     app.focus_item().hash(&mut h);
     let mut picked: Vec<i64> = app.selected_items().iter().copied().collect();
@@ -1889,6 +1895,11 @@ fn history_column(app: &App, d: Density) -> Element<'static, Message> {
                 prev_sender = None;
                 prev_channel_block = false;
             }
+        }
+        if app.new_messages_from() == Some(msg.item_id) {
+            col = col.push(new_messages_divider(d));
+            prev_sender = None;
+            prev_channel_block = false;
         }
         if msg.group_invitation.is_some() {
             prev_sender = None;
@@ -2126,6 +2137,49 @@ fn same_group(a: &ChatMessage, b: &ChatMessage) -> bool {
     }
 }
 
+/// Temporary accent line + pill above the first message that just arrived.
+fn new_messages_divider(d: Density) -> Element<'static, Message> {
+    let line = || {
+        container(Space::new().width(Length::Fill).height(1))
+            .width(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(Color {
+                    a: 0.45,
+                    ..theme::t().accent
+                })),
+                ..container::Style::default()
+            })
+    };
+    let pill = container(
+        txt("New messages".to_string())
+            .size(d.meta)
+            .font(BOLD)
+            .color(theme::t().accent),
+    )
+    .padding(Padding::from([3, 10]))
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(theme::t().accent_soft)),
+        border: iced::Border {
+            radius: 999.0.into(),
+            ..Default::default()
+        },
+        ..container::Style::default()
+    });
+    container(
+        row![line(), pill, line()]
+            .spacing(10)
+            .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .padding(Padding {
+        top: 12.0,
+        right: 0.0,
+        bottom: 2.0,
+        left: 0.0,
+    })
+    .into()
+}
+
 /// Centered "Today" / "Yesterday" / date pill between days.
 fn day_divider(at: &chrono::DateTime<chrono::Local>, d: Density) -> Element<'static, Message> {
     container(
@@ -2180,7 +2234,8 @@ fn message_bubble<'a>(
         theme::t().bubble_in
     };
 
-    let mut body = Column::new().spacing(4);
+    // Text with its stamp comes last and spans the bubble (see bubble_body).
+    let mut body = crate::bubble_body::BubbleBody::new(4.0);
     let mut voice_owns_meta = false;
     let mut media_flush = false;
 
@@ -2231,6 +2286,7 @@ fn message_bubble<'a>(
             voice_owns_meta = true;
         }
     } else if emoji_only {
+        body = body.stretch_last(true);
         body = body.push(bubble_content_with_time(
             emoji_message_text(&msg.text, Some(stamp_reserve_span(msg, d, emoji_text_size(&msg.text)))),
             msg,
@@ -2238,6 +2294,7 @@ fn message_bubble<'a>(
         ));
         voice_owns_meta = true;
     } else {
+        body = body.stretch_last(true);
         body = body.push(bubble_content_with_time(
             message_text_content(app, msg, d, Some(stamp_reserve_span(msg, d, d.body))),
             msg,
@@ -5430,7 +5487,7 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
         }
         body = body.push(card(profile));
     }
-    body = body.push(card(nav_row(
+    body = body.push(button_card(card_row(
         icons::settings_icon_plain(18.0, theme::t().accent),
         "Chat preferences",
         Some("Disappearing messages, receipts, calls…".to_string()),
@@ -5440,7 +5497,7 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
         hover,
     )));
     let narrow = matches!(app.layout(), LayoutMode::Mobile) || app.window_width() < 720.0;
-    body = body.push(card(contact_danger_actions(d, hover, narrow)));
+    body = body.push(button_card(contact_danger_actions(d, hover, narrow)));
 
     column![
         header,
@@ -6712,8 +6769,6 @@ fn group_overview_pane(
             d,
             hover,
         ));
-        profile = profile.push(vertical().height(4));
-        profile = profile.push(welcome_message_button(&g.welcome_message, d, hover));
     } else {
         for (label, value) in [("About", &g.short_descr), ("Welcome message", &g.welcome_message)] {
             if !value.is_empty() {
@@ -6735,14 +6790,32 @@ fn group_overview_pane(
     // ── Support / invite / subscribers ──────────────────────────────────
     let support_ok = group_support_allowed(g.group_preferences.as_ref());
     let moderate = can_moderate(&g.my_role);
-    let mut people = Column::new().spacing(2).width(Length::Fill);
+    let mut people = Column::new().spacing(0).width(Length::Fill);
+    if owner {
+        // Same row as "Chats with members" / "Invite"; opens the editor.
+        let preview = g.welcome_message.split_whitespace().collect::<Vec<_>>().join(" ");
+        let sub = if preview.is_empty() {
+            "Greet the members who join".to_string()
+        } else {
+            preview
+        };
+        people = people.push(card_row(
+            icons::scroll_icon(18.0, theme::t().accent),
+            "Welcome message",
+            Some(sub),
+            Message::OpenFieldEditor(crate::EditField::GroupWelcome),
+            None,
+            d,
+            hover,
+        ));
+    }
     if support_ok || moderate {
         let (label, sub, msg) = if moderate {
             ("Chats with members", "Join requests and member support", Message::OpenSupportChatList)
         } else {
             ("Chat with admins", "Private conversation with moderators", Message::OpenUserSupportChat)
         };
-        people = people.push(nav_row(
+        people = people.push(card_row(
             icons::admin_icon(18.0, theme::t().accent),
             label,
             Some(sub.to_string()),
@@ -6753,7 +6826,7 @@ fn group_overview_pane(
         ));
     }
     if admin && !g.is_channel {
-        people = people.push(nav_row(
+        people = people.push(card_row(
             icons::user_plus_icon(18.0, theme::t().accent),
             "Invite",
             Some("Group link and contacts".to_string()),
@@ -6772,7 +6845,7 @@ fn group_overview_pane(
         } else {
             ("Owners", "Who runs this channel".to_string())
         };
-        people = people.push(nav_row(
+        people = people.push(card_row(
             icons::user_group_icon(18.0, theme::t().accent),
             label,
             Some(sub),
@@ -6782,8 +6855,8 @@ fn group_overview_pane(
             hover,
         ));
     }
-    if support_ok || moderate || admin || g.is_channel {
-        page = page.push(card(people));
+    if owner || support_ok || moderate || admin || g.is_channel {
+        page = page.push(button_card(people));
     }
 
     // ── Members (private groups) ────────────────────────────────────────
@@ -6808,7 +6881,7 @@ fn group_overview_pane(
             .members
             .iter()
             .any(|m| !m.is_me && m.role.eq_ignore_ascii_case("owner"));
-    page = page.push(card(group_danger_actions(
+    page = page.push(button_card(group_danger_actions(
         g.is_channel,
         !sole_channel_owner,
         d,
@@ -6832,12 +6905,45 @@ fn nav_row<'a>(
     d: Density,
     hover: bool,
 ) -> Element<'a, Message> {
+    nav_row_styled(icon, title, subtitle, on_press, trailing, d, hover, false)
+}
+
+/// [`nav_row`] for a [`button_card`]: fills the card's width and corners,
+/// content stays where the inset card put it.
+fn card_row<'a>(
+    icon: Element<'a, Message>,
+    title: &'a str,
+    subtitle: Option<String>,
+    on_press: Message,
+    trailing: Option<Element<'a, Message>>,
+    d: Density,
+    hover: bool,
+) -> Element<'a, Message> {
+    nav_row_styled(icon, title, subtitle, on_press, trailing, d, hover, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn nav_row_styled<'a>(
+    icon: Element<'a, Message>,
+    title: &'a str,
+    subtitle: Option<String>,
+    on_press: Message,
+    trailing: Option<Element<'a, Message>>,
+    d: Density,
+    hover: bool,
+    flush: bool,
+) -> Element<'a, Message> {
     let mut labels = Column::new()
         .spacing(1)
         .width(Length::Fill)
         .push(text(title).size(d.body).color(theme::t().text_primary));
     if let Some(sub) = subtitle {
-        labels = labels.push(text(sub).size(d.meta).color(theme::t().text_secondary));
+        // Card rows keep one line each (the welcome preview can be long).
+        labels = labels.push(if flush {
+            crate::ellipsis::ellipsis_text(sub, d.meta, theme::t().text_secondary, 1)
+        } else {
+            text(sub).size(d.meta).color(theme::t().text_secondary).into()
+        });
     }
     button(
         row![
@@ -6849,9 +6955,9 @@ fn nav_row<'a>(
         .align_y(Alignment::Center),
     )
     .on_press(on_press)
-    .padding(Padding::from([8, 8]))
+    .padding(if flush { Padding::from([14, 20]) } else { Padding::from([8, 8]) })
     .width(Length::Fill)
-    .style(theme::ghost_tile(hover))
+    .style(theme::ghost_tile_r(hover, if flush { CARD_RADIUS } else { 12.0 }))
     .into()
 }
 
@@ -7055,54 +7161,6 @@ fn editable_line<'a>(
         .into()
 }
 
-/// Group owners: the welcome message as a tile (scroll icon, title, first
-/// lines) that opens the editor sheet.
-fn welcome_message_button<'a>(welcome: &str, d: Density, hover: bool) -> Element<'a, Message> {
-    let preview = welcome.trim();
-    let sub = if preview.is_empty() {
-        txt("Greet the members who join".to_string())
-            .size(d.meta)
-            .color(theme::t().text_muted)
-    } else {
-        txt(truncate_graphemes(preview, 140))
-            .size(d.meta)
-            .color(theme::t().text_secondary)
-            .wrapping(Wrapping::WordOrGlyph)
-    };
-    let badge = container(icons::scroll_icon(22.0, theme::t().accent))
-        .width(40)
-        .height(40)
-        .center_x(40)
-        .center_y(40)
-        .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().accent_soft)),
-            border: iced::Border {
-                radius: 12.0.into(),
-                ..iced::Border::default()
-            },
-            ..container::Style::default()
-        });
-    button(
-        row![
-            badge,
-            column![
-                text("Welcome message").size(d.body).font(BOLD).color(theme::t().text_primary),
-                sub,
-            ]
-            .spacing(2)
-            .width(Length::Fill),
-            icons::edit_icon(16.0, theme::t().text_muted),
-        ]
-        .spacing(12)
-        .align_y(Alignment::Center),
-    )
-    .on_press(Message::OpenFieldEditor(crate::EditField::GroupWelcome))
-    .padding(Padding::from([10, 12]))
-    .width(Length::Fill)
-    .style(theme::ghost_tile(hover))
-    .into()
-}
-
 fn field_editor_meta(field: crate::EditField) -> (&'static str, &'static str, &'static str) {
     use crate::EditField as F;
     match field {
@@ -7260,13 +7318,13 @@ fn action_tile_row(
     narrow: bool,
 ) -> Element<'static, Message> {
     if narrow {
-        let mut col = Column::new().spacing(8).width(Length::Fill);
+        let mut col = Column::new().spacing(0).width(Length::Fill);
         for tile in tiles {
             col = col.push(tile);
         }
         col.into()
     } else {
-        let mut row = Row::new().spacing(8).width(Length::Fill);
+        let mut row = Row::new().spacing(0).width(Length::Fill);
         for tile in tiles {
             row = row.push(tile.width(Length::Fill));
         }
@@ -7404,7 +7462,7 @@ fn contact_danger_actions(
                 icons::clear_all_icon(18.0, theme::t().accent),
                 "Clear chat",
                 Message::ContactProfileClear,
-                theme::ghost_tile(hover),
+                theme::ghost_tile_r(hover, CARD_RADIUS),
                 d,
                 narrow,
                 false,
@@ -7413,7 +7471,7 @@ fn contact_danger_actions(
                 icons::trash_icon(18.0, theme::t().danger),
                 "Delete contact",
                 Message::ContactProfileDelete,
-                theme::ghost_danger(hover),
+                theme::ghost_danger_r(hover, CARD_RADIUS),
                 d,
                 narrow,
                 true,
@@ -7445,7 +7503,7 @@ fn group_danger_actions(
         icons::clear_all_icon(18.0, theme::t().accent),
         "Clear chat",
         Message::ClearGroupChat,
-        theme::ghost_tile(hover),
+        theme::ghost_tile_r(hover, CARD_RADIUS),
         d,
         narrow,
         false,
@@ -7455,7 +7513,7 @@ fn group_danger_actions(
             icons::leave_icon(18.0, theme::t().accent),
             leave_label,
             Message::OpenLeaveGroupConfirm,
-            theme::ghost_tile(hover),
+            theme::ghost_tile_r(hover, CARD_RADIUS),
             d,
             narrow,
             false,
@@ -7465,7 +7523,7 @@ fn group_danger_actions(
         icons::trash_icon(18.0, theme::t().danger),
         delete_label,
         Message::OpenDeleteGroupConfirm,
-        theme::ghost_danger(hover),
+        theme::ghost_danger_r(hover, CARD_RADIUS),
         d,
         narrow,
         true,
@@ -7521,7 +7579,8 @@ fn group_action_tile<'a>(
             .center_x(Length::Fill),
     )
     .on_press(on_press)
-    .padding(Padding::from([10, 8]))
+    // Flush in a button_card: rows line up with card_row, tiles fill it.
+    .padding(if narrow { Padding::from([14, 20]) } else { Padding::from([18, 8]) })
     .width(Length::Fill)
     .style(style)
 }
@@ -7614,10 +7673,23 @@ channel links after they’re gone — create a new channel to invite people."
 }
 
 /// Rounded card grouping related rows on a page (Invite page sections).
+/// Corner radius of [`card`]; flush buttons inside use it too.
+const CARD_RADIUS: f32 = 16.0;
+
 fn card<'a>(body: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    card_padded(body, Padding::from([12, 12]))
+}
+
+/// Card made only of buttons: no inset, so each button (rows, action tiles)
+/// spans the card edge to edge — the whole card surface is clickable.
+fn button_card<'a>(body: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    card_padded(body, Padding::ZERO)
+}
+
+fn card_padded<'a>(body: impl Into<Element<'a, Message>>, padding: Padding) -> Element<'a, Message> {
     // Tone, not lines: cards sit one step above the page surface.
     container(body)
-        .padding(Padding::from([12, 12]))
+        .padding(padding)
         .width(Length::Fill)
         .style(|_| {
             let c = theme::t();
@@ -8641,6 +8713,49 @@ mod stamp_tests {
                 }
             }
         }
+    }
+
+    /// Short reply under a long quote: the stamp sits at the bubble's
+    /// bottom-right, not right after the text; the bubble keeps the quote's
+    /// width. A reply longer than its quote still sets the width itself.
+    #[test]
+    fn reply_stamp_sits_at_the_right_edge() {
+        let r = renderer();
+        let d = densities()[0];
+        let quote = cursus_core::MessageQuote {
+            item_id: None,
+            text: "SimpleX group link (via smp15.simplex.im)".into(),
+            outgoing: false,
+        };
+        for (text, outgoing) in [("hi!", true), ("ok 👍", false), ("😝", true)] {
+            let msg = message(text, outgoing, false, TIMES[1]);
+            let bubble = crate::bubble_body::BubbleBody::new(4.0)
+                .push(quote_preview(&quote, d))
+                .stretch_last(true)
+                .push(bubble_content_with_time(body(&msg, d), &msg, d));
+            let node = layout(&r, bubble.into(), 360.0);
+            let l = Layout::new(&node);
+            let mut kids = l.children();
+            let quote_box = kids.next().unwrap().bounds();
+            let stamped = kids.next().unwrap();
+            let stamp = stamped.children().nth(1).unwrap().children().next().unwrap().bounds();
+            assert_eq!(node.bounds().width, quote_box.width, "{text:?}: the quote sets the width");
+            assert!(
+                (stamp.x + stamp.width - quote_box.width).abs() < 0.5,
+                "{text:?}: stamp ends at {} but the bubble at {}",
+                stamp.x + stamp.width,
+                quote_box.width
+            );
+        }
+        let long = message("A much longer answer than the quoted line above, so it wraps", true, false, TIMES[1]);
+        let bubble = crate::bubble_body::BubbleBody::new(4.0)
+            .push(quote_preview(&quote, d))
+            .stretch_last(true)
+            .push(bubble_content_with_time(body(&long, d), &long, d));
+        let node = layout(&r, bubble.into(), 360.0);
+        let stamped = Layout::new(&node).children().nth(1).unwrap().bounds();
+        assert_eq!(stamped.width, node.bounds().width, "the long reply sets the width");
+        assert!(node.bounds().width <= 360.0);
     }
 
     /// A short line keeps the stamp on the same line (no extra row).

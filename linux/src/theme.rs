@@ -613,6 +613,11 @@ pub fn danger_quiet(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> 
 /// rounded shape as the old bordered tiles but no border or fill at rest — the shape
 /// only appears on hover / press.
 pub fn ghost_tile(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    ghost_tile_r(hover_ok, 12.0)
+}
+
+/// [`ghost_tile`] with its own corner radius (16 = flush with a card edge).
+pub fn ghost_tile_r(hover_ok: bool, radius: f32) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
         let c = t();
         let background = match status {
@@ -626,7 +631,7 @@ pub fn ghost_tile(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: 12.0.into(),
+                radius: radius.into(),
             },
             ..button::Style::default()
         }
@@ -635,6 +640,11 @@ pub fn ghost_tile(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
 
 /// Destructive variant of [`ghost_tile`] — red label/icon, soft red on hover.
 pub fn ghost_danger(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    ghost_danger_r(hover_ok, 12.0)
+}
+
+/// [`ghost_danger`] with its own corner radius.
+pub fn ghost_danger_r(hover_ok: bool, radius: f32) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
         let c = t();
         let background = match status {
@@ -648,7 +658,7 @@ pub fn ghost_danger(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> 
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: 12.0.into(),
+                radius: radius.into(),
             },
             ..button::Style::default()
         }

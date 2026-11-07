@@ -4,6 +4,7 @@
 
 mod app_lock;
 mod avatar_cache;
+mod bubble_body;
 mod call;
 mod call_flow;
 mod desktop;
@@ -1059,6 +1060,8 @@ pub enum Message {
     ClearFocusItem { generation: u64 },
     /// Snap chat history to the newest message.
     ScrollToLatest,
+    /// Fade the "New messages" divider (ignored if a newer one replaced it).
+    ClearNewMessagesMarker(u64),
     /// User scrolled up in history — show jump-to-latest (edge-triggered).
     HistoryAwayChanged(bool),
     /// Reveal / hide original content of a marked-deleted item.
@@ -1423,6 +1426,8 @@ struct App {
     image_previews_failed: HashSet<PathBuf>,
     /// After opening a chat, pin history to the newest message once it loads.
     pin_history_end: bool,
+    /// "New messages" divider above this incoming item (id, timer generation).
+    new_messages_marker: Option<(i64, u64)>,
     /// Link waiting for “Open link?” confirmation.
     pending_url: Option<PendingLink>,
     /// Privacy warning awaiting confirmation (see [`PrivacyConfirm`]).
@@ -1647,6 +1652,7 @@ impl App {
                 image_previews_pending: HashSet::new(),
                 image_previews_failed: HashSet::new(),
                 pin_history_end: false,
+                new_messages_marker: None,
                 messages_load_gen: 0,
                 chats_refresh_gen: 0,
                 pending_url: None,
@@ -2926,6 +2932,12 @@ impl App {
             Message::ClearFocusItem { generation } => {
                 if self.focus_item_generation == generation {
                     self.focus_item = None;
+                }
+                Task::none()
+            }
+            Message::ClearNewMessagesMarker(gen) => {
+                if self.new_messages_marker.is_some_and(|(_, g)| g == gen) {
+                    self.new_messages_marker = None;
                 }
                 Task::none()
             }
@@ -5364,7 +5376,37 @@ impl App {
                         // Defer auto-receive until WarmChatMedia so first paint /
                         // scroll aren't competing with a burst of XFTP starts.
                         self.pending_auto_receives = auto_receive_from_messages(&messages);
+                        // Refresh of the open chat (not a fresh open): new
+                        // bubbles at the end scroll into view, and new incoming
+                        // ones get a short-lived "New messages" divider.
+                        let refresh = !self.pin_history_end && !self.messages.is_empty();
+                        let arrived = if refresh {
+                            new_tail(&self.messages, &messages)
+                        } else {
+                            self.new_messages_marker = None;
+                            None
+                        };
                         self.messages = messages;
+                        let follow = match arrived {
+                            Some(first_incoming) => {
+                                let mut tasks = vec![self.update(Message::ScrollToLatest)];
+                                if let Some(id) = first_incoming {
+                                    let gen = self.new_messages_marker.map_or(0, |(_, g)| g + 1);
+                                    // Keep the oldest unseen one while the label shows.
+                                    let at = self.new_messages_marker.map_or(id, |(old, _)| old);
+                                    self.new_messages_marker = Some((at, gen));
+                                    tasks.push(Task::perform(
+                                        async move {
+                                            tokio::time::sleep(NEW_MESSAGES_LABEL_FOR).await;
+                                            gen
+                                        },
+                                        Message::ClearNewMessagesMarker,
+                                    ));
+                                }
+                                Task::batch(tasks)
+                            }
+                            None => Task::none(),
+                        };
                         // With Anchor::End, relative y=0 is the newest (visual bottom).
                         let pin = if self.pin_history_end {
                             self.pin_history_end = false;
@@ -5384,7 +5426,7 @@ impl App {
                             },
                             |m| m,
                         );
-                        Task::batch([pin, defer_media])
+                        Task::batch([pin, defer_media, follow])
                     }
                     Err(err) => {
                         self.status = err;
@@ -7023,6 +7065,10 @@ impl App {
     pub(crate) fn chat_menu(&self) -> Option<&ChatContextMenu> {
         self.chat_menu.as_ref()
     }
+    pub(crate) fn new_messages_from(&self) -> Option<i64> {
+        self.new_messages_marker.map(|(id, _)| id)
+    }
+
     pub(crate) fn field_editor(&self) -> Option<&FieldEditor> {
         self.field_editor.as_ref()
     }
@@ -8350,6 +8396,25 @@ async fn connect_session(
                 .into(),
         ),
     }
+}
+
+/// How long the "New messages" divider stays after the last arrival.
+const NEW_MESSAGES_LABEL_FOR: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Bubbles appended at the end of the open chat by a refresh: `None` when
+/// nothing new arrived, else `Some(first new incoming item, if any)`.
+fn new_tail(old: &[ChatMessage], new: &[ChatMessage]) -> Option<Option<i64>> {
+    let last = old.last()?.item_id;
+    let at = new.iter().rposition(|m| m.item_id == last)?;
+    let tail = &new[at + 1..];
+    if tail.is_empty() {
+        return None;
+    }
+    Some(
+        tail.iter()
+            .find(|m| !m.outgoing && !m.is_announcement)
+            .map(|m| m.item_id),
+    )
 }
 
 async fn activate_network(session: Arc<Session>) -> Result<(), String> {

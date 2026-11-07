@@ -8,6 +8,14 @@ struct SettingsListView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
+        VStack(spacing: 0) {
+            PaneHeader(title: "Settings", background: Theme.list)
+            list
+        }
+        .background(Theme.list)
+    }
+
+    private var list: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
                 if let user = model.user {
@@ -38,7 +46,6 @@ struct SettingsListView: View {
             .padding(8)
         }
         .background(Theme.list)
-        .navigationTitle("Settings")
     }
 }
 
@@ -46,15 +53,18 @@ struct SettingsDetailView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        Page {
-            switch model.settingsPage ?? .profile {
-            case .profile: ProfilePage()
-            case .privacy: PrivacyPage()
-            case .notifications: NotificationsPage()
-            case .about: AboutPage()
+        VStack(spacing: 0) {
+            PaneHeader(title: (model.settingsPage ?? .profile).title)
+            Page {
+                switch model.settingsPage ?? .profile {
+                case .profile: ProfilePage()
+                case .privacy: PrivacyPage()
+                case .notifications: NotificationsPage()
+                case .about: AboutPage()
+                }
             }
         }
-        .navigationTitle((model.settingsPage ?? .profile).title)
+        .background(Theme.panel)
     }
 }
 

@@ -6,6 +6,7 @@ struct RootView: View {
 
     var body: some View {
         content
+            .background(WindowChrome())
             .task { await model.bootstrap() }
             .alert("Cursus", isPresented: errorShown) {
                 Button("OK", role: .cancel) { model.errorMessage = nil }

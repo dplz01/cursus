@@ -171,6 +171,96 @@ struct IconTool: View {
     }
 }
 
+/// Small pencil after an editable text (same size as the Linux one).
+struct PencilButton: View {
+    var help = "Edit"
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            CIcon("edit-3", size: 14)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(Theme.mutedText)
+        .help(help)
+    }
+}
+
+// MARK: - Pane header
+
+/// Cursus header at the top of a pane (Linux: list title, chat header,
+/// profile / settings page title): Back (also Esc), optional leading
+/// content (an avatar), title + subtitle, actions on the right; a hairline
+/// below. The window's own title bar only carries the traffic lights and
+/// "Cursus", so every pane brings its header, as on Linux.
+struct PaneHeader<Leading: View, Actions: View>: View {
+    let title: String
+    var subtitle: String?
+    var back: (() -> Void)?
+    var background: Color
+    let leading: Leading
+    let actions: Actions
+
+    init(title: String, subtitle: String? = nil, back: (() -> Void)? = nil, background: Color = Theme.panel,
+         @ViewBuilder leading: () -> Leading, @ViewBuilder actions: () -> Actions) {
+        self.title = title
+        self.subtitle = subtitle
+        self.back = back
+        self.background = background
+        self.leading = leading()
+        self.actions = actions()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                if let back = back {
+                    Button(action: back) { CIcon("back", size: 18) }
+                        .buttonStyle(IconToolStyle())
+                        .keyboardShortcut(.cancelAction)
+                        .help("Back (Esc)")
+                }
+                leading
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.cTitle)
+                        .foregroundColor(Theme.primaryText)
+                        .lineLimit(1)
+                    if let subtitle = subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.cMeta)
+                            .foregroundColor(Theme.secondaryText)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                HStack(spacing: 4) { actions }
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 56)
+            Hairline()
+        }
+        .background(background)
+    }
+}
+
+extension PaneHeader where Leading == EmptyView {
+    init(title: String, subtitle: String? = nil, back: (() -> Void)? = nil, background: Color = Theme.panel,
+         @ViewBuilder actions: () -> Actions) {
+        self.init(title: title, subtitle: subtitle, back: back, background: background,
+                  leading: { EmptyView() }, actions: actions)
+    }
+}
+
+extension PaneHeader where Leading == EmptyView, Actions == EmptyView {
+    init(title: String, subtitle: String? = nil, back: (() -> Void)? = nil, background: Color = Theme.panel) {
+        self.init(title: title, subtitle: subtitle, back: back, background: background,
+                  leading: { EmptyView() }, actions: { EmptyView() })
+    }
+}
+
 // MARK: - Discs, tiles, rows
 
 /// Round tinted disc around a glyph (card titles, tiles, nav rows).

@@ -11,6 +11,14 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            PaneHeader(title: chat.title, subtitle: subtitle, background: Theme.sidebar) {
+                Avatar(image: chat.image, name: chat.title, size: 36, kind: chat.avatarKind)
+            } actions: {
+                if !chat.isNotes && chat.pendingRequestId == nil {
+                    IconTool(icon: "info-circle", help: chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)",
+                             size: 20) { model.toggleInfo() }
+                }
+            }
             if chat.pendingRequestId != nil {
                 RequestBanner(chat: chat)
             }
@@ -42,18 +50,6 @@ struct ConversationView: View {
             }
             Hairline()
             ComposerView(chat: chat)
-        }
-        .navigationTitle(chat.title)
-        .navigationSubtitle(subtitle)
-        .toolbar {
-            ToolbarItem {
-                if !chat.isNotes && chat.pendingRequestId == nil {
-                    Button { model.toggleInfo() } label: {
-                        Image(systemName: model.showInfo ? "info.circle.fill" : "info.circle")
-                    }
-                    .help(chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)")
-                }
-            }
         }
         .onDrop(of: [UTType.fileURL], isTargeted: $dropTargeted, perform: drop)
         .overlay {

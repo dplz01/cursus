@@ -59,7 +59,9 @@ struct CursusApp: App {
     @StateObject private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup {
+        // A plain title bar: traffic lights and "Cursus"; each pane draws its
+        // own Cursus header below it.
+        WindowGroup("Cursus") {
             RootView()
                 .environmentObject(model)
                 .frame(minWidth: 760, minHeight: 500)
@@ -68,8 +70,6 @@ struct CursusApp: App {
                 .accentColor(Theme.accent)
                 .tint(Theme.accent)
         }
-        // Title and toolbar on one line, the same height on every page.
-        .windowToolbarStyle(.unified(showsTitle: true))
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat…") { model.showNewChat = true }

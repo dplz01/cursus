@@ -338,3 +338,28 @@ enum Format {
         String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
+
+
+// MARK: - Window chrome
+
+/// Configures the hosting NSWindow: a plain title bar ("Cursus" + traffic
+/// lights) without the system separator line — each pane draws its own
+/// Cursus header and hairline right below it.
+struct WindowChrome: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { configure(view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { configure(nsView.window) }
+    }
+
+    private func configure(_ window: NSWindow?) {
+        guard let window = window else { return }
+        window.title = "Cursus"
+        window.titleVisibility = .visible
+        window.titlebarSeparatorStyle = .none
+    }
+}

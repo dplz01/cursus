@@ -19,15 +19,6 @@ struct MainView: View {
             }
         }
         .background(Theme.app)
-        // One toolbar on every page: without it Settings had a bare title
-        // bar, so the window chrome (traffic lights included) jumped when
-        // switching destinations.
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button { model.showNewChat = true } label: { Image(systemName: "square.and.pencil") }
-                    .help("New chat (⌘N)")
-            }
-        }
         .sheet(isPresented: $model.showNewChat) {
             NewChatSheet().environmentObject(model)
         }
@@ -164,6 +155,19 @@ struct ChatListView: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            PaneHeader(title: model.destination.title, background: Theme.list) {
+                IconTool(icon: "plus", help: "New chat (⌘N)", size: 18) { model.showNewChat = true }
+            }
+            SearchField(text: $search)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            list
+        }
+        .background(Theme.list)
+    }
+
+    private var list: some View {
         ScrollView {
             LazyVStack(spacing: 2) {
                 ForEach(rows) { chat in
@@ -177,7 +181,6 @@ struct ChatListView: View {
             .padding(.vertical, 6)
         }
         .background(Theme.list)
-        .searchable(text: $search, placement: .toolbar, prompt: "Search")
         .overlay {
             if model.visibleChats.isEmpty {
                 VStack(spacing: 12) {
@@ -191,7 +194,34 @@ struct ChatListView: View {
                 }
             }
         }
-        .navigationTitle(model.destination.title)
+    }
+}
+
+/// Rounded search field of the chat list (Linux: the list's search box).
+struct SearchField: View {
+    @Binding var text: String
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundColor(Theme.mutedText)
+            TextField("Search", text: $text)
+                .textFieldStyle(.plain)
+                .font(.cBody)
+                .focused($focused)
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundColor(Theme.mutedText)
+                }
+                .buttonStyle(.plain)
+                .help("Clear")
+            }
+        }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 10)
+        .background(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).fill(Theme.fieldFill))
+        .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+            .strokeBorder(focused ? Theme.accent : Theme.border, lineWidth: 1))
     }
 }
 
@@ -292,12 +322,14 @@ struct ChatRow: View {
 
 struct CallsView: View {
     var body: some View {
-        VStack(spacing: 12) {
-            IconDisc(icon: "calls", size: 44)
-            Text("No calls yet.").font(.cBody).foregroundColor(Theme.secondaryText)
+        VStack(spacing: 0) {
+            PaneHeader(title: "Calls", background: Theme.list)
+            VStack(spacing: 12) {
+                IconDisc(icon: "calls", size: 44)
+                Text("No calls yet.").font(.cBody).foregroundColor(Theme.secondaryText)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.list)
-        .navigationTitle("Calls")
     }
 }

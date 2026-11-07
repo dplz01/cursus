@@ -12,9 +12,8 @@ enum InfoPage: Equatable {
 }
 
 /// Contact / group / channel page (⌘I). Fills the detail pane like the Linux
-/// contact and group pages: the same cards, in the same order. Title, Back
-/// and the favourite / mute / preferences actions sit in the native toolbar
-/// where a Mac user looks for them.
+/// contact and group pages: header with Back (Esc), title and the favourite /
+/// mute / preferences actions, then the same cards in the same order.
 struct ChatInfoView: View {
     @EnvironmentObject private var model: AppModel
     let chat: Chat
@@ -38,6 +37,28 @@ struct ChatInfoView: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            PaneHeader(title: pageTitle, subtitle: chat.title, back: back) {
+                if page == .overview {
+                    IconTool(icon: "star", help: chat.favorite ? "Remove from favorites" : "Add to favorites",
+                             active: chat.favorite, size: 18) {
+                        Task { await model.setFavorite(chat, !chat.favorite) }
+                    }
+                    IconTool(icon: "mute-notification", help: chat.muted ? "Unmute" : "Mute",
+                             active: chat.muted, size: 18) {
+                        Task { await model.setMuted(chat, !chat.muted) }
+                    }
+                    IconTool(icon: "preferences", help: pageTitleFor(.preferences), size: 18) {
+                        page = .preferences
+                    }
+                }
+            }
+            pages
+        }
+        .background(Theme.panel)
+    }
+
+    private var pages: some View {
         Page {
             switch page {
             case .overview:
@@ -62,29 +83,6 @@ struct ChatInfoView: View {
                 GroupLinkPage(chat: chat)
             }
         }
-        .navigationTitle(pageTitle)
-        .navigationSubtitle(chat.title)
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button(action: back) { Image(systemName: "chevron.left") }
-                    .help(page == .overview ? "Back to the chat" : "Back")
-            }
-            ToolbarItemGroup {
-                if page == .overview {
-                    Button { Task { await model.setFavorite(chat, !chat.favorite) } } label: {
-                        CIcon("star", size: 18, color: chat.favorite ? Theme.accent : nil)
-                    }
-                    .help(chat.favorite ? "Remove from favorites" : "Add to favorites")
-                    Button { Task { await model.setMuted(chat, !chat.muted) } } label: {
-                        CIcon("mute-notification", size: 18, color: chat.muted ? Theme.accent : nil)
-                    }
-                    .help(chat.muted ? "Unmute" : "Mute")
-                    Button { page = .preferences } label: { CIcon("preferences", size: 18) }
-                        .help(pageTitleFor(.preferences))
-                }
-            }
-        }
-        .onExitCommand(perform: back)
     }
 
     private func pageTitleFor(_ p: InfoPage) -> String {
@@ -352,14 +350,14 @@ struct EditableLine: View {
 
     var body: some View {
         if editable || !empty {
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
+            HStack(alignment: .center, spacing: 2) {
                 Text(empty ? placeholder : text)
                     .font(font)
                     .foregroundColor(empty ? Theme.mutedText : color)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 if editable {
-                    IconTool(icon: "edit-3", help: help ?? "Edit", size: 14, action: edit)
+                    PencilButton(help: help ?? "Edit", action: edit)
                 }
                 Spacer(minLength: 0)
             }

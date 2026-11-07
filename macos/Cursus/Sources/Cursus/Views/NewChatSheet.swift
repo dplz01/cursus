@@ -7,6 +7,7 @@ struct NewChatSheet: View {
         case connect = "Connect"
         case address = "My address"
         case group = "New group"
+        case channel = "New channel"
         var id: String { rawValue }
     }
 
@@ -28,6 +29,7 @@ struct NewChatSheet: View {
                 case .connect: ConnectTab(done: { dismiss() })
                 case .address: AddressTab()
                 case .group: GroupTab(done: { dismiss() })
+                case .channel: ChannelTab()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -182,6 +184,44 @@ private struct GroupTab: View {
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+}
+
+/// A channel: relay-backed, anyone with the link subscribes; only owners post.
+private struct ChannelTab: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var name = ""
+    @State private var creating = false
+    @State private var link: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Channels broadcast to subscribers through chat relays. Share the link so people can subscribe.")
+                .font(.cBody)
+                .foregroundColor(Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if let link = link {
+                Text("Channel created. Share this link:")
+                    .font(.cBodyBold)
+                    .foregroundColor(Theme.primaryText)
+                LinkBox(text: link)
+            } else {
+                CursusField(placeholder: "Channel name", text: $name)
+                HStack {
+                    Spacer()
+                    Button(creating ? "Creating…" : "Create channel") {
+                        let trimmed = name.trimmingCharacters(in: .whitespaces)
+                        creating = true
+                        Task {
+                            link = await model.createChannel(name: trimmed)
+                            creating = false
+                        }
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(creating || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
             }
         }
     }

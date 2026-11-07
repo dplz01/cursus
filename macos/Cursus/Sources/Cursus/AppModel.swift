@@ -92,6 +92,8 @@ final class AppModel: ObservableObject {
     /// Contact / group info panel beside the conversation (⌘I).
     @Published var showInfo = false
     @Published var members: [Member] = []
+    /// Chat lists (tags) for "Add to list".
+    @Published var chatTags: [ChatTag] = []
     @Published var isLoadingMessages = false
 
     /// Settings → Notifications (`@AppStorage` with these keys in the view).
@@ -311,20 +313,77 @@ final class AppModel: ObservableObject {
         await perform { try await Core.run("markUnread", ["chat": chat.ref]) }
     }
 
+    // The bridge keeps the settings a call leaves out.
     func setFavorite(_ chat: Chat, _ on: Bool) async {
+        await perform { try await Core.run("setChatSettings", ["chat": chat.ref, "favorite": on]) }
+    }
+
+    func setMuted(_ chat: Chat, _ muted: Bool) async {
+        await setNotifications(chat, muted ? "none" : "all")
+    }
+
+    /// "all", "mentions" (groups) or "none".
+    func setNotifications(_ chat: Chat, _ mode: String) async {
+        await perform { try await Core.run("setChatSettings", ["chat": chat.ref, "notifications": mode]) }
+    }
+
+    /// nil = follow your default (Settings → Privacy).
+    func setSendReceipts(_ chat: Chat, _ on: Bool?) async {
+        let value: Any = on.map { $0 as Any } ?? NSNull()
+        await perform { try await Core.run("setChatSettings", ["chat": chat.ref, "sendReceipts": value]) }
+    }
+
+    /// Delete messages on this Mac after `seconds` (nil = never / default).
+    func setChatTtl(_ chat: Chat, _ seconds: Int64?) async {
+        let value: Any = seconds.map { $0 as Any } ?? NSNull()
+        await perform { try await Core.run("setChatTtl", ["chat": chat.ref, "seconds": value]) }
+    }
+
+    /// Your setting for one contact feature ("no" / "yes" / "always").
+    func setContactFeature(_ chat: Chat, _ key: String, _ allow: String) async {
         await perform {
-            try await Core.run("setChatSettings", [
-                "chat": chat.ref, "favorite": on, "notifications": chat.notifications,
+            try await Core.run("setContactPrefs", ["chat": chat.ref, "changes": [key: allow]])
+        }
+    }
+
+    func setContactTimedTtl(_ chat: Chat, _ seconds: Int64) async {
+        await perform {
+            try await Core.run("setContactPrefs", [
+                "chat": chat.ref, "changes": ["timedMessages": "yes", "timedTtl": seconds] as [String: Any],
             ])
         }
     }
 
-    func setMuted(_ chat: Chat, _ muted: Bool) async {
-        await perform {
-            try await Core.run("setChatSettings", [
-                "chat": chat.ref, "favorite": chat.favorite, "notifications": muted ? "none" : "all",
-            ])
+    // MARK: - Lists
+
+    func loadChatTags() async {
+        do {
+            chatTags = try await Core.call("chatTags", as: [ChatTag].self)
+        } catch {
+            report(error)
         }
+    }
+
+    func createChatTag(_ text: String, adding chat: Chat) async {
+        let name = text.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        do {
+            chatTags = try await Core.call("createChatTag", ["text": name], as: [ChatTag].self)
+            if let tag = chatTags.first(where: { $0.text == name }) {
+                await setTags(chat, chat.tagIds + [tag.id])
+            }
+        } catch {
+            report(error)
+        }
+    }
+
+    func toggleTag(_ chat: Chat, _ tag: ChatTag) async {
+        let ids = chat.tagIds.contains(tag.id) ? chat.tagIds.filter { $0 != tag.id } : chat.tagIds + [tag.id]
+        await setTags(chat, ids)
+    }
+
+    private func setTags(_ chat: Chat, _ ids: [Int64]) async {
+        await perform { try await Core.run("setChatTags", ["chat": chat.ref, "tagIds": ids]) }
     }
 
     func clear(_ chat: Chat) async {
@@ -387,14 +446,128 @@ final class AppModel: ObservableObject {
         }
     }
 
-    static func roleRank(_ role: String) -> Int {
-        ["observer", "member", "moderator", "admin", "owner"].firstIndex(of: role) ?? 0
+    nonisolated static func roleRank(_ role: String) -> Int {
+        groupRoleRank(role)
     }
 
     func setAlias(_ chat: Chat, _ alias: String) async {
         let trimmed = alias.trimmingCharacters(in: .whitespaces)
         guard trimmed != (chat.alias ?? "") else { return }
         await perform { try await Core.run("setAlias", ["chat": chat.ref, "alias": trimmed]) }
+    }
+
+    // MARK: - Group settings
+
+    /// Owners: change some of name / bio / welcome message / picture
+    /// (`image: .some(nil)` removes the picture).
+    func updateGroupProfile(_ chat: Chat, name: String? = nil, shortDescr: String? = nil,
+                            welcome: String? = nil, image: String?? = nil) async {
+        var params: [String: Any] = ["groupId": chat.apiId]
+        if let name = name { params["name"] = name }
+        if let shortDescr = shortDescr { params["shortDescr"] = shortDescr }
+        if let welcome = welcome { params["welcome"] = welcome }
+        if let image = image { params["image"] = image ?? "" }
+        await perform { try await Core.run("updateGroupProfile", params) }
+    }
+
+    func setGroupFeature(_ chat: Chat, _ key: String, on: Bool, ttl: Int64? = nil) async {
+        var params: [String: Any] = ["groupId": chat.apiId, "key": key, "on": on]
+        if let ttl = ttl { params["ttl"] = ttl }
+        await perform { try await Core.run("setGroupPref", params) }
+    }
+
+    func setMemberReview(_ chat: Chat, _ on: Bool) async {
+        await perform { try await Core.run("setMemberReview", ["groupId": chat.apiId, "on": on]) }
+    }
+
+    /// The group / channel link (created the first time). Joiners get `role`.
+    /// `quiet`: no error alert (subscribers may simply have no link to show).
+    func groupLink(_ chat: Chat, role: String = "member", quiet: Bool = false) async -> ConnLink? {
+        do {
+            return try await Core.call("groupLink", ["groupId": chat.apiId, "role": role], as: ConnLink.self)
+        } catch {
+            if !quiet { report(error) }
+            return nil
+        }
+    }
+
+    func setGroupLinkRole(_ chat: Chat, _ role: String) async {
+        await perform { try await Core.run("setGroupLinkRole", ["groupId": chat.apiId, "role": role]) }
+    }
+
+    func deleteGroupLink(_ chat: Chat) async {
+        await perform { try await Core.run("deleteGroupLink", ["groupId": chat.apiId]) }
+    }
+
+    /// Contacts you can invite (direct chats that are connected contacts).
+    var invitableContacts: [Chat] {
+        let inGroup = Set(members.compactMap { $0.gone ? nil : $0.contactId })
+        return chats.filter { $0.isDirect && $0.pendingRequestId == nil && !inGroup.contains($0.apiId) }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    func addMember(_ chat: Chat, contact: Chat, role: String) async {
+        await perform {
+            try await Core.run("addMember", ["groupId": chat.apiId, "contactId": contact.apiId, "role": role])
+        }
+        await loadMembers()
+    }
+
+    func setMemberRole(_ chat: Chat, _ member: Member, _ role: String) async {
+        await perform {
+            try await Core.run("setMemberRole", ["groupId": chat.apiId, "memberId": member.id, "role": role])
+        }
+        await loadMembers()
+    }
+
+    func removeMember(_ chat: Chat, _ member: Member, withMessages: Bool) async {
+        await perform {
+            try await Core.run("removeMember", [
+                "groupId": chat.apiId, "memberId": member.id, "withMessages": withMessages,
+            ])
+        }
+        await loadMembers()
+    }
+
+    /// Moderators: block for everyone.
+    func blockMember(_ chat: Chat, _ member: Member, _ blocked: Bool) async {
+        await perform {
+            try await Core.run("blockMember", ["groupId": chat.apiId, "memberId": member.id, "blocked": blocked])
+        }
+        await loadMembers()
+    }
+
+    /// Hide / show a member's messages on this Mac.
+    func setMemberShowMessages(_ chat: Chat, _ member: Member, _ show: Bool) async {
+        await perform {
+            try await Core.run("setMemberShowMessages", ["groupId": chat.apiId, "memberId": member.id, "show": show])
+        }
+        await loadMembers()
+        if selection == chat.ref { await reloadMessages(for: chat.ref) }
+    }
+
+    func acceptMember(_ chat: Chat, _ member: Member, role: String = "member") async {
+        await perform {
+            try await Core.run("acceptMember", ["groupId": chat.apiId, "memberId": member.id, "role": role])
+        }
+        await loadMembers()
+    }
+
+    /// Open the direct chat with a member, creating it when the group
+    /// allows direct messages.
+    func messageMember(_ chat: Chat, _ member: Member) async {
+        if let id = member.contactId, chats.contains(where: { $0.ref == "@\(id)" }) {
+            openContact(id)
+            return
+        }
+        do {
+            let ref = try await Core.call("memberContact", ["groupId": chat.apiId, "memberId": member.id], as: String.self)
+            await reloadChats()
+            destination = .chats
+            selection = ref
+        } catch {
+            report(error)
+        }
     }
 
     func leaveGroup(_ chat: Chat) async {
@@ -565,6 +738,20 @@ final class AppModel: ObservableObject {
         } catch {
             report(error)
             return false
+        }
+    }
+
+    /// A channel (relay-backed group); returns its link to share.
+    func createChannel(name: String) async -> String? {
+        do {
+            let created = try await Core.call("createChannel", ["name": name], as: CreatedChannel.self)
+            await reloadChats()
+            destination = .channels
+            selection = created.ref
+            return created.link
+        } catch {
+            report(error)
+            return nil
         }
     }
 

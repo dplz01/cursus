@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 
 use cursus_core::{
-    AccountMeta, ChatSettings, NtfFilter, ReceiveOutcome, Session, SessionConfig,
+    AccountMeta, ChatId, ChatPreview, ChatSettings, ChatType, GroupProfileUpdate, NtfFilter,
+    ReceiveOutcome, Session, SessionConfig,
 };
 use serde_json::{json, Value};
 
@@ -31,6 +32,45 @@ fn chat_param(p: &Value) -> Result<cursus_core::ChatId, String> {
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+/// Current state of one chat (settings, preferences, group profile), so a
+/// change to one field can keep the others.
+fn find_chat(s: &Session, chat: &ChatId) -> Result<ChatPreview, String> {
+    let id = ChatId { scope: None, ..chat.clone() };
+    s.list_chats()
+        .map_err(err)?
+        .into_iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| "chat not found".to_string())
+}
+
+fn group_chat(s: &Session, group_id: i64) -> Result<ChatPreview, String> {
+    find_chat(s, &ChatId { chat_type: ChatType::Group, api_id: group_id, scope: None })
+}
+
+/// The group's full profile, ready to send back with some fields changed.
+fn group_profile(c: &ChatPreview) -> GroupProfileUpdate {
+    GroupProfileUpdate {
+        display_name: c.peer_profile.display_name.clone(),
+        full_name: c.peer_profile.full_name.clone(),
+        short_descr: c.peer_profile.short_descr.clone(),
+        welcome_message: c.peer_profile.description.clone(),
+        image: c.peer_profile.image.clone(),
+        group_preferences: c.group_preferences.clone(),
+        member_admission: c.member_admission.clone(),
+        public_group: c.public_group.clone(),
+    }
+}
+
+/// Group roles a member can be given (`relay` / `author` are protocol-only).
+fn role_param(p: &Value, key: &str) -> Result<String, String> {
+    let role = str_param(p, key)?;
+    if cursus_core::GROUP_ROLES.contains(&role) {
+        Ok(role.to_string())
+    } else {
+        Err(format!("unknown role `{role}`"))
+    }
 }
 
 pub fn dispatch(method: &str, p: &Value) -> Result<Value, String> {
@@ -212,13 +252,55 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             s.mark_chat_unread(&chat_param(p)?).map_err(err)?;
             Ok(Value::Null)
         }
+        // Favourite / notifications / delivery receipts; fields left out keep
+        // their current value. `sendReceipts`: true, false or null (default).
         "setChatSettings" => {
+            let chat = chat_param(p)?;
+            let current = find_chat(&s, &chat)?.settings;
             let settings = ChatSettings {
-                enable_ntfs: NtfFilter::parse(opt_str(p, "notifications").unwrap_or("all")),
-                favorite: p.get("favorite").and_then(Value::as_bool).unwrap_or(false),
-                send_rcpts: None,
+                enable_ntfs: opt_str(p, "notifications").map(NtfFilter::parse).unwrap_or(current.enable_ntfs),
+                favorite: p.get("favorite").and_then(Value::as_bool).unwrap_or(current.favorite),
+                send_rcpts: match p.get("sendReceipts") {
+                    None => current.send_rcpts,
+                    Some(v) => v.as_bool(),
+                },
             };
-            s.set_chat_settings(&chat_param(p)?, &settings).map_err(err)?;
+            s.set_chat_settings(&chat, &settings).map_err(err)?;
+            Ok(Value::Null)
+        }
+        // Delete messages on this Mac after `seconds` (null: the app default).
+        "setChatTtl" => {
+            let seconds = p.get("seconds").and_then(Value::as_i64);
+            s.set_chat_ttl(&chat_param(p)?, seconds).map_err(err)?;
+            Ok(Value::Null)
+        }
+        // `changes`: { feature: "no"|"yes"|"always", timedTtl: secs }.
+        "setContactPrefs" => {
+            let chat = chat_param(p)?;
+            if chat.chat_type != ChatType::Direct {
+                return Err("only contacts have chat preferences".into());
+            }
+            let c = find_chat(&s, &chat)?;
+            let changes = p.get("changes").cloned().unwrap_or_else(|| json!({}));
+            let prefs = crate::prefs::contact_update(
+                c.contact_preferences.as_ref(),
+                c.contact_merged_preferences.as_ref(),
+                &changes,
+            );
+            s.set_contact_prefs(chat.api_id, &prefs).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "chatTags" => Ok(Value::Array(s.list_chat_tags().map_err(err)?.iter().map(dto::tag).collect())),
+        "createChatTag" => Ok(Value::Array(
+            s.create_chat_tag(str_param(p, "text")?).map_err(err)?.iter().map(dto::tag).collect(),
+        )),
+        "setChatTags" => {
+            let ids: Vec<i64> = p
+                .get("tagIds")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_i64).collect())
+                .unwrap_or_default();
+            s.set_chat_tags(&chat_param(p)?, &ids).map_err(err)?;
             Ok(Value::Null)
         }
         "clearChat" => {
@@ -269,6 +351,109 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             Ok(Value::Null)
         }
         "createGroup" => Ok(json!(s.create_group(str_param(p, "name")?.trim()).map_err(err)?.command_ref())),
+        "createChannel" => {
+            let (chat, link) = s.create_channel(str_param(p, "name")?.trim()).map_err(err)?;
+            Ok(json!({ "ref": chat.command_ref(), "link": link }))
+        }
+        // Owners: name, bio, welcome message, picture ("" removes it).
+        "updateGroupProfile" => {
+            let gid = i64_param(p, "groupId")?;
+            let mut profile = group_profile(&group_chat(&s, gid)?);
+            if let Some(v) = opt_str(p, "name") {
+                profile.display_name = v.to_string();
+            }
+            if let Some(v) = opt_str(p, "fullName") {
+                profile.full_name = v.to_string();
+            }
+            if let Some(v) = opt_str(p, "shortDescr") {
+                profile.short_descr = v.to_string();
+            }
+            if let Some(v) = opt_str(p, "welcome") {
+                profile.welcome_message = v.to_string();
+            }
+            if let Some(v) = p.get("image") {
+                profile.image = v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
+            }
+            s.update_group_profile(gid, &profile).map_err(err)?;
+            Ok(Value::Null)
+        }
+        // Owners: one group feature on / off (`ttl` for disappearing messages).
+        "setGroupPref" => {
+            let gid = i64_param(p, "groupId")?;
+            let key = str_param(p, "key")?;
+            if !crate::prefs::GROUP_FEATURES.contains(&key) {
+                return Err(format!("unknown group feature `{key}`"));
+            }
+            let mut profile = group_profile(&group_chat(&s, gid)?);
+            profile.group_preferences = Some(crate::prefs::group_set(
+                profile.group_preferences.as_ref(),
+                key,
+                bool_param(p, "on")?,
+                p.get("ttl").and_then(Value::as_i64),
+            ));
+            s.update_group_profile(gid, &profile).map_err(err)?;
+            Ok(Value::Null)
+        }
+        // Owners: admins review new members before they join.
+        "setMemberReview" => {
+            let gid = i64_param(p, "groupId")?;
+            let mut profile = group_profile(&group_chat(&s, gid)?);
+            profile.member_admission = bool_param(p, "on")?.then(|| json!({ "review": "all" }));
+            s.update_group_profile(gid, &profile).map_err(err)?;
+            Ok(Value::Null)
+        }
+        // Group / channel link (created on first use). Joiners: member / observer.
+        "groupLink" => {
+            let role = opt_str(p, "role").filter(|r| *r == "observer").unwrap_or("member");
+            Ok(dto::link(&s.group_invite_link(i64_param(p, "groupId")?, role).map_err(err)?))
+        }
+        "setGroupLinkRole" => {
+            let role = role_param(p, "role")?;
+            s.set_group_link_role(i64_param(p, "groupId")?, &role).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "deleteGroupLink" => {
+            s.delete_group_link(i64_param(p, "groupId")?).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "addMember" => {
+            let role = role_param(p, "role")?;
+            s.add_group_member(i64_param(p, "groupId")?, i64_param(p, "contactId")?, &role).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "setMemberRole" => {
+            let role = role_param(p, "role")?;
+            s.set_group_member_role(i64_param(p, "groupId")?, i64_param(p, "memberId")?, &role).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "removeMember" => {
+            let with_messages = p.get("withMessages").and_then(Value::as_bool).unwrap_or(false);
+            s.remove_group_member(i64_param(p, "groupId")?, i64_param(p, "memberId")?, with_messages)
+                .map_err(err)?;
+            Ok(Value::Null)
+        }
+        // Moderators: block for everyone.
+        "blockMember" => {
+            s.block_group_member(i64_param(p, "groupId")?, i64_param(p, "memberId")?, bool_param(p, "blocked")?)
+                .map_err(err)?;
+            Ok(Value::Null)
+        }
+        // Anyone: hide a member's messages on this Mac only.
+        "setMemberShowMessages" => {
+            s.set_member_show_messages(i64_param(p, "groupId")?, i64_param(p, "memberId")?, bool_param(p, "show")?)
+                .map_err(err)?;
+            Ok(Value::Null)
+        }
+        "acceptMember" => {
+            let role = opt_str(p, "role").unwrap_or("member");
+            s.accept_group_member(i64_param(p, "groupId")?, i64_param(p, "memberId")?, role).map_err(err)?;
+            Ok(Value::Null)
+        }
+        // Direct chat with a member (group allows direct messages): `@contactId`.
+        "memberContact" => {
+            let contact = s.create_member_contact(i64_param(p, "groupId")?, i64_param(p, "memberId")?).map_err(err)?;
+            Ok(json!(format!("@{contact}")))
+        }
         "setEncryptLocalFiles" => {
             let on = bool_param(p, "on")?;
             s.set_encrypt_local_files(on).map_err(err)?;

@@ -81,6 +81,41 @@ fn abi_round_trip() {
     assert_eq!(g["alias"], "Mine");
     assert_eq!(g["title"], "Mine");
     assert_eq!(g["name"], "Abi group");
+    // Chat settings: each field changes alone, the others are kept.
+    let find = |dump: &mut Vec<Value>| {
+        let chats = call("listChats", json!({}), dump);
+        chats.as_array().unwrap().iter().find(|c| c["ref"] == group_ref.as_str()).cloned().unwrap()
+    };
+    call("setChatSettings", json!({ "chat": group_ref, "favorite": true }), &mut dump);
+    call("setChatSettings", json!({ "chat": group_ref, "notifications": "mentions" }), &mut dump);
+    call("setChatSettings", json!({ "chat": group_ref, "sendReceipts": false }), &mut dump);
+    let g = find(&mut dump);
+    assert_eq!(g["favorite"], true);
+    assert_eq!(g["notifications"], "mentions");
+    assert_eq!(g["sendReceipts"], false);
+    call("setChatSettings", json!({ "chat": group_ref, "sendReceipts": null }), &mut dump);
+    assert_eq!(find(&mut dump)["sendReceipts"], Value::Null, "back to the default");
+    call("setChatTtl", json!({ "chat": group_ref, "seconds": 86400 }), &mut dump);
+    assert_eq!(find(&mut dump)["chatItemTtl"], 86400);
+    call("setChatTtl", json!({ "chat": group_ref, "seconds": null }), &mut dump);
+    // Group profile and features (owner).
+    call("updateGroupProfile", json!({ "groupId": group_id, "shortDescr": "bio", "welcome": "Hi!" }), &mut dump);
+    call("setGroupPref", json!({ "groupId": group_id, "key": "reactions", "on": true }), &mut dump);
+    call("setGroupPref", json!({ "groupId": group_id, "key": "timedMessages", "on": true, "ttl": 3600 }), &mut dump);
+    call("setMemberReview", json!({ "groupId": group_id, "on": true }), &mut dump);
+    let g = find(&mut dump);
+    assert_eq!(g["shortDescr"], "bio");
+    assert_eq!(g["description"], "Hi!");
+    assert_eq!(g["name"], "Abi group", "name kept");
+    assert_eq!(g["groupPrefs"]["features"]["reactions"]["on"], true);
+    assert_eq!(g["groupPrefs"]["features"]["timedMessages"]["on"], true);
+    assert_eq!(g["groupPrefs"]["timedTtl"], 3600);
+    assert_eq!(g["memberReview"], true);
+    // Lists.
+    let tags = call("createChatTag", json!({ "text": "Work" }), &mut dump);
+    let tag_id = tags.as_array().unwrap().iter().find(|t| t["text"] == "Work").unwrap()["id"].as_i64().unwrap();
+    call("setChatTags", json!({ "chat": group_ref, "tagIds": [tag_id] }), &mut dump);
+    assert_eq!(find(&mut dump)["tagIds"], json!([tag_id]));
     call("leaveGroup", json!({ "groupId": group_id }), &mut dump);
     // Needs the network (SMP server).
     match std::env::var("CURSUS_ABI_OFFLINE") {

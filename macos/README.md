@@ -55,6 +55,23 @@ profile editor, delivery receipts, notifications, Dock badge, lock, contact /
 group info panel (⌘I: local name, favourite, mute, address, members, clear /
 leave / delete).
 
+Chat, group and channel settings (info panel, same rules as Linux):
+
+- **Every chat:** favourite, notifications (all / mentions / muted), delivery
+  receipts (default / on / off), delete messages on this Mac after…, lists.
+- **Contacts:** chat preferences — disappearing messages (+ time), delete for
+  everyone, reactions, voice, calls — with what the contact allows.
+- **Groups / channels:** owners edit name, bio, welcome message and picture,
+  switch the nine group features (+ disappearing time) and member review;
+  admins invite contacts (with a role) and manage the group link (role, delete);
+  members page: message a member, change role, accept, hide messages, block for
+  everyone, remove (optionally with their messages). New channels from the
+  New chat sheet.
+
+The preference JSON is built in the bridge (`bridge/src/prefs.rs`, unit
+tested); `cargo test -p cursus-bridge --test abi -- --ignored` exercises the
+group settings against the real core.
+
 ## Look
 
 Cursus's design system (`docs/DESIGN_SYSTEM.md`) on native macOS chrome: the
@@ -64,4 +81,5 @@ rail, cards, ghost tiles, link box and bubbles (`Views/Components.swift`).
 Window, toolbar, search, menus, sheets, alerts and context menus stay native.
 
 Next: audio calls (the Linux WebRTC engine moves into the bridge), voice
-recording, group management (invite, roles), contact preferences, chat tags.
+recording, member support chats ("chat with admins"), list filters in the
+chat list.

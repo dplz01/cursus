@@ -3,7 +3,7 @@
 //! internals without breaking the app.
 
 use cursus_core::{
-    parse_chat_info_id, ChatId, ChatMessage, ChatPreview, ChatType, ConnLink, DeletedState,
+    parse_chat_info_id, ChatId, ChatMessage, ChatPreview, ChatTag, ChatType, ConnLink, DeletedState,
     DeliveryStatus, Event, FileInfo, FileKind, FileTransferState, FormatColor, GroupChatScope,
     GroupMemberInfo, SimplexLinkKind, TextSegment, TextStyle, UserProfile,
 };
@@ -90,7 +90,22 @@ pub fn chat(c: &ChatPreview) -> Value {
         "isChannel": c.is_channel,
         "role": c.membership_role,
         "lastTs": c.last_ts,
+        // Settings shown in the info panel.
+        "sendReceipts": c.settings.send_rcpts,
+        "chatItemTtl": c.chat_item_ttl,
+        "tagIds": c.tag_ids,
+        "contactPrefs": (c.id.chat_type == ChatType::Direct).then(|| {
+            crate::prefs::contact_view(c.contact_preferences.as_ref(), c.contact_merged_preferences.as_ref())
+        }),
+        "groupPrefs": (c.id.chat_type == ChatType::Group)
+            .then(|| crate::prefs::group_view(c.group_preferences.as_ref())),
+        "memberReview": c.member_admission.as_ref().and_then(|m| m.get("review")).is_some(),
+        "membersRequireAttention": c.members_require_attention,
     })
+}
+
+pub fn tag(t: &ChatTag) -> Value {
+    json!({ "id": t.id, "text": t.text, "emoji": t.emoji })
 }
 
 pub fn member(m: &GroupMemberInfo) -> Value {
@@ -105,6 +120,7 @@ pub fn member(m: &GroupMemberInfo) -> Value {
         "shortDescr": m.short_descr,
         "isMe": m.is_me,
         "blocked": m.blocked_by_admin,
+        "showMessages": m.show_messages,
     })
 }
 

@@ -55,6 +55,9 @@ Default servers and default chat options are used; no custom relay UI in milesto
 - Command string builders and JSON decoding into domain models
 - In-memory application state (users, chats, open conversation, send/receive errors)
 - File attachment helpers that call into core file APIs when needed
+- Chat rules every app shares — e.g. `preferences` (what you and a contact
+  allow, group features, the JSON sent back). Apps keep only how these are
+  shown (labels, menus); never copy such a rule into an app or a bridge
 - Future: UniFFI surface for Android/iOS
 
 ### Platform-specific

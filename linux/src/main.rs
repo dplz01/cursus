@@ -338,69 +338,20 @@ pub struct OwnProfileDraft {
     pub dirty: bool,
 }
 
-/// Contact preference allow level (`FeatureAllowed` in libsimplex).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FeatureAllow {
-    No,
-    Yes,
-    Always,
+/// Contact feature level — the shared rules live in `cursus_core::preferences`.
+pub use cursus_core::FeatureAllow;
+
+/// How this app labels a contact feature level (presentation only).
+pub trait FeatureAllowLabel {
+    const FULL_OPTIONS: [FeatureAllow; 3] = [FeatureAllow::No, FeatureAllow::Yes, FeatureAllow::Always];
+    fn label(self) -> &'static str;
 }
 
-impl std::fmt::Display for FeatureAllow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.label())
-    }
-}
-
-impl FeatureAllow {
-    pub fn label(self) -> &'static str {
+impl FeatureAllowLabel for FeatureAllow {
+    fn label(self) -> &'static str {
         match self {
             Self::No => "off",
             Self::Yes => "on",
-            Self::Always => "always",
-        }
-    }
-
-    /// Disappearing-messages chip: SimpleX has no “always” for one-way device
-    /// wipe — that third state is local chatItemTTL, shown as “for me”.
-    pub fn timed_label(self) -> &'static str {
-        match self {
-            Self::No => "off",
-            Self::Yes => "on",
-            Self::Always => "for me",
-        }
-    }
-
-    pub const TIMED_OPTIONS: [Self; 3] = [Self::No, Self::Yes, Self::Always];
-    pub const BINARY_OPTIONS: [Self; 2] = [Self::No, Self::Yes];
-    pub const FULL_OPTIONS: [Self; 3] = [Self::No, Self::Yes, Self::Always];
-
-    pub fn is_on(self) -> bool {
-        !matches!(self, Self::No)
-    }
-
-    /// Cycle `no` → `yes` → `always` → `no`.
-    pub fn cycle(self) -> Self {
-        match self {
-            Self::No => Self::Yes,
-            Self::Yes => Self::Always,
-            Self::Always => Self::No,
-        }
-    }
-
-    /// Parse the API value (`yes` / `always` / anything else → `No`).
-    pub fn from_api(s: &str) -> Self {
-        match s.to_ascii_lowercase().as_str() {
-            "yes" | "on" | "true" => Self::Yes,
-            "always" | "for me" | "forme" => Self::Always,
-            _ => Self::No,
-        }
-    }
-
-    pub fn as_api(self) -> &'static str {
-        match self {
-            Self::No => "no",
-            Self::Yes => "yes",
             Self::Always => "always",
         }
     }
@@ -4410,33 +4361,12 @@ impl App {
             Message::SetGroupTimedTtl(secs) => {
                 self.pref_menu = None;
                 if let Some(g) = self.group_settings.as_mut() {
-                    match secs {
-                        None => {
-                            set_group_pref(&mut g.group_preferences, "timedMessages", false);
-                        }
-                        Some(secs) => {
-                            set_group_pref(&mut g.group_preferences, "timedMessages", true);
-                            let obj = g
-                                .group_preferences
-                                .get_or_insert_with(|| serde_json::json!({}))
-                                .as_object_mut();
-                            if let Some(obj) = obj {
-                                let entry = obj
-                                    .entry("timedMessages".to_string())
-                                    .or_insert_with(|| serde_json::json!({ "enable": "on" }));
-                                if let Some(map) = entry.as_object_mut() {
-                                    map.insert(
-                                        "enable".into(),
-                                        serde_json::Value::String("on".into()),
-                                    );
-                                    map.insert(
-                                        "ttl".into(),
-                                        serde_json::Value::Number(secs.max(1).into()),
-                                    );
-                                }
-                            }
-                        }
-                    }
+                    cursus_core::preferences::set_group_feature(
+                        &mut g.group_preferences,
+                        "timedMessages",
+                        secs.is_some(),
+                        secs,
+                    );
                     g.dirty = true;
                 }
                 self.update(Message::SaveGroupPreferences)
@@ -7946,8 +7876,14 @@ impl App {
     pub(crate) fn selected_full_delete_for_user(&self) -> bool {
         self.selected
             .and_then(|i| self.chats.get(i))
-            .and_then(|c| c.contact_merged_preferences.as_ref())
-            .map(|m| merged_enabled(Some(m), "fullDelete", true))
+            .map(|c| {
+                cursus_core::preferences::contact_feature(
+                    c.contact_preferences.as_ref(),
+                    c.contact_merged_preferences.as_ref(),
+                    "fullDelete",
+                )
+                .enabled_for_user
+            })
             .unwrap_or(false)
     }
 
@@ -9398,51 +9334,10 @@ fn cycle_link_joiner_role(current: &str) -> String {
 }
 
 fn set_group_pref(prefs: &mut Option<serde_json::Value>, key: &str, turn_on: bool) {
-    let obj = prefs
-        .get_or_insert_with(|| serde_json::json!({}))
-        .as_object_mut();
-    let Some(obj) = obj else {
-        return;
-    };
-    let role_pref = matches!(
-        key,
-        "directMessages" | "voice" | "files" | "simplexLinks" | "sessions"
-    );
-    let entry = obj.entry(key.to_string()).or_insert_with(|| {
-        if role_pref {
-            serde_json::json!({ "enable": "off", "role": "member" })
-        } else {
-            serde_json::json!({ "enable": "off" })
-        }
-    });
-    if let Some(map) = entry.as_object_mut() {
-        map.insert(
-            "enable".into(),
-            serde_json::Value::String(if turn_on { "on" } else { "off" }.into()),
-        );
-        if role_pref && !map.contains_key("role") {
-            map.insert(
-                "role".into(),
-                serde_json::Value::String("member".into()),
-            );
-        }
-        // Disappearing messages need a TTL when enabled (core uses `ttl`).
-        if key == "timedMessages" {
-            if turn_on {
-                if map.get("ttl").and_then(|v| v.as_i64()).unwrap_or(0) <= 0 {
-                    map.insert(
-                        "ttl".into(),
-                        serde_json::Value::Number(DEFAULT_TIMED_TTL_SECS.into()),
-                    );
-                }
-            } else {
-                map.insert("ttl".into(), serde_json::Value::Null);
-            }
-        }
-    }
+    cursus_core::preferences::set_group_feature(prefs, key, turn_on, None);
 }
 
-pub(crate) const DEFAULT_TIMED_TTL_SECS: i64 = 86_400; // 1 day
+pub(crate) use cursus_core::preferences::DEFAULT_TIMED_TTL_SECS;
 
 pub(crate) fn format_timed_ttl(secs: i64) -> String {
     match secs {
@@ -9460,101 +9355,36 @@ pub(crate) fn format_timed_ttl(secs: i64) -> String {
     }
 }
 
-fn contact_pref_allow(prefs: Option<&serde_json::Value>, key: &str) -> FeatureAllow {
-    prefs
-        .and_then(|p| p.get(key))
-        .and_then(|v| v.get("allow"))
-        .and_then(|v| v.as_str())
-        .map(FeatureAllow::from_api)
-        .unwrap_or(FeatureAllow::No)
-}
-
-fn merged_user_allow(merged: Option<&serde_json::Value>, key: &str) -> Option<FeatureAllow> {
-    let up = merged?.get(key)?.get("userPreference")?;
-    up.get("preference")
-        .and_then(|v| v.get("allow"))
-        .and_then(|v| v.as_str())
-        .map(FeatureAllow::from_api)
-}
-
-fn feature_you_allow(
-    prefs: Option<&serde_json::Value>,
-    merged: Option<&serde_json::Value>,
-    key: &str,
-    default: FeatureAllow,
-) -> FeatureAllow {
-    if prefs.and_then(|p| p.get(key)).is_some() {
-        return contact_pref_allow(prefs, key);
-    }
-    merged_user_allow(merged, key).unwrap_or(default)
-}
-
-fn merged_contact_allow(merged: Option<&serde_json::Value>, key: &str) -> FeatureAllow {
-    merged
-        .and_then(|p| p.get(key))
-        .and_then(|v| v.get("contactPreference"))
-        .and_then(|v| v.get("allow"))
-        .and_then(|v| v.as_str())
-        .map(FeatureAllow::from_api)
-        .unwrap_or(FeatureAllow::No)
-}
-
-fn merged_enabled(merged: Option<&serde_json::Value>, key: &str, for_user: bool) -> bool {
-    let field = if for_user { "forUser" } else { "forContact" };
-    merged
-        .and_then(|p| p.get(key))
-        .and_then(|v| v.get("enabled"))
-        .and_then(|v| v.get(field))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-}
-
-fn contact_pref_ttl(
-    prefs: Option<&serde_json::Value>,
-    merged: Option<&serde_json::Value>,
-) -> Option<i64> {
-    prefs
-        .and_then(|p| p.get("timedMessages"))
-        .and_then(|v| v.get("ttl"))
-        .and_then(|v| v.as_i64())
-        .filter(|n| *n > 0)
-        .or_else(|| {
-            merged
-                .and_then(|p| p.get("timedMessages"))
-                .and_then(|v| v.get("userPreference"))
-                .and_then(|v| v.get("preference"))
-                .and_then(|v| v.get("ttl"))
-                .and_then(|v| v.as_i64())
-                .filter(|n| *n > 0)
-        })
-}
-
 fn fill_contact_feature_overlay(overlay: &mut ContactProfileOverlay, chat: &ChatPreview) {
+    use cursus_core::preferences::{contact_feature, contact_timed_ttl};
     let prefs = chat.contact_preferences.as_ref();
     let merged = chat.contact_merged_preferences.as_ref();
-    // Defaults when neither contact nor merged prefs specify a value.
-    overlay.timed_allow =
-        feature_you_allow(prefs, merged, "timedMessages", FeatureAllow::No);
-    overlay.timed_contact_allows = merged_contact_allow(merged, "timedMessages");
-    overlay.timed_ttl_secs = contact_pref_ttl(prefs, merged).unwrap_or(DEFAULT_TIMED_TTL_SECS);
+    let feature = |key| contact_feature(prefs, merged, key);
+    let timed = feature("timedMessages");
+    overlay.timed_allow = timed.mine;
+    overlay.timed_contact_allows = timed.contact;
+    overlay.timed_ttl_secs = contact_timed_ttl(prefs, merged).unwrap_or(DEFAULT_TIMED_TTL_SECS);
     overlay.chat_item_ttl = chat.chat_item_ttl;
     overlay.send_rcpts = chat.settings.send_rcpts;
-    // Local wipe TTL takes the “for me” chip even if negotiated timed is off.
+    // The local wipe TTL is the "for me" (Always) choice of this UI, shown
+    // even when the negotiated timer is off.
     if chat.chat_item_ttl.is_some() && !matches!(overlay.timed_allow, FeatureAllow::Yes) {
         overlay.timed_allow = FeatureAllow::Always;
     }
-    overlay.full_delete_allow =
-        feature_you_allow(prefs, merged, "fullDelete", FeatureAllow::No);
-    overlay.full_delete_contact_allows = merged_contact_allow(merged, "fullDelete");
-    overlay.full_delete_for_user = merged_enabled(merged, "fullDelete", true);
-    overlay.full_delete_for_contact = merged_enabled(merged, "fullDelete", false);
-    overlay.reactions_allow =
-        feature_you_allow(prefs, merged, "reactions", FeatureAllow::Yes);
-    overlay.reactions_contact_allows = merged_contact_allow(merged, "reactions");
-    overlay.voice_allow = feature_you_allow(prefs, merged, "voice", FeatureAllow::Yes);
-    overlay.voice_contact_allows = merged_contact_allow(merged, "voice");
-    overlay.calls_allow = feature_you_allow(prefs, merged, "calls", FeatureAllow::Yes);
-    overlay.calls_contact_allows = merged_contact_allow(merged, "calls");
+    let full_delete = feature("fullDelete");
+    overlay.full_delete_allow = full_delete.mine;
+    overlay.full_delete_contact_allows = full_delete.contact;
+    overlay.full_delete_for_user = full_delete.enabled_for_user;
+    overlay.full_delete_for_contact = full_delete.enabled_for_contact;
+    let reactions = feature("reactions");
+    overlay.reactions_allow = reactions.mine;
+    overlay.reactions_contact_allows = reactions.contact;
+    let voice = feature("voice");
+    overlay.voice_allow = voice.mine;
+    overlay.voice_contact_allows = voice.contact;
+    let calls = feature("calls");
+    overlay.calls_allow = calls.mine;
+    overlay.calls_contact_allows = calls.contact;
     overlay.contact_preferences = chat.contact_preferences.clone();
 }
 
@@ -9567,54 +9397,28 @@ fn build_contact_prefs_json(
     voice: FeatureAllow,
     calls: FeatureAllow,
 ) -> serde_json::Value {
-    let mut prefs = existing.cloned().unwrap_or_else(|| serde_json::json!({}));
-    // Always (= “for me”) is chatItemTTL, not FeatureAllowed::always on the wire.
-    let timed = match timed_allow {
-        FeatureAllow::Yes => serde_json::json!({
-            "allow": "yes",
-            "ttl": timed_ttl_secs.max(1),
-        }),
-        FeatureAllow::Always | FeatureAllow::No => serde_json::json!({ "allow": "no" }),
-    };
-    if let Some(obj) = prefs.as_object_mut() {
-        obj.insert("timedMessages".into(), timed);
-        obj.insert(
-            "fullDelete".into(),
-            serde_json::json!({ "allow": full_delete.as_api() }),
-        );
-        obj.insert(
-            "reactions".into(),
-            serde_json::json!({ "allow": reactions.as_api() }),
-        );
-        obj.insert(
-            "voice".into(),
-            serde_json::json!({ "allow": voice.as_api() }),
-        );
-        obj.insert(
-            "calls".into(),
-            serde_json::json!({ "allow": calls.as_api() }),
-        );
-    }
-    prefs
+    // "For me" (Always) is the local chat TTL here, not a negotiated timer.
+    let timed = if timed_allow == FeatureAllow::Yes { FeatureAllow::Yes } else { FeatureAllow::No };
+    cursus_core::preferences::contact_preferences_json(
+        existing,
+        &[
+            ("timedMessages", timed),
+            ("fullDelete", full_delete),
+            ("reactions", reactions),
+            ("voice", voice),
+            ("calls", calls),
+        ],
+        timed_ttl_secs,
+    )
 }
 
 pub(crate) fn group_pref_on(prefs: Option<&serde_json::Value>, key: &str) -> bool {
-    prefs
-        .and_then(|p| p.get(key))
-        .and_then(|v| v.get("enable"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.eq_ignore_ascii_case("on"))
-        .unwrap_or(false)
+    cursus_core::preferences::group_feature_on(prefs, key)
 }
 
 /// Member support defaults to on in SimpleX when the pref is omitted.
 pub(crate) fn group_support_allowed(prefs: Option<&serde_json::Value>) -> bool {
-    prefs
-        .and_then(|p| p.get("support"))
-        .and_then(|v| v.get("enable"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.eq_ignore_ascii_case("on"))
-        .unwrap_or(true)
+    cursus_core::preferences::group_feature_on(prefs, "support")
 }
 
 /// Invite outstanding / connecting — clock glyph, no Accept yet.

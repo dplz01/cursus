@@ -27,6 +27,7 @@ use crate::icons::{self, NavIcon};
 use crate::layout::{Density, LayoutMode};
 use crate::media;
 use crate::theme;
+use crate::FeatureAllowLabel as _;
 use crate::{
     can_edit_group_profile, can_manage_members, can_moderate, group_pref_on, group_support_allowed,
     member_status_is_pending, member_status_shows_pending_icon, App, AuthScreen, ChatMenuAction,

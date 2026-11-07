@@ -109,6 +109,7 @@ Member role / action menus:
 | `user-member.svg` | same as `user-alt-1.svg` | Dazzle Line Icons / Dazzle UI | **CC Attribution** |
 | `user-plus-alt-1.svg` | [svgrepo/532381](https://www.svgrepo.com/svg/532381/user-plus-alt-1) | Dazzle Line Icons / Dazzle UI | **CC Attribution** |
 | `system-pending-line.svg` | [svgrepo/486094](https://www.svgrepo.com/svg/486094/system-pending-line) | Bicons Sharp UI Icons / SVG Repo | **CC0** |
+| `scripture-scroll.svg` | [allsvgicons.com](https://allsvgicons.com/search/?q=parchment) | Appic Marketing | **MIT License** |
 
 Suggested credit line (also shown in Settings):
 

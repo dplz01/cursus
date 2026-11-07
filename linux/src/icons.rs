@@ -178,6 +178,25 @@ pub fn edit_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     )
 }
 
+/// Parchment scroll for the group welcome message — Appic Marketing (MIT,
+/// via allsvgicons.com).
+pub fn scroll_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg_handle!("../assets/icons/scripture-scroll.svg"),
+        color,
+        size,
+    )
+}
+
+/// Save check in the text editor sheet (Coolicons / CC Attribution).
+pub fn check_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg_handle!("../assets/icons/check.svg"),
+        color,
+        size,
+    )
+}
+
 /// Reply — Solar Outline Icons / Solar Icons (CC Attribution via SVG Repo).
 pub fn reply_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(

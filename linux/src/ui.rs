@@ -269,6 +269,9 @@ pub fn shell(app: &App) -> Element<'_, Message> {
     if app.pref_menu().is_some() {
         stack = stack.push(pref_menu_overlay(app));
     }
+    if app.field_editor().is_some() {
+        stack = stack.push(field_editor_overlay(app));
+    }
     stack.into()
 }
 
@@ -2229,18 +2232,16 @@ fn message_bubble<'a>(
         }
     } else if emoji_only {
         body = body.push(bubble_content_with_time(
-            emoji_message_text(&msg.text),
+            emoji_message_text(&msg.text, Some(stamp_reserve_span(msg, d, emoji_text_size(&msg.text)))),
             msg,
             d,
-            bubble_text_content_max(app),
         ));
         voice_owns_meta = true;
     } else {
         body = body.push(bubble_content_with_time(
-            message_text_content(app, msg, d),
+            message_text_content(app, msg, d, Some(stamp_reserve_span(msg, d, d.body))),
             msg,
             d,
-            bubble_text_content_max(app),
         ));
         voice_owns_meta = true;
     }
@@ -2316,6 +2317,7 @@ fn message_bubble<'a>(
         });
 
     const MEMBER_AVATAR: f32 = 32.0;
+    const MEMBER_AVATAR_GAP: f32 = 8.0;
     let group_incoming =
         !msg.outgoing && msg.sender.is_some() && app.selected_shows_member_headers();
     let channel_incoming = !msg.outgoing && app.selected_is_channel();
@@ -2346,7 +2348,7 @@ fn message_bubble<'a>(
         }
         bubble_col = bubble_col.push(bubble);
         row![avatar, bubble_col]
-            .spacing(8)
+            .spacing(MEMBER_AVATAR_GAP)
             .align_y(Alignment::End)
             .into()
     } else if channel_incoming {
@@ -2376,7 +2378,7 @@ fn message_bubble<'a>(
         }
         bubble_col = bubble_col.push(bubble);
         row![avatar, bubble_col]
-            .spacing(8)
+            .spacing(MEMBER_AVATAR_GAP)
             .align_y(Alignment::End)
             .into()
     } else {
@@ -2405,7 +2407,17 @@ fn message_bubble<'a>(
         .push(bubble_area);
 
     if !show_as_deleted && !msg.reactions.is_empty() {
-        col = col.push(reaction_chips(app, msg, d));
+        // Group / channel bubbles sit right of the sender's avatar: indent the
+        // chips by that column so they line up under the bubble, not the avatar.
+        let gutter = if group_incoming || channel_incoming {
+            MEMBER_AVATAR + MEMBER_AVATAR_GAP
+        } else {
+            0.0
+        };
+        col = col.push(container(reaction_chips(app, msg, d)).padding(Padding {
+            left: gutter,
+            ..Padding::ZERO
+        }));
     }
 
     col.into()
@@ -2591,26 +2603,42 @@ fn reaction_picker_row(item_id: i64, d: Density, hover: bool) -> Element<'static
     row.into()
 }
 
-fn emoji_message_text(raw: &str) -> Element<'static, Message> {
+/// Big emoji; `reserve` is the trailing stamp room (see [`stamp_reserve`]).
+fn emoji_message_text(
+    raw: &str,
+    reserve: Option<iced::widget::text::Span<'static, Message>>,
+) -> Element<'static, Message> {
     let s = raw.trim().to_string();
-    let n = s.graphemes(true).count();
-    let size: f32 = if n <= LARGE_EMOJI_MAX { 48.0 } else { 36.0 };
-    emoji_glyph(s)
+    let size = emoji_text_size(&s);
+    let Some(reserve) = reserve else {
+        return emoji_glyph(s).size(size).color(Color::WHITE).into();
+    };
+    rich_text(vec![span(s).font(EMOJI_FONT).size(size), reserve])
         .size(size)
         .color(Color::WHITE)
+        .wrapping(Wrapping::WordOrGlyph)
         .into()
 }
 
-fn message_text_content(app: &App, msg: &ChatMessage, d: Density) -> Element<'static, Message> {
-    if msg.segments.is_empty() {
+/// Formatted message body; `reserve` is the trailing stamp room.
+fn message_text_content(
+    app: &App,
+    msg: &ChatMessage,
+    d: Density,
+    reserve: Option<iced::widget::text::Span<'static, Message>>,
+) -> Element<'static, Message> {
+    if msg.segments.is_empty() && reserve.is_none() {
         return txt(msg.text.clone())
             .size(d.body)
             .color(theme::t().text_primary)
             .wrapping(Wrapping::WordOrGlyph)
             .into();
     }
+    if msg.segments.is_empty() {
+        return plain_text_body(&msg.text, d, reserve);
+    }
     let item_id = msg.item_id;
-    let spans: Vec<_> = msg
+    let mut spans: Vec<_> = msg
         .segments
         .iter()
         .enumerate()
@@ -2619,6 +2647,7 @@ fn message_text_content(app: &App, msg: &ChatMessage, d: Density) -> Element<'st
             styled_span(seg, d.body, item_id, index, revealed)
         })
         .collect();
+    spans.extend(reserve);
     let rich = rich_text(spans)
         .on_link_click(|msg: Message| msg)
         .size(d.body)
@@ -2629,6 +2658,21 @@ fn message_text_content(app: &App, msg: &ChatMessage, d: Density) -> Element<'st
     } else {
         rich.into()
     }
+}
+
+/// Unformatted body followed by the stamp reservation.
+fn plain_text_body(
+    raw: &str,
+    d: Density,
+    reserve: Option<iced::widget::text::Span<'static, Message>>,
+) -> Element<'static, Message> {
+    let mut spans = vec![span(raw.to_string()).color(theme::t().text_primary)];
+    spans.extend(reserve);
+    rich_text(spans)
+        .size(d.body)
+        .color(theme::t().text_primary)
+        .wrapping(Wrapping::WordOrGlyph)
+        .into()
 }
 
 fn styled_span(
@@ -2785,149 +2829,86 @@ fn voice_draft_bar(
 
 /// Soft cap for bubble body text on wide desktops.
 const BUBBLE_TEXT_MAX: f32 = 420.0;
-/// Horizontal padding inside a normal text bubble (`Padding::from([8, 12])`).
-const BUBBLE_PAD_X: f32 = 12.0;
 
 /// Compact height for time + ticks.
 fn bubble_time_height(d: Density) -> f32 {
     d.meta + 2.0
 }
 
-/// Gap between last text glyphs and the time row.
-const STAMP_GAP: f32 = 6.0;
-/// Extra inset so a floating stamp stays inside the bubble padding.
-const STAMP_EDGE_PAD: f32 = 2.0;
 /// Matches `bubble_time_meta` row spacing.
 const STAMP_INNER_GAP: f32 = 3.0;
 
-/// Actual text column width for the current window (not the desktop soft-cap).
+/// Room for one stamp icon (pencil / receipt) plus its gap, in en spaces
+/// (0.5em of the meta size each): ≥ `icon + STAMP_INNER_GAP` for every meta.
+const STAMP_ICON_SPACES: &str = "\u{2002}\u{2002}\u{2002}";
+
+/// Invisible tail appended to the message text that reserves the stamp's
+/// room, Telegram-style: the text shaper measures it with the real fonts
+/// (emoji included) and wraps it onto a new line when the last line is too
+/// full — then the stamp, pinned bottom-right, lands on that empty line.
 ///
-/// Using a fixed 420 made short mobile bubbles keep the stamp inline even when
-/// `last_line + stamp` already exceeded the real bubble — the stamp then spilled
-/// onto the dark chat background and looked like a dark “chip”.
-fn bubble_text_content_max(app: &App) -> f32 {
-    let d = app.density();
-    let win = app.window_width().max(1.0);
-    let history_pad = d.pad * 2.0;
-    let bubble_chrome = BUBBLE_PAD_X * 2.0;
-    // Small slack only — previous 8px stacked with padded stamp estimates and
-    // forced short lines like "sei un coglione" onto two rows.
-    let slack = 2.0;
-    (win - history_pad - bubble_chrome - slack).clamp(96.0, BUBBLE_TEXT_MAX)
-}
-
-/// Intrinsic width of the stamp row (edit + time + receipt), no outer gap.
-fn estimate_stamp_width(d: Density, outgoing: bool, edited: bool) -> f32 {
-    // ~8 glyphs ("11:15 AM") at ~0.55×meta — was 6.2×meta (~0.78em) and far too wide.
-    let time_w = d.meta * 4.4;
-    let icon = (d.meta * 0.85).clamp(10.0, 13.0);
-    let mut w = time_w;
-    if edited {
-        w += icon + STAMP_INNER_GAP;
+/// Width estimates used to decide this before: they ignored the group
+/// avatar column and counted emoji as half-width letters, so the time and
+/// receipt were painted past the bubble edge.
+///
+/// The leading normal space is the only break point; the rest is glued
+/// with no-break spaces so the reservation never splits across lines.
+fn stamp_reserve(msg: &ChatMessage) -> String {
+    let mut out = String::from(" \u{00A0}\u{2009}");
+    if msg.edited {
+        out.push_str(STAMP_ICON_SPACES);
     }
-    if outgoing {
-        w += STAMP_INNER_GAP + icon;
+    if let Some(label) = format_bubble_time(msg.created_at.as_deref()) {
+        out.push_str(&label.replace(' ', "\u{00A0}"));
     }
-    w
+    if msg.outgoing {
+        out.push_str(STAMP_ICON_SPACES);
+    }
+    out
 }
 
-fn estimate_last_line_width(text: &str, d: Density) -> f32 {
-    let last = text.lines().last().unwrap_or(text).trim_end();
-    // ~0.5em average Latin advance; 0.55 was stacking pessimism with the stamp.
-    let col_w = (d.body * 0.5).max(6.0);
-    last.chars().count() as f32 * col_w
-}
-
-fn count_visual_lines(text: &str, d: Density, content_max: f32) -> usize {
-    let col_w = (d.body * 0.5).max(6.0);
-    let hard = text.lines().count().max(1);
-    let soft: usize = text
-        .lines()
-        .map(|line| {
-            let w = line.chars().count() as f32 * col_w;
-            ((w / content_max.max(1.0)).ceil() as usize).max(1)
-        })
-        .sum();
-    hard.max(soft).max(1)
-}
-
-/// True when the last line plus stamp still fits in the text column.
-fn should_keep_timestamp_inline(
-    text: &str,
+/// The reservation as a transparent span at the stamp's text size, keeping
+/// the line height of the body (`body_size`) so the last line doesn't shrink.
+fn stamp_reserve_span(
+    msg: &ChatMessage,
     d: Density,
-    outgoing: bool,
-    edited: bool,
-    content_max: f32,
-) -> bool {
-    let stamp_w = estimate_stamp_width(d, outgoing, edited);
-    let last_w = estimate_last_line_width(text, d);
-    // Add the row gap once (not baked into stamp_w). Tiny epsilon for rounding.
-    last_w + STAMP_GAP + stamp_w <= content_max + 2.0
+    body_size: f32,
+) -> iced::widget::text::Span<'static, Message> {
+    let line = iced::widget::text::LineHeight::default().to_absolute(body_size.into());
+    span(stamp_reserve(msg))
+        .size(d.meta)
+        .line_height(line)
+        .color(Color::TRANSPARENT)
 }
 
-/// Body + time/receipt: no chip background — stamp sits on the bubble face.
-///
-/// Inline (over / near) when the last line has room including gaps; else stack
-/// underneath.
+/// Size `emoji_message_text` draws `raw` at.
+fn emoji_text_size(raw: &str) -> f32 {
+    if raw.trim().graphemes(true).count() <= LARGE_EMOJI_MAX {
+        48.0
+    } else {
+        36.0
+    }
+}
+
+/// Body (ending in [`stamp_reserve_span`]) with time/receipt pinned to its
+/// bottom-right corner — no chip background, the stamp sits on the bubble.
+/// The body wraps at the width the bubble really gets, so neither can stick
+/// out of it.
 fn bubble_content_with_time(
     content: Element<'static, Message>,
     msg: &ChatMessage,
     d: Density,
-    content_max: f32,
 ) -> Element<'static, Message> {
-    let stamp = bubble_time_meta(msg, d);
-    let stamp_w = estimate_stamp_width(d, msg.outgoing, msg.edited);
-    let inline = should_keep_timestamp_inline(&msg.text, d, msg.outgoing, msg.edited, content_max);
-    let multi = count_visual_lines(&msg.text, d, content_max) > 1;
-    if inline {
-        if multi {
-            // Float over the last line (bare stamp, no pill background).
-            container(
-                Stack::new()
-                    .push(container(content).max_width(content_max))
-                    .push(
-                        container(stamp)
-                            .width(Length::Fill)
-                            .height(Length::Fill)
-                            .align_x(Alignment::End)
-                            .align_y(Alignment::End)
-                            .padding(Padding {
-                                top: 0.0,
-                                right: STAMP_EDGE_PAD,
-                                bottom: 0.0,
-                                left: 0.0,
-                            }),
-                    ),
-            )
-            .into()
-        } else {
-            // Single line: reserve stamp + gap so text cannot shove it past the
-            // bubble edge (max_width on the row alone does not shrink children).
-            let text_max = (content_max - stamp_w - STAMP_GAP).max(40.0);
-            container(
-                row![container(content).max_width(text_max), stamp]
-                    .spacing(STAMP_GAP)
-                    .align_y(Alignment::End),
-            )
-            .max_width(content_max)
-            .into()
-        }
-    } else {
-        column![
-            container(content).max_width(content_max),
-            container(stamp)
+    Stack::new()
+        .push(container(content).max_width(BUBBLE_TEXT_MAX))
+        .push(
+            container(bubble_time_meta(msg, d))
                 .width(Length::Fill)
+                .height(Length::Fill)
                 .align_x(Alignment::End)
-                .padding(Padding {
-                    top: 0.0,
-                    right: STAMP_EDGE_PAD,
-                    bottom: 0.0,
-                    left: 0.0,
-                }),
-        ]
-        .spacing(2)
+                .align_y(Alignment::End),
+        )
         .into()
-    }
 }
 
 /// Telegram-style trailing time (+ edited pencil + receipt for outgoing).
@@ -2935,7 +2916,7 @@ fn bubble_time_meta(msg: &ChatMessage, d: Density) -> Element<'static, Message> 
     let time_h = bubble_time_height(d);
     let icon_size = (d.meta * 0.85).clamp(10.0, 13.0);
     let mut row = Row::new()
-        .spacing(3)
+        .spacing(STAMP_INNER_GAP)
         .height(Length::Fixed(time_h))
         .align_y(Alignment::Center);
     let meta = if msg.outgoing {
@@ -3854,32 +3835,32 @@ fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<
                     hover,
                 )),
                 vec![
-                    profile_name_field(
-                        "edit-field-OwnProfileDisplayName",
+                    editable_line(
                         &draft.fields.display_name,
                         "Display name",
-                        Message::OwnProfileDisplayName,
-                        Message::SaveOwnProfile,
+                        LineStyle::Name,
+                        crate::EditField::OwnName,
                         d,
+                        hover,
                     ),
-                    profile_name_field(
-                        "edit-field-OwnProfileBio",
+                    editable_line(
                         &draft.fields.short_descr,
-                        "Bio",
-                        Message::OwnProfileBio,
-                        Message::SaveOwnProfile,
+                        "Add a bio",
+                        LineStyle::Sub,
+                        crate::EditField::OwnBio,
                         d,
+                        hover,
                     ),
                 ],
             ));
             col = col.push(pref_section("Description", false, d));
-            col = col.push(profile_name_field(
-                "edit-field-OwnProfileDescription",
+            col = col.push(editable_line(
                 &draft.fields.description,
-                "Longer description",
-                Message::OwnProfileDescription,
-                Message::SaveOwnProfile,
+                "Add a longer description",
+                LineStyle::Body,
+                crate::EditField::OwnDescription,
                 d,
+                hover,
             ));
         }
         crate::SettingsSection::Address => {
@@ -5413,12 +5394,13 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
     {
         let mut lines = vec![
             profile_name_text(display.clone(), d),
-            alias_inline_field(
+            editable_line(
                 &p.alias,
-                "Local name",
-                Message::ContactAliasChanged,
-                Message::SaveContactAlias,
+                "Add a local name",
+                LineStyle::Sub,
+                crate::EditField::ContactAlias,
                 d,
+                hover,
             ),
         ];
         if !p.fields.full_name.is_empty() {
@@ -6686,23 +6668,17 @@ fn group_overview_pane(
     let mut profile = Column::new().spacing(6).width(Length::Fill);
     {
         let name: Element<'_, Message> = if owner {
-            profile_name_field(
-                "edit-field-GroupSettingsNameChanged",
-                &g.name,
-                "Name",
-                Message::GroupSettingsNameChanged,
-                Message::SaveGroupProfile,
-                d,
-            )
+            editable_line(&g.name, "Name", LineStyle::Name, crate::EditField::GroupName, d, hover)
         } else {
             profile_name_text(g.name.clone(), d)
         };
-        let alias = alias_inline_field(
+        let alias = editable_line(
             &g.alias,
-            "Local name",
-            Message::GroupSettingsAliasChanged,
-            Message::SaveGroupAlias,
+            "Add a local name",
+            LineStyle::Sub,
+            crate::EditField::GroupAlias,
             d,
+            hover,
         );
         profile = profile.push(profile_identity(
             profile_avatar_fallback(
@@ -6728,23 +6704,16 @@ fn group_overview_pane(
     }
     if owner {
         profile = profile.push(pref_section("Short description", false, d));
-        profile = profile.push(profile_name_field(
-            "edit-field-GroupSettingsShortDescrChanged",
+        profile = profile.push(editable_line(
             &g.short_descr,
-            "Optional short description",
-            Message::GroupSettingsShortDescrChanged,
-            Message::SaveGroupProfile,
+            "Add a short description",
+            LineStyle::Body,
+            crate::EditField::GroupShortDescr,
             d,
+            hover,
         ));
-        profile = profile.push(pref_section("Welcome message", false, d));
-        profile = profile.push(profile_name_field(
-            "edit-field-GroupSettingsWelcomeChanged",
-            &g.welcome_message,
-            "Message shown to new members",
-            Message::GroupSettingsWelcomeChanged,
-            Message::SaveGroupProfile,
-            d,
-        ));
+        profile = profile.push(vertical().height(4));
+        profile = profile.push(welcome_message_button(&g.welcome_message, d, hover));
     } else {
         for (label, value) in [("About", &g.short_descr), ("Welcome message", &g.welcome_message)] {
             if !value.is_empty() {
@@ -7013,41 +6982,8 @@ fn group_members_list<'a>(
 
 }
 
-/// Local alias under the peer name — same title size, commits on Enter.
 /// Profile size of the avatar in every profile header.
 const PROFILE_AVATAR: f32 = 72.0;
-
-/// Editable name line in a profile header (own name, group name, local alias):
-/// action-tile radius (12) with side padding ≥ radius so the rounded corners
-/// never clip the placeholder.
-fn profile_name_field<'a>(
-    id: &'static str,
-    value: &'a str,
-    placeholder: &'a str,
-    on_changed: impl Fn(String) -> Message + Clone + 'a,
-    on_submit: Message,
-    d: Density,
-) -> Element<'a, Message> {
-    crate::edit_menu::edit_field(
-        text_input(placeholder, value)
-            .id(id)
-            .on_input(on_changed.clone())
-            .on_submit(on_submit)
-            .padding(Padding {
-                top: 6.0,
-                right: 12.0,
-                bottom: 6.0,
-                left: 12.0,
-            })
-            .size(d.body)
-            .width(Length::Fill)
-            .style(theme::rounded_field()),
-        iced::widget::Id::new(id),
-        value,
-        on_changed,
-        true,
-    )
-}
 
 /// Read-only name line, inset to line up with the text inside the fields.
 fn profile_name_text<'a>(name: String, d: Density) -> Element<'a, Message> {
@@ -7067,15 +7003,231 @@ fn profile_name_text<'a>(name: String, d: Density) -> Element<'a, Message> {
     .into()
 }
 
-/// Local alias under the peer / group name.
-fn alias_inline_field<'a>(
-    value: &'a str,
-    placeholder: &'a str,
-    on_changed: impl Fn(String) -> Message + Clone + 'a,
-    on_submit: Message,
+/// How an [`editable_line`] is set.
+#[derive(Debug, Clone, Copy)]
+enum LineStyle {
+    /// Big bold name in a profile header.
+    Name,
+    /// Secondary line under the name (bio, local name).
+    Sub,
+    /// Paragraph under a section label (descriptions).
+    Body,
+}
+
+/// Profile text shown as plain text, with a pencil right after it that opens
+/// the editor sheet. Empty values show a muted hint instead.
+fn editable_line<'a>(
+    value: &str,
+    placeholder: &str,
+    style: LineStyle,
+    field: crate::EditField,
     d: Density,
+    hover: bool,
 ) -> Element<'a, Message> {
-    profile_name_field("edit-field-local-name", value, placeholder, on_changed, on_submit, d)
+    let empty = value.trim().is_empty();
+    let shown = if empty { placeholder.to_string() } else { value.to_string() };
+    let (size, color) = match style {
+        LineStyle::Name => (d.title, theme::t().text_primary),
+        LineStyle::Sub => (d.body, theme::t().text_secondary),
+        LineStyle::Body => (d.body, theme::t().text_secondary),
+    };
+    let mut label = txt(shown)
+        .size(size)
+        .color(if empty { theme::t().text_muted } else { color })
+        .wrapping(Wrapping::WordOrGlyph);
+    if matches!(style, LineStyle::Name) && !empty {
+        label = label.font(BOLD);
+    }
+    let pencil = button(icons::edit_icon(16.0, theme::t().text_muted))
+        .on_press(Message::OpenFieldEditor(field))
+        .padding(6)
+        .style(theme::ghost_tile(hover));
+    // Header lines line up with the name; paragraphs with their section label.
+    let inset = if matches!(style, LineStyle::Body) { 8.0 } else { 13.0 };
+    container(crate::trail_row::trail_row(label, pencil, 4.0))
+        .padding(Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: inset,
+        })
+        .width(Length::Fill)
+        .into()
+}
+
+/// Group owners: the welcome message as a tile (scroll icon, title, first
+/// lines) that opens the editor sheet.
+fn welcome_message_button<'a>(welcome: &str, d: Density, hover: bool) -> Element<'a, Message> {
+    let preview = welcome.trim();
+    let sub = if preview.is_empty() {
+        txt("Greet the members who join".to_string())
+            .size(d.meta)
+            .color(theme::t().text_muted)
+    } else {
+        txt(truncate_graphemes(preview, 140))
+            .size(d.meta)
+            .color(theme::t().text_secondary)
+            .wrapping(Wrapping::WordOrGlyph)
+    };
+    let badge = container(icons::scroll_icon(22.0, theme::t().accent))
+        .width(40)
+        .height(40)
+        .center_x(40)
+        .center_y(40)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().accent_soft)),
+            border: iced::Border {
+                radius: 12.0.into(),
+                ..iced::Border::default()
+            },
+            ..container::Style::default()
+        });
+    button(
+        row![
+            badge,
+            column![
+                text("Welcome message").size(d.body).font(BOLD).color(theme::t().text_primary),
+                sub,
+            ]
+            .spacing(2)
+            .width(Length::Fill),
+            icons::edit_icon(16.0, theme::t().text_muted),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center),
+    )
+    .on_press(Message::OpenFieldEditor(crate::EditField::GroupWelcome))
+    .padding(Padding::from([10, 12]))
+    .width(Length::Fill)
+    .style(theme::ghost_tile(hover))
+    .into()
+}
+
+fn field_editor_meta(field: crate::EditField) -> (&'static str, &'static str, &'static str) {
+    use crate::EditField as F;
+    match field {
+        F::OwnName => ("Display name", "How your contacts see you.", "Your name"),
+        F::OwnBio => ("Bio", "A short line under your name.", "Bio"),
+        F::OwnDescription => ("Description", "Shown on your profile.", "Tell people about yourself"),
+        F::GroupName => ("Name", "Every member sees this name.", "Name"),
+        F::GroupAlias | F::ContactAlias => ("Local name", "Only you see this name.", "Local name"),
+        F::GroupShortDescr => ("Short description", "Shown under the name.", "Short description"),
+        F::GroupWelcome => (
+            "Welcome message",
+            "Sent to every new member when they join.",
+            "Welcome to the group! Please…",
+        ),
+    }
+}
+
+/// Editor sheet for one profile text: title, hint, field, cancel ✕ / save ✓.
+fn field_editor_overlay(app: &App) -> Element<'_, Message> {
+    let d = app.density();
+    let hover = app.hover_ok();
+    let Some(editor) = app.field_editor() else {
+        return vertical().height(0).into();
+    };
+    let (title, hint, placeholder) = field_editor_meta(editor.field);
+    let id = iced::widget::Id::new(crate::FIELD_EDITOR_ID);
+
+    let cancel = button(icons::cancel_icon(16.0, theme::t().text_secondary))
+        .on_press(Message::FieldEditorCancel)
+        .padding(10)
+        .style(theme::ghost_tile(hover));
+    let save = button(icons::check_icon(18.0, theme::t().accent_on))
+        .on_press(Message::FieldEditorSave)
+        .padding(9)
+        .style(theme::primary_action(hover));
+    let header = row![
+        column![
+            text(title).size(d.body + 1.0).font(BOLD).color(theme::t().text_primary),
+            text(hint).size(d.meta).color(theme::t().text_secondary),
+        ]
+        .spacing(2)
+        .width(Length::Fill),
+        cancel,
+        save,
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+
+    let field: Element<'_, Message> = if editor.field.multiline() {
+        text_editor(&editor.content)
+            .id(id)
+            .placeholder(placeholder)
+            .on_action(Message::FieldEditorEdit)
+            .padding(Padding::from([10, 14]))
+            .size(d.body)
+            .height(Length::Shrink)
+            .min_height(140.0)
+            .max_height(320.0)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(theme::rounded_editor())
+            .into()
+    } else {
+        crate::edit_menu::edit_field(
+            text_input(placeholder, &editor.value)
+                .id(id.clone())
+                .on_input(Message::FieldEditorInput)
+                .on_submit(Message::FieldEditorSave)
+                .padding(Padding::from([12, 14]))
+                .size(d.body)
+                .width(Length::Fill)
+                .style(theme::rounded_field()),
+            id,
+            &editor.value,
+            Message::FieldEditorInput,
+            true,
+        )
+    };
+
+    let mut content = column![header, field].spacing(14).width(Length::Fill);
+    if let Some(err) = editor.error.as_ref() {
+        content = content.push(text(err.clone()).size(d.meta).color(theme::t().danger));
+    }
+    let card = container(content)
+        .padding(d.pad)
+        .width(Length::Fill)
+        .max_width(480)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().bg_panel)),
+            border: iced::Border {
+                color: theme::t().border,
+                width: 1.0,
+                radius: 18.0.into(),
+            },
+            shadow: iced::Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
+                offset: iced::Vector::new(0.0, 8.0),
+                blur_radius: 24.0,
+            },
+            ..container::Style::default()
+        });
+    let backdrop = mouse_area(
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.45))),
+                ..container::Style::default()
+            }),
+    )
+    .on_press(Message::FieldEditorCancel);
+    // Phones: sit in the upper part so the on-screen keyboard doesn't hide it.
+    let narrow = !matches!(app.layout(), LayoutMode::Desktop);
+    let sheet = container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .padding(Padding::from([if narrow { 48 } else { 24 }, 16]));
+    let sheet = if narrow { sheet.align_y(Alignment::Start) } else { sheet.center_y(Length::Fill) };
+    iced::widget::opaque(
+        Stack::new()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .push(backdrop)
+            .push(sheet),
+    )
 }
 
 /// The one profile header used by Contact, Group, Channel and Settings pages:
@@ -8335,6 +8487,179 @@ fn create_chat_overlay(app: &App) -> Element<'_, Message> {
     )
 }
 
+
+#[cfg(test)]
+mod stamp_tests {
+    //! The time + receipt stamp must stay inside its bubble at every width,
+    //! with emoji (wide, colour glyphs) anywhere in the text.
+    use super::*;
+    use iced::advanced::layout::{Layout, Limits, Node};
+    use iced::advanced::renderer::Headless;
+    use iced::advanced::widget::Tree;
+
+    fn renderer() -> iced::Renderer {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/fonts");
+        {
+            let mut fs = iced::advanced::graphics::text::font_system()
+                .write()
+                .expect("font system");
+            for f in ["NotoSans-Regular.ttf", "NotoColorEmoji.ttf"] {
+                if let Ok(bytes) = std::fs::read(dir.join(f)) {
+                    fs.load_font(std::borrow::Cow::Owned(bytes));
+                }
+            }
+        }
+        iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+            Font::with_name("Noto Sans"),
+            iced::Pixels(16.0),
+            Some("tiny-skia"),
+        ))
+        .expect("headless renderer")
+    }
+
+    fn message(text: &str, outgoing: bool, edited: bool, at: &str) -> ChatMessage {
+        ChatMessage {
+            item_id: 1,
+            text: text.into(),
+            segments: Vec::new(),
+            outgoing,
+            created_at: Some(at.into()),
+            delivery: cursus_core::DeliveryStatus::Delivered,
+            file: None,
+            reactions: Vec::new(),
+            quote: None,
+            deleted: None,
+            sender: None,
+            is_announcement: false,
+            group_invitation: None,
+            edited,
+            editable: false,
+        }
+    }
+
+    fn layout(r: &iced::Renderer, mut el: Element<'static, Message>, max_w: f32) -> Node {
+        let mut tree = Tree::new(&el);
+        el.as_widget_mut()
+            .layout(&mut tree, r, &Limits::new(Size::ZERO, Size::new(max_w, 10_000.0)))
+    }
+
+    fn body(msg: &ChatMessage, d: Density) -> Element<'static, Message> {
+        if msg.is_emoji_only() {
+            let reserve = stamp_reserve_span(msg, d, emoji_text_size(&msg.text));
+            emoji_message_text(&msg.text, Some(reserve))
+        } else {
+            plain_text_body(&msg.text, d, Some(stamp_reserve_span(msg, d, d.body)))
+        }
+    }
+
+    const TEXTS: &[&str] = &[
+        "Infatti non sto tanto bene 😔😔😔",
+        "Ma tu oggi vai dal dottore? 🤓",
+        "Dopo ci sentiamo 🥰",
+        "Così così 😔",
+        "😝😝😝",
+        "🥰",
+        "😔😔😔😔😔😔😔😔😔😔😔😔😔😔😔😔😔😔😔😔😔😔😔😔",
+        "ok 👨‍👩‍👧 🇮🇹 👍🏽",
+        "Tu hai dormito bene??",
+        "precipitevolissimevolmente😂😂😂",
+        "a",
+    ];
+    const TIMES: &[&str] = &["2026-11-07T12:44:00Z", "2026-11-07T01:23:00Z", "2026-11-07T23:59:00Z"];
+
+    fn densities() -> Vec<Density> {
+        vec![
+            Density::for_window(crate::layout::LayoutMode::Mobile, 390.0, 800.0),
+            Density::for_window(crate::layout::LayoutMode::Mobile, 560.0, 1200.0),
+            Density::for_window(crate::layout::LayoutMode::Desktop, 1400.0, 900.0),
+        ]
+    }
+
+    /// The invisible reservation is at least as wide as the stamp drawn over
+    /// it, so the stamp never covers the end of the text.
+    #[test]
+    fn reservation_covers_the_stamp() {
+        let r = renderer();
+        for d in densities() {
+            for &at in TIMES {
+                for (outgoing, edited) in [(false, false), (true, false), (false, true), (true, true)] {
+                    let msg = message("x", outgoing, edited, at);
+                    // Without the leading breakable space (that's the gap).
+                    let reserved = stamp_reserve(&msg).trim_start_matches(' ').to_string();
+                    let reserve_w = layout(
+                        &r,
+                        rich_text::<Message, _, _, _>(vec![span(reserved).size(d.meta)]).into(),
+                        10_000.0,
+                    )
+                    .size()
+                    .width;
+                    let stamp_w = layout(&r, bubble_time_meta(&msg, d), 10_000.0).size().width;
+                    assert!(
+                        reserve_w >= stamp_w,
+                        "reserve {reserve_w} < stamp {stamp_w} (meta {}, out {outgoing}, edited {edited}, {at})",
+                        d.meta
+                    );
+                }
+            }
+        }
+    }
+
+    /// Screenshot bug: in a group chat the stamp of an emoji line was drawn
+    /// past the bubble edge. At every width the stamp stays inside the body.
+    #[test]
+    fn stamp_stays_inside_the_bubble_with_emoji() {
+        let r = renderer();
+        for d in densities() {
+            for &text in TEXTS {
+                for &at in TIMES {
+                    for outgoing in [false, true] {
+                        let msg = message(text, outgoing, outgoing, at);
+                        let mut w = 90.0;
+                        while w <= 460.0 {
+                            let node = layout(&r, bubble_content_with_time(body(&msg, d), &msg, d), w);
+                            let outer = node.bounds();
+                            assert!(
+                                outer.width <= w + 0.5,
+                                "{text:?} at {w}: body {} wider than the bubble",
+                                outer.width
+                            );
+                            let l = Layout::new(&node);
+                            let mut kids = l.children();
+                            let text_box = kids.next().unwrap().bounds();
+                            let stamp = kids.next().unwrap().children().next().unwrap().bounds();
+                            assert!(
+                                stamp.x >= outer.x - 0.5
+                                    && stamp.x + stamp.width <= outer.x + outer.width + 0.5
+                                    && stamp.y + stamp.height <= outer.y + outer.height + 0.5
+                                    && stamp.y >= outer.y - 0.5,
+                                "{text:?} at {w}: stamp {stamp:?} outside {outer:?}"
+                            );
+                            assert_eq!(text_box.height, outer.height, "{text:?}: stamp must not grow the body");
+                            w += 9.0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A short line keeps the stamp on the same line (no extra row).
+    #[test]
+    fn short_line_keeps_stamp_inline() {
+        let r = renderer();
+        let d = densities()[0];
+        for text in ["Nono 🥰", "Nono", "Dopo ci sentiamo 🥰"] {
+            let msg = message(text, false, false, TIMES[0]);
+            let with = layout(&r, body(&msg, d), 300.0).size().height;
+            let without = layout(&r, plain_text_body(&msg.text, d, None), 300.0).size().height;
+            assert_eq!(with, without, "{text:?}");
+        }
+        let big = message("😝😝😝", false, false, TIMES[0]);
+        let with = layout(&r, body(&big, d), 300.0).size().height;
+        let without = layout(&r, emoji_message_text(&big.text, None), 300.0).size().height;
+        assert_eq!(with, without, "big emoji line keeps its height");
+    }
+}
 
 #[cfg(test)]
 mod tests {

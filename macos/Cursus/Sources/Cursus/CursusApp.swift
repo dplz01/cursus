@@ -63,6 +63,10 @@ struct CursusApp: App {
             RootView()
                 .environmentObject(model)
                 .frame(minWidth: 760, minHeight: 500)
+                // Native controls (switches, checkboxes, segmented pickers,
+                // focus rings) in Cursus blue rather than the system accent.
+                .accentColor(Theme.accent)
+                .tint(Theme.accent)
         }
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -76,6 +80,19 @@ struct CursusApp: App {
                 }
                 .keyboardShortcut(",")
                 .disabled(model.phase != .ready)
+            }
+            CommandMenu("Chat") {
+                Button(model.showInfo ? "Hide Info" : "Show Info") { model.toggleInfo() }
+                    .keyboardShortcut("i")
+                    .disabled(model.phase != .ready || model.selectedChat == nil
+                              || model.selectedChat?.isNotes == true)
+                Divider()
+                Button("Next Conversation") { model.selectAdjacent(1) }
+                    .keyboardShortcut(.tab, modifiers: .control)
+                    .disabled(model.phase != .ready)
+                Button("Previous Conversation") { model.selectAdjacent(-1) }
+                    .keyboardShortcut(.tab, modifiers: [.control, .shift])
+                    .disabled(model.phase != .ready)
             }
             CommandMenu("Account") {
                 Button("Lock Cursus") { model.lock() }

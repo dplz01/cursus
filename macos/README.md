@@ -51,7 +51,17 @@ Done: profile setup / unlock (Keychain), chats and channels lists, conversation
 with formatting, replies, edits, deletes, reactions, images, voice playback,
 files (download, open, save, drag-and-drop send), contact requests, group
 invitations, one-time invites / address with QR, connect via link, new group,
-profile editor, delivery receipts, notifications, Dock badge, lock.
+profile editor, delivery receipts, notifications, Dock badge, lock, contact /
+group info panel (⌘I: local name, favourite, mute, address, members, clear /
+leave / delete).
+
+## Look
+
+Cursus's design system (`docs/DESIGN_SYSTEM.md`) on native macOS chrome: the
+colour tokens of `linux/src/theme.rs` (`Theme` in `Platform.swift`), Cursus's
+own icons (`Resources/icons`, vector PDFs of `linux/assets/icons`), the nav
+rail, cards, ghost tiles, link box and bubbles (`Views/Components.swift`).
+Window, toolbar, search, menus, sheets, alerts and context menus stay native.
 
 Next: audio calls (the Linux WebRTC engine moves into the bridge), voice
-recording, group management, chat tags.
+recording, group management (invite, roles), contact preferences, chat tags.

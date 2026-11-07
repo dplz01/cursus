@@ -2,16 +2,42 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Profile summary on top, then the categories as rows with icon discs;
+/// the selected one is accent.soft and opens as cards in the main pane.
 struct SettingsListView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        List(selection: $model.settingsPage) {
-            ForEach(SettingsPage.allCases) { page in
-                Label(page.title, systemImage: page.symbol).tag(page)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                if let user = model.user {
+                    Button { model.settingsPage = .profile } label: {
+                        HStack(spacing: 12) {
+                            Avatar(image: user.image, name: user.displayName, size: 52)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(user.displayName).font(.cTitle).foregroundColor(Theme.primaryText).lineLimit(1)
+                                Text(user.shortDescr.isEmpty ? "Your profile" : user.shortDescr)
+                                    .font(.cMeta)
+                                    .foregroundColor(Theme.secondaryText)
+                                    .lineLimit(2)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(10)
+                    }
+                    .buttonStyle(GhostTileStyle())
+                    .padding(.bottom, 6)
+                }
+                ForEach(SettingsPage.allCases) { page in
+                    NavRow(icon: page.icon, title: page.title, subtitle: page.subtitle,
+                           selected: model.settingsPage == page) {
+                        model.settingsPage = page
+                    }
+                }
             }
+            .padding(8)
         }
-        .listStyle(.inset)
+        .background(Theme.list)
         .navigationTitle("Settings")
     }
 }
@@ -20,40 +46,45 @@ struct SettingsDetailView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                switch model.settingsPage ?? .profile {
-                case .profile: ProfilePage()
-                case .privacy: PrivacyPage()
-                case .notifications: NotificationsPage()
-                case .about: AboutPage()
-                }
+        Page {
+            switch model.settingsPage ?? .profile {
+            case .profile: ProfilePage()
+            case .privacy: PrivacyPage()
+            case .notifications: NotificationsPage()
+            case .about: AboutPage()
             }
-            .padding(28)
-            .frame(maxWidth: 560, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Theme.panel)
         .navigationTitle((model.settingsPage ?? .profile).title)
     }
 }
 
-/// Titled group of settings rows.
+/// A settings card: title row, then its rows.
 struct SettingsSection<Content: View>: View {
+    let icon: String
     let title: String
+    var subtitle: String? = nil
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title.uppercased())
-                .font(.caption.weight(.semibold))
-                .foregroundColor(Theme.mutedText)
-            VStack(alignment: .leading, spacing: 12) {
-                content
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Theme.elevated))
+        Card(spacing: 6) {
+            CardTitle(icon: icon, title: title, subtitle: subtitle)
+                .padding(.bottom, 4)
+            content
+        }
+        .toggleStyle(.switch)
+        .tint(Theme.accent)
+    }
+}
+
+/// Toggle on the right of a preference row.
+struct ToggleRow: View {
+    let label: String
+    var note: String? = nil
+    @Binding var isOn: Bool
+
+    var body: some View {
+        PrefRow(label: label, note: note) {
+            Toggle("", isOn: $isOn).labelsHidden().controlSize(.small)
         }
     }
 }
@@ -78,23 +109,25 @@ private struct ProfilePage: View {
     }
 
     var body: some View {
-        SettingsSection(title: "Your profile") {
-            HStack(spacing: 16) {
-                Avatar(image: shownImage, name: name.isEmpty ? "?" : name, size: 72)
-                VStack(alignment: .leading, spacing: 6) {
-                    Button("Choose picture…", action: pickImage)
-                    if shownImage != nil {
-                        Button("Remove picture") { image = .some(nil) }
-                            .buttonStyle(.link)
+        SettingsSection(icon: "user-alt-1", title: "Your profile",
+                        subtitle: "Sent only to your contacts — SimpleX servers never see it.") {
+            HStack(alignment: .center, spacing: 14) {
+                VStack(spacing: 8) {
+                    Avatar(image: shownImage, name: name.isEmpty ? "?" : name, size: 72)
+                    HStack(spacing: 0) {
+                        IconTool(icon: "image-pen", help: "Choose picture…", size: 18, action: pickImage)
+                        if shownImage != nil {
+                            IconTool(icon: "trash-delete", help: "Remove picture", size: 18) { image = .some(nil) }
+                        }
                     }
                 }
+                VStack(alignment: .leading, spacing: 6) {
+                    RoundedField(placeholder: "Display name", text: $name)
+                    RoundedField(placeholder: "Full name (optional)", text: $fullName)
+                }
             }
-            TextField("Display name", text: $name).textFieldStyle(.roundedBorder)
-            TextField("Full name (optional)", text: $fullName).textFieldStyle(.roundedBorder)
-            TextField("Bio (optional)", text: $bio).textFieldStyle(.roundedBorder)
-            Text("Your profile is sent only to your contacts — SimpleX servers never see it.")
-                .font(.caption)
-                .foregroundColor(Theme.mutedText)
+            SectionLabel("Bio")
+            CursusField(placeholder: "A short line about you (optional)", text: $bio)
             HStack {
                 Spacer()
                 Button(saving ? "Saving…" : "Save") {
@@ -107,7 +140,7 @@ private struct ProfilePage: View {
                         saving = false
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PrimaryButtonStyle())
                 .disabled(!changed || saving || name.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
@@ -141,38 +174,38 @@ private struct PrivacyPage: View {
     @State private var confirmWipe = false
 
     var body: some View {
-        SettingsSection(title: "Delivery receipts") {
-            Toggle("Send receipts to contacts", isOn: Binding(
+        SettingsSection(icon: "check-read", title: "Delivery receipts",
+                        subtitle: "Let senders see that their messages arrived.") {
+            ToggleRow(label: "Send receipts to contacts", isOn: Binding(
                 get: { model.user?.sendRcptsContacts ?? true },
                 set: { on in Task { await model.setDeliveryReceipts(groups: false, on: on) } }))
-            Toggle("Send receipts in small groups", isOn: Binding(
+            ToggleRow(label: "Send receipts in small groups", isOn: Binding(
                 get: { model.user?.sendRcptsSmallGroups ?? true },
                 set: { on in Task { await model.setDeliveryReceipts(groups: true, on: on) } }))
         }
-        SettingsSection(title: "This Mac") {
-            Toggle("Encrypt received files", isOn: Binding(
+        SettingsSection(icon: "lock", title: "This Mac", subtitle: "How Cursus keeps your data here.") {
+            ToggleRow(label: "Encrypt received files", isOn: Binding(
                 get: { model.info?.encryptLocalFiles ?? true },
                 set: { on in Task { await model.setEncryptLocalFiles(on) } }))
-            Toggle("Remember database password in Keychain", isOn: $remember)
+            ToggleRow(label: "Remember database password in Keychain",
+                      note: remember && !Keychain.hasPassword ? "The password is saved the next time you unlock." : nil,
+                      isOn: $remember)
                 .onChange(of: remember) { on in
                     if !on { Keychain.delete() }
                 }
-            if remember && !Keychain.hasPassword {
-                Text("The password is saved the next time you unlock.")
-                    .font(.caption)
-                    .foregroundColor(Theme.mutedText)
+            ActionTile(icon: "lock", title: "Lock now") { model.lock() }
+            if confirmWipe {
+                InlineConfirm(question: "Erase all Cursus data on this Mac?",
+                              detail: "All chats, contacts and files stored on this Mac are deleted. This can't be undone.",
+                              confirmTitle: "Erase everything",
+                              onCancel: { confirmWipe = false },
+                              onConfirm: {
+                                  confirmWipe = false
+                                  Task { await model.wipeAll() }
+                              })
+            } else {
+                ActionTile(icon: "trash-delete", title: "Erase all data…", danger: true) { confirmWipe = true }
             }
-            HStack {
-                Button("Lock now") { model.lock() }
-                Spacer()
-                Button("Erase all data…") { confirmWipe = true }
-                    .foregroundColor(.red)
-            }
-        }
-        .confirmationDialog("Erase all Cursus data on this Mac?", isPresented: $confirmWipe) {
-            Button("Erase everything", role: .destructive) { Task { await model.wipeAll() } }
-        } message: {
-            Text("All chats, contacts and files stored on this Mac are deleted. This can't be undone.")
         }
     }
 }
@@ -182,15 +215,11 @@ private struct NotificationsPage: View {
     @AppStorage(AppModel.notificationsHideTextKey) private var hideText = false
 
     var body: some View {
-        SettingsSection(title: "Notifications") {
-            Toggle("Show notifications for new messages", isOn: $enabled)
-            Toggle("Hide message text in notifications", isOn: $hideText)
+        SettingsSection(icon: "sf:bell", title: "Notifications",
+                        subtitle: Notifier.available ? "Banners and sounds for new messages." : "Notifications need Cursus to run as Cursus.app.") {
+            ToggleRow(label: "Show notifications for new messages", isOn: $enabled)
+            ToggleRow(label: "Hide message text in notifications", isOn: $hideText)
                 .disabled(!enabled)
-            if !Notifier.available {
-                Text("Notifications need Cursus to run as Cursus.app.")
-                    .font(.caption)
-                    .foregroundColor(Theme.mutedText)
-            }
         }
     }
 }
@@ -199,28 +228,28 @@ private struct AboutPage: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        SettingsSection(title: "Cursus for Mac") {
+        Card {
             HStack(spacing: 14) {
                 Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Cursus \(model.info?.version ?? "")").font(.headline)
+                    Text("Cursus \(model.info?.version ?? "")").font(.cTitle).foregroundColor(Theme.primaryText)
                     Text("A native client for the SimpleX network, built on the official SimpleX chat core.")
-                        .font(.callout)
+                        .font(.cMeta)
                         .foregroundColor(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if let dir = model.info?.dataDir {
-                HStack {
-                    Text("Data folder").foregroundColor(Theme.secondaryText)
-                    Spacer()
-                    Button("Show in Finder") {
-                        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir)
-                    }
+        }
+        if let dir = model.info?.dataDir {
+            Card(spacing: 4) {
+                NavRow(icon: "sf:folder", title: "Data folder", subtitle: "Show in Finder") {
+                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir)
+                }
+                NavRow(icon: "review-file", title: "Licences", subtitle: "AGPL-3.0-or-later and third-party notices") {
+                    let dir = Bundle.main.bundlePath + "/Contents/Resources/licenses"
+                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir)
                 }
             }
-            Text("Licensed under AGPL-3.0-or-later. Third-party notices are in Cursus.app/Contents/Resources/licenses.")
-                .font(.caption)
-                .foregroundColor(Theme.mutedText)
         }
     }
 }

@@ -43,9 +43,10 @@ enum Keychain {
     static var hasPassword: Bool { load() != nil }
 }
 
-/// Design tokens (docs/DESIGN_SYSTEM.md), light / dark.
+/// Design tokens — the values of `Tokens::light()` / `Tokens::dark()` in
+/// linux/src/theme.rs (see docs/DESIGN_SYSTEM.md), so both apps look alike.
 enum Theme {
-    private static func dynamic(_ light: UInt32, _ dark: UInt32, alpha: CGFloat = 1) -> Color {
+    private static func dynamic(_ light: UInt32, _ dark: UInt32, alpha: CGFloat = 1, darkAlpha: CGFloat? = nil) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
             let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             let hex = isDark ? dark : light
@@ -53,17 +54,49 @@ enum Theme {
                 srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
                 green: CGFloat((hex >> 8) & 0xFF) / 255,
                 blue: CGFloat(hex & 0xFF) / 255,
-                alpha: alpha)
+                alpha: isDark ? (darkAlpha ?? alpha) : alpha)
         })
     }
 
-    static let accent = dynamic(0x2F6FED, 0x5B8CFF)
-    static let accentSoft = dynamic(0x2F6FED, 0x5B8CFF, alpha: 0.17)
-    static let panel = dynamic(0xFFFFFF, 0x1C2028)
-    static let elevated = dynamic(0xF0F2F5, 0x262B36)
+    // Surfaces
+    static let app = dynamic(0xEEF0F4, 0x0E1015)
+    static let sidebar = dynamic(0xFFFFFF, 0x15181E)
+    static let list = dynamic(0xFFFFFF, 0x15181E)
+    static let panel = dynamic(0xEEF0F4, 0x0E1015)
+    static let elevated = dynamic(0xFFFFFF, 0x1C2028)
+    static let hover = dynamic(0xEDEFF3, 0x20242D)
+    static let fieldFill = dynamic(0xF2F4F7, 0x111318)
+    static let border = dynamic(0xDDE1E7, 0x252A33)
+
+    // Text
+    static let primaryText = dynamic(0x12141A, 0xF2F3F5)
     static let secondaryText = dynamic(0x5C6370, 0xA0A6B3)
     static let mutedText = dynamic(0x8B919C, 0x6E7585)
-    static let fieldFill = dynamic(0xEBEDF0, 0x181B22)
+
+    // Accent
+    static let accent = dynamic(0x2F6FED, 0x5B8CFF)
+    static let accentHover = dynamic(0x255DD1, 0x6B99FF)
+    static let accentPress = dynamic(0x1C4CB8, 0x4D7AEB)
+    static let accentOn = dynamic(0xFFFFFF, 0x0B1020)
+    static let accentSoft = dynamic(0x2F6FED, 0x5B8CFF, alpha: 0.12, darkAlpha: 0.16)
+    static let accentSoftHover = dynamic(0x2F6FED, 0x5B8CFF, alpha: 0.20, darkAlpha: 0.26)
+    static let accentSoftPress = dynamic(0x2F6FED, 0x5B8CFF, alpha: 0.30, darkAlpha: 0.36)
+    static let disabledFill = dynamic(0xD1D5DA, 0x404D66)
+
+    // Status
+    static let danger = dynamic(0xC62828, 0xFF6B6B)
+    static let dangerHover = dynamic(0xB01C1C, 0xD94747)
+    static let dangerPress = dynamic(0x941414, 0xB33333)
+    static let dangerSoft = dynamic(0xC62828, 0xFF6B6B, alpha: 0.14)
+    static let dangerSoftPress = dynamic(0xC62828, 0xFF6B6B, alpha: 0.24)
+    static let success = dynamic(0x2E7D32, 0x6BCB77)
+    static let gold = dynamic(0xB58B0F, 0xECC14F)
+
+    // Bubbles
+    static let bubbleIn = dynamic(0xFFFFFF, 0x1C2028)
+    static let bubbleOut = dynamic(0xD8E5FF, 0x243A63)
+    static let bubbleOutMeta = dynamic(0x5A6C8F, 0xA7B6D6)
+    static let bubbleOutTick = dynamic(0x2F6FED, 0x9CBBFF)
 
     static func formatColor(_ name: String?) -> Color? {
         switch name {
@@ -76,6 +109,127 @@ enum Theme {
         case "black": return .primary
         case "white": return .secondary
         default: return nil
+        }
+    }
+}
+
+/// Shapes (DESIGN_SYSTEM.md → Spacing, radius and shape). Use these, never
+/// inline numbers.
+enum Radius {
+    static let sm: CGFloat = 8
+    static let md: CGFloat = 10
+    static let lg: CGFloat = 12
+    static let bubble: CGFloat = 16
+}
+
+/// Type scale (desktop): title 18 / body 14 / meta 12.
+extension Font {
+    static let cTitle = Font.system(size: 18, weight: .semibold)
+    static let cBody = Font.system(size: 14)
+    static let cBodyBold = Font.system(size: 14, weight: .semibold)
+    static let cMeta = Font.system(size: 12)
+    static let cMetaBold = Font.system(size: 12, weight: .semibold)
+}
+
+/// Cursus's own outlined icons (linux/assets/icons, converted to vector PDF
+/// templates in macos/Resources/icons and copied into the bundle by
+/// build.sh). Outside the bundle (`swift run`) an SF Symbol stands in.
+enum Icons {
+    private static var cache: [String: NSImage] = [:]
+
+    static func image(_ name: String) -> NSImage? {
+        if name.hasPrefix("sf:") { return nil }
+        if let hit = cache[name] { return hit }
+        guard let url = Bundle.main.url(forResource: name, withExtension: "pdf", subdirectory: "icons"),
+              let image = NSImage(contentsOf: url) else { return nil }
+        image.isTemplate = true
+        cache[name] = image
+        return image
+    }
+
+    /// SF Symbol for a Cursus icon name; `sf:<symbol>` asks for one directly
+    /// (glyphs Cursus has no drawing for yet).
+    static func fallback(_ name: String) -> String {
+        if name.hasPrefix("sf:") { return String(name.dropFirst(3)) }
+        switch name {
+        case "chats": return "bubble.left"
+        case "channels": return "antenna.radiowaves.left.and.right"
+        case "calls": return "phone"
+        case "settings": return "gearshape"
+        case "send", "paperplane": return "paperplane"
+        case "star": return "star"
+        case "plus": return "plus"
+        case "copy": return "doc.on.doc"
+        case "paste": return "doc.on.clipboard"
+        case "trash-delete": return "trash"
+        case "session-leave": return "rectangle.portrait.and.arrow.right"
+        case "clear-all": return "eraser"
+        case "mute-notification": return "bell.slash"
+        case "preferences": return "slider.horizontal.3"
+        case "back": return "chevron.left"
+        case "chevron-down": return "chevron.down"
+        case "info-circle": return "info.circle"
+        case "lock": return "lock"
+        case "reply": return "arrowshape.turn.up.left"
+        case "edit-3": return "pencil"
+        case "download": return "arrow.down.circle"
+        case "check": return "checkmark"
+        case "check-read": return "checkmark.circle"
+        case "system-pending-line": return "clock"
+        case "user-group": return "person.2"
+        case "user-alt-1": return "person"
+        case "user-plus-alt-1": return "person.badge.plus"
+        case "link-minimalistic-2": return "link"
+        case "address-card": return "person.text.rectangle"
+        case "shield-check": return "checkmark.shield"
+        case "image-pen", "image-square": return "photo"
+        case "owner": return "crown"
+        case "admin", "admin-role": return "person.badge.key"
+        case "user-member": return "person"
+        case "eye-observer": return "eye"
+        case "cancel": return "xmark"
+        case "mic": return "mic"
+        case "play": return "play.fill"
+        case "stop": return "pause.fill"
+        case "timer": return "timer"
+        case "history": return "clock.arrow.circlepath"
+        case "review-file": return "doc.text"
+        default: return "questionmark"
+        }
+    }
+}
+
+/// One tinted Cursus glyph. Without `color` it takes the surrounding
+/// foreground colour (so button styles can tint it on hover).
+struct CIcon: View {
+    let name: String
+    var size: CGFloat = 20
+    var color: Color? = nil
+
+    init(_ name: String, size: CGFloat = 20, color: Color? = nil) {
+        self.name = name
+        self.size = size
+        self.color = color
+    }
+
+    var body: some View {
+        glyph
+            .frame(width: size, height: size)
+            .foregroundColor(color)
+    }
+
+    @ViewBuilder private var glyph: some View {
+        if let image = Icons.image(name) {
+            Image(nsImage: image)
+                .renderingMode(.template)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+        } else {
+            Image(systemName: Icons.fallback(name))
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .padding(size * 0.06)
         }
     }
 }

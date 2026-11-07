@@ -35,18 +35,19 @@ struct NewChatSheet: View {
             HStack {
                 Spacer()
                 Button("Done") { dismiss() }
+                    .buttonStyle(SecondaryButtonStyle())
                     .keyboardShortcut(.cancelAction)
             }
         }
         .padding(20)
-        .frame(width: 460, height: 520)
+        .frame(width: 460, height: 540)
+        .background(Theme.panel)
     }
 }
 
 /// Link text + QR + copy, shared by invite and address tabs.
 struct LinkCard: View {
     let link: ConnLink
-    @State private var copied = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -54,23 +55,12 @@ struct LinkCard: View {
                 Image(nsImage: qr)
                     .interpolation(.none)
                     .resizable()
-                    .frame(width: 210, height: 210)
+                    .frame(width: 200, height: 200)
                     .padding(10)
-                    .background(Color.white)
-                    .cornerRadius(10)
+                    .background(RoundedRectangle(cornerRadius: Radius.lg).fill(Color.white))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Theme.border, lineWidth: 1))
             }
-            Text(link.display)
-                .font(.caption.monospaced())
-                .textSelection(.enabled)
-                .lineLimit(3)
-                .truncationMode(.middle)
-                .padding(8)
-                .frame(maxWidth: .infinity)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.accentSoft))
-            Button(copied ? "Copied" : "Copy link") {
-                Clipboard.copy(link.display)
-                copied = true
-            }
+            LinkBox(text: link.display)
         }
     }
 }
@@ -83,7 +73,7 @@ private struct InviteTab: View {
     var body: some View {
         VStack(spacing: 14) {
             Text("Share a one-time link with someone you want to talk to. It works once; they can paste it in any SimpleX app.")
-                .font(.callout)
+                .font(.cBody)
                 .foregroundColor(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             if let link = link {
@@ -96,7 +86,7 @@ private struct InviteTab: View {
                         loading = false
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PrimaryButtonStyle())
                 .disabled(loading)
             }
         }
@@ -112,19 +102,19 @@ private struct ConnectTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Paste a SimpleX link you received — a one-time invitation, an address, a group or a channel link.")
-                .font(.callout)
+                .font(.cBody)
                 .foregroundColor(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-            TextField("https://simplex.chat/… or simplex:/…", text: $link)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit(connect)
-            HStack {
-                Button("Paste") {
+            HStack(spacing: 4) {
+                CursusField(placeholder: "https://simplex.chat/… or simplex:/…", text: $link, onSubmit: connect)
+                IconTool(icon: "paste", help: "Paste") {
                     if let text = NSPasteboard.general.string(forType: .string) { link = text }
                 }
+            }
+            HStack {
                 Spacer()
                 Button(working ? "Connecting…" : "Connect", action: connect)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PrimaryButtonStyle())
                     .disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || working)
             }
         }
@@ -150,7 +140,7 @@ private struct AddressTab: View {
     var body: some View {
         VStack(spacing: 14) {
             Text("Your address can be used many times. Anyone with it can send you a contact request; you accept or reject each one.")
-                .font(.callout)
+                .font(.cBody)
                 .foregroundColor(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             if let link = link {
@@ -163,7 +153,7 @@ private struct AddressTab: View {
                         loading = false
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PrimaryButtonStyle())
                 .disabled(loading)
             }
         }
@@ -178,10 +168,9 @@ private struct GroupTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Create a group, then invite contacts from it.")
-                .font(.callout)
+                .font(.cBody)
                 .foregroundColor(Theme.secondaryText)
-            TextField("Group name", text: $name)
-                .textFieldStyle(.roundedBorder)
+            CursusField(placeholder: "Group name", text: $name)
             HStack {
                 Spacer()
                 Button("Create group") {
@@ -191,7 +180,7 @@ private struct GroupTab: View {
                         done()
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PrimaryButtonStyle())
                 .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }

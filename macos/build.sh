@@ -95,9 +95,15 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns" || echo "warning: iconutil failed; no app icon" >&2
 rm -rf "$ICONSET"
 
-# License notices travel with the binary (AGPL + statically linked crates).
+# Cursus's own icons (vector PDF templates of linux/assets/icons).
+mkdir -p "$APP/Contents/Resources/icons"
+cp "$MAC/Resources/icons/"*.pdf "$APP/Contents/Resources/icons/"
+
+# License notices travel with the binary (AGPL + statically linked crates,
+# icon credits).
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/licenses/"
 cp "$ROOT"/licenses/* "$APP/Contents/Resources/licenses/"
+cp "$ROOT/linux/assets/icons/ATTRIBUTION.md" "$APP/Contents/Resources/licenses/ICONS-ATTRIBUTION.md"
 
 # 5. Ad-hoc signature (required to run at all on Apple Silicon; harmless on Intel).
 say "Signing (ad-hoc)"

@@ -40,8 +40,13 @@ struct Chat: Decodable, Identifiable, Equatable {
     let favorite: Bool
     let pendingRequestId: Int64?
     let image: String?
+    /// Public name (title is the local alias when one is set).
+    let name: String?
+    let alias: String?
     let fullName: String
     let shortDescr: String
+    let description: String?
+    let contactLink: String?
     let isChannel: Bool
     let role: String?
     let lastTs: String?
@@ -97,6 +102,24 @@ struct Sender: Decodable, Equatable {
     let name: String
     let image: String?
     let role: String
+}
+
+struct Member: Decodable, Identifiable, Equatable {
+    let id: Int64
+    let contactId: Int64?
+    let name: String
+    let publicName: String
+    let role: String
+    let status: String
+    let image: String?
+    let shortDescr: String?
+    let isMe: Bool
+    let blocked: Bool
+
+    /// Invited / still connecting: shown with the gold pending clock.
+    var pending: Bool {
+        ["invited", "intro-inv", "pending_approval", "pending_review"].contains(status.lowercased())
+    }
 }
 
 struct GroupInvite: Decodable, Equatable {

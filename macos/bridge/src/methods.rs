@@ -249,6 +249,25 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             s.join_group(i64_param(p, "groupId")?).map_err(err)?;
             Ok(Value::Null)
         }
+        // Local name for a contact or group (empty clears it).
+        "setAlias" => {
+            let chat = chat_param(p)?;
+            let alias = str_param(p, "alias")?;
+            match chat.chat_type {
+                cursus_core::ChatType::Direct => s.set_contact_alias(chat.api_id, alias).map_err(err)?,
+                cursus_core::ChatType::Group => s.set_group_alias(chat.api_id, alias).map_err(err)?,
+                _ => return Err("only contacts and groups have a local name".into()),
+            };
+            Ok(Value::Null)
+        }
+        "listMembers" => {
+            let members = s.list_group_members(i64_param(p, "groupId")?).map_err(err)?;
+            Ok(Value::Array(members.iter().map(dto::member).collect()))
+        }
+        "leaveGroup" => {
+            s.leave_group(i64_param(p, "groupId")?).map_err(err)?;
+            Ok(Value::Null)
+        }
         "createGroup" => Ok(json!(s.create_group(str_param(p, "name")?.trim()).map_err(err)?.command_ref())),
         "setEncryptLocalFiles" => {
             let on = bool_param(p, "on")?;

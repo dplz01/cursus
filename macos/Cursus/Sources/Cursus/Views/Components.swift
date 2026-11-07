@@ -1,0 +1,556 @@
+import AppKit
+import SwiftUI
+
+// The Cursus component set (docs/DESIGN_SYSTEM.md → Components), built once
+// here. Screens compose these; they don't style buttons themselves. Native
+// macOS pieces (window, toolbar, menus, sheets, alerts, context menus, text
+// editing) stay native.
+
+/// Tracks the pointer for hover fills (ButtonStyle can't hold state itself).
+private struct Hovering<Content: View>: View {
+    let content: (Bool) -> Content
+    @State private var hover = false
+
+    var body: some View {
+        content(hover).onHover { hover = $0 }
+    }
+}
+
+// MARK: - Buttons
+
+/// The one main action of a screen: accent fill, radius 10.
+struct PrimaryButtonStyle: ButtonStyle {
+    var small = false
+    /// Stretch to the available width.
+    var stretch = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        Inner(configuration: configuration, small: small, stretch: stretch)
+    }
+
+    private struct Inner: View {
+        let configuration: ButtonStyleConfiguration
+        let small: Bool
+        let stretch: Bool
+        @Environment(\.isEnabled) private var enabled
+
+        var body: some View {
+            Hovering { hover in
+                configuration.label
+                    .font(small ? .cMeta : .cBody)
+                    .foregroundColor(enabled ? Theme.accentOn : Theme.mutedText)
+                    .padding(.vertical, small ? 6 : 9)
+                    .padding(.horizontal, small ? 12 : 16)
+                    .frame(maxWidth: stretch ? .infinity : nil)
+                    .background(
+                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                            .fill(!enabled ? Theme.disabledFill
+                                  : configuration.isPressed ? Theme.accentPress
+                                  : hover ? Theme.accentHover : Theme.accent))
+                    .contentShape(Rectangle())
+            }
+        }
+    }
+}
+
+/// Neutral alternatives (Cancel, choice chips): field fill + hairline.
+struct SecondaryButtonStyle: ButtonStyle {
+    var small = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        Inner(configuration: configuration, small: small)
+    }
+
+    private struct Inner: View {
+        let configuration: ButtonStyleConfiguration
+        let small: Bool
+        @Environment(\.isEnabled) private var enabled
+
+        var body: some View {
+            Hovering { hover in
+                configuration.label
+                    .font(small ? .cMeta : .cBody)
+                    .foregroundColor(enabled ? Theme.primaryText : Theme.mutedText)
+                    .padding(.vertical, small ? 6 : 9)
+                    .padding(.horizontal, small ? 12 : 16)
+                    .background(
+                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                            .fill(configuration.isPressed ? Theme.accentSoft
+                                  : hover && enabled ? Theme.hover : Theme.fieldFill))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                            .strokeBorder(Theme.border, lineWidth: 1))
+                    .contentShape(Rectangle())
+            }
+        }
+    }
+}
+
+/// Final confirmation of something destructive.
+struct DangerButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Hovering { hover in
+            configuration.label
+                .font(.cBody)
+                .foregroundColor(.white)
+                .padding(.vertical, 9)
+                .padding(.horizontal, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                        .fill(configuration.isPressed ? Theme.dangerPress
+                              : hover ? Theme.dangerHover : Theme.danger))
+                .contentShape(Rectangle())
+        }
+    }
+}
+
+/// Ghost tile: no fill or border at rest; the shape shows on hover.
+/// Used by action tiles, navigation rows and list rows.
+struct GhostTileStyle: ButtonStyle {
+    var danger = false
+    var selected = false
+    var radius: CGFloat = Radius.lg
+
+    func makeBody(configuration: Configuration) -> some View {
+        Inner(configuration: configuration, style: self)
+    }
+
+    private struct Inner: View {
+        let configuration: ButtonStyleConfiguration
+        let style: GhostTileStyle
+        @Environment(\.isEnabled) private var enabled
+
+        var body: some View {
+            Hovering { hover in
+                configuration.label
+                    .contentShape(Rectangle())
+                    .background(
+                        RoundedRectangle(cornerRadius: style.radius, style: .continuous)
+                            .fill(style.tileFill(hover: hover && enabled, pressed: configuration.isPressed)))
+            }
+        }
+    }
+
+    fileprivate func tileFill(hover: Bool, pressed: Bool) -> Color {
+        if danger {
+            return pressed ? Theme.dangerSoftPress : hover ? Theme.dangerSoft : Color.clear
+        }
+        if pressed { return Theme.accentSoftPress }
+        if selected { return hover ? Theme.accentSoftHover : Theme.accentSoft }
+        return hover ? Theme.hover : Color.clear
+    }
+}
+
+/// Icon-only tool: 32×32 hit, glyph secondary → primary on hover.
+struct IconToolStyle: ButtonStyle {
+    var active = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        Hovering { hover in
+            configuration.label
+                .foregroundColor(active ? Theme.accent : hover ? Theme.primaryText : Theme.secondaryText)
+                .frame(width: 32, height: 32)
+                .background(
+                    Circle().fill(configuration.isPressed ? Theme.accentSoft : hover ? Theme.hover : Color.clear))
+                .contentShape(Circle())
+        }
+    }
+}
+
+struct IconTool: View {
+    let icon: String
+    let help: String
+    var active = false
+    var size: CGFloat = 20
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) { CIcon(icon, size: size) }
+            .buttonStyle(IconToolStyle(active: active))
+            .help(help)
+    }
+}
+
+// MARK: - Discs, tiles, rows
+
+/// Round tinted disc around a glyph (card titles, tiles, nav rows).
+struct IconDisc: View {
+    let icon: String
+    var size: CGFloat = 32
+    var tint: Color = Theme.accent
+    var fill: Color = Theme.accentSoft
+
+    var body: some View {
+        CIcon(icon, size: size * 0.52, color: tint)
+            .frame(width: size, height: size)
+            .background(Circle().fill(fill))
+    }
+}
+
+/// Clear / leave / delete: 32px disc + body label.
+struct ActionTile: View {
+    let icon: String
+    let title: String
+    var danger = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                IconDisc(icon: icon, tint: danger ? Theme.danger : Theme.accent,
+                         fill: danger ? Theme.dangerSoft : Theme.accentSoft)
+                Text(title)
+                    .font(.cBody)
+                    .foregroundColor(danger ? Theme.danger : Theme.primaryText)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+        }
+        .buttonStyle(GhostTileStyle(danger: danger))
+    }
+}
+
+/// Opens another page: disc · title / subtitle · chevron.
+struct NavRow: View {
+    let icon: String
+    let title: String
+    var subtitle: String? = nil
+    var selected = false
+    var trailing: String? = "chevron"
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                IconDisc(icon: icon)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.cBody).foregroundColor(Theme.primaryText)
+                    if let subtitle = subtitle {
+                        Text(subtitle).font(.cMeta).foregroundColor(Theme.secondaryText).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+                if trailing == "chevron" {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Theme.mutedText)
+                } else if let trailing = trailing {
+                    CIcon(trailing, size: 16, color: Theme.mutedText)
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+        }
+        .buttonStyle(GhostTileStyle(selected: selected))
+    }
+}
+
+// MARK: - Cards and pages
+
+/// `bg.elevated`, 1px border, radius 12.
+struct Card<Content: View>: View {
+    var spacing: CGFloat = 10
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: spacing) {
+            content
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).fill(Theme.elevated))
+        .overlay(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+    }
+}
+
+/// 36px disc, title and a one-line explanation.
+struct CardTitle: View {
+    let icon: String
+    let title: String
+    var subtitle: String? = nil
+
+    var body: some View {
+        HStack(spacing: 10) {
+            IconDisc(icon: icon, size: 36)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.cBodyBold).foregroundColor(Theme.primaryText)
+                if let subtitle = subtitle {
+                    Text(subtitle)
+                        .font(.cMeta)
+                        .foregroundColor(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// Meta-size muted label above a group of rows.
+struct SectionLabel: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text).font(.cMeta).foregroundColor(Theme.mutedText)
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
+    }
+}
+
+/// `[icon] label ……… control` (settings and preference rows).
+struct PrefRow<Control: View>: View {
+    var icon: String? = nil
+    let label: String
+    var note: String? = nil
+    @ViewBuilder let control: Control
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if let icon = icon {
+                CIcon(icon, size: 20, color: Theme.secondaryText).frame(width: 24)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label).font(.cBody).foregroundColor(Theme.primaryText)
+                if let note = note {
+                    Text(note).font(.cMeta).foregroundColor(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            control
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+    }
+}
+
+/// A scrolling column of cards, centred and capped at 760pt.
+struct Page<Content: View>: View {
+    var background: Color = Theme.panel
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                content
+            }
+            .padding(16)
+            .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity)
+        }
+        .background(background)
+    }
+}
+
+// MARK: - Fields
+
+/// Standard field: radius 10, field fill, border → accent when focused.
+struct CursusField: View {
+    let placeholder: String
+    @Binding var text: String
+    var secure = false
+    var onSubmit: () -> Void = {}
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Group {
+            if secure {
+                SecureField(placeholder, text: $text)
+            } else {
+                TextField(placeholder, text: $text)
+            }
+        }
+        .textFieldStyle(.plain)
+        .font(.cBody)
+        .focused($focused)
+        .onSubmit(onSubmit)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .background(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).fill(Theme.fieldFill))
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                .strokeBorder(focused ? Theme.accent : Theme.border, lineWidth: 1))
+    }
+}
+
+/// Rounded inline field (local name under a profile name): radius 12, 6×12.
+struct RoundedField: View {
+    let placeholder: String
+    @Binding var text: String
+    var onCommit: () -> Void = {}
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(placeholder, text: $text)
+            .textFieldStyle(.plain)
+            .font(.cBody)
+            .focused($focused)
+            .onSubmit(onCommit)
+            .onChange(of: focused) { now in
+                if !now { onCommit() }
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .background(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).fill(Theme.fieldFill))
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                    .strokeBorder(focused ? Theme.accent : Color.clear, lineWidth: 1))
+    }
+}
+
+/// A shareable link: the whole box copies.
+struct LinkBox: View {
+    let text: String
+    var copyText: String? = nil
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            Clipboard.copy(copyText ?? text)
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }
+        } label: {
+            HStack(alignment: .center, spacing: 10) {
+                Text(copied ? "Copied to clipboard" : text)
+                    .font(.cMeta.monospaced())
+                    .foregroundColor(Theme.accent)
+                    .lineLimit(3)
+                    .truncationMode(.middle)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                CIcon(copied ? "check" : "copy", size: 18, color: Theme.accent)
+            }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .background(Hovering { hover in
+                RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                    .fill(hover ? Theme.accentSoftHover : Theme.accentSoft)
+            })
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                    .strokeBorder(Theme.accent, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Copy link")
+    }
+}
+
+/// Unread count: accent on accent.soft (muted: grey).
+struct UnreadPill: View {
+    let count: Int
+    var muted = false
+
+    var body: some View {
+        Text(count > 0 ? (count > 999 ? "999+" : "\(count)") : " ")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(muted ? Theme.secondaryText : Theme.accent)
+            .padding(.horizontal, 6)
+            .frame(minWidth: 20, minHeight: 18)
+            .background(Capsule().fill(muted ? Theme.hover : Theme.accentSoft))
+    }
+}
+
+/// 1px hairline in the border colour (between panes, under headers).
+struct Hairline: View {
+    var vertical = false
+
+    var body: some View {
+        Rectangle()
+            .fill(Theme.border)
+            .frame(width: vertical ? 1 : nil, height: vertical ? nil : 1)
+    }
+}
+
+// MARK: - Avatar
+
+enum AvatarKind {
+    case contact, group, channel, notes, initial
+}
+
+/// Profile picture, or Cursus's default disc: `bg.elevated` with a hairline
+/// and a person / group / antenna glyph (or an initial).
+struct Avatar: View {
+    let image: String?
+    let name: String
+    var size: CGFloat = 36
+    var kind: AvatarKind = .initial
+
+    var body: some View {
+        Group {
+            if let nsImage = Images.fromDataURL(image) {
+                Image(nsImage: nsImage).resizable().scaledToFill()
+                    .frame(width: size, height: size)
+                    .clipShape(Circle())
+            } else {
+                fallback
+                    .frame(width: size, height: size)
+                    .background(Circle().fill(kind == .notes ? Theme.accentSoft : Theme.elevated))
+                    .overlay(Circle().strokeBorder(kind == .notes ? Color.clear : Theme.border, lineWidth: 1))
+            }
+        }
+        .frame(width: size, height: size)
+    }
+
+    @ViewBuilder private var fallback: some View {
+        let glyph = min(max(size * 0.52, 14), 36)
+        switch kind {
+        case .contact: CIcon("user-alt-1", size: glyph, color: Theme.secondaryText)
+        case .group: CIcon("user-group", size: glyph, color: Theme.secondaryText)
+        case .channel: CIcon("channels", size: glyph, color: Theme.secondaryText)
+        case .notes: CIcon("edit-3", size: glyph, color: Theme.accent)
+        case .initial:
+            Text(initial)
+                .font(.system(size: size * 0.42))
+                .foregroundColor(Theme.primaryText)
+        }
+    }
+
+    private var initial: String {
+        name.trimmingCharacters(in: .whitespaces).first.map { String($0).uppercased() } ?? "?"
+    }
+}
+
+extension Chat {
+    var avatarKind: AvatarKind {
+        if isNotes { return .notes }
+        if isChannel { return .channel }
+        if isGroup { return .group }
+        return .contact
+    }
+}
+
+// MARK: - Confirm inside a card
+
+/// A destructive question asked in place: the question, Cancel and a solid
+/// danger button (DESIGN_SYSTEM.md → Overlays and menus).
+struct InlineConfirm: View {
+    let question: String
+    var detail: String? = nil
+    let confirmTitle: String
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(question).font(.cBodyBold).foregroundColor(Theme.primaryText)
+            if let detail = detail {
+                Text(detail).font(.cMeta).foregroundColor(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .buttonStyle(SecondaryButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+                Button(confirmTitle, action: onConfirm)
+                    .buttonStyle(DangerButtonStyle())
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+    }
+}

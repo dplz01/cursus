@@ -17,7 +17,7 @@ struct RootView: View {
     @ViewBuilder private var content: some View {
         switch model.phase {
         case .starting:
-            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(Theme.panel)
         case .welcome:
             WelcomeView()
         case .unlock:
@@ -43,9 +43,9 @@ struct BrandHeader: View {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
                 .frame(width: 88, height: 88)
-            Text("Cursus").font(.largeTitle.weight(.semibold))
+            Text("Cursus").font(.system(size: 28, weight: .semibold)).foregroundColor(Theme.primaryText)
             Text(subtitle)
-                .font(.callout)
+                .font(.cBody)
                 .foregroundColor(Theme.secondaryText)
                 .multilineTextAlignment(.center)
         }
@@ -69,33 +69,35 @@ struct WelcomeView: View {
     var body: some View {
         VStack(spacing: 22) {
             BrandHeader(subtitle: "Private messaging on SimpleX — no phone number, no user IDs.")
-            VStack(alignment: .leading, spacing: 10) {
-                TextField("Display name", text: $name)
-                SecureField("Database password", text: $password)
-                SecureField("Repeat password", text: $confirm)
+            Card(spacing: 10) {
+                CursusField(placeholder: "Display name", text: $name)
+                CursusField(placeholder: "Database password", text: $password, secure: true)
+                CursusField(placeholder: "Repeat password", text: $confirm, secure: true)
                 Toggle("Remember password in Keychain", isOn: $remember)
+                    .toggleStyle(.checkbox)
+                    .font(.cBody)
                 Text("The password encrypts your messages on this Mac. It can't be recovered if you forget it.")
-                    .font(.caption)
+                    .font(.cMeta)
                     .foregroundColor(Theme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    Task { await model.createAccount(name: name.trimmingCharacters(in: .whitespaces), password: password, remember: remember) }
+                } label: {
+                    Text(model.busy ? "Creating…" : "Create profile")
+                }
+                .buttonStyle(PrimaryButtonStyle(stretch: true))
+                .keyboardShortcut(.defaultAction)
+                .disabled(problem != nil || model.busy)
+                .padding(.top, 4)
+                if let problem = problem, !password.isEmpty || !name.isEmpty {
+                    Text(problem).font(.cMeta).foregroundColor(Theme.secondaryText)
+                }
             }
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 320)
-            Button {
-                Task { await model.createAccount(name: name.trimmingCharacters(in: .whitespaces), password: password, remember: remember) }
-            } label: {
-                Text(model.busy ? "Creating…" : "Create profile").frame(width: 180)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .keyboardShortcut(.defaultAction)
-            .disabled(problem != nil || model.busy)
-            if let problem = problem, !password.isEmpty || !name.isEmpty {
-                Text(problem).font(.caption).foregroundColor(Theme.secondaryText)
-            }
+            .frame(width: 340)
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.panel)
     }
 }
 
@@ -109,27 +111,37 @@ struct UnlockView: View {
     var body: some View {
         VStack(spacing: 22) {
             BrandHeader(subtitle: model.info?.displayName.map { "Welcome back, \($0)." } ?? "Enter your database password.")
-            VStack(alignment: .leading, spacing: 10) {
+            Card(spacing: 10) {
                 SecureField("Database password", text: $password)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
+                    .font(.cBody)
                     .focused($focused)
                     .onSubmit(unlock)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).fill(Theme.fieldFill))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                        .strokeBorder(focused ? Theme.accent : Theme.border, lineWidth: 1))
                 Toggle("Remember password in Keychain", isOn: $remember)
+                    .toggleStyle(.checkbox)
+                    .font(.cBody)
+                Button(action: unlock) {
+                    Text(model.busy ? "Unlocking…" : "Unlock")
+                }
+                .buttonStyle(PrimaryButtonStyle(stretch: true))
+                .keyboardShortcut(.defaultAction)
+                .disabled(password.isEmpty || model.busy)
+                .padding(.top, 4)
             }
-            .frame(width: 300)
-            Button(action: unlock) {
-                Text(model.busy ? "Unlocking…" : "Unlock").frame(width: 160)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .keyboardShortcut(.defaultAction)
-            .disabled(password.isEmpty || model.busy)
+            .frame(width: 320)
             Button("Forgot password?") { confirmWipe = true }
-                .buttonStyle(.link)
-                .font(.caption)
+                .buttonStyle(.plain)
+                .font(.cMeta)
+                .foregroundColor(Theme.accent)
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.panel)
         .onAppear { focused = true }
         .confirmationDialog("Erase Cursus data on this Mac?", isPresented: $confirmWipe) {
             Button("Erase everything", role: .destructive) {
@@ -156,12 +168,11 @@ struct FailureView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 40))
-                .foregroundColor(.orange)
-            Text("Cursus couldn't start the chat core").font(.title2.weight(.semibold))
+            IconDisc(icon: "sf:exclamationmark.triangle", size: 56, tint: Theme.danger, fill: Theme.dangerSoft)
+            Text("Cursus couldn't start the chat core").font(.cTitle).foregroundColor(Theme.primaryText)
             Text(reason)
-                .font(.callout.monospaced())
+                .font(.cMeta.monospaced())
+                .foregroundColor(Theme.secondaryText)
                 .textSelection(.enabled)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
@@ -169,8 +180,10 @@ struct FailureView: View {
                 model.phase = .starting
                 Task { await model.bootstrap() }
             }
+            .buttonStyle(PrimaryButtonStyle())
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.panel)
     }
 }

@@ -1,20 +1,24 @@
 import AppKit
 import SwiftUI
 
-/// Three columns, the macOS 12 way (NavigationSplitView is macOS 13+):
-/// destinations | list | detail.
+/// Cursus's nav rail | the macOS split view (list | detail). The rail is
+/// Cursus's own (four destinations, Settings at the bottom); the split
+/// view, toolbar, search field and menus stay native.
 struct MainView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        NavigationView {
-            SidebarView()
-                .frame(minWidth: 160, idealWidth: 180)
-            middle
-                .frame(minWidth: 260, idealWidth: 300)
-            detail
-                .frame(minWidth: 380)
+        HStack(spacing: 0) {
+            NavRail()
+            Hairline(vertical: true)
+            NavigationView {
+                middle
+                    .frame(minWidth: 260, idealWidth: 300)
+                detail
+                    .frame(minWidth: 380)
+            }
         }
+        .background(Theme.app)
         .sheet(isPresented: $model.showNewChat) {
             NewChatSheet().environmentObject(model)
         }
@@ -36,72 +40,69 @@ struct MainView: View {
         case .settings:
             SettingsDetailView()
         case .calls:
-            Placeholder(symbol: "phone", text: "Voice calls are coming to Cursus for Mac.")
+            Placeholder(icon: "calls", text: "Voice calls are coming to Cursus for Mac.")
         case .chats, .channels:
             if let chat = model.selectedChat {
-                ConversationView(chat: chat).id(chat.ref)
+                HStack(spacing: 0) {
+                    ConversationView(chat: chat).id(chat.ref)
+                        .frame(minWidth: 320)
+                    if model.showInfo {
+                        Hairline(vertical: true)
+                        ChatInfoView(chat: chat)
+                            .frame(width: 320)
+                            .transition(.move(edge: .trailing))
+                    }
+                }
+                .animation(.easeOut(duration: 0.18), value: model.showInfo)
             } else {
-                Placeholder(symbol: "bubble.left.and.bubble.right", text: "Select a conversation")
+                Placeholder(icon: model.destination == .channels ? "channels" : "chats",
+                            text: "Select a conversation")
             }
         }
     }
 }
 
+/// One short sentence on the panel colour (DESIGN_SYSTEM.md → Empty states).
 struct Placeholder: View {
-    let symbol: String
+    let icon: String
     let text: String
 
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(.system(size: 36, weight: .light))
-                .foregroundColor(Theme.mutedText)
-            Text(text).foregroundColor(Theme.secondaryText)
+            IconDisc(icon: icon, size: 56)
+            Text(text).font(.cBody).foregroundColor(Theme.secondaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.panel)
     }
 }
 
-struct SidebarView: View {
+// MARK: - Nav rail
+
+struct NavRail: View {
     @EnvironmentObject private var model: AppModel
 
-    private var selection: Binding<Destination?> {
-        Binding(get: { model.destination }, set: { if let d = $0 { model.destination = d } })
-    }
-
     var body: some View {
-        List(selection: selection) {
-            ForEach(Destination.allCases) { dest in
-                Label(dest.title, systemImage: dest.symbol)
-                    .badge(badge(for: dest))
-                    .tag(dest)
+        VStack(spacing: 8) {
+            ForEach([Destination.chats, .channels, .calls]) { dest in
+                NavDestinationButton(dest: dest, badge: badge(for: dest))
             }
-        }
-        .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom) {
+            Spacer(minLength: 8)
+            NavDestinationButton(dest: .settings, badge: 0)
             if let user = model.user {
-                HStack(spacing: 8) {
-                    Avatar(image: user.image, name: user.displayName, size: 26)
-                    Text(user.displayName).lineLimit(1)
-                    Spacer()
-                    Button { model.lock() } label: { Image(systemName: "lock") }
-                        .buttonStyle(.borderless)
-                        .help("Lock Cursus (⇧⌘L)")
+                Button { model.destination = .settings; model.settingsPage = .profile } label: {
+                    Avatar(image: user.image, name: user.displayName, size: 32)
                 }
-                .padding(10)
+                .buttonStyle(.plain)
+                .help(user.displayName)
+                .padding(.top, 2)
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    NSApp.keyWindow?.firstResponder?.tryToPerform(
-                        #selector(NSSplitViewController.toggleSidebar(_:)), with: nil)
-                } label: {
-                    Image(systemName: "sidebar.left")
-                }
-                .help("Show or hide the sidebar")
-            }
-        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 8)
+        .frame(width: 76)
+        .frame(maxHeight: .infinity)
+        .background(Theme.sidebar)
     }
 
     private func badge(for dest: Destination) -> Int {
@@ -116,6 +117,36 @@ struct SidebarView: View {
     }
 }
 
+private struct NavDestinationButton: View {
+    @EnvironmentObject private var model: AppModel
+    let dest: Destination
+    let badge: Int
+
+    private var active: Bool { model.destination == dest }
+
+    var body: some View {
+        Button { model.destination = dest } label: {
+            VStack(spacing: 3) {
+                CIcon(dest.icon, size: 22)
+                Text(dest.title).font(.system(size: 10, weight: active ? .semibold : .regular))
+            }
+            .foregroundColor(active ? Theme.accent : Theme.secondaryText)
+            .frame(width: 60, height: 52)
+            .overlay(alignment: .topTrailing) {
+                if badge > 0 {
+                    UnreadPill(count: badge)
+                        .scaleEffect(0.85)
+                        .offset(x: 2, y: -2)
+                }
+            }
+        }
+        .buttonStyle(GhostTileStyle(selected: active))
+        .help(dest.title)
+    }
+}
+
+// MARK: - Chat list
+
 struct ChatListView: View {
     @EnvironmentObject private var model: AppModel
     @State private var search = ""
@@ -128,22 +159,29 @@ struct ChatListView: View {
     }
 
     var body: some View {
-        List(selection: $model.selection) {
-            ForEach(rows) { chat in
-                ChatRow(chat: chat)
-                    .tag(chat.ref)
+        ScrollView {
+            LazyVStack(spacing: 2) {
+                ForEach(rows) { chat in
+                    ChatRow(chat: chat, selected: model.selection == chat.ref) {
+                        model.selection = chat.ref
+                    }
                     .contextMenu { ChatMenu(chat: chat) }
+                }
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
         }
-        .listStyle(.inset)
+        .background(Theme.list)
         .searchable(text: $search, placement: .toolbar, prompt: "Search")
         .overlay {
             if model.visibleChats.isEmpty {
-                VStack(spacing: 10) {
-                    Text(model.destination == .channels ? "No channels yet" : "No conversations yet")
+                VStack(spacing: 12) {
+                    Text(model.destination == .channels ? "No channels yet." : "No conversations yet.")
+                        .font(.cBody)
                         .foregroundColor(Theme.secondaryText)
                     if model.destination == .chats {
-                        Button("Add contact…") { model.showNewChat = true }
+                        Button("Add contact") { model.showNewChat = true }
+                            .buttonStyle(PrimaryButtonStyle(small: true))
                     }
                 }
             }
@@ -174,6 +212,12 @@ struct ChatMenu: View {
         Button(chat.muted ? "Unmute" : "Mute") {
             Task { await model.setMuted(chat, !chat.muted) }
         }
+        if !chat.isNotes && chat.pendingRequestId == nil {
+            Button(chat.isGroup ? (chat.isChannel ? "Channel info" : "Group info") : "Contact info") {
+                model.selection = chat.ref
+                if !model.showInfo { model.toggleInfo() }
+            }
+        }
         Divider()
         Button("Clear messages…") {
             if confirm("Clear all messages in “\(chat.title)”?", "Messages are deleted from this Mac only.") {
@@ -198,92 +242,63 @@ struct ChatMenu: View {
     }
 }
 
+/// 44px avatar · name / two-line preview · stamp, star, mute, unread pill.
 struct ChatRow: View {
     let chat: Chat
+    let selected: Bool
+    let action: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Avatar(image: chat.image, name: chat.title, size: 38, symbol: chat.isNotes ? "note.text" : nil)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    if chat.favorite {
-                        Image(systemName: "star.fill").font(.caption2).foregroundColor(.yellow)
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 10) {
+                Avatar(image: chat.image, name: chat.title, size: 44, kind: chat.avatarKind)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text(chat.title)
+                            .font(chat.hasUnread ? .cBodyBold : .cBody)
+                            .foregroundColor(Theme.primaryText)
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        if let date = chat.lastDate {
+                            Text(Dates.listStamp(date))
+                                .font(.cMeta)
+                                .foregroundColor(chat.hasUnread && !chat.muted ? Theme.accent : Theme.mutedText)
+                        }
                     }
-                    Text(chat.title).fontWeight(chat.hasUnread ? .semibold : .regular).lineLimit(1)
-                    Spacer(minLength: 4)
-                    if let date = chat.lastDate {
-                        Text(Dates.listStamp(date)).font(.caption).foregroundColor(Theme.mutedText)
-                    }
-                }
-                HStack(spacing: 4) {
-                    Text(chat.pendingRequestId != nil ? "Wants to connect" : chat.preview)
-                        .font(.callout)
-                        .foregroundColor(Theme.secondaryText)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    if chat.muted {
-                        Image(systemName: "bell.slash").font(.caption2).foregroundColor(Theme.mutedText)
-                    }
-                    if chat.hasUnread {
-                        Text(chat.unread > 0 ? "\(chat.unread)" : " ")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1)
-                            .frame(minWidth: 18)
-                            .background(Capsule().fill(chat.muted ? Theme.mutedText : Theme.accent))
-                            .foregroundColor(.white)
+                    HStack(alignment: .top, spacing: 4) {
+                        Text(chat.pendingRequestId != nil ? "Wants to connect" : chat.preview)
+                            .font(.cMeta)
+                            .foregroundColor(chat.pendingRequestId != nil ? Theme.gold : Theme.secondaryText)
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                        if chat.favorite {
+                            CIcon("star", size: 14, color: Theme.accent).padding(.top, 1)
+                        }
+                        if chat.muted {
+                            CIcon("mute-notification", size: 14, color: Theme.mutedText).padding(.top, 1)
+                        }
+                        if chat.hasUnread {
+                            UnreadPill(count: chat.unread, muted: chat.muted)
+                        }
                     }
                 }
             }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 4)
-    }
-}
-
-struct Avatar: View {
-    let image: String?
-    let name: String
-    var size: CGFloat = 36
-    var symbol: String? = nil
-
-    var body: some View {
-        Group {
-            if let nsImage = Images.fromDataURL(image) {
-                Image(nsImage: nsImage).resizable().scaledToFill()
-            } else if let symbol = symbol {
-                Image(systemName: symbol)
-                    .font(.system(size: size * 0.45))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Theme.accent)
-            } else {
-                Text(initials)
-                    .font(.system(size: size * 0.4, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(color)
-            }
-        }
-        .frame(width: size, height: size)
-        .clipShape(Circle())
-    }
-
-    private var initials: String {
-        let parts = name.split(separator: " ").prefix(2)
-        let letters = parts.compactMap { $0.first }.map { String($0) }.joined()
-        return letters.isEmpty ? "?" : letters.uppercased()
-    }
-
-    private var color: Color {
-        let palette: [Color] = [.blue, .purple, .pink, .orange, .teal, .green, .indigo, .brown]
-        let hash = name.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0x7fffffff }
-        return palette[hash % palette.count]
+        .buttonStyle(GhostTileStyle(selected: selected))
     }
 }
 
 struct CallsView: View {
     var body: some View {
-        Placeholder(symbol: "phone", text: "No calls yet")
-            .navigationTitle("Calls")
+        VStack(spacing: 12) {
+            IconDisc(icon: "calls", size: 44)
+            Text("No calls yet.").font(.cBody).foregroundColor(Theme.secondaryText)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.list)
+        .navigationTitle("Calls")
     }
 }

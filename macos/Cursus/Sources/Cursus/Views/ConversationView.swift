@@ -40,15 +40,25 @@ struct ConversationView: View {
                     if mode != .new { scrollToBottom(proxy, animated: true) }
                 }
             }
-            Divider()
+            Hairline()
             ComposerView(chat: chat)
         }
         .navigationTitle(chat.title)
         .navigationSubtitle(subtitle)
+        .toolbar {
+            ToolbarItem {
+                if !chat.isNotes && chat.pendingRequestId == nil {
+                    Button { model.toggleInfo() } label: {
+                        Image(systemName: model.showInfo ? "info.circle.fill" : "info.circle")
+                    }
+                    .help(chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)")
+                }
+            }
+        }
         .onDrop(of: [UTType.fileURL], isTargeted: $dropTargeted, perform: drop)
         .overlay {
             if dropTargeted {
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: Radius.lg)
                     .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [8, 5]))
                     .padding(8)
                     .allowsHitTesting(false)
@@ -101,15 +111,21 @@ struct RequestBanner: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "person.badge.plus").font(.title3).foregroundColor(Theme.accent)
-            Text("**\(chat.title)** wants to connect with you.")
+            IconDisc(icon: "user-plus-alt-1", size: 36)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(chat.title).font(.cBodyBold).foregroundColor(Theme.primaryText)
+                Text("wants to connect with you").font(.cMeta).foregroundColor(Theme.secondaryText)
+            }
             Spacer()
             Button("Reject") { Task { await model.rejectRequest(chat) } }
+                .buttonStyle(SecondaryButtonStyle(small: true))
             Button("Accept") { Task { await model.acceptRequest(chat) } }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PrimaryButtonStyle(small: true))
         }
-        .padding(12)
-        .background(Theme.accentSoft)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Theme.elevated)
+        .overlay(Hairline(), alignment: .bottom)
     }
 }
 
@@ -125,9 +141,12 @@ struct MessageRow: View {
     var body: some View {
         if message.announcement {
             Text(message.text)
-                .font(.caption)
+                .font(.cMeta)
                 .foregroundColor(Theme.mutedText)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Theme.elevated.opacity(0.7)))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 4)
         } else {
@@ -135,7 +154,7 @@ struct MessageRow: View {
                 if message.outgoing {
                     Spacer(minLength: 80)
                 } else if showSender {
-                    Avatar(image: message.sender?.image, name: message.sender?.name ?? "?", size: 26)
+                    Avatar(image: message.sender?.image, name: message.sender?.name ?? "?", size: 28, kind: .contact)
                 }
                 VStack(alignment: message.outgoing ? .trailing : .leading, spacing: 3) {
                     bubble
@@ -161,7 +180,7 @@ struct MessageRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 if showSender, let sender = message.sender {
                     Text(sender.name)
-                        .font(.caption.weight(.semibold))
+                        .font(.cMetaBold)
                         .foregroundColor(Theme.accent)
                 }
                 if let quote = message.quote {
@@ -179,16 +198,18 @@ struct MessageRow: View {
                         .foregroundColor(Theme.secondaryText)
                 } else if !message.text.isEmpty && message.groupInvitation == nil {
                     Text(RichText.attributed(message))
+                        .font(.cBody)
+                        .foregroundColor(Theme.primaryText)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 footer
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(message.outgoing ? Theme.accentSoft : Theme.elevated)
+                RoundedRectangle(cornerRadius: Radius.bubble, style: .continuous)
+                    .fill(message.outgoing ? Theme.bubbleOut : Theme.bubbleIn)
             )
         }
     }
@@ -205,8 +226,8 @@ struct MessageRow: View {
                 DeliveryMark(delivery: message.delivery)
             }
         }
-        .font(.caption2)
-        .foregroundColor(Theme.mutedText)
+        .font(.system(size: 11))
+        .foregroundColor(message.outgoing && !message.emojiOnly ? Theme.bubbleOutMeta : Theme.mutedText)
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }
@@ -217,13 +238,13 @@ struct DeliveryMark: View {
     var body: some View {
         switch delivery {
         case "sent":
-            Text("✓")
+            CIcon("check", size: 13)
         case "delivered":
-            Text("✓✓").foregroundColor(Theme.accent)
+            CIcon("check-read", size: 13, color: Theme.bubbleOutTick)
         case "error", "warning":
-            Image(systemName: "exclamationmark.circle").foregroundColor(.red)
+            Image(systemName: "exclamationmark.circle").foregroundColor(Theme.danger)
         default:
-            Image(systemName: "clock")
+            CIcon("system-pending-line", size: 12)
         }
     }
 }
@@ -238,16 +259,16 @@ struct QuoteView: View {
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 1) {
                 Text(quote.outgoing ? "You" : "Reply")
-                    .font(.caption.weight(.semibold))
+                    .font(.cMetaBold)
                     .foregroundColor(Theme.accent)
                 Text(quote.text.isEmpty ? "Attachment" : quote.text)
-                    .font(.callout)
+                    .font(.cMeta)
                     .foregroundColor(Theme.secondaryText)
                     .lineLimit(2)
             }
         }
         .padding(6)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .background(RoundedRectangle(cornerRadius: Radius.sm).fill(Color.primary.opacity(0.05)))
     }
 }
 
@@ -258,14 +279,20 @@ struct GroupInviteCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(outgoing ? "You invited them to \(invite.name)" : "Invitation to join \(invite.name)",
-                  systemImage: "person.3")
-            Text("Role: \(invite.role) · \(invite.status)")
-                .font(.caption)
-                .foregroundColor(Theme.secondaryText)
+            HStack(spacing: 10) {
+                IconDisc(icon: "user-group", size: 36)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(outgoing ? "You invited them to \(invite.name)" : "Invitation to join \(invite.name)")
+                        .font(.cBody)
+                        .foregroundColor(Theme.primaryText)
+                    Text("Role: \(invite.role) · \(invite.status)")
+                        .font(.cMeta)
+                        .foregroundColor(Theme.secondaryText)
+                }
+            }
             if invite.pending {
                 Button("Join group") { Task { await model.joinGroup(invite.groupId) } }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PrimaryButtonStyle(small: true))
             }
         }
     }
@@ -282,10 +309,12 @@ struct ReactionsBar: View {
                     Task { await model.toggleReaction(message, emoji: reaction.emoji) }
                 } label: {
                     Text("\(reaction.glyph) \(reaction.total)")
-                        .font(.caption)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(reaction.mine ? Theme.accentSoft : Theme.elevated))
+                        .font(.cMeta)
+                        .foregroundColor(reaction.mine ? Theme.accent : Theme.primaryText)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(reaction.mine ? Theme.accentSoft : Theme.elevated))
+                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(reaction.mine ? Theme.accent : Theme.border, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
             }
@@ -406,7 +435,7 @@ struct AttachmentView: View {
                         .resizable()
                         .scaledToFit()
                         .frame(maxWidth: 300, maxHeight: 320)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                         .onTapGesture { Task { await model.open(file) } }
                         .help("Open in Preview")
                 } else {
@@ -436,13 +465,10 @@ struct FileRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: symbol)
-                .font(.title2)
-                .foregroundColor(Theme.accent)
-                .frame(width: 30)
+            IconDisc(icon: symbol, size: 36)
             VStack(alignment: .leading, spacing: 2) {
-                Text(file.name).lineLimit(1).truncationMode(.middle)
-                Text(detail).font(.caption).foregroundColor(Theme.secondaryText)
+                Text(file.name).font(.cBody).foregroundColor(Theme.primaryText).lineLimit(1).truncationMode(.middle)
+                Text(detail).font(.cMeta).foregroundColor(Theme.secondaryText)
                 if file.state == "inProgress" {
                     if let progress = progress {
                         ProgressView(value: progress).frame(width: 160)
@@ -460,16 +486,10 @@ struct FileRow: View {
     @ViewBuilder private var action: some View {
         switch file.state {
         case "offer":
-            Button { Task { await model.download(file) } } label: { Image(systemName: "arrow.down.circle") }
-                .buttonStyle(.borderless)
-                .font(.title2)
-                .help("Download")
+            IconTool(icon: "download", help: "Download") { Task { await model.download(file) } }
         case "complete":
             if file.isComplete {
-                Button { Task { await model.open(file) } } label: { Image(systemName: "arrow.up.forward.app") }
-                    .buttonStyle(.borderless)
-                    .font(.title3)
-                    .help("Open")
+                IconTool(icon: "sf:arrow.up.forward.app", help: "Open", size: 18) { Task { await model.open(file) } }
             }
         default:
             EmptyView()
@@ -478,10 +498,10 @@ struct FileRow: View {
 
     private var symbol: String {
         switch file.kind {
-        case "image": return "photo"
-        case "video": return "film"
-        case "voice": return "waveform"
-        default: return "doc"
+        case "image": return "image-square"
+        case "video": return "sf:film"
+        case "voice": return "mic"
+        default: return "review-file"
         }
     }
 
@@ -544,15 +564,15 @@ struct VoiceView: View {
                     }
                 }
             } label: {
-                Image(systemName: player.playingId == messageId ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundColor(Theme.accent)
+                CIcon(player.playingId == messageId ? "stop" : "play", size: 16, color: Theme.accentOn)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(Theme.accent))
             }
             .buttonStyle(.plain)
             Image(systemName: "waveform")
                 .foregroundColor(Theme.secondaryText)
             Text(file.duration.map(Format.duration) ?? "Voice message")
-                .font(.callout.monospacedDigit())
+                .font(.cMeta.monospacedDigit())
                 .foregroundColor(Theme.secondaryText)
         }
     }
@@ -572,36 +592,40 @@ struct ComposerView: View {
     var body: some View {
         if chat.pendingRequestId != nil {
             Text("Accept the request to start chatting.")
+                .font(.cBody)
                 .foregroundColor(Theme.secondaryText)
                 .frame(maxWidth: .infinity)
                 .padding(14)
+                .background(Theme.list)
         } else {
             VStack(spacing: 0) {
                 contextBar
-                HStack(spacing: 8) {
-                    Button(action: attach) {
-                        Image(systemName: "paperclip").font(.title3)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Send a file")
+                HStack(spacing: 6) {
+                    IconTool(icon: "sf:paperclip", help: "Send a file", action: attach)
                     TextField(placeholder, text: $model.draft)
                         .textFieldStyle(.plain)
+                        .font(.cBody)
                         .focused($focused)
                         .onSubmit(send)
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.fieldFill))
+                        .padding(.vertical, 9)
+                        .background(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).fill(Theme.fieldFill))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                                .strokeBorder(focused ? Theme.accent : Theme.border, lineWidth: 1))
                     Button(action: send) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 26))
-                            .foregroundColor(canSend ? Theme.accent : Theme.mutedText)
+                        CIcon("send", size: 18, color: canSend ? Theme.accentOn : Theme.mutedText)
+                            .frame(width: 34, height: 34)
+                            .background(Circle().fill(canSend ? Theme.accent : Theme.disabledFill))
                     }
                     .buttonStyle(.plain)
                     .disabled(!canSend)
                     .help("Send (Return)")
                 }
-                .padding(10)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
             }
+            .background(Theme.list)
             .onAppear { focused = true }
             .onChange(of: model.composeMode) { _ in focused = true }
             .onExitCommand { model.cancelCompose() }
@@ -619,25 +643,23 @@ struct ComposerView: View {
         case .new:
             EmptyView()
         case .reply(let message):
-            bar(symbol: "arrowshape.turn.up.left", title: "Replying", text: message.text)
+            bar(icon: "reply", title: "Replying", text: message.text)
         case .edit(let message):
-            bar(symbol: "pencil", title: "Editing", text: message.text)
+            bar(icon: "edit-3", title: "Editing", text: message.text)
         }
     }
 
-    private func bar(symbol: String, title: String, text: String) -> some View {
+    private func bar(icon: String, title: String, text: String) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: symbol).foregroundColor(Theme.accent)
+            RoundedRectangle(cornerRadius: 1.5).fill(Theme.accent).frame(width: 3, height: 30)
+            CIcon(icon, size: 18, color: Theme.accent)
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.caption.weight(.semibold)).foregroundColor(Theme.accent)
-                Text(text.isEmpty ? "Attachment" : text).font(.callout).lineLimit(1)
+                Text(title).font(.cMetaBold).foregroundColor(Theme.accent)
+                Text(text.isEmpty ? "Attachment" : text).font(.cMeta).lineLimit(1)
                     .foregroundColor(Theme.secondaryText)
             }
             Spacer()
-            Button { model.cancelCompose() } label: { Image(systemName: "xmark.circle.fill") }
-                .buttonStyle(.borderless)
-                .foregroundColor(Theme.mutedText)
-                .help("Cancel (Esc)")
+            IconTool(icon: "cancel", help: "Cancel (Esc)", size: 14) { model.cancelCompose() }
         }
         .padding(.horizontal, 14)
         .padding(.top, 8)

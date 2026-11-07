@@ -5,7 +5,7 @@
 use cursus_core::{
     parse_chat_info_id, ChatId, ChatMessage, ChatPreview, ChatType, ConnLink, DeletedState,
     DeliveryStatus, Event, FileInfo, FileKind, FileTransferState, FormatColor, GroupChatScope,
-    SimplexLinkKind, TextSegment, TextStyle, UserProfile,
+    GroupMemberInfo, SimplexLinkKind, TextSegment, TextStyle, UserProfile,
 };
 use serde_json::{json, Value};
 
@@ -80,11 +80,31 @@ pub fn chat(c: &ChatPreview) -> Value {
         "favorite": c.settings.favorite,
         "pendingRequestId": c.pending_request_id,
         "image": c.peer_profile.image,
+        // Public name (ignoring the local alias), for the info panel.
+        "name": if c.peer_profile.display_name.trim().is_empty() { c.title.clone() } else { c.peer_profile.display_name.clone() },
+        "alias": c.local_alias,
         "fullName": c.peer_profile.full_name,
         "shortDescr": c.peer_profile.short_descr,
+        "description": c.peer_profile.description,
+        "contactLink": c.peer_profile.contact_link,
         "isChannel": c.is_channel,
         "role": c.membership_role,
         "lastTs": c.last_ts,
+    })
+}
+
+pub fn member(m: &GroupMemberInfo) -> Value {
+    json!({
+        "id": m.group_member_id,
+        "contactId": m.contact_id,
+        "name": m.display_name,
+        "publicName": m.public_name,
+        "role": m.role,
+        "status": m.status,
+        "image": m.image,
+        "shortDescr": m.short_descr,
+        "isMe": m.is_me,
+        "blocked": m.blocked_by_admin,
     })
 }
 

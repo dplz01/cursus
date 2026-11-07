@@ -25,14 +25,8 @@ enum Destination: String, CaseIterable, Identifiable {
         }
     }
 
-    var symbol: String {
-        switch self {
-        case .chats: return "bubble.left.and.bubble.right"
-        case .channels: return "megaphone"
-        case .calls: return "phone"
-        case .settings: return "gearshape"
-        }
-    }
+    /// Cursus icon (macos/Resources/icons).
+    var icon: String { rawValue }
 }
 
 enum SettingsPage: String, CaseIterable, Identifiable {
@@ -48,12 +42,21 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         }
     }
 
-    var symbol: String {
+    var icon: String {
         switch self {
-        case .profile: return "person.crop.circle"
-        case .privacy: return "lock.shield"
-        case .notifications: return "bell"
-        case .about: return "info.circle"
+        case .profile: return "user-alt-1"
+        case .privacy: return "shield-check"
+        case .notifications: return "sf:bell"
+        case .about: return "info-circle"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .profile: return "Name, picture and bio"
+        case .privacy: return "Receipts, files, password"
+        case .notifications: return "Banners for new messages"
+        case .about: return "Version, data and licences"
         }
     }
 }
@@ -86,6 +89,9 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var busy = false
     @Published var showNewChat = false
+    /// Contact / group info panel beside the conversation (⌘I).
+    @Published var showInfo = false
+    @Published var members: [Member] = []
     @Published var isLoadingMessages = false
 
     /// Settings → Notifications (`@AppStorage` with these keys in the view).
@@ -262,8 +268,10 @@ final class AppModel: ObservableObject {
         draft = selection.flatMap { drafts[$0] } ?? ""
         composeMode = .new
         messages = []
+        members = []
         fileProgress = [:]
         guard let ref = selection else { return }
+        if showInfo { Task { await loadMembers() } }
         isLoadingMessages = true
         Task {
             await reloadMessages(for: ref)
@@ -326,7 +334,10 @@ final class AppModel: ObservableObject {
 
     func delete(_ chat: Chat) async {
         await perform { try await Core.run("deleteChat", ["chat": chat.ref]) }
-        if selection == chat.ref { selection = nil }
+        if selection == chat.ref {
+            selection = nil
+            showInfo = false
+        }
     }
 
     func acceptRequest(_ chat: Chat) async {
@@ -338,6 +349,65 @@ final class AppModel: ObservableObject {
         guard let id = chat.pendingRequestId else { return }
         await perform { try await Core.run("rejectRequest", ["id": id]) }
         if selection == chat.ref { selection = nil }
+    }
+
+    /// ⌃Tab / ⌃⇧Tab: next / previous conversation in the visible list.
+    func selectAdjacent(_ step: Int) {
+        let list = visibleChats
+        guard !list.isEmpty else { return }
+        guard let sel = selection, let i = list.firstIndex(where: { $0.ref == sel }) else {
+            selection = list.first?.ref
+            return
+        }
+        selection = list[(i + step + list.count) % list.count].ref
+    }
+
+    func toggleInfo() {
+        guard selectedChat != nil else { return }
+        showInfo.toggle()
+        if showInfo { Task { await loadMembers() } }
+    }
+
+    func loadMembers() async {
+        guard let chat = selectedChat, chat.isGroup else {
+            members = []
+            return
+        }
+        do {
+            let list = try await Core.call("listMembers", ["groupId": chat.apiId], as: [Member].self)
+            guard selection == chat.ref else { return }
+            members = list.sorted { a, b in
+                if a.isMe != b.isMe { return a.isMe }
+                let ra = Self.roleRank(a.role), rb = Self.roleRank(b.role)
+                if ra != rb { return ra > rb }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+        } catch {
+            report(error)
+        }
+    }
+
+    static func roleRank(_ role: String) -> Int {
+        ["observer", "member", "moderator", "admin", "owner"].firstIndex(of: role) ?? 0
+    }
+
+    func setAlias(_ chat: Chat, _ alias: String) async {
+        let trimmed = alias.trimmingCharacters(in: .whitespaces)
+        guard trimmed != (chat.alias ?? "") else { return }
+        await perform { try await Core.run("setAlias", ["chat": chat.ref, "alias": trimmed]) }
+    }
+
+    func leaveGroup(_ chat: Chat) async {
+        await perform { try await Core.run("leaveGroup", ["groupId": chat.apiId]) }
+        if selection == chat.ref { await loadMembers() }
+    }
+
+    /// Open (or start) the direct chat with a group member.
+    func openContact(_ contactId: Int64) {
+        let ref = "@\(contactId)"
+        guard chats.contains(where: { $0.ref == ref }) else { return }
+        destination = .chats
+        selection = ref
     }
 
     func joinGroup(_ groupId: Int64) async {

@@ -68,6 +68,20 @@ fn abi_round_trip() {
     let updated = call("updateProfile", json!({ "displayName": "Abi2", "shortDescr": "bio" }), &mut dump);
     assert_eq!(updated["displayName"], "Abi2");
     call("setDeliveryReceipts", json!({ "groups": false, "on": false }), &mut dump);
+    // Group info panel: create → alias → members (just me) → listChats shape.
+    let group = call("createGroup", json!({ "name": "Abi group" }), &mut dump);
+    let group_ref = group.as_str().unwrap().to_string();
+    let group_id: i64 = group_ref.trim_start_matches('#').parse().unwrap();
+    call("setAlias", json!({ "chat": group_ref, "alias": "Mine" }), &mut dump);
+    let members = call("listMembers", json!({ "groupId": group_id }), &mut dump);
+    let me = members.as_array().unwrap().iter().find(|m| m["isMe"] == true).cloned().expect("own member row");
+    assert_eq!(me["role"], "owner");
+    let chats = call("listChats", json!({}), &mut dump);
+    let g = chats.as_array().unwrap().iter().find(|c| c["ref"] == group_ref.as_str()).cloned().unwrap();
+    assert_eq!(g["alias"], "Mine");
+    assert_eq!(g["title"], "Mine");
+    assert_eq!(g["name"], "Abi group");
+    call("leaveGroup", json!({ "groupId": group_id }), &mut dump);
     // Needs the network (SMP server).
     match std::env::var("CURSUS_ABI_OFFLINE") {
         Ok(_) => {}

@@ -23,6 +23,7 @@ mod touch_mouse;
 mod trail_row;
 #[cfg(test)]
 mod shots;
+mod single_instance;
 mod tap;
 mod ui;
 
@@ -500,6 +501,70 @@ pub struct SupportOverlay {
     pub return_to_settings: bool,
 }
 
+/// A profile text shown as plain text, edited in the [`FieldEditor`] sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditField {
+    OwnName,
+    OwnBio,
+    OwnDescription,
+    GroupName,
+    GroupAlias,
+    GroupShortDescr,
+    GroupWelcome,
+    ContactAlias,
+}
+
+impl EditField {
+    /// Long texts get a multi-line editor.
+    pub fn multiline(self) -> bool {
+        matches!(self, Self::OwnDescription | Self::GroupWelcome)
+    }
+
+    /// An empty value can't be saved.
+    fn required(self) -> bool {
+        matches!(self, Self::OwnName | Self::GroupName)
+    }
+
+    /// Draft update + commit, the same messages the inline fields used.
+    fn messages(self, value: String) -> (Message, Message) {
+        match self {
+            Self::OwnName => (Message::OwnProfileDisplayName(value), Message::SaveOwnProfile),
+            Self::OwnBio => (Message::OwnProfileBio(value), Message::SaveOwnProfile),
+            Self::OwnDescription => (Message::OwnProfileDescription(value), Message::SaveOwnProfile),
+            Self::GroupName => (Message::GroupSettingsNameChanged(value), Message::SaveGroupProfile),
+            Self::GroupAlias => (Message::GroupSettingsAliasChanged(value), Message::SaveGroupAlias),
+            Self::GroupShortDescr => (
+                Message::GroupSettingsShortDescrChanged(value),
+                Message::SaveGroupProfile,
+            ),
+            Self::GroupWelcome => (Message::GroupSettingsWelcomeChanged(value), Message::SaveGroupProfile),
+            Self::ContactAlias => (Message::ContactAliasChanged(value), Message::SaveContactAlias),
+        }
+    }
+}
+
+/// Open text editor sheet (one field at a time).
+pub struct FieldEditor {
+    pub field: EditField,
+    /// Single-line value.
+    pub value: String,
+    /// Multi-line fields edit here instead.
+    pub content: text_editor::Content,
+    pub error: Option<String>,
+}
+
+impl FieldEditor {
+    pub fn text(&self) -> String {
+        if self.field.multiline() {
+            self.content.text()
+        } else {
+            self.value.clone()
+        }
+    }
+}
+
+pub const FIELD_EDITOR_ID: &str = "field-editor-input";
+
 /// Group / channel settings page state.
 #[derive(Debug, Clone)]
 pub struct GroupSettingsOverlay {
@@ -798,6 +863,16 @@ pub fn main() -> iced::Result {
     cursus_core::init_process_env();
 
     init_file_logging();
+    // Hidden in the tray, Cursus still holds the databases: a second launch
+    // would fail to open them ("database is locked"). Show the running one.
+    match single_instance::acquire(&cursus_core::data_dir()) {
+        Some(single_instance::Instance::Forwarded) => {
+            tracing::info!("Cursus is already running — showed its window");
+            std::process::exit(0);
+        }
+        Some(single_instance::Instance::Primary(listener)) => single_instance::serve(listener),
+        None => {}
+    }
     // AppImage / cargo installs: make sure Cursus shows up in the launcher.
     match desktop_entry::install(false) {
         Ok(Some(path)) => tracing::info!(path = %path.display(), "added launcher entry"),
@@ -1090,6 +1165,12 @@ pub enum Message {
     GroupProfileImagePicked(Result<String, String>),
     ClearGroupProfileImage,
     SaveGroupProfile,
+    /// Profile text sheet: open / type / multi-line edit / save / cancel.
+    OpenFieldEditor(EditField),
+    FieldEditorInput(String),
+    FieldEditorEdit(text_editor::Action),
+    FieldEditorSave,
+    FieldEditorCancel,
     GroupProfileSaved(Result<(), String>),
     GroupMembersLoaded(Result<Vec<GroupMemberInfo>, String>),
     OpenAddGroupMember,
@@ -1348,6 +1429,8 @@ struct App {
     privacy_confirm: Option<PrivacyConfirm>,
     /// Open setting explanation sheet.
     setting_info: Option<SettingInfo>,
+    /// Profile text being edited in its sheet.
+    field_editor: Option<FieldEditor>,
     /// Engaged app lock (content hidden, decrypted media wiped).
     locked: Option<LockState>,
     /// Delivery receipts (contacts, small groups) of the active profile.
@@ -1569,6 +1652,7 @@ impl App {
                 pending_url: None,
                 privacy_confirm: None,
                 setting_info: None,
+                field_editor: None,
                 locked: None,
                 receipts: (true, true),
                 encrypt_files: load_account().map(|a| a.encrypt_local_files).unwrap_or(true),
@@ -1800,6 +1884,8 @@ impl App {
             Subscription::none()
         };
 
+        let relaunch = Subscription::run(relaunch_stream);
+
         Subscription::batch([
             window,
             events,
@@ -1807,6 +1893,7 @@ impl App {
             fling_tick,
             tray_tick,
             lock_tick,
+            relaunch,
             self.call_subscription(),
         ])
     }
@@ -3664,6 +3751,70 @@ impl App {
             Message::MemberSupportChatDeleted(Err(err)) => {
                 self.status = err;
                 Task::none()
+            }
+            Message::OpenFieldEditor(field) => {
+                let Some(value) = self.field_value(field) else {
+                    return Task::none();
+                };
+                let content = if field.multiline() {
+                    let mut c = text_editor::Content::with_text(&value);
+                    c.perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
+                    c
+                } else {
+                    text_editor::Content::new()
+                };
+                self.field_editor = Some(FieldEditor {
+                    field,
+                    value,
+                    content,
+                    error: None,
+                });
+                let id = iced::widget::Id::new(FIELD_EDITOR_ID);
+                if field.multiline() {
+                    iced::widget::operation::focus(id)
+                } else {
+                    Task::batch([
+                        iced::widget::operation::focus(id.clone()),
+                        iced::widget::operation::move_cursor_to_end(id),
+                    ])
+                }
+            }
+            Message::FieldEditorInput(v) => {
+                if let Some(e) = self.field_editor.as_mut() {
+                    e.value = v;
+                    e.error = None;
+                }
+                Task::none()
+            }
+            Message::FieldEditorEdit(action) => {
+                if let Some(e) = self.field_editor.as_mut() {
+                    e.content.perform(action);
+                    e.error = None;
+                }
+                Task::none()
+            }
+            Message::FieldEditorCancel => {
+                self.field_editor = None;
+                Task::none()
+            }
+            Message::FieldEditorSave => {
+                let Some(editor) = self.field_editor.as_mut() else {
+                    return Task::none();
+                };
+                let field = editor.field;
+                let value = if field.multiline() {
+                    editor.text().trim_end().to_string()
+                } else {
+                    editor.text().trim().to_string()
+                };
+                if field.required() && value.is_empty() {
+                    editor.error = Some("The name can't be empty.".into());
+                    return Task::none();
+                }
+                self.field_editor = None;
+                let (change, commit) = field.messages(value);
+                let changed = self.update(change);
+                Task::batch([changed, self.update(commit)])
             }
             Message::GroupSettingsNameChanged(v) => {
                 if let Some(g) = self.group_settings.as_mut() {
@@ -5611,6 +5762,9 @@ impl App {
                 }
             }
             Message::Escape => {
+                if self.field_editor.take().is_some() {
+                    return Task::none();
+                }
                 if self.setting_info.take().is_some() {
                     return Task::none();
                 }
@@ -6869,6 +7023,26 @@ impl App {
     pub(crate) fn chat_menu(&self) -> Option<&ChatContextMenu> {
         self.chat_menu.as_ref()
     }
+    pub(crate) fn field_editor(&self) -> Option<&FieldEditor> {
+        self.field_editor.as_ref()
+    }
+
+    /// Current value of an editable profile text (`None` when its page is closed).
+    fn field_value(&self, field: EditField) -> Option<String> {
+        let own = &self.own_profile.fields;
+        let group = self.group_settings.as_ref();
+        Some(match field {
+            EditField::OwnName => own.display_name.clone(),
+            EditField::OwnBio => own.short_descr.clone(),
+            EditField::OwnDescription => own.description.clone(),
+            EditField::GroupName => group?.name.clone(),
+            EditField::GroupAlias => group?.alias.clone(),
+            EditField::GroupShortDescr => group?.short_descr.clone(),
+            EditField::GroupWelcome => group?.welcome_message.clone(),
+            EditField::ContactAlias => self.contact_profile.as_ref()?.alias.clone(),
+        })
+    }
+
     pub(crate) fn setting_info(&self) -> Option<SettingInfo> {
         self.setting_info
     }
@@ -8041,6 +8215,18 @@ fn core_event_stream(
 /// current sender from here and a restarted stream just swaps it.
 static TRAY_EVENTS: Mutex<Option<tokio::sync::mpsc::UnboundedSender<desktop::TrayAction>>> =
     Mutex::new(None);
+
+/// Cursus launched again while running: bring this window up instead.
+fn relaunch_stream() -> impl stream::Stream<Item = Message> + Send + 'static {
+    iced::stream::channel(4, |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+        let mut rx = single_instance::requests();
+        while rx.recv().await.is_some() {
+            if output.send(Message::ShowFromTray).await.is_err() {
+                break;
+            }
+        }
+    })
+}
 
 fn forward_tray_action(action: desktop::TrayAction) {
     if let Ok(guard) = TRAY_EVENTS.lock() {

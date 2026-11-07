@@ -679,6 +679,28 @@ pub fn rounded_field() -> impl Fn(&iced::Theme, text_input::Status) -> text_inpu
     }
 }
 
+/// Multi-line twin of [`rounded_field`] (editor sheet).
+pub fn rounded_editor() -> impl Fn(&iced::Theme, text_editor::Status) -> text_editor::Style {
+    |_, status| {
+        let c = t();
+        let border_color = match status {
+            text_editor::Status::Focused { .. } => c.accent,
+            _ => c.border,
+        };
+        text_editor::Style {
+            background: Background::Color(c.bg_field),
+            border: Border {
+                color: border_color,
+                width: 1.0,
+                radius: 12.0.into(),
+            },
+            placeholder: c.text_secondary,
+            value: c.text_primary,
+            selection: c.accent_soft,
+        }
+    }
+}
+
 /// Blue link box (accent-soft fill, accent hairline) — shared links / call cards.
 pub fn link_box(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {

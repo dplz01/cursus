@@ -880,3 +880,78 @@ fn shots_ui_fixes() {
         render(&app, MOBILE, &format!("fix-mgroup-alias-{t}"));
     }
 }
+
+/// A refresh that appends bubbles scrolls to them; new incoming ones get a
+/// "New messages" divider that goes away on its timer. Opening a chat or a
+/// refresh with nothing new shows none.
+#[test]
+fn new_messages_follow_and_label() {
+    load_fonts();
+    let mut app = demo_app(true, MOBILE.width, MOBILE.height);
+    select(&mut app, 0);
+    app.pin_history_end = false;
+    let mut away = app.messages.clone();
+    app.history_away_from_end = true;
+    let load = |app: &mut App, messages: Vec<ChatMessage>| {
+        let gen = app.messages_load_gen;
+        let _ = app.update(Message::MessagesLoaded { gen, result: Ok(messages) });
+    };
+
+    // Same list: nothing happens.
+    load(&mut app, away.clone());
+    assert_eq!(app.new_messages_from(), None);
+    assert!(app.history_away_from_end);
+
+    // Own message: follow it, no label.
+    away.push(msg(30, "on my way 🚆", true, "09:10"));
+    load(&mut app, away.clone());
+    assert!(!app.history_away_from_end, "scrolled to the new bubble");
+    assert_eq!(app.new_messages_from(), None);
+
+    // Two incoming: label above the first; a third keeps it there.
+    app.history_away_from_end = true;
+    away.push(msg(31, "great!", false, "09:11"));
+    away.push(msg(32, "I'm at platform 4", false, "09:11"));
+    load(&mut app, away.clone());
+    assert!(!app.history_away_from_end);
+    assert_eq!(app.new_messages_from(), Some(31));
+    render(&app, MOBILE, "fix-new-messages-dark");
+    away.push(msg(33, "😄", false, "09:12"));
+    load(&mut app, away.clone());
+    assert_eq!(app.new_messages_from(), Some(31));
+
+    // Only the latest timer clears it.
+    let _ = app.update(Message::ClearNewMessagesMarker(0));
+    assert_eq!(app.new_messages_from(), Some(31), "stale timer ignored");
+    let _ = app.update(Message::ClearNewMessagesMarker(1));
+    assert_eq!(app.new_messages_from(), None);
+
+    // Opening a chat never labels its history.
+    app.pin_history_end = true;
+    away.push(msg(34, "new on open", false, "09:13"));
+    load(&mut app, away);
+    assert_eq!(app.new_messages_from(), None);
+}
+
+/// Full group / contact pages (cards with buttons):
+/// `cargo test -p cursus-linux shots_profile_cards -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn shots_profile_cards() {
+    for dark in [true, false] {
+        let t = if dark { "dark" } else { "light" };
+        for (size, name) in [(Size::new(1200.0, 1500.0), "desk"), (Size::new(400.0, 1900.0), "mob")] {
+            let mut app = demo_app(dark, size.width, size.height);
+            group_page(&mut app, GroupSettingsPane::Overview);
+            if let Some(g) = app.group_settings.as_mut() {
+                g.my_role = "owner".into();
+                g.welcome_message = "Welcome to Cursus devs!\nRead the roadmap first, then say hi 👋".into();
+            }
+            render(&app, size, &format!("cards-group-{name}-{t}"));
+            let mut app = demo_app(dark, size.width, size.height);
+            select(&mut app, 0);
+            let _ = app.update(Message::OpenContactProfile);
+            render(&app, size, &format!("cards-contact-{name}-{t}"));
+        }
+    }
+}

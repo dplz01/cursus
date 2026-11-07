@@ -7,6 +7,7 @@ use cursus_core::{
     DeliveryStatus, Event, FileInfo, FileKind, FileTransferState, FormatColor, GroupChatScope,
     GroupMemberInfo, SimplexLinkKind, TextSegment, TextStyle, UserProfile,
 };
+use cursus_core::preferences;
 use serde_json::{json, Value};
 
 /// Parse a chat reference (`@3`, `#9`, `#9(_support)`, `#9(_support:4)`, `*1`).
@@ -94,14 +95,38 @@ pub fn chat(c: &ChatPreview) -> Value {
         "sendReceipts": c.settings.send_rcpts,
         "chatItemTtl": c.chat_item_ttl,
         "tagIds": c.tag_ids,
-        "contactPrefs": (c.id.chat_type == ChatType::Direct).then(|| {
-            crate::prefs::contact_view(c.contact_preferences.as_ref(), c.contact_merged_preferences.as_ref())
-        }),
-        "groupPrefs": (c.id.chat_type == ChatType::Group)
-            .then(|| crate::prefs::group_view(c.group_preferences.as_ref())),
+        "contactPrefs": (c.id.chat_type == ChatType::Direct).then(|| contact_prefs(c)),
+        "groupPrefs": (c.id.chat_type == ChatType::Group).then(|| group_prefs(c)),
         "memberReview": c.member_admission.as_ref().and_then(|m| m.get("review")).is_some(),
         "membersRequireAttention": c.members_require_attention,
     })
+}
+
+/// `{ features: { key: { mine, contact, enabled } }, timedTtl }` — the rules
+/// are `cursus_core::preferences`; this is only their JSON for the app.
+fn contact_prefs(c: &ChatPreview) -> Value {
+    let (prefs, merged) = (c.contact_preferences.as_ref(), c.contact_merged_preferences.as_ref());
+    let features: serde_json::Map<String, Value> = preferences::CONTACT_FEATURES
+        .iter()
+        .map(|key| {
+            let f = preferences::contact_feature(prefs, merged, key);
+            let v = json!({ "mine": f.mine.as_api(), "contact": f.contact.as_api(), "enabled": f.enabled_for_user });
+            (key.to_string(), v)
+        })
+        .collect();
+    let ttl = preferences::contact_timed_ttl(prefs, merged).unwrap_or(preferences::DEFAULT_TIMED_TTL_SECS);
+    json!({ "features": features, "timedTtl": ttl })
+}
+
+/// `{ features: { key: { on } }, timedTtl }`.
+fn group_prefs(c: &ChatPreview) -> Value {
+    let prefs = c.group_preferences.as_ref();
+    let features: serde_json::Map<String, Value> = preferences::GROUP_FEATURES
+        .iter()
+        .map(|key| (key.to_string(), json!({ "on": preferences::group_feature_on(prefs, key) })))
+        .collect();
+    let ttl = preferences::group_timed_ttl(prefs).unwrap_or(preferences::DEFAULT_TIMED_TTL_SECS);
+    json!({ "features": features, "timedTtl": ttl })
 }
 
 pub fn tag(t: &ChatTag) -> Value {

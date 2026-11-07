@@ -187,28 +187,51 @@ struct IconDisc: View {
     }
 }
 
-/// Clear / leave / delete: 32px disc + body label.
+/// Clear / leave / delete: 32px disc + body label. `stacked`: disc above
+/// the label, filling its share of a row of tiles (wide pages, as on Linux).
 struct ActionTile: View {
     let icon: String
     let title: String
     var danger = false
+    var stacked = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
-                IconDisc(icon: icon, tint: danger ? Theme.danger : Theme.accent,
-                         fill: danger ? Theme.dangerSoft : Theme.accentSoft)
-                Text(title)
-                    .font(.cBody)
-                    .foregroundColor(danger ? Theme.danger : Theme.primaryText)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
+            Group {
+                if stacked {
+                    VStack(spacing: 8) {
+                        disc
+                        label
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .padding(.horizontal, 8)
+                } else {
+                    HStack(spacing: 10) {
+                        disc
+                        label
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 10)
+                }
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 10)
+            .contentShape(Rectangle())
         }
         .buttonStyle(GhostTileStyle(danger: danger))
+    }
+
+    private var disc: some View {
+        IconDisc(icon: icon, tint: danger ? Theme.danger : Theme.accent,
+                 fill: danger ? Theme.dangerSoft : Theme.accentSoft)
+    }
+
+    private var label: some View {
+        Text(title)
+            .font(.cBody)
+            .foregroundColor(danger ? Theme.danger : Theme.primaryText)
+            .lineLimit(1)
     }
 }
 
@@ -219,6 +242,8 @@ struct NavRow: View {
     var subtitle: String? = nil
     var selected = false
     var trailing: String? = "chevron"
+    /// In a `Card(padding: 0)`: the row spans the card edge to edge.
+    var flush = false
     let action: () -> Void
 
     var body: some View {
@@ -240,8 +265,9 @@ struct NavRow: View {
                     CIcon(trailing, size: 16, color: Theme.mutedText)
                 }
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 10)
+            .padding(.vertical, flush ? 12 : 8)
+            .padding(.horizontal, flush ? 14 : 10)
+            .contentShape(Rectangle())
         }
         .buttonStyle(GhostTileStyle(selected: selected))
     }
@@ -249,8 +275,10 @@ struct NavRow: View {
 
 // MARK: - Cards and pages
 
-/// `bg.elevated`, 1px border, radius 12.
+/// `bg.elevated`, 1px border, radius 12. `padding: 0` for a card made only
+/// of buttons (flush rows / tiles): the whole card surface is clickable.
 struct Card<Content: View>: View {
+    var padding: CGFloat = 12
     var spacing: CGFloat = 10
     @ViewBuilder let content: Content
 
@@ -258,7 +286,7 @@ struct Card<Content: View>: View {
         VStack(alignment: .leading, spacing: spacing) {
             content
         }
-        .padding(12)
+        .padding(padding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).fill(Theme.elevated))
         .overlay(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))

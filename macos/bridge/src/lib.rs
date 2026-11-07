@@ -17,7 +17,6 @@
 
 mod dto;
 mod methods;
-mod prefs;
 
 use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};

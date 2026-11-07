@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-// Sub-pages of the info panel (ChatInfoView): preferences, a member, invite,
-// the group / channel link and the owner's profile editor.
+// Sub-pages of a chat's profile (ChatInfoView): preferences, a member,
+// invite, the group / channel link.
 
 // MARK: - Contact preferences
 
@@ -438,95 +438,5 @@ struct GroupLinkPage: View {
         loading = true
         link = await model.groupLink(chat, role: role, quiet: quiet)
         loading = false
-    }
-}
-
-// MARK: - Edit group (owners)
-
-struct EditGroupPage: View {
-    @EnvironmentObject private var model: AppModel
-    let chat: Chat
-    let done: () -> Void
-
-    @State private var name = ""
-    @State private var bio = ""
-    @State private var welcome = ""
-    /// nil = unchanged; .some(nil) = remove; .some(url) = new picture.
-    @State private var image: String??
-    @State private var saving = false
-
-    private var shownImage: String? {
-        if let pending = image { return pending }
-        return chat.image
-    }
-
-    private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
-
-    var body: some View {
-        Card(spacing: 8) {
-            HStack(alignment: .center, spacing: 14) {
-                VStack(spacing: 8) {
-                    Avatar(image: shownImage, name: trimmedName.isEmpty ? "?" : trimmedName, size: 72,
-                           kind: chat.avatarKind)
-                    HStack(spacing: 0) {
-                        IconTool(icon: "image-pen", help: "Choose picture…", size: 18, action: pickImage)
-                        if shownImage != nil {
-                            IconTool(icon: "trash-delete", help: "Remove picture", size: 18) { image = .some(nil) }
-                        }
-                    }
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    SectionLabel("Name")
-                    CursusField(placeholder: "Name", text: $name)
-                }
-            }
-            SectionLabel("Bio")
-            CursusField(placeholder: "A short line under the name (optional)", text: $bio)
-            SectionLabel("Welcome message")
-            TextEditor(text: $welcome)
-                .font(.cBody)
-                .frame(minHeight: 90, maxHeight: 200)
-                .padding(6)
-                .background(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).fill(Theme.fieldFill))
-                .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                    .strokeBorder(Theme.border, lineWidth: 1))
-            Text("Sent to every new member when they join.")
-                .font(.cMeta).foregroundColor(Theme.mutedText).padding(.horizontal, 8)
-            HStack(spacing: 8) {
-                Spacer()
-                Button("Cancel", action: done)
-                    .buttonStyle(SecondaryButtonStyle())
-                    .keyboardShortcut(.cancelAction)
-                Button(saving ? "Saving…" : "Save") {
-                    saving = true
-                    Task {
-                        await model.updateGroupProfile(
-                            chat, name: trimmedName, shortDescr: String(bio.prefix(160)),
-                            welcome: welcome, image: image)
-                        saving = false
-                        done()
-                    }
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(trimmedName.isEmpty || saving)
-            }
-        }
-        .onAppear {
-            name = chat.name ?? chat.title
-            bio = chat.shortDescr
-            welcome = chat.description ?? ""
-        }
-    }
-
-    private func pickImage() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image]
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url, let picked = NSImage(contentsOf: url) else { return }
-        if let dataURL = Images.profileDataURL(from: picked) {
-            image = .some(dataURL)
-        } else {
-            model.errorMessage = "That picture couldn't be used."
-        }
     }
 }

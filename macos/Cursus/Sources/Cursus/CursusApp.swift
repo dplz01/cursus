@@ -68,6 +68,8 @@ struct CursusApp: App {
                 .accentColor(Theme.accent)
                 .tint(Theme.accent)
         }
+        // Title and toolbar on one line, the same height on every page.
+        .windowToolbarStyle(.unified(showsTitle: true))
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat…") { model.showNewChat = true }

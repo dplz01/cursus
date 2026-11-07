@@ -2,9 +2,10 @@
 
 use std::path::PathBuf;
 
+use cursus_core::preferences;
 use cursus_core::{
-    AccountMeta, ChatId, ChatPreview, ChatSettings, ChatType, GroupProfileUpdate, NtfFilter,
-    ReceiveOutcome, Session, SessionConfig,
+    AccountMeta, ChatId, ChatPreview, ChatSettings, ChatType, FeatureAllow, GroupProfileUpdate,
+    NtfFilter, ReceiveOutcome, Session, SessionConfig,
 };
 use serde_json::{json, Value};
 
@@ -281,13 +282,27 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
                 return Err("only contacts have chat preferences".into());
             }
             let c = find_chat(&s, &chat)?;
+            let (prefs, merged) = (c.contact_preferences.as_ref(), c.contact_merged_preferences.as_ref());
             let changes = p.get("changes").cloned().unwrap_or_else(|| json!({}));
-            let prefs = crate::prefs::contact_update(
-                c.contact_preferences.as_ref(),
-                c.contact_merged_preferences.as_ref(),
-                &changes,
-            );
-            s.set_contact_prefs(chat.api_id, &prefs).map_err(err)?;
+            // Every shown feature: the requested change, else its current value.
+            let allows: Vec<(&str, FeatureAllow)> = preferences::CONTACT_FEATURES
+                .iter()
+                .map(|&key| {
+                    let allow = changes
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .map(FeatureAllow::from_api)
+                        .unwrap_or_else(|| preferences::contact_feature(prefs, merged, key).mine);
+                    (key, allow)
+                })
+                .collect();
+            let ttl = changes
+                .get("timedTtl")
+                .and_then(Value::as_i64)
+                .or_else(|| preferences::contact_timed_ttl(prefs, merged))
+                .unwrap_or(preferences::DEFAULT_TIMED_TTL_SECS);
+            let json = preferences::contact_preferences_json(prefs, &allows, ttl);
+            s.set_contact_prefs(chat.api_id, &json).map_err(err)?;
             Ok(Value::Null)
         }
         "chatTags" => Ok(Value::Array(s.list_chat_tags().map_err(err)?.iter().map(dto::tag).collect())),
@@ -381,16 +396,16 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
         "setGroupPref" => {
             let gid = i64_param(p, "groupId")?;
             let key = str_param(p, "key")?;
-            if !crate::prefs::GROUP_FEATURES.contains(&key) {
+            if !preferences::GROUP_FEATURES.contains(&key) {
                 return Err(format!("unknown group feature `{key}`"));
             }
             let mut profile = group_profile(&group_chat(&s, gid)?);
-            profile.group_preferences = Some(crate::prefs::group_set(
-                profile.group_preferences.as_ref(),
+            preferences::set_group_feature(
+                &mut profile.group_preferences,
                 key,
                 bool_param(p, "on")?,
                 p.get("ttl").and_then(Value::as_i64),
-            ));
+            );
             s.update_group_profile(gid, &profile).map_err(err)?;
             Ok(Value::Null)
         }

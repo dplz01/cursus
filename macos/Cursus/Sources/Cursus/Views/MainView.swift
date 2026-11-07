@@ -19,6 +19,15 @@ struct MainView: View {
             }
         }
         .background(Theme.app)
+        // One toolbar on every page: without it Settings had a bare title
+        // bar, so the window chrome (traffic lights included) jumped when
+        // switching destinations.
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button { model.showNewChat = true } label: { Image(systemName: "square.and.pencil") }
+                    .help("New chat (⌘N)")
+            }
+        }
         .sheet(isPresented: $model.showNewChat) {
             NewChatSheet().environmentObject(model)
         }
@@ -43,17 +52,13 @@ struct MainView: View {
             Placeholder(icon: "calls", text: "Voice calls are coming to Cursus for Mac.")
         case .chats, .channels:
             if let chat = model.selectedChat {
-                HStack(spacing: 0) {
+                // The profile is a page of its own (as on Linux), not a strip
+                // beside the chat; Back returns to the conversation.
+                if model.showInfo && !chat.isNotes {
+                    ChatInfoView(chat: chat).id(chat.ref)
+                } else {
                     ConversationView(chat: chat).id(chat.ref)
-                        .frame(minWidth: 320)
-                    if model.showInfo {
-                        Hairline(vertical: true)
-                        ChatInfoView(chat: chat)
-                            .frame(width: 320)
-                            .transition(.move(edge: .trailing))
-                    }
                 }
-                .animation(.easeOut(duration: 0.18), value: model.showInfo)
             } else {
                 Placeholder(icon: model.destination == .channels ? "channels" : "chats",
                             text: "Select a conversation")
@@ -187,12 +192,6 @@ struct ChatListView: View {
             }
         }
         .navigationTitle(model.destination.title)
-        .toolbar {
-            ToolbarItem {
-                Button { model.showNewChat = true } label: { Image(systemName: "square.and.pencil") }
-                    .help("New chat (⌘N)")
-            }
-        }
     }
 }
 

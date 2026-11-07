@@ -272,8 +272,9 @@ final class AppModel: ObservableObject {
         messages = []
         members = []
         fileProgress = [:]
+        // The profile is a full page: another chat opens on its messages.
+        showInfo = false
         guard let ref = selection else { return }
-        if showInfo { Task { await loadMembers() } }
         isLoadingMessages = true
         Task {
             await reloadMessages(for: ref)

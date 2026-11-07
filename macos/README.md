@@ -55,7 +55,9 @@ profile editor, delivery receipts, notifications, Dock badge, lock, contact /
 group info panel (⌘I: local name, favourite, mute, address, members, clear /
 leave / delete).
 
-Chat, group and channel settings (info panel, same rules as Linux):
+Chat, group and channel settings — the profile page (⌘I) fills the detail
+pane like the Linux contact / group page; title, Back and favourite / mute /
+preferences live in the native toolbar:
 
 - **Every chat:** favourite, notifications (all / mentions / muted), delivery
   receipts (default / on / off), delete messages on this Mac after…, lists.
@@ -68,9 +70,10 @@ Chat, group and channel settings (info panel, same rules as Linux):
   everyone, remove (optionally with their messages). New channels from the
   New chat sheet.
 
-The preference JSON is built in the bridge (`bridge/src/prefs.rs`, unit
-tested); `cargo test -p cursus-bridge --test abi -- --ignored` exercises the
-group settings against the real core.
+The rules (who allows what, group features, the JSON sent back) are the
+core's `cursus_core::preferences`, shared with Linux; the bridge only turns
+them into JSON for Swift. `cargo test -p cursus-bridge --test abi -- --ignored`
+exercises the group settings against the real core.
 
 ## Look
 
@@ -80,6 +83,6 @@ own icons (`Resources/icons`, vector PDFs of `linux/assets/icons`), the nav
 rail, cards, ghost tiles, link box and bubbles (`Views/Components.swift`).
 Window, toolbar, search, menus, sheets, alerts and context menus stay native.
 
-Next: audio calls (the Linux WebRTC engine moves into the bridge), voice
+Next: audio calls (the WebRTC engine moves from the Linux app into the core, then a native macOS UI), voice
 recording, member support chats ("chat with admins"), list filters in the
 chat list.

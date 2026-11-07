@@ -1,21 +1,20 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Pages inside the info panel (back arrow returns to the overview).
+/// Pages of a chat's profile (Back returns to the overview, then to the chat).
 enum InfoPage: Equatable {
     case overview
     case preferences
     case member(Int64)
     case invite
     case link
-    case editProfile
 }
 
-/// Contact / group / channel page, shown as an inspector beside the
-/// conversation (⌘I, the toolbar's info button, or the chat's context menu).
-/// Same content as the Linux contact and group pages: profile header,
-/// your settings for this chat, preferences, members, link, then clear /
-/// leave / delete.
+/// Contact / group / channel page (⌘I). Fills the detail pane like the Linux
+/// contact and group pages: the same cards, in the same order. Title, Back
+/// and the favourite / mute / preferences actions sit in the native toolbar
+/// where a Mac user looks for them.
 struct ChatInfoView: View {
     @EnvironmentObject private var model: AppModel
     let chat: Chat
@@ -23,7 +22,6 @@ struct ChatInfoView: View {
     @State private var page: InfoPage = .overview
 
     private var kindTitle: String {
-        if chat.isNotes { return "Notes" }
         if chat.isChannel { return "Channel" }
         if chat.isGroup { return "Group" }
         return "Contact"
@@ -32,66 +30,90 @@ struct ChatInfoView: View {
     private var pageTitle: String {
         switch page {
         case .overview: return kindTitle
-        case .preferences: return chat.isGroup ? (chat.isChannel ? "Channel preferences" : "Group preferences") : "Chat preferences"
+        case .preferences: return chat.isDirect ? "Chat preferences" : "\(kindTitle) preferences"
         case .member: return chat.isChannel ? "Subscriber" : "Member"
         case .invite: return "Invite members"
-        case .link: return chat.isChannel ? "Channel link" : "Group link"
-        case .editProfile: return chat.isChannel ? "Edit channel" : "Edit group"
+        case .link: return "\(kindTitle) link"
         }
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 4) {
-                if page != .overview {
-                    IconTool(icon: "back", help: "Back", size: 16) { page = .overview }
+        Page {
+            switch page {
+            case .overview:
+                InfoOverview(chat: chat, page: $page)
+            case .preferences:
+                if chat.isGroup {
+                    GroupPreferencesPage(chat: chat)
+                } else {
+                    ContactPreferencesPage(chat: chat)
                 }
-                Text(pageTitle).font(.cTitle).foregroundColor(Theme.primaryText).lineLimit(1)
-                Spacer()
-                IconTool(icon: "cancel", help: "Close (⌘I)", size: 16) { model.showInfo = false }
+                ChatSettingsCard(chat: chat)
+            case .member(let id):
+                if let member = model.members.first(where: { $0.id == id }) {
+                    MemberPage(chat: chat, member: member)
+                } else {
+                    Text("This member is no longer in the group.")
+                        .font(.cBody).foregroundColor(Theme.secondaryText)
+                }
+            case .invite:
+                InviteMembersPage(chat: chat)
+            case .link:
+                GroupLinkPage(chat: chat)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            Hairline()
-            Page {
-                switch page {
-                case .overview:
-                    InfoOverview(chat: chat, page: $page)
-                case .preferences:
-                    if chat.isGroup {
-                        GroupPreferencesPage(chat: chat)
-                    } else {
-                        ContactPreferencesPage(chat: chat)
+        }
+        .navigationTitle(pageTitle)
+        .navigationSubtitle(chat.title)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button(action: back) { Image(systemName: "chevron.left") }
+                    .help(page == .overview ? "Back to the chat" : "Back")
+            }
+            ToolbarItemGroup {
+                if page == .overview {
+                    Button { Task { await model.setFavorite(chat, !chat.favorite) } } label: {
+                        CIcon("star", size: 18, color: chat.favorite ? Theme.accent : nil)
                     }
-                case .member(let id):
-                    if let member = model.members.first(where: { $0.id == id }) {
-                        MemberPage(chat: chat, member: member)
-                    } else {
-                        Text("This member is no longer in the group.")
-                            .font(.cBody).foregroundColor(Theme.secondaryText)
+                    .help(chat.favorite ? "Remove from favorites" : "Add to favorites")
+                    Button { Task { await model.setMuted(chat, !chat.muted) } } label: {
+                        CIcon("mute-notification", size: 18, color: chat.muted ? Theme.accent : nil)
                     }
-                case .invite:
-                    InviteMembersPage(chat: chat)
-                case .link:
-                    GroupLinkPage(chat: chat)
-                case .editProfile:
-                    EditGroupPage(chat: chat) { page = .overview }
+                    .help(chat.muted ? "Unmute" : "Mute")
+                    Button { page = .preferences } label: { CIcon("preferences", size: 18) }
+                        .help(pageTitleFor(.preferences))
                 }
             }
         }
-        .background(Theme.panel)
-        .onChange(of: chat.ref) { _ in page = .overview }
+        .onExitCommand(perform: back)
+    }
+
+    private func pageTitleFor(_ p: InfoPage) -> String {
+        p == .preferences ? (chat.isDirect ? "Chat preferences" : "\(kindTitle) preferences") : kindTitle
+    }
+
+    private func back() {
+        if page == .overview {
+            model.showInfo = false
+        } else {
+            page = .overview
+        }
     }
 }
 
 // MARK: - Overview
+
+/// Which profile text the edit sheet is changing.
+enum ProfileField: String, Identifiable {
+    case alias, groupName, groupBio, welcome
+    var id: String { rawValue }
+}
 
 private struct InfoOverview: View {
     @EnvironmentObject private var model: AppModel
     let chat: Chat
     @Binding var page: InfoPage
 
-    @State private var alias = ""
+    @State private var editing: ProfileField?
     @State private var confirming: Danger?
 
     private enum Danger { case clear, leave, delete }
@@ -102,13 +124,10 @@ private struct InfoOverview: View {
     }
 
     private var amMember: Bool { model.members.contains { $0.isMe && !$0.gone } }
+    private var ownsGroup: Bool { chat.isGroup && chat.isOwner }
 
     var body: some View {
         identity
-        if !chat.isNotes && chat.pendingRequestId == nil {
-            ChatSettingsCard(chat: chat)
-            featuresCard
-        }
         if chat.isDirect, let link = chat.contactLink, !link.isEmpty {
             Card {
                 CardTitle(icon: "link-minimalistic-2", title: "Address",
@@ -116,63 +135,72 @@ private struct InfoOverview: View {
                 LinkBox(text: link)
             }
         }
+        if chat.isDirect && chat.pendingRequestId == nil {
+            Card(padding: 0, spacing: 0) {
+                NavRow(icon: "preferences", title: "Chat preferences",
+                       subtitle: "Disappearing messages, receipts, calls…", flush: true) { page = .preferences }
+            }
+        }
+        if chat.isGroup { groupActions }
         if chat.isGroup { membersCard }
         dangerCard
-            .onAppear { alias = chat.alias ?? "" }
-            .onChange(of: chat.ref) { _ in
-                alias = chat.alias ?? ""
-                confirming = nil
+            .sheet(item: $editing) { field in
+                ProfileFieldSheet(chat: chat, field: field)
+                    .environmentObject(model)
             }
-            .onChange(of: chat.alias) { new in alias = new ?? "" }
+            .onChange(of: chat.ref) { _ in confirming = nil }
     }
 
-    // MARK: Profile header
+    // MARK: Profile card
 
     private var identity: some View {
         Card(spacing: 6) {
             HStack(alignment: .center, spacing: 14) {
-                Avatar(image: chat.image, name: chat.title, size: 72, kind: chat.avatarKind)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 2) {
-                        Text(chat.isNotes ? "Private notes" : publicName)
-                            .font(.cTitle)
-                            .foregroundColor(Theme.primaryText)
-                            .lineLimit(2)
-                            .textSelection(.enabled)
-                        if chat.isGroup && chat.isOwner {
-                            IconTool(icon: "edit-3", help: "Edit name, bio, welcome message and picture", size: 15) {
-                                page = .editProfile
-                            }
-                        }
-                    }
-                    .padding(.leading, 13)
-                    if !chat.isNotes && chat.pendingRequestId == nil {
-                        RoundedField(placeholder: "Local name", text: $alias) {
-                            Task { await model.setAlias(chat, alias) }
-                        }
-                        .help("Only you see this name")
+                VStack(spacing: 8) {
+                    Avatar(image: chat.image, name: chat.title, size: 72, kind: chat.avatarKind)
+                    if ownsGroup { photoActions }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    EditableLine(text: publicName, placeholder: "Name", style: .name,
+                                 editable: ownsGroup) { editing = .groupName }
+                    if chat.pendingRequestId == nil {
+                        EditableLine(text: chat.alias ?? "", placeholder: "Add a local name", style: .sub,
+                                     editable: true, help: "Only you see this name") { editing = .alias }
                     }
                     if !chat.fullName.isEmpty && chat.fullName != publicName {
-                        Text(chat.fullName)
-                            .font(.cMeta)
-                            .foregroundColor(Theme.secondaryText)
-                            .padding(.horizontal, 13)
+                        Text(chat.fullName).font(.cMeta).foregroundColor(Theme.secondaryText)
+                            .padding(.leading, 13)
                     }
                     if chat.isGroup, let role = chat.role {
-                        Text("You are \(role)")
-                            .font(.cMeta)
-                            .foregroundColor(Theme.secondaryText)
-                            .padding(.horizontal, 13)
+                        Text("You are \(role)").font(.cMeta).foregroundColor(Theme.secondaryText)
+                            .padding(.leading, 13)
                     }
                 }
             }
-            if !chat.shortDescr.isEmpty {
-                SectionLabel("Bio")
-                about(chat.shortDescr)
+            if ownsGroup {
+                SectionLabel("Short description")
+                EditableLine(text: chat.shortDescr, placeholder: "Add a short description", style: .body,
+                             editable: true) { editing = .groupBio }
+            } else {
+                if !chat.shortDescr.isEmpty {
+                    SectionLabel(chat.isGroup ? "About" : "Bio")
+                    about(chat.shortDescr)
+                }
+                if let text = chat.description, !text.isEmpty {
+                    SectionLabel(chat.isGroup ? "Welcome message" : "About")
+                    about(text)
+                }
             }
-            if let description = chat.description, !description.isEmpty {
-                SectionLabel(chat.isGroup ? "Welcome message" : "About")
-                about(description)
+        }
+    }
+
+    private var photoActions: some View {
+        HStack(spacing: 6) {
+            IconTool(icon: "image-pen", help: "Choose picture…", size: 18, action: pickImage)
+            if chat.image != nil {
+                IconTool(icon: "cancel", help: "Remove picture", size: 18) {
+                    Task { await model.updateGroupProfile(chat, image: .some(nil)) }
+                }
             }
         }
     }
@@ -186,32 +214,43 @@ private struct InfoOverview: View {
             .padding(.horizontal, 8)
     }
 
-    // MARK: Preferences / invite / link
+    private func pickImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url, let picked = NSImage(contentsOf: url) else { return }
+        guard let dataURL = Images.profileDataURL(from: picked) else {
+            model.errorMessage = "That picture couldn't be used."
+            return
+        }
+        Task { await model.updateGroupProfile(chat, image: .some(dataURL)) }
+    }
 
-    @ViewBuilder private var featuresCard: some View {
-        Card(spacing: 2) {
-            if chat.isDirect {
-                NavRow(icon: "preferences", title: "Chat preferences",
-                       subtitle: "Disappearing messages, reactions, calls…") { page = .preferences }
-            }
-            if chat.isGroup {
-                NavRow(icon: "preferences", title: chat.isChannel ? "Channel preferences" : "Group preferences",
-                       subtitle: chat.isOwner ? "What members can do" : "What members can do (view only)") {
-                    page = .preferences
+    // MARK: Welcome / invite / link
+
+    @ViewBuilder private var groupActions: some View {
+        if ownsGroup || chat.isAdmin || chat.isChannel {
+            Card(padding: 0, spacing: 0) {
+                if ownsGroup {
+                    NavRow(icon: "scripture-scroll", title: "Welcome message", subtitle: welcomePreview,
+                           trailing: "edit-3", flush: true) { editing = .welcome }
                 }
                 if chat.isAdmin && !chat.isChannel {
-                    NavRow(icon: "user-plus-alt-1", title: "Invite members", subtitle: "Add your contacts") {
-                        page = .invite
-                    }
+                    NavRow(icon: "user-plus-alt-1", title: "Invite", subtitle: "Your contacts",
+                           trailing: "plus", flush: true) { page = .invite }
                 }
                 if chat.isAdmin || chat.isChannel {
-                    NavRow(icon: "link-minimalistic-2", title: chat.isChannel ? "Channel link" : "Group link",
-                           subtitle: chat.isAdmin ? "Anyone with it can join" : "Share this channel") {
-                        page = .link
-                    }
+                    NavRow(icon: "link-minimalistic-2", title: "\(chat.isChannel ? "Channel" : "Group") link",
+                           subtitle: chat.isAdmin ? "Anyone with it can join" : "Share this channel",
+                           flush: true) { page = .link }
                 }
             }
         }
+    }
+
+    private var welcomePreview: String {
+        let text = (chat.description ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return text.isEmpty ? "Greet the members who join" : text
     }
 
     // MARK: Members
@@ -235,49 +274,56 @@ private struct InfoOverview: View {
 
     // MARK: Clear / leave / delete
 
-    private var dangerCard: some View {
-        Card(spacing: 4) {
-            switch confirming {
-            case .clear?:
-                InlineConfirm(question: "Clear all messages?",
-                              detail: "Messages are deleted from this Mac only.",
-                              confirmTitle: "Clear",
-                              onCancel: { confirming = nil },
-                              onConfirm: {
-                                  confirming = nil
-                                  Task { await model.clear(chat) }
-                              })
-            case .leave?:
-                InlineConfirm(question: chat.isChannel ? "Leave this channel?" : "Leave this group?",
-                              detail: "You stop receiving messages. The chat stays until you delete it.",
-                              confirmTitle: "Leave",
-                              onCancel: { confirming = nil },
-                              onConfirm: {
-                                  confirming = nil
-                                  Task { await model.leaveGroup(chat) }
-                              })
-            case .delete?:
-                InlineConfirm(question: "Delete \(chat.title)?",
-                              detail: chat.isGroup
-                                ? "The chat and its messages are deleted from this Mac."
-                                : "The contact, the connection and all messages are deleted.",
-                              confirmTitle: "Delete",
-                              onCancel: { confirming = nil },
-                              onConfirm: {
-                                  confirming = nil
-                                  Task { await model.delete(chat) }
-                              })
-            case nil:
-                ActionTile(icon: "clear-all", title: "Clear chat") { confirming = .clear }
-                if chat.isGroup && amMember {
-                    ActionTile(icon: "session-leave", title: chat.isChannel ? "Leave channel" : "Leave group") {
-                        confirming = .leave
+    @ViewBuilder private var dangerCard: some View {
+        if let confirming = confirming {
+            Card(spacing: 4) { confirm(confirming) }
+        } else {
+            Card(padding: 0, spacing: 0) {
+                HStack(spacing: 0) {
+                    ActionTile(icon: "clear-all", title: "Clear chat", stacked: true) { confirming = .clear }
+                    if chat.isGroup && amMember {
+                        ActionTile(icon: "session-leave", title: chat.isChannel ? "Leave channel" : "Leave group",
+                                   stacked: true) { confirming = .leave }
+                    }
+                    ActionTile(icon: "trash-delete", title: deleteTitle, danger: true, stacked: true) {
+                        confirming = .delete
                     }
                 }
-                if !chat.isNotes {
-                    ActionTile(icon: "trash-delete", title: deleteTitle, danger: true) { confirming = .delete }
-                }
             }
+        }
+    }
+
+    @ViewBuilder private func confirm(_ danger: Danger) -> some View {
+        switch danger {
+        case .clear:
+            InlineConfirm(question: "Clear all messages?",
+                          detail: "Messages are deleted from this Mac only.",
+                          confirmTitle: "Clear",
+                          onCancel: { confirming = nil },
+                          onConfirm: {
+                              confirming = nil
+                              Task { await model.clear(chat) }
+                          })
+        case .leave:
+            InlineConfirm(question: chat.isChannel ? "Leave this channel?" : "Leave this group?",
+                          detail: "You stop receiving messages. The chat stays until you delete it.",
+                          confirmTitle: "Leave",
+                          onCancel: { confirming = nil },
+                          onConfirm: {
+                              confirming = nil
+                              Task { await model.leaveGroup(chat) }
+                          })
+        case .delete:
+            InlineConfirm(question: "Delete \(chat.title)?",
+                          detail: chat.isGroup
+                            ? "The chat and its messages are deleted from this Mac."
+                            : "The contact, the connection and all messages are deleted.",
+                          confirmTitle: "Delete",
+                          onCancel: { confirming = nil },
+                          onConfirm: {
+                              confirming = nil
+                              Task { await model.delete(chat) }
+                          })
         }
     }
 
@@ -288,10 +334,140 @@ private struct InfoOverview: View {
     }
 }
 
+// MARK: - Editable profile text
+
+/// Profile text shown as plain text, with a pencil right after it that opens
+/// the edit sheet (Linux: the same line and pencil). Empty: a muted hint.
+struct EditableLine: View {
+    enum Style { case name, sub, body }
+
+    let text: String
+    let placeholder: String
+    let style: Style
+    var editable = true
+    var help: String? = nil
+    let edit: () -> Void
+
+    private var empty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var body: some View {
+        if editable || !empty {
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text(empty ? placeholder : text)
+                    .font(font)
+                    .foregroundColor(empty ? Theme.mutedText : color)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                if editable {
+                    IconTool(icon: "edit-3", help: help ?? "Edit", size: 14, action: edit)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, style == .body ? 8 : 13)
+        }
+    }
+
+    private var font: Font {
+        switch style {
+        case .name: return .cTitle
+        case .sub, .body: return .cBody
+        }
+    }
+
+    private var color: Color {
+        style == .name ? Theme.primaryText : Theme.secondaryText
+    }
+}
+
+/// Native sheet with a Cursus card inside: title, hint, field, Cancel / ✓.
+struct ProfileFieldSheet: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let chat: Chat
+    let field: ProfileField
+
+    @State private var value = ""
+    @State private var error: String?
+
+    private var meta: (title: String, hint: String, placeholder: String, multiline: Bool) {
+        switch field {
+        case .alias: return ("Local name", "Only you see this name.", "Local name", false)
+        case .groupName: return ("Name", "Every member sees this name.", "Name", false)
+        case .groupBio: return ("Short description", "Shown under the name.", "Short description", false)
+        case .welcome: return ("Welcome message", "Sent to every new member when they join.",
+                               "Welcome to the group! Please…", true)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(meta.title).font(.cBodyBold).foregroundColor(Theme.primaryText)
+                    Text(meta.hint).font(.cMeta).foregroundColor(Theme.secondaryText)
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+                Button(action: save) {
+                    Image(systemName: "checkmark").font(.system(size: 13, weight: .bold))
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .keyboardShortcut(meta.multiline ? KeyboardShortcut("s", modifiers: .command) : .defaultAction)
+                .help("Save")
+            }
+            if meta.multiline {
+                TextEditor(text: $value)
+                    .font(.cBody)
+                    .frame(minHeight: 140, maxHeight: 280)
+                    .padding(6)
+                    .background(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).fill(Theme.fieldFill))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                        .strokeBorder(Theme.border, lineWidth: 1))
+            } else {
+                CursusField(placeholder: meta.placeholder, text: $value, onSubmit: save)
+            }
+            if let error = error {
+                Text(error).font(.cMeta).foregroundColor(Theme.danger)
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+        .background(Theme.elevated)
+        .onAppear {
+            switch field {
+            case .alias: value = chat.alias ?? ""
+            case .groupName: value = chat.name ?? chat.title
+            case .groupBio: value = chat.shortDescr
+            case .welcome: value = chat.description ?? ""
+            }
+        }
+    }
+
+    private func save() {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if field == .groupName && trimmed.isEmpty {
+            error = "The name can't be empty."
+            return
+        }
+        dismiss()
+        Task {
+            switch field {
+            case .alias: await model.setAlias(chat, trimmed)
+            case .groupName: await model.updateGroupProfile(chat, name: trimmed)
+            case .groupBio: await model.updateGroupProfile(chat, shortDescr: String(trimmed.prefix(160)))
+            case .welcome: await model.updateGroupProfile(chat, welcome: trimmed)
+            }
+        }
+    }
+}
+
 // MARK: - Your settings for this chat
 
-/// Favourite, notifications, receipts, auto-delete and lists — only for you.
-private struct ChatSettingsCard: View {
+/// Notifications, receipts, auto-delete and lists — only for you (shown on
+/// the preferences page, as on Linux).
+struct ChatSettingsCard: View {
     @EnvironmentObject private var model: AppModel
     let chat: Chat
     @State private var newList = ""
@@ -299,12 +475,9 @@ private struct ChatSettingsCard: View {
 
     var body: some View {
         Card(spacing: 0) {
-            PrefRow(icon: "star", label: "Favorite") {
-                Toggle("", isOn: Binding(
-                    get: { chat.favorite },
-                    set: { on in Task { await model.setFavorite(chat, on) } }))
-                    .toggleStyle(.switch)
-            }
+            CardTitle(icon: "user-alt-1", title: "Your settings",
+                      subtitle: "Only for you — \(chat.isDirect ? "they don't" : "other members don't") see these.")
+                .padding(.bottom, 6)
             PrefRow(icon: "mute-notification", label: "Notifications") {
                 Picker("", selection: Binding(
                     get: { chat.notifications },
@@ -367,7 +540,7 @@ private struct ChatSettingsCard: View {
             }
             if addingList {
                 HStack(spacing: 6) {
-                    CursusField(placeholder: "List name", text: $newList) { createList() }
+                    CursusField(placeholder: "List name", text: $newList, onSubmit: createList)
                     Button("Add", action: createList)
                         .buttonStyle(PrimaryButtonStyle())
                         .disabled(newList.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -447,6 +620,7 @@ private struct MemberRow: View {
             }
             .padding(.vertical, 4)
             .padding(.horizontal, 6)
+            .contentShape(Rectangle())
         }
         .buttonStyle(GhostTileStyle())
         .help("Member details")

@@ -13,10 +13,13 @@ use tokio::sync::mpsc;
 use super::{App, Message, NavSection};
 use crate::call::audio::{Tone, TonePlayer};
 use crate::call::{CallEngine, CallEvent};
-use cursus_core::CallMedia;
+use cursus_core::{CallMedia, CallRecord, ChatId, ChatType, Event};
 
 /// Unanswered calls stop ringing after this.
 const RING_TIMEOUT: Duration = Duration::from_secs(60);
+/// Calls page: entries shown, and how far back through all chats to look.
+const HISTORY_LIMIT: usize = 100;
+const HISTORY_SCAN_ITEMS: u32 = 2000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CallPhase {
@@ -57,6 +60,11 @@ pub(crate) struct CallState {
     gen: u64,
     /// Suspend / screen-blank inhibitor while a call rings or runs.
     awake: Option<crate::call::inhibit::AwakeGuard>,
+    /// Recent calls, newest first (from the core's call chat items).
+    history: Vec<CallRecord>,
+    history_loading: bool,
+    /// A change arrived while loading: load again when this one lands.
+    history_stale: bool,
 }
 
 impl CallState {
@@ -66,6 +74,15 @@ impl CallState {
 
     pub(crate) fn incoming(&self) -> Option<&IncomingCall> {
         self.incoming.as_ref()
+    }
+
+    pub(crate) fn history(&self) -> &[CallRecord] {
+        &self.history
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_history_for_test(&mut self, history: Vec<CallRecord>) {
+        self.history = history;
     }
 
     /// Hold the device awake exactly while a call is ringing or up.
@@ -126,6 +143,10 @@ pub enum CallMsg {
     RingTimeout(u64),
     /// Once a second while connected (duration label).
     Tick,
+    ReloadHistory,
+    HistoryLoaded(Result<Vec<CallRecord>, String>),
+    /// Calls page row: open the chat with this contact.
+    OpenChat(i64),
 }
 
 /// Contact id and display name from a core `contact` object.
@@ -255,8 +276,70 @@ impl App {
         task
     }
 
+    /// Load the call history (coalesced: a request while loading reloads once
+    /// more when the current load lands).
+    pub(crate) fn reload_call_history(&mut self) -> iced::Task<Message> {
+        if self.call.history_loading {
+            self.call.history_stale = true;
+            return iced::Task::none();
+        }
+        let Some(session) = self.session.clone() else {
+            return iced::Task::none();
+        };
+        self.call.history_loading = true;
+        self.call.history_stale = false;
+        iced::Task::perform(
+            blocking(move || {
+                session.call_history(HISTORY_LIMIT, HISTORY_SCAN_ITEMS).map_err(|e| e.to_string())
+            }),
+            |r| Message::Call(CallMsg::HistoryLoaded(r)),
+        )
+    }
+
+    /// A core event that adds / updates / deletes a call item: refresh the
+    /// history if the Calls page shows it (opening the page always reloads).
+    pub(crate) fn call_history_event(&mut self, event: &Event) -> iced::Task<Message> {
+        let touches = match event {
+            Event::NewChatItems(body) => CallRecord::touches_calls(body),
+            Event::Other { type_name, body } => {
+                matches!(type_name.as_str(), "callEnded" | "callInvitation")
+                    || CallRecord::touches_calls(body)
+            }
+            _ => false,
+        };
+        if !touches {
+            return iced::Task::none();
+        }
+        if self.nav == NavSection::Calls {
+            self.reload_call_history()
+        } else {
+            iced::Task::none()
+        }
+    }
+
     fn update_call_inner(&mut self, msg: CallMsg) -> iced::Task<Message> {
         match msg {
+            CallMsg::ReloadHistory => self.reload_call_history(),
+            CallMsg::HistoryLoaded(result) => {
+                self.call.history_loading = false;
+                match result {
+                    Ok(list) => self.call.history = list,
+                    Err(err) => tracing::warn!(%err, "call history"),
+                }
+                if self.call.history_stale {
+                    return self.reload_call_history();
+                }
+                iced::Task::none()
+            }
+            CallMsg::OpenChat(contact_id) => {
+                let want = ChatId::new(ChatType::Direct, contact_id);
+                let Some(index) = self.chats.iter().position(|c| c.id == want) else {
+                    self.status = "That contact's chat is gone.".into();
+                    return iced::Task::none();
+                };
+                self.nav = NavSection::Chats;
+                self.update(Message::SelectChat(index))
+            }
             CallMsg::Start(contact_id) => self.start_call(contact_id),
             CallMsg::Accept => self.accept_call(),
             CallMsg::Reject => {

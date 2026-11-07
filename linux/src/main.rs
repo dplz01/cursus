@@ -1834,10 +1834,15 @@ impl App {
                     self.selected_id = None;
                     self.messages.clear();
                 }
+                let history = if section == NavSection::Calls {
+                    self.reload_call_history()
+                } else {
+                    Task::none()
+                };
                 if leaving_settings && self.own_profile.dirty {
-                    return self.update(Message::SaveOwnProfile);
+                    return Task::batch([history, self.update(Message::SaveOwnProfile)]);
                 }
-                Task::none()
+                history
             }
             Message::Back => {
                 // Back is often a button press after scrolling the chat — clear
@@ -5981,6 +5986,8 @@ impl App {
         // `refreshes_messages()` (busy groups used to schedule 2× get_chat).
         let mut messages_reload_queued = false;
 
+        tasks.push(self.call_history_event(&event));
+
         // Official clients auto-accept image/voice/video offers on newChatItems.
         let auto = auto_receive_candidates(&event);
         if !auto.is_empty() {
@@ -7130,6 +7137,10 @@ impl App {
 
     pub(crate) fn incoming_call(&self) -> Option<&call_flow::IncomingCall> {
         self.call.incoming()
+    }
+
+    pub(crate) fn call_history(&self) -> &[cursus_core::CallRecord] {
+        self.call.history()
     }
 
     /// Chats for the current nav: inbox (non-channel) or channels only.

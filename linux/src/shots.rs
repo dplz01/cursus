@@ -288,6 +288,31 @@ fn shots() {
             let _ = app.open_contact_profile();
             render(&app, DESKTOP, &format!("contact-{t}"));
         }
+        if want("calls") {
+            for (size, name) in [(DESKTOP, "calls"), (MOBILE, "mcalls")] {
+                let mut app = demo_app(dark, size.width, size.height);
+                app.nav = NavSection::Calls;
+                let rec = |id: i64, contact: i64, name: &str, outgoing: bool, status: &str, secs: i64, ts: &str| {
+                    cursus_core::CallRecord {
+                        item_id: id,
+                        contact_id: contact,
+                        peer_name: name.into(),
+                        outgoing,
+                        status: status.into(),
+                        duration_secs: secs,
+                        ts: Some(ts.into()),
+                    }
+                };
+                app.call.set_history_for_test(vec![
+                    rec(9, 1, "Alice Marchetti", true, "ended", 754, "2026-11-06T09:10:00Z"),
+                    rec(8, 3, "Marco", false, "missed", 0, "2026-11-06T07:02:00Z"),
+                    rec(7, 1, "Alice Marchetti", false, "ended", 65, "2026-11-05T21:40:00Z"),
+                    rec(6, 3, "Marco", true, "pending", 0, "2026-11-04T12:00:00Z"),
+                    rec(5, 1, "Alice Marchetti", false, "rejected", 0, "2026-10-28T18:30:00Z"),
+                ]);
+                render(&app, size, &format!("{name}-{t}"));
+            }
+        }
         if want("mobile") {
             let app = demo_app(dark, MOBILE.width, MOBILE.height);
             render(&app, MOBILE, &format!("mobile-list-{t}"));

@@ -1220,6 +1220,7 @@ dependencies = [
  "base64",
  "chrono",
  "cursus-core",
+ "decibri-aec",
  "emojis",
  "iced",
  "iced_aw",
@@ -1282,6 +1283,15 @@ name = "data-url"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
+
+[[package]]
+name = "decibri-aec"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c082148c8441fc7db2c9c31aeb69842cf754ef9b8a853b40e086a2f383860fd"
+dependencies = [
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "der"

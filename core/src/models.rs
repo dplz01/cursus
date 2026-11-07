@@ -296,6 +296,75 @@ pub struct CallInfo {
     pub media: CallMedia,
 }
 
+/// One entry of the call history: a `sndCall` / `rcvCall` chat item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallRecord {
+    /// Chat item id (delete it to remove the entry).
+    pub item_id: i64,
+    pub contact_id: i64,
+    pub peer_name: String,
+    pub outgoing: bool,
+    /// Core `CICallStatus`: `pending`, `missed`, `rejected`, `accepted`,
+    /// `negotiated`, `progress`, `ended`, `error`.
+    pub status: String,
+    pub duration_secs: i64,
+    /// `meta.itemTs`, ISO 8601.
+    pub ts: Option<String>,
+}
+
+impl CallRecord {
+    /// Parse one `{chatInfo, chatItem}` pair; `None` unless it is a call.
+    pub fn parse(aci: &Value) -> Option<Self> {
+        let info = aci.get("chatInfo")?;
+        let item = aci.get("chatItem")?;
+        let content = item.get("content")?;
+        let outgoing = match content.get("type")?.as_str()? {
+            "sndCall" => true,
+            "rcvCall" => false,
+            _ => return None,
+        };
+        let contact = info.get("contact")?;
+        let peer_name = contact
+            .get("localAlias")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| contact.pointer("/profile/displayName").and_then(Value::as_str))
+            .or_else(|| contact.get("localDisplayName").and_then(Value::as_str))
+            .unwrap_or("Contact")
+            .to_string();
+        Some(Self {
+            item_id: item.pointer("/meta/itemId")?.as_i64()?,
+            contact_id: contact.get("contactId")?.as_i64()?,
+            peer_name,
+            outgoing,
+            status: content.get("status").and_then(Value::as_str).unwrap_or("").to_string(),
+            duration_secs: content.get("duration").and_then(Value::as_i64).unwrap_or(0),
+            ts: item.pointer("/meta/itemTs").and_then(Value::as_str).map(str::to_string),
+        })
+    }
+
+    /// Incoming and never answered (declining is not missing).
+    pub fn is_missed(&self) -> bool {
+        !self.outgoing && matches!(self.status.as_str(), "missed" | "pending")
+    }
+
+    /// Whether this chat-item payload contains a call item (history changed).
+    pub fn touches_calls(body: &Value) -> bool {
+        let is_call = |item: Option<&Value>| {
+            item.and_then(|i| i.pointer("/content/type"))
+                .and_then(Value::as_str)
+                .is_some_and(|t| t == "sndCall" || t == "rcvCall")
+        };
+        let items = body.get("chatItems").and_then(Value::as_array);
+        items.is_some_and(|a| a.iter().any(|aci| is_call(aci.get("chatItem"))))
+            || is_call(body.pointer("/chatItem/chatItem"))
+            || body
+                .get("chatItemDeletions")
+                .and_then(Value::as_array)
+                .is_some_and(|a| a.iter().any(|d| is_call(d.pointer("/deletedChatItem/chatItem"))))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallMedia {
     Audio,

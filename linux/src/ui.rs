@@ -1156,11 +1156,26 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
         horizontal().width(0).into()
     };
 
+    // Audio call, top right of a direct chat (hidden when calls are off).
+    let call_action: Element<'_, Message> = if !in_support
+        && app.selected_is_direct()
+        && contact_calls_allowed(chat)
+    {
+        composer_hit(
+            icons::phone_tool(36.0, app.hover_ok()),
+            36.0,
+            Message::StartAudioCall(chat.id.api_id),
+        )
+    } else {
+        horizontal().width(0).into()
+    };
+
     let title_row: Element<'_, Message> = if with_back || in_support {
         row![
             mobile_back_btn(Message::Back, app.hover_ok()),
             identity,
             support_action,
+            call_action,
         ]
         .spacing(6)
         .align_y(Alignment::Center)
@@ -1175,6 +1190,7 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
         row![
             container(identity).width(Length::Fill),
             support_action,
+            call_action,
         ]
         .spacing(10)
         .align_y(Alignment::Center)
@@ -1212,6 +1228,15 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
     column![header, hairline(), history, footer]
         .height(Length::Fill)
         .into()
+}
+
+/// Whether both sides allow calls (`mergedPreferences.calls`); unknown → yes.
+fn contact_calls_allowed(chat: &cursus_core::ChatPreview) -> bool {
+    chat.contact_merged_preferences
+        .as_ref()
+        .and_then(|p| p.pointer("/calls/enabled/forUser"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
 }
 
 fn selection_bar(app: &App, d: Density) -> Element<'_, Message> {
@@ -5932,19 +5957,35 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
         col = col.push(card);
     }
 
+    let history = app.call_history();
+    if !history.is_empty() {
+        col = col.push(calls_section_label("Recent", d));
+        for rec in history {
+            col = col.push(call_history_row(app, rec, d, hover));
+        }
+    }
+
     let contacts = app.direct_contacts();
     if contacts.is_empty() {
-        col = col.push(placeholder(
-            "No contacts",
-            "Connect with someone in Chats first, then call them here.",
-            d,
-        ));
+        if history.is_empty() {
+            col = col.push(placeholder(
+                "No contacts",
+                "Connect with someone in Chats first, then call them here.",
+                d,
+            ));
+        }
     } else {
+        col = col.push(calls_section_label("Contacts", d));
         for (_index, chat) in contacts {
             let contact_id = chat.id.api_id;
             col = col.push(
                 row![
-                    profile_avatar(chat.peer_profile.image.as_deref(), &chat.title, 36.0),
+                    profile_avatar_fallback(
+                        chat.peer_profile.image.as_deref(),
+                        &chat.title,
+                        40.0,
+                        AvatarFallback::ContactIcon,
+                    ),
                     text(chat.title.clone())
                         .size(d.body)
                         .color(theme::t().text_primary)
@@ -5957,11 +5998,113 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
                 ]
                 .spacing(10)
                 .align_y(Alignment::Center)
-                .padding(Padding::from([6, 4])),
+                .padding(Padding {
+                    top: 6.0,
+                    right: 0.0,
+                    bottom: 6.0,
+                    left: 4.0,
+                }),
             );
         }
     }
     page_scroll_y(col)
+}
+
+fn calls_section_label(label: &str, d: Density) -> Element<'static, Message> {
+    container(
+        text(label.to_uppercase())
+            .size(d.meta)
+            .font(BOLD)
+            .color(theme::t().text_muted),
+    )
+    .padding(Padding {
+        top: 14.0,
+        right: 4.0,
+        bottom: 4.0,
+        left: 4.0,
+    })
+    .into()
+}
+
+/// `1:05`, `12:40`, `1:02:03`.
+fn format_call_duration(secs: i64) -> String {
+    let secs = secs.max(0);
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// Status line for one history entry ("Outgoing · 12:34", "Missed", …).
+fn call_record_label(rec: &cursus_core::CallRecord) -> String {
+    let direction = if rec.outgoing { "Outgoing" } else { "Incoming" };
+    let label = match (rec.outgoing, rec.status.as_str()) {
+        (_, "ended") if rec.duration_secs > 0 => {
+            format!("{direction} · {}", format_call_duration(rec.duration_secs))
+        }
+        (true, "missed" | "pending" | "rejected") => "No answer".into(),
+        (false, "missed" | "pending") => "Missed".into(),
+        (false, "rejected") => "Declined".into(),
+        (_, "error") => "Failed".into(),
+        (_, "accepted" | "negotiated" | "progress") => "In progress".into(),
+        _ => direction.into(),
+    };
+    label
+}
+
+/// Recent-call row: tap opens the chat, the phone button calls back.
+fn call_history_row<'a>(
+    app: &'a App,
+    rec: &'a cursus_core::CallRecord,
+    d: Density,
+    hover: bool,
+) -> Element<'a, Message> {
+    let t = theme::t();
+    let chat = app
+        .chats()
+        .iter()
+        .find(|c| matches!(c.id.chat_type, ChatType::Direct) && c.id.api_id == rec.contact_id);
+    let name = chat.map(|c| c.title.clone()).unwrap_or_else(|| rec.peer_name.clone());
+    let image = chat.and_then(|c| c.peer_profile.image.as_deref());
+    let missed = rec.is_missed();
+    let tint = if missed { t.danger } else { t.text_muted };
+    let when = format_list_time(rec.ts.as_deref()).unwrap_or_default();
+    let info = row![
+        profile_avatar_fallback(image, &name, 40.0, AvatarFallback::ContactIcon),
+        column![
+            text(name.clone())
+                .size(d.body)
+                .wrapping(Wrapping::None)
+                .color(if missed { t.danger } else { t.text_primary }),
+            row![
+                icons::phone_icon(12.0, tint),
+                text(call_record_label(rec)).size(d.meta).wrapping(Wrapping::None).color(tint),
+            ]
+            .spacing(5)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(2)
+        .width(Length::Fill),
+        text(when).size(d.meta).color(t.text_muted),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+    let open = mouse_area(container(info).width(Length::Fill).padding(Padding::from([6, 4])))
+        .on_release(Message::Call(crate::call_flow::CallMsg::OpenChat(rec.contact_id)))
+        .interaction(mouse::Interaction::Pointer);
+    row![
+        container(open).width(Length::Fill).clip(true),
+        round_header_icon_btn(
+            icons::phone_tool(PROFILE_HEADER_ICON, hover),
+            Message::StartAudioCall(rec.contact_id),
+            hover,
+        ),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .into()
 }
 
 fn calls_detail(app: &App) -> Element<'_, Message> {

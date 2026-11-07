@@ -200,6 +200,19 @@ async fn simplex_e2e_call() {
     assert_eq!(ended.pointer("/contact/contactId").and_then(|v| v.as_i64()), Some(alice_in_bob));
     alice_engine.close().await;
     bob_engine.close().await;
+
+    // Both sides now have the call in their history (Calls page).
+    let history = |s: Arc<Session>| blocking(move || s.call_history(50, 1000).expect("history"));
+    let mine = history(alice.clone()).await;
+    assert_eq!(mine.len(), 1, "{mine:?}");
+    assert!(mine[0].outgoing && mine[0].contact_id == bob_in_alice, "{mine:?}");
+    let theirs = history(bob.clone()).await;
+    assert_eq!(theirs.len(), 1, "{theirs:?}");
+    assert!(!theirs[0].outgoing && theirs[0].contact_id == alice_in_bob, "{theirs:?}");
+    // Paging syntax the history uses for older pages.
+    let call_item = mine[0].item_id;
+    let paged = blocking({ let a = alice.clone(); move || a.send(&format!("/_get items before={call_item} count=1")) }).await;
+    assert!(paged.is_ok(), "before= pagination: {paged:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
 

@@ -608,6 +608,14 @@ impl Commands {
         format!("/_call end @{contact_id}")
     }
 
+    /// Newest chat items across all chats (`before` = older than that item id).
+    pub fn get_items(count: u32, before: Option<i64>) -> String {
+        match before {
+            Some(id) => format!("/_get items before={id} count={count}"),
+            None => format!("/_get items count={count}"),
+        }
+    }
+
     pub fn call_get() -> &'static str {
         "/_call get"
     }

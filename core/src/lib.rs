@@ -22,7 +22,7 @@ pub use chat_list::{merge_seeded_channels, prune_resolved_seeds};
 pub use commands::Commands;
 pub use error::{Error, Result};
 pub use models::{
-    group_role_rank, parse_chat_info_id, CallInfo, CallMedia, ChatId, ChatMessage, ChatPreview, ChatRelayInfo,
+    group_role_rank, parse_chat_info_id, CallInfo, CallMedia, CallRecord, ChatId, ChatMessage, ChatPreview, ChatRelayInfo,
     ChatSettings, ChatTag, ChatType, ConnLink, DeletedState, DeliveryStatus, Event, FileInfo,
     FileKind, FileTransferState, GroupChatScope, GroupMemberInfo, GroupProfileUpdate,
     GroupSupportChat, MessageContent, MessageQuote, MessageSender, NtfFilter, ProfileFields,
@@ -229,6 +229,28 @@ mod smoke {
         assert_eq!(Commands::set_group_link_role(9, "observer"), "/_set link role #9 observer");
         assert_eq!(Commands::delete_group_link(9), "/_delete link #9");
         assert_eq!(Commands::set_group_alias(9, "Work"), "/_set alias #9 Work");
+    }
+
+    #[test]
+    fn call_record_parse() {
+        let aci = serde_json::json!({
+            "chatInfo": {"type": "direct", "contact": {"contactId": 3, "localAlias": "",
+                "localDisplayName": "bob_1", "profile": {"displayName": "Bob"}}},
+            "chatItem": {"meta": {"itemId": 42, "itemTs": "2026-11-07T00:09:45Z"},
+                "content": {"type": "rcvCall", "status": "missed", "duration": 0}}
+        });
+        let rec = CallRecord::parse(&aci).expect("call");
+        assert_eq!((rec.item_id, rec.contact_id, rec.peer_name.as_str()), (42, 3, "Bob"));
+        assert!(!rec.outgoing && rec.is_missed());
+        let text = serde_json::json!({
+            "chatInfo": aci["chatInfo"].clone(),
+            "chatItem": {"meta": {"itemId": 43}, "content": {"type": "sndMsgContent"}}
+        });
+        assert!(CallRecord::parse(&text).is_none());
+        assert!(CallRecord::touches_calls(&serde_json::json!({"chatItems": [aci]})));
+        assert!(!CallRecord::touches_calls(&serde_json::json!({"chatItems": [text]})));
+        assert_eq!(Commands::get_items(5, None), "/_get items count=5");
+        assert_eq!(Commands::get_items(5, Some(9)), "/_get items before=9 count=5");
     }
 
     #[test]

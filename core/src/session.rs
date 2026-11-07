@@ -8,6 +8,7 @@ use crate::commands::Commands;
 use crate::error::{Error, Result};
 use crate::ffi::LibSimplex;
 use crate::models::{
+    CallRecord,
     parse_conn_link, parse_event, ApiEnvelope, ChatId, ChatMessage, ChatPreview, ChatSettings,
     ChatTag, ChatType, ConnLink, DeliveryStatus, Event, FileInfo, FileKind, FileTransferState,
     CallMedia, ChatRelayInfo, GroupMemberInfo, NtfFilter, ProfileFields, ReactionCount,
@@ -985,6 +986,43 @@ Create a new channel — private-group style links won’t join."
         self.send(&Commands::call_status(contact_id, status))
     }
 
+    /// Recent calls, newest first. The core keeps each call as a chat item
+    /// in the contact's chat; there is no call-only query, so this pages
+    /// back through the newest items of all chats (at most `scan_items`)
+    /// until `limit` calls are found.
+    pub fn call_history(&self, limit: usize, scan_items: u32) -> Result<Vec<CallRecord>> {
+        const PAGE: u32 = 250;
+        let mut out = Vec::new();
+        let mut before = None;
+        let mut scanned = 0;
+        while scanned < scan_items && out.len() < limit {
+            let value = self.send(&Commands::get_items(PAGE, before))?;
+            let Some(items) = value.get("chatItems").and_then(Value::as_array) else { break };
+            if items.is_empty() {
+                break;
+            }
+            scanned += items.len() as u32;
+            // Pages come oldest → newest.
+            for aci in items.iter().rev() {
+                if let Some(rec) = CallRecord::parse(aci) {
+                    out.push(rec);
+                }
+            }
+            let oldest = items
+                .iter()
+                .filter_map(|aci| aci.pointer("/chatItem/meta/itemId").and_then(Value::as_i64))
+                .min();
+            if oldest.is_none() || oldest == before || (items.len() as u32) < PAGE {
+                break;
+            }
+            before = oldest;
+        }
+        // Item ids grow with time across chats: newest first.
+        out.sort_by_key(|r| std::cmp::Reverse(r.item_id));
+        out.truncate(limit);
+        Ok(out)
+    }
+
     fn user_id(&self) -> Result<i64> {
         self.with_user(|u| u.user_id)
             .ok_or_else(|| Error::Command("no active user".into()))
@@ -1807,11 +1845,17 @@ fn is_announcement_content(item: &Value) -> bool {
                 | "rcvGroupE2EEInfo"
                 | "sndGroupE2EEInfo"
                 | "chatBanner"
+                // Calls: a quiet label in the chat, like the official clients.
+                | "sndCall"
+                | "rcvCall"
         )
     )
 }
 
 fn format_announcement_text(item: &Value, item_text: &str) -> String {
+    if let Some(label) = call_item_label(item) {
+        return label;
+    }
     let member_name = parse_message_sender(item).map(|s| s.display_name);
     let Some(name) = member_name else {
         return item_text.to_string();
@@ -1827,6 +1871,35 @@ fn format_announcement_text(item: &Value, item_text: &str) -> String {
     } else {
         format!("{name} {item_text}")
     }
+}
+
+/// "Outgoing call · 0:42", "Missed call", … for a `sndCall` / `rcvCall` item.
+fn call_item_label(item: &Value) -> Option<String> {
+    let content = item.get("content")?;
+    let outgoing = match content.get("type")?.as_str()? {
+        "sndCall" => true,
+        "rcvCall" => false,
+        _ => return None,
+    };
+    let status = content.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    let secs = content.get("duration").and_then(|v| v.as_i64()).unwrap_or(0).max(0);
+    let direction = if outgoing { "Outgoing call" } else { "Incoming call" };
+    Some(match (outgoing, status) {
+        (_, "ended") if secs > 0 => {
+            let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+            if h > 0 {
+                format!("{direction} · {h}:{m:02}:{s:02}")
+            } else {
+                format!("{direction} · {m}:{s:02}")
+            }
+        }
+        (true, "missed" | "pending" | "rejected") => "Call not answered".into(),
+        (false, "missed" | "pending") => "Missed call".into(),
+        (false, "rejected") => "Call declined".into(),
+        (_, "error") => "Call failed".into(),
+        (_, "accepted" | "negotiated" | "progress") => format!("{direction} in progress"),
+        _ => direction.into(),
+    })
 }
 
 fn parse_message_sender(item: &Value) -> Option<crate::models::MessageSender> {
@@ -2526,6 +2599,26 @@ mod tests {
         });
         let parsed = super::parse_one_group_member(&m).expect("member");
         assert_eq!(parsed.display_name, "Ali");
+    }
+
+    #[test]
+    fn call_item_is_quiet_label() {
+        let call = |dir: &str, ty: &str, status: &str, secs: i64| {
+            json!({
+                "chatDir": { "type": dir },
+                "meta": { "itemId": 7, "itemTs": "2026-11-07T00:09:45Z",
+                    "itemText": "outgoing call: ended (00:02)", "itemStatus": { "type": "sndSent" } },
+                "content": { "type": ty, "status": status, "duration": secs }
+            })
+        };
+        let msg = parse_one_message(&call("directSnd", "sndCall", "ended", 42)).expect("call");
+        assert!(msg.is_announcement);
+        assert_eq!(msg.text, "Outgoing call · 0:42");
+        let missed = parse_one_message(&call("directRcv", "rcvCall", "missed", 0)).expect("call");
+        assert!(missed.is_announcement);
+        assert_eq!(missed.text, "Missed call");
+        let long = parse_one_message(&call("directRcv", "rcvCall", "ended", 3725)).expect("call");
+        assert_eq!(long.text, "Incoming call · 1:02:05");
     }
 
     #[test]

@@ -12,6 +12,14 @@
 //! Playback is clocked by the sound device: the player pulls from its stdin
 //! pipe at the hardware rate, and we top the pipe up only while it holds less
 //! than [`TARGET_BUFFERED`] — so latency stays bounded and never drifts.
+//!
+//! Echo: without cancellation the peer hears themselves whenever our speaker
+//! reaches our microphone (laptop, phone on speaker). Every frame handed to
+//! the player is also sent to the capture thread as the far-end reference,
+//! and the microphone signal goes through an adaptive echo canceller
+//! ([`decibri_aec`]) before encoding. The canceller finds the speaker → mic
+//! delay itself (pipe + sound server + room), so the tools' unknown latency
+//! doesn't matter.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -33,6 +41,18 @@ const PREBUFFER: usize = 3;
 const MAX_QUEUED: usize = 12;
 /// Consecutive missing frames concealed before falling back to silence.
 const MAX_CONCEALED: u32 = 5;
+/// Echo tail the canceller models. 120 ms covers laptops, phones on
+/// speaker and ordinary rooms; longer costs CPU on phones for little gain.
+const AEC_TAIL_MS: u16 = 120;
+
+fn echo_canceller() -> Option<decibri_aec::Aec> {
+    let mut cfg = decibri_aec::AecConfig::default();
+    cfg.sample_rate = RATE;
+    cfg.tail_ms = AEC_TAIL_MS;
+    decibri_aec::Aec::new(cfg)
+        .map_err(|e| tracing::warn!(%e, "call: echo cancellation unavailable"))
+        .ok()
+}
 
 fn sound_server_running() -> bool {
     if std::env::var_os("PULSE_SERVER").is_some() {
@@ -303,6 +323,8 @@ impl AudioIo {
         mut on_packet: impl FnMut(Vec<u8>) + Send + 'static,
     ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
+        // What the speaker plays, for the echo canceller on the capture side.
+        let (reference_tx, reference_rx) = std::sync::mpsc::channel::<[f32; FRAME]>();
 
         // Speaker first: hearing the peer matters even when the mic fails.
         let mut player = spawn_first(playback_recipes(), false)?;
@@ -327,6 +349,8 @@ impl AudioIo {
                             Ok(n) => frame[n..].fill(0),
                             Err(_) => frame.fill(0),
                         }
+                        // Fails only without a microphone thread: nothing to cancel.
+                        let _ = reference_tx.send(frame.map(|s| s as f32 / 32768.0));
                     })
                 })
                 .map_err(|e| e.to_string())?;
@@ -347,23 +371,51 @@ impl AudioIo {
                     .name("call-capture".into())
                     .spawn(move || {
                         let mut raw = [0u8; FRAME_BYTES];
+                        let mut near = [0f32; FRAME];
                         let mut pcm = [0i16; FRAME];
                         let mut out = [0u8; 1500];
+                        let mut aec = echo_canceller();
+                        // Cancelled samples waiting to fill a 20 ms frame (the
+                        // canceller is block-based and may lag one block).
+                        let mut cleaned: Vec<f32> = Vec::with_capacity(FRAME * 4);
                         while !stop.load(Ordering::Relaxed) {
                             if stdout.read_exact(&mut raw).is_err() {
                                 tracing::warn!("call audio: recorder stopped");
                                 break;
                             }
-                            if muted.load(Ordering::Relaxed) {
-                                pcm.fill(0);
-                            } else {
-                                for (i, s) in pcm.iter_mut().enumerate() {
-                                    *s = i16::from_le_bytes([raw[2 * i], raw[2 * i + 1]]);
-                                }
+                            for (i, s) in near.iter_mut().enumerate() {
+                                *s = i16::from_le_bytes([raw[2 * i], raw[2 * i + 1]]) as f32 / 32768.0;
                             }
-                            match encoder.encode(&pcm, &mut out) {
-                                Ok(n) => on_packet(out[..n].to_vec()),
-                                Err(e) => tracing::warn!(%e, "opus encode"),
+                            // Keep cancelling while muted: the filter stays converged.
+                            let mut failed = false;
+                            if let Some(aec) = aec.as_mut() {
+                                while let Ok(reference) = reference_rx.try_recv() {
+                                    aec.feed_reference(&reference);
+                                }
+                                if let Err(e) = aec.process(&near, &mut cleaned) {
+                                    tracing::warn!(%e, "call: echo canceller failed; continuing without");
+                                    failed = true;
+                                }
+                            } else {
+                                cleaned.extend_from_slice(&near);
+                            }
+                            if failed {
+                                aec = None;
+                                cleaned.extend_from_slice(&near);
+                            }
+                            while cleaned.len() >= FRAME {
+                                if muted.load(Ordering::Relaxed) {
+                                    pcm.fill(0);
+                                } else {
+                                    for (p, s) in pcm.iter_mut().zip(&cleaned[..FRAME]) {
+                                        *p = (s * 32768.0).clamp(-32768.0, 32767.0) as i16;
+                                    }
+                                }
+                                cleaned.drain(..FRAME);
+                                match encoder.encode(&pcm, &mut out) {
+                                    Ok(n) => on_packet(out[..n].to_vec()),
+                                    Err(e) => tracing::warn!(%e, "opus encode"),
+                                }
                             }
                         }
                     })
@@ -473,6 +525,44 @@ fn tone_sample(tone: Tone, n: u64) -> i16 {
 
 #[cfg(test)]
 mod tests {
+    /// The canceller as the capture thread drives it: 20 ms frames, the
+    /// reference running ahead of the microphone (pipe + sound server), a
+    /// room echo 150 ms later. After converging, most of the echo is gone.
+    #[test]
+    fn echo_canceller_removes_delayed_echo() {
+        use super::{echo_canceller, FRAME, RATE};
+        let mut aec = echo_canceller().expect("canceller");
+        let secs = 8;
+        let n = RATE as usize * secs;
+        let mut seed = 0x2545_f491_u32;
+        let far: Vec<f32> = (0..n)
+            .map(|i| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let talking = (i / 9600) % 4 != 3; // pauses like speech
+                if talking { (seed as f32 / u32::MAX as f32 - 0.5) * 0.4 } else { 0.0 }
+            })
+            .collect();
+        let delay = RATE as usize * 150 / 1000;
+        let near: Vec<f32> = (0..n)
+            .map(|i| {
+                let tap = |d: usize, g: f32| if i >= d { far[i - d] * g } else { 0.0 };
+                tap(delay, 0.45) + tap(delay + 90, 0.2) + tap(delay + 400, -0.08)
+            })
+            .collect();
+        let mut out = Vec::new();
+        for b in 0..n / FRAME {
+            let r = b * FRAME..(b + 1) * FRAME;
+            aec.feed_reference(&far[r.clone()]);
+            aec.process(&near[r], &mut out).unwrap();
+        }
+        let energy = |v: &[f32]| v.iter().map(|x| x * x).sum::<f32>();
+        let half = n / 2;
+        let erle = 10.0 * (energy(&near[half..]) / energy(&out[half..out.len().min(n)]).max(1e-12)).log10();
+        assert!(erle > 20.0, "echo only reduced by {erle:.1} dB");
+    }
+
     use super::*;
 
     fn frame(jb: &mut JitterBuffer) -> Option<u8> {

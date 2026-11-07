@@ -570,8 +570,17 @@ impl Session {
         self.send(&Commands::clear_chat(chat))
     }
 
+    /// Delete a chat. A group you're still in but don't own can't be deleted
+    /// for everyone (`groupUserRole`): leave it — members are told — then
+    /// delete it from this device, as the official apps do.
     pub fn delete_chat(&self, chat: &ChatId) -> Result<Value> {
-        self.send(&Commands::delete_chat(chat))
+        match self.send(&Commands::delete_chat(chat)) {
+            Err(Error::Command(msg)) if chat.chat_type == ChatType::Group && is_group_role_error(&msg) => {
+                self.leave_group(chat.api_id)?;
+                self.send(&Commands::delete_chat(chat))
+            }
+            other => other,
+        }
     }
 
     pub fn list_chat_tags(&self) -> Result<Vec<ChatTag>> {
@@ -2727,5 +2736,21 @@ mod tests {
             }
         });
         assert_eq!(auto_receive_from_chat_item(&aci), None);
+    }
+}
+
+/// `chat command error` for an action your group role doesn't allow.
+fn is_group_role_error(message: &str) -> bool {
+    message.starts_with("groupUserRole")
+}
+
+#[cfg(test)]
+mod group_role_tests {
+    /// The error a member gets for `/_delete #group` (from a real session).
+    #[test]
+    fn member_delete_error_is_recognised() {
+        let msg = r#"groupUserRole: {"errorType":{"requiredRole":"owner","type":"groupUserRole"},"type":"error"}"#;
+        assert!(super::is_group_role_error(msg));
+        assert!(!super::is_group_role_error("noActiveUser: {}"));
     }
 }

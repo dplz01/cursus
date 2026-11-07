@@ -736,43 +736,147 @@ fn tab_moves_between_password_fields() {
 }
 
 
-/// Tab also walks the settings Profile fields (wrapped in the edit menu):
-/// display name → bio.
+/// Profile texts are plain text now; the pencil opens the editor sheet,
+/// whose ✓ writes the value through the same draft/save messages.
 #[test]
-fn tab_moves_between_profile_fields() {
-    use iced::advanced::widget::operation::focusable;
+fn field_editor_edits_and_saves_profile_texts() {
+    use crate::EditField;
     load_fonts();
     let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
     app.nav = NavSection::Settings;
     app.own_profile.fields = profile("Davide", "Building Cursus");
-    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
-        iced::Font::with_name("Noto Sans"),
-        iced::Pixels(16.0),
-        Some("tiny-skia"),
-    ))
-    .unwrap();
-    let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), DESKTOP, Cache::default(), &mut renderer);
-    run_operation(&mut ui, &renderer, Box::new(focusable::focus_next::<()>()));
-    run_operation(&mut ui, &renderer, Box::new(focusable::focus_next::<()>()));
-    let key_x = iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-        key: iced::keyboard::Key::Character("x".into()),
-        modified_key: iced::keyboard::Key::Character("x".into()),
-        physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyX),
-        location: iced::keyboard::Location::Standard,
-        modifiers: iced::keyboard::Modifiers::default(),
-        text: Some("x".into()),
-        repeat: false,
-    });
-    let mut msgs: Vec<Message> = Vec::new();
-    let _ = ui.update(
-        std::slice::from_ref(&key_x),
-        iced::mouse::Cursor::Unavailable,
-        &mut renderer,
-        &mut iced::advanced::clipboard::Null,
-        &mut msgs,
-    );
-    assert!(
-        matches!(msgs.as_slice(), [Message::OwnProfileBio(_)]),
-        "second field should be the bio, got {msgs:?}"
-    );
+
+    let _ = app.update(Message::OpenFieldEditor(EditField::OwnBio));
+    assert_eq!(app.field_editor().map(|e| e.text()), Some("Building Cursus".into()));
+    // The sheet renders on top of Settings.
+    let _ = app.view(iced::window::Id::unique());
+    let _ = app.update(Message::FieldEditorInput("  Shipping Cursus 🚀 ".into()));
+    let _ = app.update(Message::FieldEditorSave);
+    assert!(app.field_editor().is_none(), "✓ closes the sheet");
+    assert_eq!(app.own_profile.fields.short_descr, "Shipping Cursus 🚀");
+
+    // A name can't be emptied: the sheet stays open with an error.
+    let _ = app.update(Message::OpenFieldEditor(EditField::OwnName));
+    let _ = app.update(Message::FieldEditorInput("   ".into()));
+    let _ = app.update(Message::FieldEditorSave);
+    assert!(app.field_editor().is_some_and(|e| e.error.is_some()));
+    assert_eq!(app.own_profile.fields.display_name, "Davide");
+
+    // Cancel / Escape drop the edit.
+    let _ = app.update(Message::FieldEditorInput("Someone else".into()));
+    let _ = app.update(Message::Escape);
+    assert!(app.field_editor().is_none());
+    assert_eq!(app.own_profile.fields.display_name, "Davide");
+
+    // Multi-line description keeps its line breaks.
+    let _ = app.update(Message::OpenFieldEditor(EditField::OwnDescription));
+    let _ = app.update(Message::FieldEditorEdit(iced::widget::text_editor::Action::Edit(
+        iced::widget::text_editor::Edit::Paste(std::sync::Arc::new("line one\nline two\n".into())),
+    )));
+    let _ = app.update(Message::FieldEditorSave);
+    assert_eq!(app.own_profile.fields.description, "line one\nline two");
+}
+
+/// Group pages: the welcome-message tile opens the multi-line editor.
+#[test]
+fn welcome_message_tile_opens_editor() {
+    use crate::EditField;
+    load_fonts();
+    let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+    select(&mut app, 1);
+    group_page(&mut app, GroupSettingsPane::Overview);
+    let Some(g) = app.group_settings.as_mut() else {
+        panic!("group page open");
+    };
+    g.my_role = "owner".into();
+    g.welcome_message = "Ciao!".into();
+    let _ = app.update(Message::OpenFieldEditor(EditField::GroupWelcome));
+    let editor = app.field_editor().expect("sheet open");
+    assert!(editor.field.multiline());
+    assert_eq!(editor.text(), "Ciao!");
+    let _ = app.view(iced::window::Id::unique());
+    let _ = app.update(Message::FieldEditorCancel);
+    assert!(app.field_editor().is_none());
+}
+
+/// Screens touched by the Linux UI fixes (bubble stamps with emoji, group
+/// reactions, plain profile texts + editor sheet):
+/// `cargo test -p cursus-linux shots_ui_fixes -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn shots_ui_fixes() {
+    use crate::EditField;
+    let sender = |id: i64, name: &str, role: &str| MessageSender {
+        group_member_id: id,
+        contact_id: Some(100 + id),
+        display_name: name.into(),
+        image: None,
+        role: role.into(),
+    };
+    for dark in [true, false] {
+        let t = if dark { "dark" } else { "light" };
+
+        // Group chat from the bug report: emoji lines + reactions.
+        let mut app = demo_app(dark, MOBILE.width, MOBILE.height);
+        select(&mut app, 1);
+        let incoming = |id: i64, text: &str, time: &str, who: (i64, &str, &str)| {
+            let mut m = msg(id, text, false, time);
+            m.sender = Some(sender(who.0, who.1, who.2));
+            m
+        };
+        let g = (2, "giubina", "owner");
+        let dav = (3, "Davide ANDROID", "member");
+        app.messages = vec![
+            incoming(20, "😝😝😝", "12:44", dav),
+            incoming(21, "Tu hai dormito bene??", "12:45", dav),
+            incoming(22, "E allora che me ne faccio?!", "13:22", g),
+            incoming(23, "Così così 😔", "13:23", g),
+            {
+                let mut m = incoming(24, "Infatti non sto tanto bene 😔😔😔", "13:23", g);
+                m.reactions = vec![ReactionCount { emoji: "❤".into(), user_reacted: true, total: 1 }];
+                m
+            },
+            incoming(25, "Ma tu oggi vai dal dottore? 🤓", "13:23", g),
+            incoming(26, "Dopo ci sentiamo 🥰🥰🥰🥰🥰🥰🥰🥰", "13:23", g),
+            {
+                let mut m = incoming(27, "Nono", "16:36", dav);
+                m.reactions = vec![ReactionCount { emoji: "👍".into(), user_reacted: false, total: 2 }];
+                m
+            },
+            {
+                let mut m = msg(28, "stasera alle 19/20? 😊😊😊😊😊😊", true, "17:51");
+                m.edited = true;
+                m
+            },
+        ];
+        render(&app, MOBILE, &format!("fix-group-chat-{t}"));
+
+        // Settings → Profile: plain texts with pencils.
+        let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);
+        app.nav = NavSection::Settings;
+        app.own_profile.fields = profile("Davide", "Building Cursus");
+        render(&app, DESKTOP, &format!("fix-profile-{t}"));
+        let _ = app.update(Message::OpenFieldEditor(EditField::OwnBio));
+        render(&app, DESKTOP, &format!("fix-profile-edit-{t}"));
+
+        // Group page (owner): welcome-message tile + its editor.
+        let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);
+        group_page(&mut app, GroupSettingsPane::Overview);
+        if let Some(g) = app.group_settings.as_mut() {
+            g.my_role = "owner".into();
+            g.short_descr = "Where Cursus gets built".into();
+            g.welcome_message = "Welcome to Cursus devs! Read the roadmap first, then say hi 👋".into();
+        }
+        render(&app, DESKTOP, &format!("fix-group-{t}"));
+        let _ = app.update(Message::OpenFieldEditor(EditField::GroupWelcome));
+        render(&app, DESKTOP, &format!("fix-group-welcome-{t}"));
+        let mut app = demo_app(dark, MOBILE.width, MOBILE.height);
+        group_page(&mut app, GroupSettingsPane::Overview);
+        if let Some(g) = app.group_settings.as_mut() {
+            g.my_role = "owner".into();
+        }
+        render(&app, MOBILE, &format!("fix-mgroup-{t}"));
+        let _ = app.update(Message::OpenFieldEditor(EditField::GroupAlias));
+        render(&app, MOBILE, &format!("fix-mgroup-alias-{t}"));
+    }
 }

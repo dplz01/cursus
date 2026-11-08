@@ -9502,77 +9502,30 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
         .unwrap_or(0);
     let wav = dir.join(format!("voice-{stamp}.wav"));
     let mut errors = Vec::new();
+    // A backend attached to the wrong / suspended source records exact
+    // digital zeros (a real mic always has some noise): skip it and try the
+    // next one. Only if every backend is silent is the first one used.
+    let mut first_silent: Option<CaptureRecipe> = None;
 
     for recipe in capture_recipes() {
-        let _ = std::fs::remove_file(&wav);
-        let spawned = Command::new(recipe.program)
-            .args(recipe.args)
-            .arg(&wav)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn();
-        let mut child = match spawned {
-            Ok(c) => c,
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    errors.push(format!("{}: {e}", recipe.label));
-                }
-                continue;
-            }
-        };
-        let started = Instant::now();
-        // Poll for up to ~600ms: an unusable device makes the tool exit fast.
-        let mut alive = true;
-        let mut grew = false;
-        for _ in 0..12 {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            match child.try_wait() {
-                Ok(None) => {
-                    let len = std::fs::metadata(&wav).map(|m| m.len()).unwrap_or(0);
-                    if len > 44 {
-                        grew = true;
-                        if recipe.needs_growth {
-                            break;
-                        }
-                    }
-                }
-                _ => {
-                    alive = false;
-                    break;
+        match try_capture(&recipe, &wav, true) {
+            Ok(rec) => return Ok(rec),
+            Err(CaptureFailure::Silent) => {
+                tracing::warn!(backend = recipe.label, "voice: backend records only silence, trying the next");
+                errors.push(format!("{}: silent", recipe.label));
+                if first_silent.is_none() {
+                    first_silent = Some(recipe);
                 }
             }
+            Err(CaptureFailure::Missing) => {}
+            Err(CaptureFailure::Failed(err)) => errors.push(format!("{}: {err}", recipe.label)),
         }
-        if alive && (grew || !recipe.needs_growth) {
-            tracing::info!(backend = recipe.label, "voice capture started");
-            // Keep draining stderr: once its 64 KB pipe fills (xrun warnings
-            // on a busy phone) the recorder would block and the take stall.
-            if let Some(mut err) = child.stderr.take() {
-                let _ = std::thread::Builder::new()
-                    .name("rec-stderr".into())
-                    .spawn(move || std::io::copy(&mut err, &mut std::io::sink()));
-            }
-            return Ok(VoiceRec {
-                path: wav,
-                child,
-                started,
-            });
+    }
+    if let Some(recipe) = first_silent {
+        tracing::warn!(backend = recipe.label, "voice: every backend was silent; using the first");
+        if let Ok(rec) = try_capture(&recipe, &wav, false) {
+            return Ok(rec);
         }
-        if alive {
-            let _ = child.kill();
-            let _ = child.wait();
-            errors.push(format!("{}: no audio frames", recipe.label));
-        } else {
-            let mut stderr = String::new();
-            if let Some(mut s) = child.stderr.take() {
-                use std::io::Read;
-                let _ = s.read_to_string(&mut stderr);
-            }
-            let _ = child.wait();
-            let first = stderr.lines().next().unwrap_or("exited").trim().to_string();
-            errors.push(format!("{}: {first}", recipe.label));
-        }
-        let _ = std::fs::remove_file(&wav);
     }
 
     let detail = if errors.is_empty() {
@@ -9583,6 +9536,117 @@ fn start_voice_recording() -> Result<VoiceRec, String> {
     Err(format!(
         "Microphone unavailable ({detail}). Install pipewire-tools (pw-record), pulseaudio-utils (parecord), alsa-utils (arecord) or ffmpeg."
     ))
+}
+
+enum CaptureFailure {
+    /// The program isn't installed.
+    Missing,
+    /// It runs but delivers only digital zeros.
+    Silent,
+    Failed(String),
+}
+
+/// A recorder / converter: inherits our environment except the musl
+/// compatibility preload, which is for the glibc libsimplex only — the
+/// sound tools are native programs of the device.
+fn media_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    if std::env::var_os("CURSUS_MUSL_COMPAT_READY").is_some() {
+        cmd.env_remove("LD_PRELOAD");
+    }
+    cmd
+}
+
+/// Start one capture recipe; probe ~0.6 s that it runs, delivers frames and
+/// (`check_silence`) isn't pure digital silence.
+fn try_capture(recipe: &CaptureRecipe, wav: &std::path::Path, check_silence: bool) -> Result<VoiceRec, CaptureFailure> {
+    let _ = std::fs::remove_file(wav);
+    let spawned = media_command(recipe.program)
+        .args(recipe.args)
+        .arg(wav)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut child = match spawned {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(CaptureFailure::Missing),
+        Err(e) => return Err(CaptureFailure::Failed(e.to_string())),
+    };
+    let started = Instant::now();
+    // Poll for up to ~600ms: an unusable device makes the tool exit fast.
+    let mut alive = true;
+    let mut grew = false;
+    for _ in 0..12 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        match child.try_wait() {
+            Ok(None) => {
+                let len = std::fs::metadata(wav).map(|m| m.len()).unwrap_or(0);
+                if len > 44 {
+                    grew = true;
+                    if recipe.needs_growth && !check_silence {
+                        break;
+                    }
+                }
+            }
+            _ => {
+                alive = false;
+                break;
+            }
+        }
+    }
+    if alive && check_silence && grew && wav_is_digital_silence(wav) {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(wav);
+        return Err(CaptureFailure::Silent);
+    }
+    if alive && (grew || !recipe.needs_growth) {
+        tracing::info!(backend = recipe.label, "voice capture started");
+        // Keep draining stderr: once its 64 KB pipe fills (xrun warnings
+        // on a busy phone) the recorder would block and the take stall.
+        if let Some(mut err) = child.stderr.take() {
+            let _ = std::thread::Builder::new()
+                .name("rec-stderr".into())
+                .spawn(move || std::io::copy(&mut err, &mut std::io::sink()));
+        }
+        return Ok(VoiceRec {
+            path: wav.to_path_buf(),
+            child,
+            started,
+        });
+    }
+    let failure = if alive {
+        let _ = child.kill();
+        let _ = child.wait();
+        "no audio frames".to_string()
+    } else {
+        let mut stderr = String::new();
+        if let Some(mut s) = child.stderr.take() {
+            use std::io::Read;
+            let _ = s.read_to_string(&mut stderr);
+        }
+        let _ = child.wait();
+        stderr.lines().next().unwrap_or("exited").trim().to_string()
+    };
+    let _ = std::fs::remove_file(wav);
+    Err(CaptureFailure::Failed(failure))
+}
+
+/// The WAV's samples so far are all exactly zero (≥ 50 ms of them).
+/// `false` when there isn't enough data to tell.
+fn wav_is_digital_silence(wav: &std::path::Path) -> bool {
+    let Ok(bytes) = std::fs::read(wav) else {
+        return false;
+    };
+    let start = bytes
+        .windows(4)
+        .position(|w| w == b"data")
+        .map(|i| i + 8)
+        .unwrap_or(44);
+    let samples = bytes.get(start..).unwrap_or(&[]);
+    // 50 ms of 16 kHz mono s16 = 1600 bytes.
+    samples.len() >= 1600 && samples.iter().all(|&b| b == 0)
 }
 
 /// Stop a capture/player process gracefully (SIGINT lets recorders finalise
@@ -9656,7 +9720,7 @@ fn finish_voice_recording(wav: PathBuf, elapsed: std::time::Duration) -> Result<
 /// broken encoder on a phone) used to leave the take with no draft forever.
 /// `false` (no ffmpeg, failure, timeout) sends the WAV instead.
 fn transcode_voice(wav: &std::path::Path, m4a: &std::path::Path) -> bool {
-    let child = Command::new("ffmpeg")
+    let child = media_command("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
         .arg(wav)
         .args(["-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "32k"])
@@ -10093,6 +10157,25 @@ mod voice_draft_tests {
         let draft = super::finish_voice_recording(path, std::time::Duration::from_secs(1)).expect("draft");
         assert!(draft.quiet);
         assert!(draft.path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A backend on a dead source writes exact zeros: detected so the next
+    /// backend gets a chance. Real (even very quiet) audio isn't.
+    #[test]
+    fn digital_silence_is_detected() {
+        let dir = std::env::temp_dir().join(format!("cursus-voice-zero-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zeros = dir.join("zeros.wav");
+        wav(&zeros, &vec![0i16; 8_000]);
+        assert!(super::wav_is_digital_silence(&zeros));
+        let quiet = dir.join("quiet.wav");
+        let samples: Vec<i16> = (0..8_000).map(|i| if i % 7 == 0 { 3 } else { 0 }).collect();
+        wav(&quiet, &samples);
+        assert!(!super::wav_is_digital_silence(&quiet), "noise floor is not silence");
+        let short = dir.join("short.wav");
+        wav(&short, &[0i16; 100]);
+        assert!(!super::wav_is_digital_silence(&short), "too little data to judge");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

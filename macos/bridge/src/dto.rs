@@ -100,6 +100,9 @@ pub fn chat(c: &ChatPreview) -> Value {
         "groupPrefs": (c.id.chat_type == ChatType::Group).then(|| group_prefs(c)),
         "memberReview": c.member_admission.as_ref().and_then(|m| m.get("review")).is_some(),
         "membersRequireAttention": c.members_require_attention,
+        // Your own "Chat with admins" thread.
+        "supportUnread": c.membership_support_unread,
+        "hasSupportChat": c.membership_has_support_chat,
     })
 }
 
@@ -147,6 +150,10 @@ pub fn member(m: &GroupMemberInfo) -> Value {
         "isMe": m.is_me,
         "blocked": m.blocked_by_admin,
         "showMessages": m.show_messages,
+        // Their support thread with the moderators, when one exists.
+        "support": m.support_chat.as_ref().map(|c| json!({
+            "unread": c.unread, "attention": c.member_attention, "mentions": c.mentions,
+        })),
     })
 }
 

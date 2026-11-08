@@ -60,6 +60,9 @@ struct Chat: Decodable, Identifiable, Equatable {
     let groupPrefs: GroupPrefs?
     let memberReview: Bool
     let membersRequireAttention: Int
+    /// Your own "Chat with admins" thread: unread count, and whether it exists.
+    let supportUnread: Int
+    let hasSupportChat: Bool
 
     var id: String { ref }
     var muted: Bool { notifications != "all" }
@@ -96,6 +99,29 @@ struct GroupFeature: Decodable, Equatable {
 struct GroupPrefs: Decodable, Equatable {
     let features: [String: GroupFeature]
     let timedTtl: Int64
+}
+
+/// An open support thread: yours with the admins (`memberId` nil) or, for
+/// moderators, a member's.
+struct SupportThread: Equatable {
+    let groupRef: String
+    let groupId: Int64
+    /// The member whose thread it is (moderators); nil = your own.
+    let member: Member?
+    let title: String
+    /// Opened from the moderators' list: Back returns there.
+    let fromList: Bool
+
+    var ref: String {
+        member.map { "#\(groupId)(_support:\($0.id))" } ?? "#\(groupId)(_support)"
+    }
+}
+
+/// A member's support thread stats.
+struct SupportStats: Decodable, Equatable {
+    let unread: Int
+    let attention: Int
+    let mentions: Int
 }
 
 /// A chat list ("Work", "Family"…).
@@ -243,6 +269,8 @@ struct Member: Decodable, Identifiable, Equatable {
     let blocked: Bool
     /// False when you hid this member's messages on this Mac.
     let showMessages: Bool
+    /// Their support thread with the moderators, if any.
+    let support: SupportStats?
 
     /// Invited / still connecting: shown with the gold pending clock.
     var pending: Bool {

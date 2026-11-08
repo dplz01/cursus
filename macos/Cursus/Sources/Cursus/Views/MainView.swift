@@ -48,7 +48,8 @@ struct MainView: View {
                 if model.showInfo && !chat.isNotes {
                     ChatInfoView(chat: chat).id(chat.ref)
                 } else {
-                    ConversationView(chat: chat).id(chat.ref)
+                    // A support thread is its own conversation (fresh scroll state).
+                    ConversationView(chat: chat).id(model.activeRef ?? chat.ref)
                 }
             } else {
                 Placeholder(icon: model.destination == .channels ? "channels" : "chats",

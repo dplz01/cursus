@@ -129,6 +129,10 @@ final class AppModel: ObservableObject {
     @Published var voiceDraft: VoiceDraft?
     /// The photo / video gallery of the open chat.
     @Published var gallery: GalleryState?
+    /// An open "Chat with admins" thread of the selected group.
+    @Published var support: SupportThread?
+    /// The profile page to show when it opens next (back from a thread).
+    @Published var infoReturnPage: InfoPage?
     @Published var isLoadingMessages = false
 
     /// Settings → Notifications (`@AppStorage` with these keys in the view).
@@ -335,6 +339,7 @@ final class AppModel: ObservableObject {
         newMessagesFrom = nil
         cancelVoice()
         gallery = nil
+        support = nil
         openUnread = selection.flatMap { ref in chats.first { $0.ref == ref }?.unread } ?? 0
         guard let ref = selection else { return }
         isLoadingMessages = true
@@ -348,7 +353,7 @@ final class AppModel: ObservableObject {
     func reloadMessages(for ref: String) async {
         do {
             let list = try await Core.call("listMessages", ["chat": ref, "count": pageSize], as: [Message].self)
-            guard selection == ref else { return }
+            guard activeRef == ref else { return }
             let old = messages
             if list != messages { messages = list }
             markNewMessages(old: old, new: list)
@@ -359,7 +364,7 @@ final class AppModel: ObservableObject {
     }
 
     func scheduleMessagesReload() {
-        guard let ref = selection else { return }
+        guard let ref = activeRef else { return }
         messagesRefresh?.cancel()
         messagesRefresh = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 120_000_000)
@@ -617,6 +622,15 @@ final class AppModel: ObservableObject {
             try await Core.run("acceptMember", ["groupId": chat.apiId, "memberId": member.id, "role": role])
         }
         await loadMembers()
+        refreshSupportMember()
+    }
+
+    /// The open thread's member after a change (accepted, removed).
+    private func refreshSupportMember() {
+        guard let thread = support, let old = thread.member else { return }
+        let fresh = members.first { $0.id == old.id }
+        support = SupportThread(groupRef: thread.groupRef, groupId: thread.groupId, member: fresh ?? old,
+                                title: thread.title, fromList: thread.fromList)
     }
 
     /// Open the direct chat with a member, creating it when the group
@@ -653,10 +667,63 @@ final class AppModel: ObservableObject {
         await perform { try await Core.run("joinGroup", ["groupId": groupId]) }
     }
 
+    // MARK: - Support threads ("Chat with admins")
+
+    /// The conversation shown: the selected chat, or one of its support
+    /// threads (`#group(_support)`, `#group(_support:member)`).
+    var activeRef: String? { support?.ref ?? selection }
+
+    /// `#9(_support:4)` → `#9`.
+    nonisolated static func baseRef(_ ref: String) -> String {
+        ref.split(separator: "(").first.map(String.init) ?? ref
+    }
+
+    /// Your own chat with the group's admins, or (moderators) a member's.
+    func openSupport(_ chat: Chat, member: Member? = nil, fromList: Bool = false) {
+        guard chat.isGroup else { return }
+        let title = member.map { "Chat with \($0.name)" } ?? "Chat with admins"
+        support = SupportThread(groupRef: chat.ref, groupId: chat.apiId, member: member,
+                                title: title, fromList: fromList)
+        showInfo = false
+        messages = []
+        composeMode = .new
+        stopSelecting()
+        guard let ref = activeRef else { return }
+        isLoadingMessages = true
+        Task {
+            await reloadMessages(for: ref)
+            isLoadingMessages = false
+            try? await Core.run("markRead", ["chat": ref])
+            scheduleChatsReload()
+        }
+    }
+
+    /// Back from a thread: to the moderators' list it came from, else the group.
+    func closeSupport() {
+        let fromList = support?.fromList ?? false
+        support = nil
+        messages = []
+        guard let ref = selection else { return }
+        Task { await reloadMessages(for: ref) }
+        if fromList {
+            infoReturnPage = .supportList
+            showInfo = true
+            Task { await loadMembers() }
+        }
+    }
+
+    /// Moderators: close a member's support thread.
+    func deleteSupportChat(_ chat: Chat, _ member: Member) async {
+        await perform {
+            try await Core.run("deleteSupportChat", ["groupId": chat.apiId, "memberId": member.id])
+        }
+        await loadMembers()
+    }
+
     // MARK: - Messages
 
     func send() async {
-        guard let ref = selection else { return }
+        guard let ref = activeRef else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let mode = composeMode
@@ -703,7 +770,7 @@ final class AppModel: ObservableObject {
     }
 
     func sendFiles(_ urls: [URL]) async {
-        guard let ref = selection else { return }
+        guard let ref = activeRef else { return }
         for url in urls {
             do {
                 try await Core.run("sendFile", ["chat": ref, "path": url.path])
@@ -716,7 +783,7 @@ final class AppModel: ObservableObject {
     }
 
     func toggleReaction(_ message: Message, emoji: String) async {
-        guard let ref = selection else { return }
+        guard let ref = activeRef else { return }
         let mine = message.reactions.contains { $0.emoji == emoji && $0.mine }
         await perform {
             try await Core.run("react", ["chat": ref, "itemId": message.id, "emoji": emoji, "add": !mine])
@@ -725,7 +792,7 @@ final class AppModel: ObservableObject {
     }
 
     func deleteMessage(_ message: Message, forEveryone: Bool) async {
-        guard let ref = selection else { return }
+        guard let ref = activeRef else { return }
         await perform {
             try await Core.run("deleteItems", ["chat": ref, "itemIds": [message.id], "forEveryone": forEveryone])
         }
@@ -754,7 +821,7 @@ final class AppModel: ObservableObject {
 
     /// Delete the selected messages from this Mac.
     func deleteSelected() async {
-        guard let ref = selection, !selectedMessages.isEmpty else { return }
+        guard let ref = activeRef, !selectedMessages.isEmpty else { return }
         let ids = Array(selectedMessages)
         stopSelecting()
         await perform { try await Core.run("deleteItems", ["chat": ref, "itemIds": ids, "forEveryone": false]) }
@@ -768,7 +835,7 @@ final class AppModel: ObservableObject {
 
     /// Forward `ids` from the open chat to `target`.
     func forward(_ ids: [Int64], to target: Chat) async {
-        guard let ref = selection, !ids.isEmpty else { return }
+        guard let ref = activeRef, !ids.isEmpty else { return }
         forwarding = nil
         stopSelecting()
         await perform { try await Core.run("forward", ["chat": ref, "to": target.ref, "itemIds": ids]) }
@@ -776,7 +843,7 @@ final class AppModel: ObservableObject {
     }
 
     func messageInfo(_ message: Message) async -> MessageInfo? {
-        guard let ref = selection else { return nil }
+        guard let ref = activeRef else { return nil }
         do {
             return try await Core.call("messageInfo", ["chat": ref, "itemId": message.id], as: MessageInfo.self)
         } catch {
@@ -787,7 +854,7 @@ final class AppModel: ObservableObject {
 
     /// Groups: names of the members who set `emoji` on `message`.
     func reactionMembers(_ message: Message, emoji: String) async -> [String] {
-        guard let ref = selection else { return [] }
+        guard let ref = activeRef else { return [] }
         return (try? await Core.call("reactionMembers", ["chat": ref, "itemId": message.id, "emoji": emoji],
                                      as: [String].self)) ?? []
     }
@@ -850,7 +917,7 @@ final class AppModel: ObservableObject {
     // MARK: - Voice messages
 
     func startRecording() async {
-        guard selection != nil, voiceDraft == nil else { return }
+        guard activeRef != nil, voiceDraft == nil else { return }
         VoicePlayer.shared.stop()
         do {
             try await recorder.start()
@@ -878,7 +945,7 @@ final class AppModel: ObservableObject {
     }
 
     func sendVoiceDraft() async {
-        guard let draft = voiceDraft, let ref = selection else { return }
+        guard let draft = voiceDraft, let ref = activeRef else { return }
         voiceDraft = nil
         do {
             // The core copies (and encrypts) it into the files folder.
@@ -1155,7 +1222,10 @@ final class AppModel: ObservableObject {
             fileProgress[p.fileId] = Double(p.transferred) / Double(p.total)
         }
         if event.refreshChats { scheduleChatsReload() }
-        if event.refreshMessages, let sel = selection, event.chat == nil || event.chat == sel {
+        // A support thread's events may carry the scoped or the plain group
+        // reference: compare the chat part.
+        if event.refreshMessages, let active = activeRef,
+           event.chat == nil || event.chat.map(Self.baseRef) == Self.baseRef(active) {
             scheduleMessagesReload()
         }
         for message in event.incoming {

@@ -9,6 +9,8 @@ enum InfoPage: Equatable {
     case member(Int64)
     case invite
     case link
+    /// Moderators: members' support threads and join requests.
+    case supportList
 }
 
 /// Contact / group / channel page (⌘I). Fills the detail pane like the Linux
@@ -33,6 +35,7 @@ struct ChatInfoView: View {
         case .member: return chat.isChannel ? "Subscriber" : "Member"
         case .invite: return "Invite members"
         case .link: return "\(kindTitle) link"
+        case .supportList: return "Chats with members"
         }
     }
 
@@ -56,6 +59,13 @@ struct ChatInfoView: View {
             pages
         }
         .background(Theme.panel)
+        .onAppear {
+            // Back from a member's thread opened from the list: the list again.
+            if let returning = model.infoReturnPage {
+                page = returning
+                model.infoReturnPage = nil
+            }
+        }
     }
 
     private var pages: some View {
@@ -81,6 +91,8 @@ struct ChatInfoView: View {
                 InviteMembersPage(chat: chat)
             case .link:
                 GroupLinkPage(chat: chat)
+            case .supportList:
+                SupportListPage(chat: chat)
             }
         }
     }
@@ -249,9 +261,25 @@ private struct InfoOverview: View {
 
     // MARK: Welcome / invite / link
 
+    /// Member support is on unless the owners switched it off.
+    private var supportOn: Bool { chat.groupPrefs?.features["support"]?.on ?? true }
+
     @ViewBuilder private var groupActions: some View {
-        if ownsGroup || chat.isAdmin || chat.isChannel {
+        if ownsGroup || chat.isAdmin || chat.isChannel || chat.isModerator || supportOn {
             Card(padding: 0, spacing: 0) {
+                if chat.isModerator {
+                    NavRow(icon: "admin", title: "Chats with members",
+                           subtitle: chat.membersRequireAttention > 0
+                            ? "\(chat.membersRequireAttention) need attention"
+                            : "Join requests and member support",
+                           flush: true) { page = .supportList }
+                } else if supportOn && chat.role != nil {
+                    NavRow(icon: "admin", title: "Chat with admins",
+                           subtitle: chat.supportUnread > 0
+                            ? "\(chat.supportUnread) unread"
+                            : "Private conversation with moderators",
+                           flush: true) { model.openSupport(chat) }
+                }
                 if ownsGroup {
                     NavRow(icon: "scripture-scroll", title: "Welcome message", subtitle: welcomePreview,
                            trailing: "edit-3", flush: true) { editing = .welcome }

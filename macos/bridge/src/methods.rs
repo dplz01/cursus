@@ -533,6 +533,11 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
                 .map_err(err)?;
             Ok(Value::Null)
         }
+        // Moderators: close a member's support thread (not for pending joiners).
+        "deleteSupportChat" => {
+            s.delete_member_support_chat(i64_param(p, "groupId")?, i64_param(p, "memberId")?).map_err(err)?;
+            Ok(Value::Null)
+        }
         "acceptMember" => {
             let role = opt_str(p, "role").unwrap_or("member");
             s.accept_group_member(i64_param(p, "groupId")?, i64_param(p, "memberId")?, role).map_err(err)?;

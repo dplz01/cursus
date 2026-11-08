@@ -188,6 +188,14 @@ struct MemberPage: View {
                 }
             }
         }
+        if chat.isModerator && !member.isMe && !member.gone {
+            Card(padding: 0, spacing: 0) {
+                NavRow(icon: "admin", title: "Private chat",
+                       subtitle: "Between \(member.name) and the moderators", flush: true) {
+                    model.openSupport(chat, member: member)
+                }
+            }
+        }
         if member.awaitingReview && chat.isModerator {
             Card(spacing: 4) {
                 CardTitle(icon: "review-file", title: "Waiting for review",
@@ -279,6 +287,83 @@ struct MemberPage: View {
         if member.pending { return "\(member.role) · invited" }
         if member.blocked { return "\(member.role) · blocked" }
         return member.role
+    }
+}
+
+// MARK: - Chats with members (moderators)
+
+/// Join requests first, then members with a support thread (Linux order).
+struct SupportListPage: View {
+    @EnvironmentObject private var model: AppModel
+    let chat: Chat
+    @State private var confirmDelete: Member?
+
+    private var rows: [Member] {
+        model.members
+            .filter { !$0.isMe && !$0.gone && ($0.support != nil || $0.awaitingReview) }
+            .sorted { a, b in
+                if a.awaitingReview != b.awaitingReview { return a.awaitingReview }
+                if (a.support != nil) != (b.support != nil) { return a.support != nil }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+    }
+
+    var body: some View {
+        Card(spacing: 6) {
+            CardTitle(icon: "admin", title: "Chats with members",
+                      subtitle: "Private threads between a member and the moderators, and join requests.")
+            if rows.isEmpty {
+                Text(model.members.isEmpty ? "Loading…" : "No member chats yet.")
+                    .font(.cMeta).foregroundColor(Theme.secondaryText).padding(8)
+            }
+            VStack(spacing: 0) {
+                ForEach(rows) { member in
+                    row(member)
+                }
+            }
+        }
+        if let member = confirmDelete {
+            Card(spacing: 4) {
+                InlineConfirm(question: "Delete the chat with \(member.name)?",
+                              detail: "The thread and its messages are deleted for the moderators.",
+                              confirmTitle: "Delete",
+                              onCancel: { confirmDelete = nil },
+                              onConfirm: {
+                                  confirmDelete = nil
+                                  Task { await model.deleteSupportChat(chat, member) }
+                              })
+            }
+        }
+    }
+
+    private func row(_ member: Member) -> some View {
+        Button { model.openSupport(chat, member: member, fromList: true) } label: {
+            HStack(spacing: 10) {
+                Avatar(image: member.image, name: member.name, size: 40, kind: .contact)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(member.name).font(.cBody).foregroundColor(Theme.primaryText).lineLimit(1)
+                    Text(member.awaitingReview ? "Wants to join — review" : "Support chat")
+                        .font(.cMeta)
+                        .foregroundColor(member.awaitingReview ? Theme.gold : Theme.secondaryText)
+                }
+                Spacer(minLength: 6)
+                if let unread = member.support?.unread, unread > 0 {
+                    UnreadPill(count: unread)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Theme.mutedText)
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(GhostTileStyle())
+        .contextMenu {
+            if !member.awaitingReview && member.support != nil {
+                Button("Delete chat…") { confirmDelete = member }
+            }
+        }
     }
 }
 

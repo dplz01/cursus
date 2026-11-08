@@ -14,14 +14,31 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PaneHeader(title: chat.title, subtitle: subtitle, background: Theme.sidebar,
-                       open: openProfile,
-                       openHelp: chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)") {
-                Avatar(image: chat.image, name: chat.title, size: 36, kind: chat.avatarKind)
-            } actions: {
-                if canOpenProfile {
-                    IconTool(icon: "info-circle", help: chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)",
-                             size: 20) { model.toggleInfo() }
+            if let thread = model.support {
+                // "Chat with admins" thread: its title, the group, Back (Esc).
+                PaneHeader(title: thread.title, subtitle: chat.title, back: { model.closeSupport() },
+                           background: Theme.sidebar) {
+                    if let member = thread.member {
+                        Avatar(image: member.image, name: member.name, size: 36, kind: .contact)
+                    } else {
+                        Avatar(image: chat.image, name: chat.title, size: 36, kind: chat.avatarKind)
+                    }
+                } actions: {
+                    EmptyView()
+                }
+                if let member = thread.member, member.awaitingReview, chat.isModerator {
+                    ReviewBanner(chat: chat, member: member)
+                }
+            } else {
+                PaneHeader(title: chat.title, subtitle: subtitle, background: Theme.sidebar,
+                           open: openProfile,
+                           openHelp: chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)") {
+                    Avatar(image: chat.image, name: chat.title, size: 36, kind: chat.avatarKind)
+                } actions: {
+                    if canOpenProfile {
+                        IconTool(icon: "info-circle", help: chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)",
+                                 size: 20) { model.toggleInfo() }
+                    }
                 }
             }
             if chat.pendingRequestId != nil {
@@ -189,6 +206,35 @@ struct NewMessagesDivider: View {
             Rectangle().fill(Theme.accent.opacity(0.45)).frame(height: 1)
         }
         .padding(.top, 8)
+    }
+}
+
+/// A join request in its support thread: accept (as member / observer) or remove.
+struct ReviewBanner: View {
+    @EnvironmentObject private var model: AppModel
+    let chat: Chat
+    let member: Member
+
+    var body: some View {
+        HStack(spacing: 8) {
+            CIcon("review-file", size: 18, color: Theme.gold)
+            Text("\(member.name) wants to join.").font(.cBody).foregroundColor(Theme.primaryText)
+            Spacer()
+            Button("Remove") {
+                Task {
+                    await model.removeMember(chat, member, withMessages: false)
+                    model.closeSupport()
+                }
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            Button("Accept as observer") { Task { await model.acceptMember(chat, member, role: "observer") } }
+                .buttonStyle(SecondaryButtonStyle())
+            Button("Accept") { Task { await model.acceptMember(chat, member) } }
+                .buttonStyle(PrimaryButtonStyle())
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Theme.list)
     }
 }
 

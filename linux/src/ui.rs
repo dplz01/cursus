@@ -1928,6 +1928,7 @@ fn history_column(app: &App, d: Density) -> Element<'static, Message> {
             continue;
         }
         let joined_prev = i > 0 && same_group(msgs[i - 1], msg);
+        let joined_next = i + 1 < msgs.len() && same_group(msg, msgs[i + 1]);
         let show_header = if show_members {
             !msg.outgoing
                 && msg.sender.as_ref().is_some_and(|s| {
@@ -1960,7 +1961,7 @@ fn history_column(app: &App, d: Density) -> Element<'static, Message> {
             msg,
             d,
             show_header,
-            BubbleRun { joined_prev },
+            BubbleRun { joined_prev, joined_next },
         ));
     }
     col.into()
@@ -2122,6 +2123,8 @@ fn announcement_row(msg: &ChatMessage, d: Density) -> Element<'static, Message> 
 #[derive(Debug, Clone, Copy, Default)]
 struct BubbleRun {
     joined_prev: bool,
+    /// The next message continues this run (same sender, close in time).
+    joined_next: bool,
 }
 
 /// Whether `b` continues `a`'s run (same side, same sender, same day, ≤5 min apart).
@@ -2350,7 +2353,19 @@ fn message_bubble<'a>(
     const JOIN: f32 = 6.0;
     let side_top = if run.joined_prev { JOIN } else { R };
     let side_bottom = JOIN;
-    let radius = if msg.outgoing {
+    // Groups / channels: the avatar sits at the top of the sender's first
+    // message, so the tail is there — top corner small on every bubble of
+    // the run, bottom corner small until the run's last bubble.
+    let avatar_on_top = !msg.outgoing
+        && ((msg.sender.is_some() && app.selected_shows_member_headers()) || app.selected_is_channel());
+    let radius = if avatar_on_top {
+        iced::border::Radius {
+            top_left: JOIN,
+            top_right: R,
+            bottom_right: R,
+            bottom_left: if run.joined_next { JOIN } else { R },
+        }
+    } else if msg.outgoing {
         iced::border::Radius {
             top_left: R,
             top_right: side_top,
@@ -2478,11 +2493,12 @@ fn sender_line(app: &App, msg: &ChatMessage, channel: bool, d: Density) -> Eleme
             .map(|s| s.role.clone());
         (name, role)
     };
-    let mut line = Row::new().spacing(6).align_y(Alignment::Center).push(
+    let mut line = Row::new().spacing(5).align_y(Alignment::Center).push(
         text(name).size(d.meta).font(BOLD).color(theme::t().accent),
     );
-    if let Some(role) = role {
-        line = line.push(text(role).size(d.meta).color(theme::t().text_muted));
+    // The role as its icon only (owner / admin / moderator; channels: none).
+    if let Some(role) = role.filter(|_| !channel) {
+        line = line.push(icons::role_icon(&role, (d.meta + 2.0).round(), theme::t().text_muted));
     }
     line.into()
 }
@@ -2858,11 +2874,7 @@ fn voice_draft_bar(
                 Message::CancelVoiceDraft,
             ),
             column![
-                text(if draft.quiet {
-                    format!("Voice · {} · very quiet — play it before sending", format_duration(draft.duration_secs))
-                } else {
-                    format!("Voice · {}", format_duration(draft.duration_secs))
-                })
+                text(format!("Voice · {}", format_duration(draft.duration_secs)))
                     .size(d.meta)
                     .color(theme::t().text_secondary),
                 wave,

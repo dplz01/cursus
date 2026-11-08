@@ -27,7 +27,7 @@ pub use models::{
     ChatSettings, ChatTag, ChatType, ConnLink, DeletedState, DeliveryStatus, Event, FileInfo,
     FileKind, FileTransferState, GroupChatScope, GroupMemberInfo, GroupProfileUpdate,
     GroupSupportChat, MessageContent, MessageQuote, MessageSender, NtfFilter, ProfileFields,
-    ReactionCount, ReactionMember, UserProfile, GROUP_ROLES, KNOWN_REACTIONS,
+    MessageInfo, ReactionCount, ReactionMember, UserProfile, GROUP_ROLES, KNOWN_REACTIONS,
     MAX_IMAGE_SIZE_AUTO_RCV, MAX_VIDEO_SIZE_AUTO_RCV, MAX_VOICE_SIZE_AUTO_RCV,
 };
 pub use rich_text::{

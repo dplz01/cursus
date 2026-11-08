@@ -8609,33 +8609,14 @@ async fn load_item_info(
     item_id: i64,
 ) -> Result<ItemInfoData, String> {
     tokio::task::spawn_blocking(move || {
-        let value = session
-            .item_info(&chat_id, item_id)
+        let info = session
+            .message_info(&chat_id, item_id)
             .map_err(|e| e.to_string())?;
-        let time = value
-            .pointer("/chatItem/chatItem/meta/itemTs")
-            .or_else(|| value.pointer("/chatItem/meta/itemTs"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let status = value
-            .pointer("/chatItem/chatItem/meta/itemStatus/type")
-            .or_else(|| value.pointer("/chatItem/meta/itemStatus/type"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let text = value
-            .pointer("/chatItem/chatItem/content/msgContent/text")
-            .or_else(|| value.pointer("/chatItem/content/msgContent/text"))
-            .or_else(|| value.pointer("/chatItem/chatItem/meta/itemText"))
-            .or_else(|| value.pointer("/chatItem/meta/itemText"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let text = cursus_core::expand_emoji_shortcodes(&text);
         Ok(ItemInfoData {
             item_id,
-            time,
-            status,
-            text,
+            time: info.time,
+            status: info.status,
+            text: info.text,
         })
     })
     .await

@@ -467,6 +467,38 @@ pub struct ReactionCount {
     pub total: u32,
 }
 
+/// One message's details (`/_get item info`): when it was sent / received,
+/// its delivery status and its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageInfo {
+    /// `itemTs`, ISO 8601.
+    pub time: Option<String>,
+    /// `itemStatus.type` (e.g. `sndRcvd`, `rcvRead`).
+    pub status: Option<String>,
+    /// Text with `:shortcodes:` expanded.
+    pub text: String,
+}
+
+impl MessageInfo {
+    pub fn from_api(value: &serde_json::Value) -> Self {
+        let at = |paths: &[&str]| {
+            paths.iter().find_map(|p| value.pointer(p)).and_then(|v| v.as_str()).map(str::to_string)
+        };
+        let text = at(&[
+            "/chatItem/chatItem/content/msgContent/text",
+            "/chatItem/content/msgContent/text",
+            "/chatItem/chatItem/meta/itemText",
+            "/chatItem/meta/itemText",
+        ])
+        .unwrap_or_default();
+        Self {
+            time: at(&["/chatItem/chatItem/meta/itemTs", "/chatItem/meta/itemTs"]),
+            status: at(&["/chatItem/chatItem/meta/itemStatus/type", "/chatItem/meta/itemStatus/type"]),
+            text: crate::expand_emoji_shortcodes(&text),
+        }
+    }
+}
+
 /// One group member who set a reaction (`MemberReaction` from libsimplex).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReactionMember {
@@ -948,5 +980,24 @@ mod tests {
             body: json!({}),
         };
         assert!(done.refreshes_chats());
+    }
+}
+
+#[cfg(test)]
+mod message_info_tests {
+    use super::MessageInfo;
+
+    #[test]
+    fn reads_nested_and_flat_item_info() {
+        let nested = serde_json::json!({ "chatItem": { "chatItem": {
+            "meta": { "itemTs": "2026-11-08T01:00:00Z", "itemStatus": { "type": "sndRcvd" }, "itemText": "x" },
+            "content": { "msgContent": { "text": "hi :smile:" } }
+        }}});
+        let info = MessageInfo::from_api(&nested);
+        assert_eq!(info.time.as_deref(), Some("2026-11-08T01:00:00Z"));
+        assert_eq!(info.status.as_deref(), Some("sndRcvd"));
+        assert!(info.text.starts_with("hi ") && !info.text.contains(":smile:"));
+        let flat = serde_json::json!({ "chatItem": { "meta": { "itemText": "file.pdf" } } });
+        assert_eq!(MessageInfo::from_api(&flat).text, "file.pdf");
     }
 }

@@ -11,7 +11,7 @@ use crate::models::{
     parse_conn_link, parse_event, ApiEnvelope, ChatId, ChatMessage, ChatPreview, ChatSettings,
     ChatTag, ChatType, ConnLink, DeliveryStatus, Event, FileInfo, FileKind, FileTransferState,
     CallMedia, ChatRelayInfo, GroupMemberInfo, NtfFilter, ProfileFields, ReactionCount,
-    ReactionMember, UserProfile, KNOWN_REACTIONS,
+    MessageInfo, ReactionMember, UserProfile, KNOWN_REACTIONS,
 };
 use crate::paths::{
     data_dir, db_prefix, default_libs_dir, files_dir, fits_in_ram_cache, free_bytes,
@@ -298,8 +298,8 @@ impl Session {
         self.send(&Commands::delete_items(chat, item_ids, broadcast))
     }
 
-    pub fn item_info(&self, chat: &ChatId, item_id: i64) -> Result<Value> {
-        self.send(&Commands::item_info(chat, item_id))
+    pub fn message_info(&self, chat: &ChatId, item_id: i64) -> Result<MessageInfo> {
+        Ok(MessageInfo::from_api(&self.send(&Commands::item_info(chat, item_id))?))
     }
 
     pub fn forward_items(

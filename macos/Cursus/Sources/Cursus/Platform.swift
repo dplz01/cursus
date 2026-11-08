@@ -360,6 +360,13 @@ struct WindowChrome: NSViewRepresentable {
         guard let window = window else { return }
         window.title = "Cursus"
         window.titleVisibility = .visible
+        // A full-width title strip with every column below it (like
+        // Telegram): the split view's sidebar otherwise runs up under the
+        // title bar and the strip covers only the detail pane.
+        if window.styleMask.contains(.fullSizeContentView) {
+            window.styleMask.remove(.fullSizeContentView)
+        }
+        window.titlebarAppearsTransparent = false
         window.titlebarSeparatorStyle = .none
     }
 }

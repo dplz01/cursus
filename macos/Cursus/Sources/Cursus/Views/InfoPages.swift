@@ -15,7 +15,7 @@ struct ContactPreferencesPage: View {
 
     var body: some View {
         Card(spacing: 2) {
-            CardTitle(icon: "preferences", title: "Chat preferences",
+            CardTitle(icon: "settings", title: "Chat preferences",
                       subtitle: "What you allow \(chat.title). A feature works when you both allow it.")
                 .padding(.bottom, 6)
             if let prefs = chat.contactPrefs {
@@ -83,7 +83,7 @@ struct GroupPreferencesPage: View {
 
     var body: some View {
         Card(spacing: 2) {
-            CardTitle(icon: "preferences", title: "Chat features",
+            CardTitle(icon: "settings", title: "Chat features",
                       subtitle: chat.isOwner
                         ? "Owners change these for everyone. Changes save immediately."
                         : "View only — only owners can change them.")

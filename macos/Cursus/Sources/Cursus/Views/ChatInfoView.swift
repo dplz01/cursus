@@ -38,7 +38,7 @@ struct ChatInfoView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PaneHeader(title: pageTitle, subtitle: chat.title, back: back) {
+            PaneHeader(title: pageTitle, back: back) {
                 if page == .overview {
                     IconTool(icon: "star", help: chat.favorite ? "Remove from favorites" : "Add to favorites",
                              active: chat.favorite, size: 18) {
@@ -48,7 +48,7 @@ struct ChatInfoView: View {
                              active: chat.muted, size: 18) {
                         Task { await model.setMuted(chat, !chat.muted) }
                     }
-                    IconTool(icon: "preferences", help: pageTitleFor(.preferences), size: 18) {
+                    IconTool(icon: "settings", help: pageTitleFor(.preferences), size: 18) {
                         page = .preferences
                     }
                 }
@@ -135,7 +135,7 @@ private struct InfoOverview: View {
         }
         if chat.isDirect && chat.pendingRequestId == nil {
             Card(padding: 0, spacing: 0) {
-                NavRow(icon: "preferences", title: "Chat preferences",
+                NavRow(icon: "settings", title: "Chat preferences",
                        subtitle: "Disappearing messages, receipts, calls…", flush: true) { page = .preferences }
             }
         }
@@ -405,8 +405,8 @@ struct ProfileFieldSheet: View {
                     Text(meta.hint).font(.cMeta).foregroundColor(Theme.secondaryText)
                 }
                 Spacer()
-                Button("Cancel") { dismiss() }
-                    .buttonStyle(SecondaryButtonStyle())
+                // ✕ / ✓ like the Linux editor sheet.
+                IconTool(icon: "cancel", help: "Cancel (Esc)", size: 16) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button(action: save) {
                     Image(systemName: "checkmark").font(.system(size: 13, weight: .bold))

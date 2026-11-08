@@ -237,10 +237,11 @@ struct MessageRow: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 4)
         } else {
-            HStack(alignment: .bottom, spacing: 6) {
+            // Top: a group sender's avatar sits at the top of the message.
+            HStack(alignment: .top, spacing: 6) {
                 if model.selectingMessages {
                     SelectionMark(selected: model.selectedMessages.contains(message.id))
-                        .padding(.bottom, 6)
+                        .padding(.top, 8)
                 }
                 if message.outgoing {
                     Spacer(minLength: 80)
@@ -306,6 +307,15 @@ struct MessageRow: View {
                         Text(RichText.attributed(message, reveal: true))
                             .font(.cBody)
                             .foregroundColor(Theme.secondaryText)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else if message.file != nil {
+                    // Under an attachment: only the sender's own caption.
+                    if !message.caption.isEmpty {
+                        Text(message.caption)
+                            .font(.cBody)
+                            .foregroundColor(Theme.primaryText)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }

@@ -239,6 +239,8 @@ pub fn message(m: &ChatMessage) -> Value {
     json!({
         "id": m.item_id,
         "text": m.text,
+        // With a file: only what the sender typed (`text` is a summary).
+        "caption": m.caption,
         "segments": m.segments.iter().map(segment).collect::<Vec<_>>(),
         "outgoing": m.outgoing,
         "createdAt": m.created_at,

@@ -270,7 +270,11 @@ struct GroupInvite: Decodable, Equatable {
 
 struct Message: Decodable, Identifiable, Equatable {
     let id: Int64
+    /// Previews, notifications, copy. With a file it is the core's summary
+    /// ("voice message (00:03)", the file name) — bubbles show `caption`.
     let text: String
+    /// What the sender typed with a file / voice / image ("" = nothing).
+    let caption: String
     let segments: [Segment]
     let outgoing: Bool
     let createdAt: String?

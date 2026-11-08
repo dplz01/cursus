@@ -31,6 +31,12 @@ fn chat_param(p: &Value) -> Result<cursus_core::ChatId, String> {
     parse_chat_ref(str_param(p, "chat")?)
 }
 
+/// "Remove tracking from links" for a message being sent; on unless the
+/// app says otherwise, so a missing flag never leaks tracking codes.
+fn clean_links(p: &Value) -> bool {
+    p.get("cleanLinks").and_then(Value::as_bool).unwrap_or(true)
+}
+
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -237,15 +243,16 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             let msgs = s.list_messages(&chat_param(p)?, count).map_err(err)?;
             Ok(Value::Array(msgs.iter().map(dto::message).collect()))
         }
-        // Texts go out as every Cursus app sends them (core outgoing_text).
+        // Texts go out as every Cursus app sends them (core outgoing_text,
+        // links cleaned of tracking codes unless `cleanLinks` is false).
         "sendText" => {
             let quote = p.get("quote").and_then(Value::as_i64);
-            let text = cursus_core::outgoing_text(str_param(p, "text")?);
+            let text = cursus_core::outgoing_text(str_param(p, "text")?, clean_links(p));
             s.send_text_quoted(&chat_param(p)?, &text, quote).map_err(err)?;
             Ok(Value::Null)
         }
         "updateText" => {
-            let text = cursus_core::outgoing_text(str_param(p, "text")?);
+            let text = cursus_core::outgoing_text(str_param(p, "text")?, clean_links(p));
             s.update_text(&chat_param(p)?, i64_param(p, "itemId")?, &text).map_err(err)?;
             Ok(Value::Null)
         }

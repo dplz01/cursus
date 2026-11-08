@@ -654,13 +654,15 @@ final class AppModel: ObservableObject {
         draft = ""
         composeMode = .new
         do {
+            // "Remove tracking from links" cleans what you send (core rule).
+            let clean = Prefs.cleanLinksOn
             switch mode {
             case .edit(let message):
-                try await Core.run("updateText", ["chat": ref, "itemId": message.id, "text": text])
+                try await Core.run("updateText", ["chat": ref, "itemId": message.id, "text": text, "cleanLinks": clean])
             case .reply(let message):
-                try await Core.run("sendText", ["chat": ref, "text": text, "quote": message.id])
+                try await Core.run("sendText", ["chat": ref, "text": text, "quote": message.id, "cleanLinks": clean])
             case .new:
-                try await Core.run("sendText", ["chat": ref, "text": text])
+                try await Core.run("sendText", ["chat": ref, "text": text, "cleanLinks": clean])
             }
             await reloadMessages(for: ref)
             scheduleChatsReload()

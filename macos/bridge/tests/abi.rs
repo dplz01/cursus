@@ -63,7 +63,12 @@ fn abi_round_trip() {
         assert!(info["text"].as_str().unwrap().starts_with("hello"));
         assert!(info["time"].is_string());
         call("forward", json!({ "chat": r, "to": r, "itemIds": [last["id"]] }), &mut dump);
-        call("updateText", json!({ "chat": r, "itemId": last["id"], "text": "edited" }), &mut dump);
+        // Tracking codes never leave this device ("Remove tracking from links").
+        call("sendText", json!({ "chat": r, "text": "see https://shop.example/p?id=7&utm_source=x&fbclid=y" }), &mut dump);
+        let msgs = call("listMessages", json!({ "chat": r, "count": 20 }), &mut dump);
+        let sent = msgs.as_array().unwrap().last().unwrap()["text"].as_str().unwrap().to_string();
+        assert_eq!(sent, "see https://shop.example/p?id=7");
+                call("updateText", json!({ "chat": r, "itemId": last["id"], "text": "edited" }), &mut dump);
         call("listMessages", json!({ "chat": r, "count": 20 }), &mut dump);
         call("deleteItems", json!({ "chat": r, "itemIds": [last["id"]], "forEveryone": false }), &mut dump);
     } else {

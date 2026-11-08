@@ -272,10 +272,10 @@ private struct PrivacyPage: View {
                     Task { await model.setEncryptLocalFiles(on) }
                 }))
             GuardedToggle(label: "Remove tracking from links",
-                          note: "Drops codes like utm_source before opening a link.",
+                          note: "From links you send and open — codes like utm_source never reach your contacts.",
                           key: Prefs.cleanLinks, defaultValue: true, riskyValue: false,
                           warning: ("Keep tracking codes in links?",
-                                    "Links will open exactly as sent, including codes like utm_source or fbclid that let websites track where you came from.",
+                                    "Links you send and open will keep codes like utm_source or fbclid, which let websites track who shared them and where you came from.",
                                     "Keep codes"))
         }
         SettingsSection(icon: "check-read", title: "What contacts see",

@@ -627,6 +627,10 @@ pub struct GroupInvitationInfo {
 pub struct ChatMessage {
     pub item_id: i64,
     pub text: String,
+    /// What the sender typed with a file / voice / image (`msgContent.text`).
+    /// `text` falls back to the core's summary ("voice message (00:03)", the
+    /// file name) for previews; bubbles show only this caption.
+    pub caption: String,
     /// SimpleX markdown segments (`formattedText`); empty → render `text` plain.
     pub segments: Vec<crate::rich_text::TextSegment>,
     /// True when this device sent / created the item (incl. Notes).

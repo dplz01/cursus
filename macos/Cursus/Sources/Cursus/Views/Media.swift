@@ -62,27 +62,46 @@ enum Waveform {
     }
 }
 
-/// Bars, the played part in `played`, the rest in `rest`.
+/// Bars, the played part in `played`, the rest in `rest`. Split into small
+/// typed helpers: one big expression was too much for Swift 5.7's checker.
 struct WaveformView: View {
     let peaks: [Float]
     var progress: Double = 0
     var played: Color = Theme.accent
     var rest: Color = Theme.mutedText
 
+    private static let gap: CGFloat = 2
+
     var body: some View {
         GeometryReader { geo in
-            let count = max(peaks.count, 1)
-            let gap: CGFloat = 2
-            let width = max(1.5, (geo.size.width - gap * CGFloat(count - 1)) / CGFloat(count))
-            HStack(alignment: .center, spacing: gap) {
-                ForEach(Array(peaks.enumerated()), id: \.offset) { index, peak in
-                    Capsule()
-                        .fill(Double(index) / Double(count) < progress ? played : rest)
-                        .frame(width: width, height: max(3, geo.size.height * CGFloat(peak)))
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            bars(in: geo.size)
         }
+    }
+
+    private func bars(in size: CGSize) -> some View {
+        let count = max(peaks.count, 1)
+        let width = barWidth(total: size.width, count: count)
+        return HStack(alignment: .center, spacing: Self.gap) {
+            ForEach(0..<peaks.count, id: \.self) { index in
+                bar(index: index, count: count, width: width, height: size.height)
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .leading)
+    }
+
+    private func barWidth(total: CGFloat, count: Int) -> CGFloat {
+        let gaps: CGFloat = Self.gap * CGFloat(count - 1)
+        let each: CGFloat = (total - gaps) / CGFloat(count)
+        return max(1.5, each)
+    }
+
+    private func bar(index: Int, count: Int, width: CGFloat, height: CGFloat) -> some View {
+        let isPlayed: Bool = Double(index) / Double(count) < progress
+        let level: CGFloat = CGFloat(peaks[index])
+        let barHeight: CGFloat = max(3, height * level)
+        return Capsule()
+            .fill(isPlayed ? played : rest)
+            .frame(width: width, height: barHeight)
     }
 }
 
@@ -212,6 +231,12 @@ struct RecordingBar: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var recorder: VoiceRecorder
 
+    private var liveLevels: [Float] {
+        let levels: [Float] = recorder.levels
+        if levels.isEmpty { return [0.08] }
+        return levels.map { (level: Float) -> Float in max(0.08, level) }
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             IconTool(icon: "cancel", help: "Discard (Esc)", size: 16) { model.cancelVoice() }
@@ -220,8 +245,7 @@ struct RecordingBar: View {
             Text(Format.duration(Int(recorder.elapsed)))
                 .font(.cMeta.monospacedDigit())
                 .foregroundColor(Theme.primaryText)
-            WaveformView(peaks: recorder.levels.isEmpty ? [0.08] : recorder.levels.map { max(0.08, $0) },
-                         progress: 1, played: Theme.danger.opacity(0.7))
+            WaveformView(peaks: liveLevels, progress: 1, played: Theme.danger.opacity(0.7))
                 .frame(height: 26)
             Button { model.stopRecording() } label: {
                 CIcon("stop", size: 16, color: .white)

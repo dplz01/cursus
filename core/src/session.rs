@@ -1723,6 +1723,16 @@ fn parse_one_message(item: &Value) -> Option<ChatMessage> {
             DeliveryStatus::Delivered
         });
     let file = parse_file_info(item);
+    let caption = if file.is_some() && deleted.is_none() {
+        let typed = item
+            .pointer("/content/msgContent/text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        crate::rich_text::expand_emoji_shortcodes(typed)
+    } else {
+        String::new()
+    };
     let group_invitation = parse_group_invitation(item);
     // File-only items often have empty itemText — synthesize a label.
     if text.is_empty() {
@@ -1783,6 +1793,7 @@ fn parse_one_message(item: &Value) -> Option<ChatMessage> {
     Some(ChatMessage {
         item_id,
         text,
+        caption,
         segments,
         outgoing,
         created_at,
@@ -2752,5 +2763,31 @@ mod group_role_tests {
         let msg = r#"groupUserRole: {"errorType":{"requiredRole":"owner","type":"groupUserRole"},"type":"error"}"#;
         assert!(super::is_group_role_error(msg));
         assert!(!super::is_group_role_error("noActiveUser: {}"));
+    }
+}
+
+#[cfg(test)]
+mod caption_tests {
+    use serde_json::json;
+
+    fn item(msg_content: serde_json::Value, item_text: &str) -> serde_json::Value {
+        json!({
+            "meta": { "itemId": 7, "itemText": item_text, "itemTs": "2026-11-08T11:39:00Z" },
+            "chatDir": { "type": "directRcv" },
+            "content": { "type": "rcvMsgContent", "msgContent": msg_content },
+            "file": { "fileId": 3, "fileName": "voice.m4a", "fileSize": 9000,
+                      "fileStatus": { "type": "rcvComplete" } }
+        })
+    }
+
+    /// The core's summary ("voice message (00:03)") is for previews; the
+    /// caption is only what the sender typed.
+    #[test]
+    fn file_messages_split_summary_and_caption() {
+        let voice = super::parse_one_message(&item(json!({ "type": "voice", "text": "", "duration": 3 }), "voice message (00:03)")).unwrap();
+        assert_eq!(voice.text, "voice message (00:03)");
+        assert_eq!(voice.caption, "");
+        let photo = super::parse_one_message(&item(json!({ "type": "image", "text": "  sunset!  ", "image": "" }), "sunset!")).unwrap();
+        assert_eq!(photo.caption, "sunset!");
     }
 }

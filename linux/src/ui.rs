@@ -2271,8 +2271,16 @@ fn message_bubble<'a>(
         theme::t().bubble_in
     };
 
+    let group_incoming =
+        !msg.outgoing && msg.sender.is_some() && app.selected_shows_member_headers();
+    let channel_incoming = !msg.outgoing && app.selected_is_channel();
+
     // Text with its stamp comes last and spans the bubble (see bubble_body).
     let mut body = crate::bubble_body::BubbleBody::new(4.0);
+    // Sender name (and role) as the bubble's first line, like the macOS app.
+    if show_member_header && (group_incoming || channel_incoming) {
+        body = body.push(sender_line(app, msg, channel_incoming, d));
+    }
     let mut voice_owns_meta = false;
     let mut media_flush = false;
 
@@ -2412,9 +2420,6 @@ fn message_bubble<'a>(
 
     const MEMBER_AVATAR: f32 = 32.0;
     const MEMBER_AVATAR_GAP: f32 = 8.0;
-    let group_incoming =
-        !msg.outgoing && msg.sender.is_some() && app.selected_shows_member_headers();
-    let channel_incoming = !msg.outgoing && app.selected_is_channel();
     let bubble_with_sender: Element<'_, Message> = if group_incoming {
         let sender = msg.sender.as_ref().unwrap();
         let sender_name = app.member_display_name(sender);
@@ -2423,27 +2428,10 @@ fn message_bubble<'a>(
         } else {
             horizontal().width(MEMBER_AVATAR).height(MEMBER_AVATAR).into()
         };
-        let mut bubble_col = Column::new().spacing(2);
-        if show_member_header {
-            let mut name_row = Row::new().spacing(6).align_y(Alignment::Center);
-            name_row = name_row.push(
-                text(sender_name)
-                    .size(d.meta)
-                    .color(theme::t().accent),
-            );
-            if group_role_rank(&sender.role) > group_role_rank("member") {
-                name_row = name_row.push(
-                    text(sender.role.clone())
-                        .size(d.meta)
-                        .color(theme::t().text_muted),
-                );
-            }
-            bubble_col = bubble_col.push(name_row);
-        }
-        bubble_col = bubble_col.push(bubble);
-        row![avatar, bubble_col]
+        // Avatar at the top of the sender's first message.
+        row![avatar, bubble]
             .spacing(MEMBER_AVATAR_GAP)
-            .align_y(Alignment::End)
+            .align_y(Alignment::Start)
             .into()
     } else if channel_incoming {
         // Official: channel avatar + chatViewName + "channel" role label.
@@ -2455,25 +2443,9 @@ fn message_bubble<'a>(
         } else {
             horizontal().width(MEMBER_AVATAR).height(MEMBER_AVATAR).into()
         };
-        let mut bubble_col = Column::new().spacing(2);
-        if show_member_header {
-            bubble_col = bubble_col.push(
-                row![
-                    text(name.to_string())
-                        .size(d.meta)
-                        .color(theme::t().accent),
-                    text("channel")
-                        .size(d.meta)
-                        .color(theme::t().text_muted),
-                ]
-                .spacing(6)
-                .align_y(Alignment::Center),
-            );
-        }
-        bubble_col = bubble_col.push(bubble);
-        row![avatar, bubble_col]
+        row![avatar, bubble]
             .spacing(MEMBER_AVATAR_GAP)
-            .align_y(Alignment::End)
+            .align_y(Alignment::Start)
             .into()
     } else {
         bubble.into()
@@ -2515,6 +2487,29 @@ fn message_bubble<'a>(
     }
 
     col.into()
+}
+
+/// First line inside an incoming group / channel bubble: the sender (or the
+/// channel) in accent, then its role when above member ("channel" for channels).
+fn sender_line(app: &App, msg: &ChatMessage, channel: bool, d: Density) -> Element<'static, Message> {
+    let (name, role) = if channel {
+        let chat = app.selected().and_then(|i| app.chats().get(i));
+        (chat.map(|c| c.title.clone()).unwrap_or_else(|| "Channel".into()), Some("channel".to_string()))
+    } else {
+        let sender = msg.sender.as_ref();
+        let name = sender.map(|s| app.member_display_name(s)).unwrap_or_default();
+        let role = sender
+            .filter(|s| group_role_rank(&s.role) > group_role_rank("member"))
+            .map(|s| s.role.clone());
+        (name, role)
+    };
+    let mut line = Row::new().spacing(6).align_y(Alignment::Center).push(
+        text(name).size(d.meta).font(BOLD).color(theme::t().accent),
+    );
+    if let Some(role) = role {
+        line = line.push(text(role).size(d.meta).color(theme::t().text_muted));
+    }
+    line.into()
 }
 
 fn deleted_mark_chip(msg: &ChatMessage, d: Density) -> Element<'static, Message> {
@@ -8644,6 +8639,7 @@ mod stamp_tests {
         ChatMessage {
             item_id: 1,
             text: text.into(),
+            caption: String::new(),
             segments: Vec::new(),
             outgoing,
             created_at: Some(at.into()),
@@ -8879,6 +8875,7 @@ mod tests {
         let msg = |ts: &str| cursus_core::ChatMessage {
             item_id: 1,
             text: String::new(),
+            caption: String::new(),
             segments: Vec::new(),
             outgoing: false,
             created_at: Some(ts.into()),

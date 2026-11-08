@@ -22,6 +22,7 @@ pub use account::{
 };
 pub use chat_list::{merge_seeded_channels, prune_resolved_seeds};
 pub use commands::Commands;
+pub use models::parse_chat_info_id;
 pub use error::{Error, Result};
 pub use models::{
     group_role_rank, CallInfo, CallMedia, CallRecord, ChatId, ChatMessage, ChatPreview, ChatRelayInfo,

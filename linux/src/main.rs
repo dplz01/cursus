@@ -6197,7 +6197,14 @@ impl App {
         if let Event::NewChatItems(_) = &event {
             self.maybe_notify_new_items(&event);
             if let Some(hint) = event.chat_id_hint() {
-                if self.selected_id.as_ref() == Some(&hint) {
+                // An open support thread also reloads for any new message of
+                // its group: a pending member's items may not carry the
+                // thread's exact scope (moderators saw no new messages until
+                // they reopened the thread).
+                let same_thread_group = self.selected_id.as_ref().is_some_and(|sel| {
+                    sel.scope.is_some() && sel.without_scope() == hint.without_scope()
+                });
+                if self.selected_id.as_ref() == Some(&hint) || same_thread_group {
                     tasks.push(self.reload_messages());
                     messages_reload_queued = true;
                     // Viewing this chat — don't leave an unread badge hanging.
@@ -7929,7 +7936,7 @@ impl App {
             let Some(info) = aci.get("chatInfo") else {
                 continue;
             };
-            let Some(chat_id) = chat_id_from_info(info) else {
+            let Some(chat_id) = cursus_core::parse_chat_info_id(info) else {
                 continue;
             };
             let item = aci.get("chatItem").unwrap_or(aci);
@@ -8597,45 +8604,6 @@ async fn load_item_info(
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-fn chat_id_from_info(info: &serde_json::Value) -> Option<ChatId> {
-    let type_name = info.get("type")?.as_str()?;
-    match type_name {
-        "direct" => Some(ChatId {
-                    chat_type: cursus_core::ChatType::Direct,
-                    api_id: info.pointer("/contact/contactId")?.as_i64()?,
-                    scope: None,
-                }),
-        "group" => {
-            let api_id = info.pointer("/groupInfo/groupId")?.as_i64()?;
-            let scope = info.get("groupChatScope").and_then(|scope| {
-                if scope.is_null() {
-                    return None;
-                }
-                match scope.get("type").and_then(|v| v.as_str())? {
-                    "memberSupport" => {
-                        let group_member_id = scope
-                            .pointer("/groupMember/groupMemberId")
-                            .and_then(|v| v.as_i64());
-                        Some(cursus_core::GroupChatScope::MemberSupport { group_member_id })
-                    }
-                    _ => None,
-                }
-            });
-            Some(ChatId {
-                chat_type: cursus_core::ChatType::Group,
-                api_id,
-                scope,
-            })
-        }
-        "local" => Some(ChatId {
-                    chat_type: cursus_core::ChatType::Local,
-                    api_id: info.pointer("/noteFolder/noteFolderId")?.as_i64()?,
-                    scope: None,
-                }),
-        _ => None,
-    }
 }
 
 fn chat_title_from_info(info: &serde_json::Value) -> Option<String> {

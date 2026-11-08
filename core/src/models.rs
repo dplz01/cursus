@@ -873,7 +873,9 @@ impl Event {
     }
 }
 
-fn parse_chat_info_id(info: &Value) -> Option<ChatId> {
+/// The chat a `chatInfo` object (events, API results) is about, with its
+/// support scope. Shared by every app — never re-implement it.
+pub fn parse_chat_info_id(info: &Value) -> Option<ChatId> {
     let type_name = info.get("type")?.as_str()?;
     match type_name {
         "direct" => Some(ChatId {
@@ -907,8 +909,12 @@ fn parse_group_chat_scope(value: Option<&Value>) -> Option<GroupChatScope> {
     }
     match scope.get("type").and_then(|v| v.as_str())? {
         "memberSupport" => {
+            // SimpleX names the field `groupMember_` (Maybe GroupMember); a
+            // miss made a member's thread look like your own (no member), so
+            // a moderator's open thread never refreshed on new messages.
             let group_member_id = scope
-                .pointer("/groupMember/groupMemberId")
+                .pointer("/groupMember_/groupMemberId")
+                .or_else(|| scope.pointer("/groupMember/groupMemberId"))
                 .and_then(|v| v.as_i64());
             Some(GroupChatScope::MemberSupport { group_member_id })
         }
@@ -1072,5 +1078,30 @@ mod message_info_tests {
         assert!(info.text.starts_with("hi ") && !info.text.contains(":smile:"));
         let flat = serde_json::json!({ "chatItem": { "meta": { "itemText": "file.pdf" } } });
         assert_eq!(MessageInfo::from_api(&flat).text, "file.pdf");
+    }
+}
+
+#[cfg(test)]
+mod chat_info_scope_tests {
+    use super::{parse_chat_info_id, ChatType, GroupChatScope};
+    use serde_json::json;
+
+    /// A member's support thread, as SimpleX sends it (`groupMember_`).
+    #[test]
+    fn member_support_scope_carries_the_member() {
+        for key in ["groupMember_", "groupMember"] {
+            let info = json!({
+                "type": "group",
+                "groupInfo": { "groupId": 9 },
+                "groupChatScope": { "type": "memberSupport", key: { "groupMemberId": 4 } }
+            });
+            let id = parse_chat_info_id(&info).unwrap();
+            assert_eq!(id.chat_type, ChatType::Group);
+            assert_eq!(id.scope, Some(GroupChatScope::MemberSupport { group_member_id: Some(4) }), "{key}");
+        }
+        let own = json!({ "type": "group", "groupInfo": { "groupId": 9 },
+                          "groupChatScope": { "type": "memberSupport" } });
+        assert_eq!(parse_chat_info_id(&own).unwrap().scope,
+                   Some(GroupChatScope::MemberSupport { group_member_id: None }));
     }
 }

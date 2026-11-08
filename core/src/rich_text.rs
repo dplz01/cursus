@@ -236,9 +236,16 @@ pub struct EmojiSuggestion {
 }
 
 /// A message as it is sent: trimmed, `:shortcodes:` expanded, emoji shown as
-/// emoji (not text glyphs). Every app sends through this.
-pub fn outgoing_text(s: &str) -> String {
-    emoji_presentation(&expand_emoji_shortcodes(s.trim())).into_owned()
+/// emoji (not text glyphs), and — with `clean_links` ("Remove tracking from
+/// links") — tracking codes removed from its links so they never reach the
+/// recipient. Every app sends through this.
+pub fn outgoing_text(s: &str, clean_links: bool) -> String {
+    let text = emoji_presentation(&expand_emoji_shortcodes(s.trim())).into_owned();
+    if clean_links {
+        crate::safety::clean_links_in_text(&text)
+    } else {
+        text
+    }
 }
 
 /// `s` with its pending `:query` (see [`pending_shortcode_query`]) replaced
@@ -859,9 +866,11 @@ mod outgoing_tests {
 
     #[test]
     fn outgoing_text_is_trimmed_and_expanded() {
-        let out = outgoing_text("  hi :smile:  ");
+        let out = outgoing_text("  hi :smile:  ", true);
         assert!(out.starts_with("hi ") && !out.contains(":smile:"), "{out}");
-        assert_eq!(outgoing_text("plain"), "plain");
+        assert_eq!(outgoing_text("plain", true), "plain");
+        assert_eq!(outgoing_text("x https://a.b/?utm_source=n", true), "x https://a.b/");
+        assert_eq!(outgoing_text("x https://a.b/?utm_source=n", false), "x https://a.b/?utm_source=n");
     }
 
     #[test]

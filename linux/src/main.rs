@@ -2152,7 +2152,9 @@ impl App {
                         "Accept the contact request before sending messages.".into();
                     return Task::none();
                 }
-                let text = cursus_core::outgoing_text(&self.composer_text());
+                // "Remove tracking from links" also cleans what you send:
+                // otherwise the codes reach your contact.
+                let text = cursus_core::outgoing_text(&self.composer_text(), self.desktop_prefs.clean_links);
                 if text.is_empty() {
                     return Task::none();
                 }
@@ -8849,7 +8851,7 @@ impl SettingInfo {
             Self::AutoDownload => ("Download images and voice automatically", "Images, voice messages and short videos download as soon as they arrive, so they are ready to view.\n\nWhen off, nothing downloads until you tap it \u{2014} useful to save data or to avoid files from strangers in groups."),
             Self::EncryptFiles => ("Encrypt stored files", "Photos, videos, voice messages and files are saved encrypted on this device; Cursus decrypts them only while you view them.\n\nTurning it off affects new files only \u{2014} files already stored stay encrypted."),
             Self::EnterSends => ("Enter sends messages", "When on, Enter sends your message and Shift+Enter starts a new line.\n\nWhen off, Enter starts a new line; send with the send button or Ctrl+Enter."),
-            Self::CleanLinks => ("Remove tracking from links", "Before opening a link, Cursus removes tracking codes such as utm_source or fbclid, which tell websites where you came from. The page itself is the same."),
+            Self::CleanLinks => ("Remove tracking from links", "Cursus removes tracking codes such as utm_source or fbclid from links in the messages you send — so they never reach your contacts — and from links before opening them. They tell websites who shared the link and where you came from. The page itself is the same."),
             Self::ReceiptsContacts => ("Delivery receipts to contacts", "Your contacts see a second tick when their messages reach this device. It does not tell them you read them.\n\nYou can choose differently for a single contact in its chat preferences."),
             Self::ReceiptsGroups => ("Delivery receipts in small groups", "Members see when their messages reach this device. SimpleX only sends receipts in groups with up to 20 members.\n\nYou can choose differently for a single group in its preferences."),
             Self::GroupReceipts => ("Send receipts", "Whether this group's members see when their messages reach this device. \u{201c}Default\u{201d} follows the setting in Privacy & security.\n\nSimpleX only sends receipts in groups with up to 20 members."),

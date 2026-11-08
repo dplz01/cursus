@@ -3392,10 +3392,11 @@ fn voice_waveform_row(
                         let c = theme::t();
                         container::Style {
                             background: Some(iced::Background::Color(c.accent)),
+                            // Same shape as the nav rail's destination buttons.
                             border: iced::Border {
                                 color: c.accent,
                                 width: 0.0,
-                                radius: 10.0.into(),
+                                radius: 12.0.into(),
                             },
                             ..container::Style::default()
                         }

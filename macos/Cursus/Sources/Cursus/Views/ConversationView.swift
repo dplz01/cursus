@@ -91,16 +91,19 @@ struct ConversationView: View {
             if model.selectingMessages {
                 SelectionBar()
             } else {
-                ComposerView(chat: chat)
+                ComposerView(chat: chat, recorder: model.recorder)
             }
         }
         .sheet(isPresented: Binding(get: { model.forwarding != nil },
                                     set: { if !$0 { model.forwarding = nil } })) {
             ForwardSheet(ids: model.forwarding ?? []).environmentObject(model)
         }
-        // Its own anchor: two .sheet modifiers on one view clash on macOS 12.
+        // Own anchors: two .sheet modifiers on one view clash on macOS 12.
         .background(Color.clear.sheet(item: $model.infoMessage) { message in
             MessageInfoSheet(message: message).environmentObject(model)
+        })
+        .overlay(Color.clear.allowsHitTesting(false).sheet(item: $model.gallery) { state in
+            MediaGallery(items: state.items, index: state.index).environmentObject(model)
         })
         // Message links are untrusted: checked by the core and confirmed.
         .environment(\.openURL, OpenURLAction { url in
@@ -583,10 +586,10 @@ struct AttachmentView: View {
                             if hidden {
                                 model.revealedMessages.insert(messageId)
                             } else {
-                                Task { await model.open(file) }
+                                model.openGallery(at: messageId)
                             }
                         }
-                        .help(hidden ? "Show photo" : "Open in Preview")
+                        .help(hidden ? "Show photo" : "Open (← → for the others)")
                 } else {
                     RoundedRectangle(cornerRadius: 10)
                         .fill(Color.primary.opacity(0.06))
@@ -599,6 +602,16 @@ struct AttachmentView: View {
                     image = NSImage(contentsOf: url)
                 }
             }
+        } else if file.kind == "video" && file.isComplete {
+            VideoThumbnail(file: file, messageId: messageId, hidden: hidden)
+                .onTapGesture {
+                    if hidden {
+                        model.revealedMessages.insert(messageId)
+                    } else {
+                        model.openGallery(at: messageId)
+                    }
+                }
+                .help(hidden ? "Show video" : "Play (← → for the others)")
         } else if file.kind == "voice" && file.isComplete {
             VoiceView(file: file, messageId: messageId)
         } else {
@@ -670,7 +683,10 @@ struct FileRow: View {
 final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     static let shared = VoicePlayer()
     @Published private(set) var playingId: Int64?
+    /// 0…1 of the message playing (waveform fill).
+    @Published private(set) var progress: Double = 0
     private var player: AVAudioPlayer?
+    private var timer: Timer?
 
     func toggle(id: Int64, url: URL) {
         if playingId == id {
@@ -683,12 +699,20 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         player.play()
         self.player = player
         playingId = id
+        progress = 0
+        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self = self, let p = self.player, p.duration > 0 else { return }
+            self.progress = p.currentTime / p.duration
+        }
     }
 
     func stop() {
+        timer?.invalidate()
+        timer = nil
         player?.stop()
         player = nil
         playingId = nil
+        progress = 0
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
@@ -703,6 +727,7 @@ struct VoiceView: View {
     @ObservedObject private var player = VoicePlayer.shared
     let file: FileAttachment
     let messageId: Int64
+    @State private var peaks: [Float]?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -718,11 +743,16 @@ struct VoiceView: View {
                     .background(Circle().fill(Theme.accent))
             }
             .buttonStyle(.plain)
-            Image(systemName: "waveform")
-                .foregroundColor(Theme.secondaryText)
+            WaveformView(peaks: peaks ?? Array(repeating: 0.25, count: 48),
+                         progress: player.playingId == messageId ? player.progress : 0)
+                .frame(width: 160, height: 26)
             Text(file.duration.map(Format.duration) ?? "Voice message")
                 .font(.cMeta.monospacedDigit())
                 .foregroundColor(Theme.secondaryText)
+        }
+        .task(id: file.path) {
+            guard let url = await model.readablePath(file) else { return }
+            peaks = await Task.detached(priority: .utility) { Waveform.peaks(url) }.value
         }
     }
 }
@@ -731,7 +761,13 @@ struct VoiceView: View {
 
 struct ComposerView: View {
     @EnvironmentObject private var model: AppModel
+    @ObservedObject private var recorder: VoiceRecorder
     let chat: Chat
+
+    init(chat: Chat, recorder: VoiceRecorder) {
+        self.chat = chat
+        _recorder = ObservedObject(wrappedValue: recorder)
+    }
     @AppStorage(Prefs.enterSends) private var enterSends = true
     @State private var fieldHeight = ComposerField.lineHeight
     /// Bumped to give the field the keyboard focus.
@@ -760,6 +796,10 @@ struct ComposerView: View {
                 .frame(maxWidth: .infinity)
                 .padding(14)
                 .background(Theme.list)
+        } else if let draft = model.voiceDraft {
+            VoiceDraftBar(draft: draft)
+        } else if recorder.recording {
+            RecordingBar(recorder: recorder)
         } else {
             VStack(spacing: 0) {
                 contextBar
@@ -789,6 +829,9 @@ struct ComposerView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                             .strokeBorder(Theme.border, lineWidth: 1))
+                    IconTool(icon: "mic", help: "Record a voice message", size: 20) {
+                        Task { await model.startRecording() }
+                    }
                     Button(action: send) {
                         CIcon("send", size: 18, color: canSend ? Theme.accentOn : Theme.mutedText)
                             .frame(width: 34, height: 34)

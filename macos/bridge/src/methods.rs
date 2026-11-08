@@ -293,6 +293,12 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
                 .map_err(err)?;
             Ok(Value::Array(members.iter().map(|m| json!(m.display_name)).collect()))
         }
+        // A recorded voice message (m4a) with its length in seconds.
+        "sendVoice" => {
+            let secs = p.get("duration").and_then(Value::as_u64).unwrap_or(0).min(u32::MAX as u64) as u32;
+            s.send_voice(&chat_param(p)?, str_param(p, "path")?, secs).map_err(err)?;
+            Ok(Value::Null)
+        }
         "sendFile" => {
             s.send_file(&chat_param(p)?, str_param(p, "path")?).map_err(err)?;
             Ok(Value::Null)

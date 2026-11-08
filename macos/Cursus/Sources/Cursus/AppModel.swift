@@ -122,6 +122,13 @@ final class AppModel: ObservableObject {
     private var newMessagesToken = 0
     /// Unread count of the chat being opened (its badge clears at once).
     private var openUnread = 0
+
+    // Media.
+    let recorder = VoiceRecorder()
+    /// A finished recording waiting to be sent or discarded.
+    @Published var voiceDraft: VoiceDraft?
+    /// The photo / video gallery of the open chat.
+    @Published var gallery: GalleryState?
     @Published var isLoadingMessages = false
 
     /// Settings → Notifications (`@AppStorage` with these keys in the view).
@@ -326,6 +333,8 @@ final class AppModel: ObservableObject {
         revealedMessages = []
         highlightedMessage = nil
         newMessagesFrom = nil
+        cancelVoice()
+        gallery = nil
         openUnread = selection.flatMap { ref in chats.first { $0.ref == ref }?.unread } ?? 0
         guard let ref = selection else { return }
         isLoadingMessages = true
@@ -836,6 +845,63 @@ final class AppModel: ObservableObject {
             guard let self = self, self.newMessagesToken == token else { return }
             self.newMessagesFrom = nil
         }
+    }
+
+    // MARK: - Voice messages
+
+    func startRecording() async {
+        guard selection != nil, voiceDraft == nil else { return }
+        VoicePlayer.shared.stop()
+        do {
+            try await recorder.start()
+        } catch {
+            report(error)
+        }
+    }
+
+    func stopRecording() {
+        guard recorder.recording else { return }
+        if let draft = recorder.stop() {
+            voiceDraft = draft
+        } else {
+            errorMessage = "That recording was too short."
+        }
+    }
+
+    /// Discard the recording or the draft.
+    func cancelVoice() {
+        if recorder.recording { recorder.cancel() }
+        if let draft = voiceDraft {
+            try? FileManager.default.removeItem(at: draft.url)
+            voiceDraft = nil
+        }
+    }
+
+    func sendVoiceDraft() async {
+        guard let draft = voiceDraft, let ref = selection else { return }
+        voiceDraft = nil
+        do {
+            // The core copies (and encrypts) it into the files folder.
+            try await Core.run("sendVoice", ["chat": ref, "path": draft.url.path, "duration": draft.duration])
+            try? FileManager.default.removeItem(at: draft.url)
+            await reloadMessages(for: ref)
+            scheduleChatsReload()
+        } catch {
+            voiceDraft = draft
+            report(error)
+        }
+    }
+
+    // MARK: - Gallery
+
+    /// Open the chat's photos and videos at this message.
+    func openGallery(at messageId: Int64) {
+        let items = messages.filter { message in
+            guard let file = message.file, message.deleted == nil, file.isComplete else { return false }
+            return file.kind == "image" || file.kind == "video"
+        }
+        guard let index = items.firstIndex(where: { $0.id == messageId }) else { return }
+        gallery = GalleryState(items: items, index: index)
     }
 
     /// ↑ in an empty composer: edit your latest editable message.

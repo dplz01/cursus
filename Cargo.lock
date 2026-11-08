@@ -1204,6 +1204,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cursus-call"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "audiopus_sys",
+ "base64",
+ "cursus-core",
+ "lz-str",
+ "opus",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "webrtc",
+ "zeroize",
+]
+
+[[package]]
 name = "cursus-core"
 version = "0.1.0"
 dependencies = [
@@ -1226,11 +1244,11 @@ dependencies = [
 name = "cursus-linux"
 version = "0.1.0"
 dependencies = [
- "aes-gcm",
  "argon2",
  "audiopus_sys",
  "base64",
  "chrono",
+ "cursus-call",
  "cursus-core",
  "decibri-aec",
  "emojis",
@@ -1239,7 +1257,6 @@ dependencies = [
  "iced_runtime",
  "image",
  "libc",
- "lz-str",
  "notify-rust",
  "oo7",
  "opus",
@@ -1253,7 +1270,6 @@ dependencies = [
  "tray-icon",
  "unicode-script",
  "unicode-segmentation",
- "webrtc",
  "zbus",
  "zeroize",
 ]

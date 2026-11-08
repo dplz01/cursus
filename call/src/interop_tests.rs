@@ -1,12 +1,12 @@
 //! Interop with a browser WebRTC stack, the way the official clients run it.
 //!
-//! `linux/tests/call-interop/harness.html` replays the relevant parts of the
+//! `call/tests/call-interop/harness.html` replays the relevant parts of the
 //! official `call.ts` in headless Firefox; this test serves it, relays the
 //! signaling, and checks that encrypted audio flows both ways — once with the
 //! browser as callee (it offers) and once as caller (it answers).
 //!
 //! Needs Firefox and network access (LZString from cdnjs), so it's ignored:
-//! `cargo test -p cursus-linux browser -- --ignored --nocapture`
+//! `cargo test -p cursus-call browser -- --ignored --nocapture`
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -140,7 +140,7 @@ async fn run(browser_offers: bool) {
     let role = if browser_offers { "offerer" } else { "answerer" };
     let mut ff = firefox(&format!("http://127.0.0.1:{port}/?role={role}&key={key}"));
 
-    let (engine, mut events) = CallEngine::with_devices(Some(&key), false).await.unwrap();
+    let (engine, mut events) = CallEngine::with_devices(Some(&key), None).await.unwrap();
     // Our late candidates → browser.
     {
         let to_tx = to_tx.clone();

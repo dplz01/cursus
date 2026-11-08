@@ -1216,6 +1216,8 @@ pub enum Message {
     VoiceRecordStarted(Result<(), String>),
     /// Recording stopped — review before send.
     VoiceDraftReady(Result<VoiceDraft, String>),
+    /// Close the voice error line above the composer.
+    DismissVoiceError,
     SendVoiceDraft,
     CancelVoiceDraft,
     VoiceSent(Result<(), String>),
@@ -1364,6 +1366,11 @@ struct App {
     voice_rec: Option<VoiceRec>,
     /// True while `start_voice_recording` runs off the UI thread.
     voice_arming: bool,
+    /// Stop pressed: the take is being checked / converted into a draft.
+    voice_preparing: bool,
+    /// Why the last recording failed — shown above the composer (the status
+    /// line isn't visible in chats, so errors used to vanish).
+    voice_error: Option<String>,
     /// Hand-off for Child (not Clone) from the arming task.
     voice_rec_slot: std::sync::Arc<std::sync::Mutex<Option<VoiceRec>>>,
     /// Recorded voice waiting for send/cancel.
@@ -1503,6 +1510,8 @@ pub struct VoiceDraft {
     pub path: PathBuf,
     pub duration_secs: u32,
     pub peaks: Vec<f32>,
+    /// Barely any signal (low mic gain): kept, but flagged in the draft bar.
+    pub quiet: bool,
 }
 
 struct VoicePlayback {
@@ -1603,6 +1612,8 @@ impl App {
                 pending_auto_receives: Vec::new(),
                 voice_rec: None,
                 voice_arming: false,
+                voice_preparing: false,
+                voice_error: None,
                 voice_rec_slot: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 voice_draft: None,
                 voice_playback: None,
@@ -5185,6 +5196,7 @@ impl App {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                self.voice_error = None;
                 // Do not steal focus back to the composer — that flickered the
                 // mic/mute chrome and swallowed the first press on ARM/OSK.
                 self.toggle_voice_record()
@@ -5203,12 +5215,19 @@ impl App {
                         }
                     }
                     Err(err) => {
+                        tracing::warn!(%err, "voice: recording did not start");
+                        self.voice_error = Some(err.clone());
                         self.status = err;
                     }
                 }
                 Task::none()
             }
+            Message::DismissVoiceError => {
+                self.voice_error = None;
+                Task::none()
+            }
             Message::VoiceDraftReady(Ok(draft)) => {
+                self.voice_preparing = false;
                 self.waveforms
                     .insert(draft.path.clone(), draft.peaks.clone());
                 self.voice_draft = Some(draft);
@@ -5219,7 +5238,10 @@ impl App {
                 Task::none()
             }
             Message::VoiceDraftReady(Err(err)) => {
+                tracing::warn!(%err, "voice: no draft");
+                self.voice_preparing = false;
                 self.send_voice_when_ready = false;
+                self.voice_error = Some(err.clone());
                 self.status = err;
                 Task::none()
             }
@@ -6617,6 +6639,14 @@ impl App {
         self.voice_arming
     }
 
+    pub(crate) fn voice_preparing(&self) -> bool {
+        self.voice_preparing
+    }
+
+    pub(crate) fn voice_error(&self) -> Option<&str> {
+        self.voice_error.as_deref()
+    }
+
     pub(crate) fn voice_draft(&self) -> Option<&VoiceDraft> {
         self.voice_draft.as_ref()
     }
@@ -6790,6 +6820,7 @@ impl App {
         let Some(mut rec) = self.voice_rec.take() else {
             return Task::none();
         };
+        self.voice_preparing = true;
         self.status = "Preparing voice…".into();
         Task::perform(
             async move {
@@ -6798,7 +6829,7 @@ impl App {
                     finish_voice_recording(rec.path, rec.started.elapsed())
                 })
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("Couldn't prepare the voice message ({e})."))?
             },
             Message::VoiceDraftReady,
         )
@@ -9697,15 +9728,18 @@ fn finish_voice_recording(wav: PathBuf, elapsed: std::time::Duration) -> Result<
         let _ = std::fs::remove_file(&wav);
         return Err("Recording was empty — check the microphone.".into());
     }
-    let info = media::analyze_audio(&wav, media::WAVEFORM_BARS).ok();
-    if let Some(info) = info.as_ref() {
-        if info.raw_peak < 0.002 {
-            let _ = std::fs::remove_file(&wav);
-            return Err(
-                "Recording was silent — check the input device / mic level (pavucontrol, alsamixer)."
-                    .into(),
-            );
+    let info = match media::analyze_audio(&wav, media::WAVEFORM_BARS) {
+        Ok(info) => Some(info),
+        Err(err) => {
+            tracing::warn!(%err, "voice: waveform analysis failed; using a flat one");
+            None
         }
+    };
+    // Phone mics at low gain record near-silence: keep the take (you can
+    // play it before sending) instead of dropping it with no draft at all.
+    let quiet = info.as_ref().is_some_and(|i| i.raw_peak < 0.002);
+    if quiet {
+        tracing::warn!(peak = info.as_ref().map(|i| i.raw_peak), "voice: very quiet recording");
     }
     let duration_secs =
         media::voice_duration_secs(&wav, elapsed, info.as_ref().map(|i| i.duration_secs));
@@ -9714,17 +9748,7 @@ fn finish_voice_recording(wav: PathBuf, elapsed: std::time::Duration) -> Result<
         .unwrap_or_else(|| vec![0.35; media::WAVEFORM_BARS]);
 
     let m4a = wav.with_extension("m4a");
-    let transcoded = Command::new("ffmpeg")
-        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
-        .arg(&wav)
-        .args(["-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "32k"])
-        .arg(&m4a)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-        && std::fs::metadata(&m4a).is_ok_and(|m| m.len() > 64);
+    let transcoded = transcode_voice(&wav, &m4a) && std::fs::metadata(&m4a).is_ok_and(|m| m.len() > 64);
     let path = if transcoded {
         let _ = std::fs::remove_file(&wav);
         m4a
@@ -9736,7 +9760,39 @@ fn finish_voice_recording(wav: PathBuf, elapsed: std::time::Duration) -> Result<
         path,
         duration_secs,
         peaks,
+        quiet,
     })
+}
+
+/// WAV → AAC m4a with ffmpeg, given at most 20 s: a stuck ffmpeg (slow or
+/// broken encoder on a phone) used to leave the take with no draft forever.
+/// `false` (no ffmpeg, failure, timeout) sends the WAV instead.
+fn transcode_voice(wav: &std::path::Path, m4a: &std::path::Path) -> bool {
+    let child = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
+        .arg(wav)
+        .args(["-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "32k"])
+        .arg(m4a)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else {
+        return false;
+    };
+    let deadline = Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(50)),
+            _ => {
+                tracing::warn!("voice: ffmpeg conversion timed out; sending WAV");
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 /// Shell fallback chain for playback. Runs in its own process group so Stop
@@ -10110,5 +10166,55 @@ mod member_status_tests {
         assert!(member_status_shows_pending_icon("invited"));
         assert!(!member_status_shows_pending_icon("connected"));
         assert!(!member_status_shows_pending_icon("complete"));
+    }
+}
+
+#[cfg(test)]
+mod voice_draft_tests {
+    /// Minimal mono 16-bit PCM WAV with `samples`.
+    fn wav(path: &std::path::Path, samples: &[i16]) {
+        let data_len = (samples.len() * 2) as u32;
+        let mut b = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&(36 + data_len).to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt ");
+        b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        b.extend_from_slice(&1u16.to_le_bytes()); // mono
+        b.extend_from_slice(&16_000u32.to_le_bytes());
+        b.extend_from_slice(&32_000u32.to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&data_len.to_le_bytes());
+        for s in samples {
+            b.extend_from_slice(&s.to_le_bytes());
+        }
+        std::fs::write(path, b).unwrap();
+    }
+
+    /// A take at very low mic gain (phones) becomes a draft marked quiet,
+    /// not an error with no draft — ARM recordings vanished that way.
+    #[test]
+    fn quiet_recording_is_kept_as_a_draft() {
+        let dir = std::env::temp_dir().join(format!("cursus-voice-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quiet.wav");
+        let samples: Vec<i16> = (0..16_000).map(|i| if i % 2 == 0 { 20 } else { -20 }).collect();
+        wav(&path, &samples);
+        let draft = super::finish_voice_recording(path, std::time::Duration::from_secs(1)).expect("draft");
+        assert!(draft.quiet);
+        assert!(draft.path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_recording_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("cursus-voice-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("empty.wav");
+        wav(&path, &[]);
+        assert!(super::finish_voice_recording(path, std::time::Duration::from_secs(1)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

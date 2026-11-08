@@ -1435,7 +1435,9 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     }
 
     let recording = app.voice_recording();
-    let arming = app.voice_arming();
+    // Starting the mic, or turning a finished take into a draft: the mic is
+    // inert and the field says what's happening.
+    let arming = app.voice_arming() || app.voice_preparing();
     let mic = if recording {
         composer_hit(
             icons::centered_hit(
@@ -1467,6 +1469,8 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
 
     let placeholder = if recording {
         "Recording…"
+    } else if app.voice_preparing() {
+        "Preparing voice…"
     } else if arming {
         "Starting microphone…"
     } else {
@@ -1658,7 +1662,26 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         Column::new().width(Length::Fill).into()
     };
 
-    let body = column![suggest_slot, reply_slot, input_row]
+    // A recording that couldn't become a draft says why (the status line
+    // isn't shown in chats).
+    let voice_error_slot: Element<'_, Message> = match app.voice_error() {
+        Some(err) => row![
+            icons::mic_icon(16.0, theme::t().danger),
+            text(err.to_string())
+                .size(d.meta)
+                .color(theme::t().danger)
+                .wrapping(Wrapping::WordOrGlyph)
+                .width(Length::Fill),
+            composer_hit(icons::cancel_icon(14.0, theme::t().text_secondary), 28.0, Message::DismissVoiceError),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .padding(Padding::from([4, 6]))
+        .into(),
+        None => Column::new().width(Length::Fill).into(),
+    };
+
+    let body = column![voice_error_slot, suggest_slot, reply_slot, input_row]
         .spacing(0)
         .width(Length::Fill);
 
@@ -2865,7 +2888,11 @@ fn voice_draft_bar(
                 Message::CancelVoiceDraft,
             ),
             column![
-                text(format!("Voice · {}", format_duration(draft.duration_secs)))
+                text(if draft.quiet {
+                    format!("Voice · {} · very quiet — play it before sending", format_duration(draft.duration_secs))
+                } else {
+                    format!("Voice · {}", format_duration(draft.duration_secs))
+                })
                     .size(d.meta)
                     .color(theme::t().text_secondary),
                 wave,

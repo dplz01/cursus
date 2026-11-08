@@ -389,6 +389,7 @@ fn shots() {
                     path: std::env::temp_dir().join("cursus-shot-voice.wav"),
                     duration_secs: 7,
                     peaks: (0..96).map(|i| (i as f32 * 0.37).sin().abs() * 0.9 + 0.1).collect(),
+                    quiet: false,
                 });
                 render(&app, size, &format!("{name}-draft-{t}"));
                 // Recording: a short-lived dummy process stands in for the recorder.

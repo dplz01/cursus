@@ -75,6 +75,7 @@ fn msg(id: i64, text: &str, outgoing: bool, time: &str) -> ChatMessage {
     ChatMessage {
         item_id: id,
         text: text.into(),
+        caption: String::new(),
         segments: Vec::new(),
         outgoing,
         created_at: Some(format!("2026-11-06T{time}:00Z")),

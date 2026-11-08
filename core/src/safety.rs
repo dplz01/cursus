@@ -86,6 +86,58 @@ pub fn is_risky_to_open(path: &std::path::Path) -> bool {
         .is_some_and(|e| RISKY.contains(&e.as_str()))
 }
 
+/// Every web link in a message with its tracking parameters removed (see
+/// [`strip_tracking_params`]): run on what you **send**, so codes like
+/// `utm_source` never reach your contact — cleaning only when opening
+/// protects you, not them. Text around the links is untouched.
+pub fn clean_links_in_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = next_link_start(rest) {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        let end = tail.find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '`')).unwrap_or(tail.len());
+        // Trailing punctuation belongs to the sentence, not the link.
+        let link_end = tail[..end].trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '\'']).len();
+        let link = &tail[..link_end];
+        out.push_str(&clean_one(link));
+        out.push_str(&tail[link_end..end]);
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Byte offset of the next `http(s)://` or `www.` link starting a word.
+fn next_link_start(s: &str) -> Option<usize> {
+    let lower = s.to_ascii_lowercase();
+    let mut from = 0;
+    while from < lower.len() {
+        let hit = ["https://", "http://", "www."]
+            .iter()
+            .filter_map(|p| lower[from..].find(p).map(|i| from + i))
+            .min()?;
+        let at_word_start = hit == 0
+            || s[..hit].chars().next_back().is_some_and(|c| c.is_whitespace() || matches!(c, '(' | '[' | '<' | '"' | '\''));
+        if at_word_start {
+            return Some(hit);
+        }
+        from = hit + 1;
+        while !lower.is_char_boundary(from) {
+            from += 1;
+        }
+    }
+    None
+}
+
+fn clean_one(link: &str) -> String {
+    if link.len() >= 4 && link[..4].eq_ignore_ascii_case("www.") {
+        let cleaned = strip_tracking_params(&format!("https://{link}"));
+        return cleaned.strip_prefix("https://").unwrap_or(&cleaned).to_string();
+    }
+    strip_tracking_params(link)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +165,24 @@ mod tests {
         );
         assert_eq!(safe_external_url("tel:+39 123").as_deref(), None);
         assert_eq!(safe_external_url("tel:+39123").as_deref(), Some("tel:+39123"));
+    }
+
+    #[test]
+    fn links_in_sent_text_are_cleaned() {
+        assert_eq!(
+            clean_links_in_text(
+                "look https://www.example.com/page?utm_content=x&utm_medium=social&utm_source=snapchat.com&utm_campaign=buffer now"
+            ),
+            "look https://www.example.com/page now"
+        );
+        assert_eq!(
+            clean_links_in_text("(see www.shop.it/a?id=3&fbclid=Z), ok?"),
+            "(see www.shop.it/a?id=3), ok?"
+        );
+        assert_eq!(clean_links_in_text("two: http://a.b/?gclid=1 and https://c.d/x?q=1"), "two: http://a.b/ and https://c.d/x?q=1");
+        assert_eq!(clean_links_in_text("no links, utm_source=x stays"), "no links, utm_source=x stays");
+        assert_eq!(clean_links_in_text("emoji 😄 https://a.b/?utm_source=x 😄"), "emoji 😄 https://a.b/ 😄");
+        assert_eq!(clean_links_in_text("mid-wordhttps://a.b/?utm_source=x"), "mid-wordhttps://a.b/?utm_source=x");
     }
 
     #[test]

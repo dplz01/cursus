@@ -5805,8 +5805,8 @@ fn privacy_confirm_overlay(app: &App) -> Element<'_, Message> {
         ),
         crate::PrivacyConfirm::KeepTrackingLinks => (
             "Keep tracking codes in links?",
-            "Links will open exactly as sent, including codes like utm_source or fbclid that let \
-             websites track where you came from."
+            "Links you send and open will keep codes like utm_source or fbclid, which let \
+             websites track who shared them and where you came from."
                 .into(),
             "Keep codes",
         ),

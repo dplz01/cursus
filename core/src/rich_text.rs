@@ -235,6 +235,21 @@ pub struct EmojiSuggestion {
     pub glyph: &'static str,
 }
 
+/// A message as it is sent: trimmed, `:shortcodes:` expanded, emoji shown as
+/// emoji (not text glyphs). Every app sends through this.
+pub fn outgoing_text(s: &str) -> String {
+    emoji_presentation(&expand_emoji_shortcodes(s.trim())).into_owned()
+}
+
+/// `s` with its pending `:query` (see [`pending_shortcode_query`]) replaced
+/// by `glyph` — accepting an autocomplete suggestion. `None` when nothing is
+/// pending.
+pub fn accept_shortcode(s: &str, glyph: &str) -> Option<String> {
+    pending_shortcode_query(s)?;
+    let start = s.rfind(':')?;
+    Some(format!("{}{glyph}", &s[..start]))
+}
+
 /// Incomplete `:prefix` at the end of `s` (no closing colon yet).
 ///
 /// Returns the prefix after the colon (`"ca"` for `"hi :ca"`).
@@ -835,5 +850,25 @@ mod tests {
         );
         assert_eq!(humanize_simplex_links("see https://example.com/#x"), "see https://example.com/#x");
         assert_eq!(humanize_simplex_links("plain"), "plain");
+    }
+}
+
+#[cfg(test)]
+mod outgoing_tests {
+    use super::{accept_shortcode, outgoing_text};
+
+    #[test]
+    fn outgoing_text_is_trimmed_and_expanded() {
+        let out = outgoing_text("  hi :smile:  ");
+        assert!(out.starts_with("hi ") && !out.contains(":smile:"), "{out}");
+        assert_eq!(outgoing_text("plain"), "plain");
+    }
+
+    #[test]
+    fn accepting_replaces_only_the_pending_query() {
+        assert_eq!(accept_shortcode("hi :smi", "😄").as_deref(), Some("hi 😄"));
+        assert_eq!(accept_shortcode("a:b c :+1", "👍").as_deref(), Some("a:b c 👍"));
+        assert_eq!(accept_shortcode("no query", "😄"), None);
+        assert_eq!(accept_shortcode("done :smile: ", "😄"), None);
     }
 }

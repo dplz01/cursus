@@ -2165,10 +2165,7 @@ impl App {
                         "Accept the contact request before sending messages.".into();
                     return Task::none();
                 }
-                let text = cursus_core::emoji_presentation(&cursus_core::expand_emoji_shortcodes(
-                    self.composer_text().trim(),
-                ))
-                .into_owned();
+                let text = cursus_core::outgoing_text(&self.composer_text());
                 if text.is_empty() {
                     return Task::none();
                 }
@@ -8125,12 +8122,9 @@ impl App {
         }
         let index = self.emoji_suggest_index.min(suggestions.len() - 1);
         let glyph = suggestions[index].glyph;
-        let mut text = self.composer_text();
-        let Some(start) = text.rfind(':') else {
+        let Some(text) = cursus_core::accept_shortcode(&self.composer_text(), glyph) else {
             return;
         };
-        text.truncate(start);
-        text.push_str(glyph);
         // Recreates content and parks the caret after the inserted emoji.
         self.set_composer_text(text);
         self.emoji_suggest_index = 0;

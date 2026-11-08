@@ -58,6 +58,7 @@ Default servers and default chat options are used; no custom relay UI in milesto
 - Chat rules every app shares — e.g. `preferences` (what you and a contact
   allow, group features, the JSON sent back). Apps keep only how these are
   shown (labels, menus); never copy such a rule into an app or a bridge
+- `safety`: which links and attachments may be opened, tracking cleanup
 - Future: UniFFI surface for Android/iOS
 
 ### Platform-specific

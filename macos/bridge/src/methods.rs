@@ -225,6 +225,29 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
                 .map_err(err)?;
             Ok(Value::Null)
         }
+        // Sent / received time, delivery status and text of one message.
+        "messageInfo" => {
+            let info = s.message_info(&chat_param(p)?, i64_param(p, "itemId")?).map_err(err)?;
+            Ok(json!({ "time": info.time, "status": info.status, "text": info.text }))
+        }
+        // Forward messages of `chat` to `to`.
+        "forward" => {
+            let ids: Vec<i64> = p
+                .get("itemIds")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_i64).collect())
+                .unwrap_or_default();
+            let to = cursus_core::ChatId { scope: None, ..dto::parse_chat_ref(str_param(p, "to")?)? };
+            s.forward_items(&chat_param(p)?, &to, &ids).map_err(err)?;
+            Ok(Value::Null)
+        }
+        // Groups: who set one reaction.
+        "reactionMembers" => {
+            let members = s
+                .reaction_members(&chat_param(p)?, i64_param(p, "itemId")?, str_param(p, "emoji")?)
+                .map_err(err)?;
+            Ok(Value::Array(members.iter().map(|m| json!(m.display_name)).collect()))
+        }
         "sendFile" => {
             s.send_file(&chat_param(p)?, str_param(p, "path")?).map_err(err)?;
             Ok(Value::Null)

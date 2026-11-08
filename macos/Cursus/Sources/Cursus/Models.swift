@@ -284,6 +284,31 @@ struct Message: Decodable, Identifiable, Equatable {
     let emojiOnly: Bool
 
     var date: Date? { createdAt.flatMap(Dates.parse) }
+    var hasSecret: Bool { segments.contains { $0.style == "secret" } }
+}
+
+/// Message details (`messageInfo`): time, delivery status, text.
+struct MessageInfo: Decodable {
+    let time: String?
+    let status: String?
+    let text: String
+
+    var date: Date? { time.flatMap(Dates.parse) }
+
+    /// Plain words for the core's `itemStatus.type`.
+    var statusLabel: String? {
+        guard let status = status else { return nil }
+        switch status {
+        case "sndNew": return "Sending"
+        case "sndSent": return "Sent"
+        case "sndRcvd": return "Delivered"
+        case "sndErrorAuth", "sndError": return "Not delivered"
+        case "sndWarning": return "Delivery warning"
+        case "rcvNew": return "Received"
+        case "rcvRead": return "Read"
+        default: return status
+        }
+    }
 }
 
 struct FileProgress: Decodable {

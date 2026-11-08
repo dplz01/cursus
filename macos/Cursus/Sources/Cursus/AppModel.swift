@@ -94,6 +94,21 @@ final class AppModel: ObservableObject {
     @Published var members: [Member] = []
     /// Chat lists (tags) for "Add to list".
     @Published var chatTags: [ChatTag] = []
+
+    // Message actions in the open chat.
+    /// Selecting several messages (forward / delete together).
+    @Published var selectingMessages = false
+    @Published var selectedMessages: Set<Int64> = []
+    /// Messages whose secret text or "marked deleted" original is shown.
+    @Published var revealedMessages: Set<Int64> = []
+    /// Message ids being forwarded (opens the chat picker).
+    @Published var forwarding: [Int64]?
+    /// Message whose info sheet is open.
+    @Published var infoMessage: Message?
+    /// Scroll to this message (jump to a quoted one), then briefly highlight it.
+    @Published var scrollTarget: Int64?
+    @Published var highlightedMessage: Int64?
+    private var highlightToken = 0
     @Published var isLoadingMessages = false
 
     /// Settings → Notifications (`@AppStorage` with these keys in the view).
@@ -274,6 +289,10 @@ final class AppModel: ObservableObject {
         fileProgress = [:]
         // The profile is a full page: another chat opens on its messages.
         showInfo = false
+        selectingMessages = false
+        selectedMessages = []
+        revealedMessages = []
+        highlightedMessage = nil
         guard let ref = selection else { return }
         isLoadingMessages = true
         Task {
@@ -657,6 +676,91 @@ final class AppModel: ObservableObject {
             try await Core.run("deleteItems", ["chat": ref, "itemIds": [message.id], "forEveryone": forEveryone])
         }
         await reloadMessages(for: ref)
+    }
+
+    // MARK: - Message actions
+
+    func startSelecting(_ message: Message) {
+        selectingMessages = true
+        selectedMessages = [message.id]
+    }
+
+    func toggleSelected(_ message: Message) {
+        if selectedMessages.contains(message.id) {
+            selectedMessages.remove(message.id)
+        } else {
+            selectedMessages.insert(message.id)
+        }
+    }
+
+    func stopSelecting() {
+        selectingMessages = false
+        selectedMessages = []
+    }
+
+    /// Delete the selected messages from this Mac.
+    func deleteSelected() async {
+        guard let ref = selection, !selectedMessages.isEmpty else { return }
+        let ids = Array(selectedMessages)
+        stopSelecting()
+        await perform { try await Core.run("deleteItems", ["chat": ref, "itemIds": ids, "forEveryone": false]) }
+        await reloadMessages(for: ref)
+    }
+
+    func forwardSelected() {
+        guard !selectedMessages.isEmpty else { return }
+        forwarding = messages.filter { selectedMessages.contains($0.id) }.map(\.id)
+    }
+
+    /// Forward `ids` from the open chat to `target`.
+    func forward(_ ids: [Int64], to target: Chat) async {
+        guard let ref = selection, !ids.isEmpty else { return }
+        forwarding = nil
+        stopSelecting()
+        await perform { try await Core.run("forward", ["chat": ref, "to": target.ref, "itemIds": ids]) }
+        if target.ref == ref { await reloadMessages(for: ref) }
+    }
+
+    func messageInfo(_ message: Message) async -> MessageInfo? {
+        guard let ref = selection else { return nil }
+        do {
+            return try await Core.call("messageInfo", ["chat": ref, "itemId": message.id], as: MessageInfo.self)
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// Groups: names of the members who set `emoji` on `message`.
+    func reactionMembers(_ message: Message, emoji: String) async -> [String] {
+        guard let ref = selection else { return [] }
+        return (try? await Core.call("reactionMembers", ["chat": ref, "itemId": message.id, "emoji": emoji],
+                                     as: [String].self)) ?? []
+    }
+
+    func toggleRevealed(_ message: Message) {
+        if revealedMessages.contains(message.id) {
+            revealedMessages.remove(message.id)
+        } else {
+            revealedMessages.insert(message.id)
+        }
+    }
+
+    /// Scroll to a quoted message and highlight it for a moment.
+    func jumpTo(_ itemId: Int64?) {
+        guard let id = itemId, messages.contains(where: { $0.id == id }) else {
+            errorMessage = "The original message is no longer available."
+            return
+        }
+        scrollTarget = id
+        highlightedMessage = id
+        highlightToken += 1
+        let token = highlightToken
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            guard let self = self, self.highlightToken == token else { return }
+            self.highlightedMessage = nil
+        }
     }
 
     func download(_ file: FileAttachment, approved: Bool = false) async {

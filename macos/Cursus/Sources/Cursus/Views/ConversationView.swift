@@ -47,10 +47,27 @@ struct ConversationView: View {
                 .onChange(of: model.composeMode) { mode in
                     if mode != .new { scrollToBottom(proxy, animated: true) }
                 }
+                .onChange(of: model.scrollTarget) { target in
+                    guard let target = target else { return }
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(target, anchor: .center) }
+                    model.scrollTarget = nil
+                }
             }
             Hairline()
-            ComposerView(chat: chat)
+            if model.selectingMessages {
+                SelectionBar()
+            } else {
+                ComposerView(chat: chat)
+            }
         }
+        .sheet(isPresented: Binding(get: { model.forwarding != nil },
+                                    set: { if !$0 { model.forwarding = nil } })) {
+            ForwardSheet(ids: model.forwarding ?? []).environmentObject(model)
+        }
+        // Its own anchor: two .sheet modifiers on one view clash on macOS 12.
+        .background(Color.clear.sheet(item: $model.infoMessage) { message in
+            MessageInfoSheet(message: message).environmentObject(model)
+        })
         .onDrop(of: [UTType.fileURL], isTargeted: $dropTargeted, perform: drop)
         .overlay {
             if dropTargeted {
@@ -147,6 +164,10 @@ struct MessageRow: View {
                 .padding(.vertical, 4)
         } else {
             HStack(alignment: .bottom, spacing: 6) {
+                if model.selectingMessages {
+                    SelectionMark(selected: model.selectedMessages.contains(message.id))
+                        .padding(.bottom, 6)
+                }
                 if message.outgoing {
                     Spacer(minLength: 80)
                 } else if showSender {
@@ -154,17 +175,30 @@ struct MessageRow: View {
                 }
                 VStack(alignment: message.outgoing ? .trailing : .leading, spacing: 3) {
                     bubble
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Radius.bubble, style: .continuous)
+                                .strokeBorder(Theme.accent, lineWidth: model.highlightedMessage == message.id ? 2 : 0))
                         .contextMenu { MessageMenu(message: message, canReact: !inNotes) }
                     if !message.reactions.isEmpty {
-                        ReactionsBar(message: message)
+                        ReactionsBar(message: message, inGroup: model.selectedChat?.isGroup == true)
                     }
                 }
                 if !message.outgoing {
                     Spacer(minLength: 80)
                 }
             }
+            .overlay {
+                // While selecting, a click anywhere on the row (de)selects it.
+                if model.selectingMessages {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { model.toggleSelected(message) }
+                }
+            }
         }
     }
+
+    private var revealed: Bool { model.revealedMessages.contains(message.id) }
 
     @ViewBuilder private var bubble: some View {
         if message.emojiOnly {
@@ -181,6 +215,8 @@ struct MessageRow: View {
                 }
                 if let quote = message.quote {
                     QuoteView(quote: quote)
+                        .onTapGesture { model.jumpTo(quote.itemId) }
+                        .help("Show the original message")
                 }
                 if let file = message.file, message.deleted == nil {
                     AttachmentView(file: file, messageId: message.id)
@@ -192,12 +228,29 @@ struct MessageRow: View {
                     Text(deleted == "marked" ? "Marked deleted" : "Message deleted")
                         .italic()
                         .foregroundColor(Theme.secondaryText)
+                    if deleted == "marked" && revealed && !message.text.isEmpty {
+                        Text(RichText.attributed(message, reveal: true))
+                            .font(.cBody)
+                            .foregroundColor(Theme.secondaryText)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 } else if !message.text.isEmpty && message.groupInvitation == nil {
-                    Text(RichText.attributed(message))
-                        .font(.cBody)
-                        .foregroundColor(Theme.primaryText)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if message.hasSecret {
+                        // Secret text: click to reveal / hide (Linux: tap).
+                        Text(RichText.attributed(message, reveal: revealed))
+                            .font(.cBody)
+                            .foregroundColor(Theme.primaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .onTapGesture { model.toggleRevealed(message) }
+                            .help(revealed ? "Hide secret text" : "Show secret text")
+                    } else {
+                        Text(RichText.attributed(message))
+                            .font(.cBody)
+                            .foregroundColor(Theme.primaryText)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 footer
             }
@@ -295,24 +348,13 @@ struct GroupInviteCard: View {
 }
 
 struct ReactionsBar: View {
-    @EnvironmentObject private var model: AppModel
     let message: Message
+    let inGroup: Bool
 
     var body: some View {
         HStack(spacing: 4) {
             ForEach(message.reactions, id: \.emoji) { reaction in
-                Button {
-                    Task { await model.toggleReaction(message, emoji: reaction.emoji) }
-                } label: {
-                    Text("\(reaction.glyph) \(reaction.total)")
-                        .font(.cMeta)
-                        .foregroundColor(reaction.mine ? Theme.accent : Theme.primaryText)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(RoundedRectangle(cornerRadius: 14).fill(reaction.mine ? Theme.accentSoft : Theme.elevated))
-                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(reaction.mine ? Theme.accent : Theme.border, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
+                ReactionChip(message: message, reaction: reaction, inGroup: inGroup)
             }
         }
     }
@@ -328,6 +370,12 @@ struct MessageMenu: View {
             Button("Reply") { model.startReply(message) }
             if !message.text.isEmpty {
                 Button("Copy") { Clipboard.copy(message.text) }
+            }
+            Button("Forward…") { model.forwarding = [message.id] }
+            if message.hasSecret {
+                Button(model.revealedMessages.contains(message.id) ? "Hide secret text" : "Show secret text") {
+                    model.toggleRevealed(message)
+                }
             }
             if canReact {
                 Menu("React") {
@@ -348,6 +396,14 @@ struct MessageMenu: View {
             }
             Divider()
         }
+        if message.deleted == "marked" && !message.text.isEmpty {
+            Button(model.revealedMessages.contains(message.id) ? "Hide original" : "Show original") {
+                model.toggleRevealed(message)
+            }
+        }
+        Button("Info") { model.infoMessage = message }
+        Button("Select") { model.startSelecting(message) }
+        Divider()
         Button("Delete for me") { Task { await model.deleteMessage(message, forEveryone: false) } }
         if message.outgoing && message.deleted == nil {
             Button("Delete for everyone") { Task { await model.deleteMessage(message, forEveryone: true) } }
@@ -358,12 +414,13 @@ struct MessageMenu: View {
 // MARK: - Rich text
 
 enum RichText {
-    static func attributed(_ message: Message) -> AttributedString {
+    /// `reveal`: show secret spans (highlighted) instead of dots.
+    static func attributed(_ message: Message, reveal: Bool = false) -> AttributedString {
         guard !message.segments.isEmpty else { return AttributedString(message.text) }
         var out = AttributedString()
         for seg in message.segments {
             var text = seg.text
-            if seg.style == "secret" {
+            if seg.style == "secret" && !reveal {
                 text = String(repeating: "•", count: max(3, min(seg.text.count, 24)))
             }
             var part = AttributedString(text)
@@ -379,7 +436,11 @@ enum RichText {
             case "small":
                 part[AttributeScopes.SwiftUIAttributes.FontAttribute.self] = .caption
             case "secret":
-                part[AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self] = Theme.mutedText
+                if reveal {
+                    part[AttributeScopes.SwiftUIAttributes.BackgroundColorAttribute.self] = Theme.accentSoft
+                } else {
+                    part[AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self] = Theme.mutedText
+                }
             case "colored":
                 if let color = Theme.formatColor(seg.color) { part[AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self] = color }
             case "mention":

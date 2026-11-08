@@ -86,6 +86,16 @@ rail, pane headers, cards, ghost tiles, link box and bubbles
 on Linux. Split view, menus, sheets, pickers, alerts and context menus stay
 native.
 
-Next: audio calls (the WebRTC engine moves from the Linux app into the core, then a native macOS UI), voice
-recording, member support chats ("chat with admins"), list filters in the
-chat list.
+## Parity with Linux
+
+Same features as the Linux app, implemented natively; shared rules live in
+`cursus-core`.
+
+| Batch | Linux features | macOS |
+|---|---|---|
+| A. Messages | forward, message info, select several, jump to quoted message, reveal secret text / "marked deleted", who reacted | Done |
+| B. Settings | theme, text size, app lock after idle, privacy (protect IP, auto-download, blur media, clean tracking links, chat previews), address settings, Enter sends | Next |
+| C. Chat flow | list filters, "New messages" divider + follow your own sends, `:emoji:` shortcodes, ↑ edits last message, link-open confirmation | Todo |
+| D. Media | voice recording, video playback / gallery | Todo |
+| E. Groups | "Chat with admins" support threads | Todo |
+| F. Calls | WebRTC engine moves from the Linux app into the core, then a native call UI | Todo |

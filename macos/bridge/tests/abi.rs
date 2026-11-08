@@ -59,6 +59,10 @@ fn abi_round_trip() {
         assert_eq!(last["outgoing"], true);
         assert!(last["segments"].as_array().unwrap().iter().any(|s| s["style"] == "bold"));
         // (Reactions are not supported in notes — core rule.)
+        let info = call("messageInfo", json!({ "chat": r, "itemId": last["id"] }), &mut dump);
+        assert!(info["text"].as_str().unwrap().starts_with("hello"));
+        assert!(info["time"].is_string());
+        call("forward", json!({ "chat": r, "to": r, "itemIds": [last["id"]] }), &mut dump);
         call("updateText", json!({ "chat": r, "itemId": last["id"], "text": "edited" }), &mut dump);
         call("listMessages", json!({ "chat": r, "count": 20 }), &mut dump);
         call("deleteItems", json!({ "chat": r, "itemIds": [last["id"]], "forEveryone": false }), &mut dump);

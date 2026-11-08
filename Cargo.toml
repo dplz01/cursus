@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "call",
     "core",
     "linux",
 ]
@@ -15,6 +16,7 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 cursus-core = { path = "core" }
+cursus-call = { path = "call" }
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 directories = "6"

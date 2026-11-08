@@ -41,14 +41,12 @@ tray-icon.workspace = true
 unicode-segmentation.workspace = true
 # Fallback trait signature (same version cosmic-text uses).
 unicode-script = "0.5"
-# Calls: native WebRTC (no browser/WebView), Opus, SimpleX frame encryption.
-webrtc = "=0.17.2"
+# Calls: the shared engine (WebRTC, signaling, frame encryption) — this app
+# adds its sound devices, which encode / decode Opus.
+cursus-call.workspace = true
 opus = "0.3"
 # Bundled libopus built statically: phones may not ship libopus.so.
 audiopus_sys = { version = "0.2", features = ["static"] }
-aes-gcm = "0.10"
-# SimpleX signaling packs SDP / ICE as LZString.compressToBase64(JSON).
-lz-str = "0.2"
 # Calls: acoustic echo cancellation (pure Rust, finds the echo delay itself).
 decibri-aec = "0.2"
 # Keep phones awake during calls (portal / logind inhibitor). Already in the

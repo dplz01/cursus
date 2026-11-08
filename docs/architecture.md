@@ -61,6 +61,15 @@ Default servers and default chat options are used; no custom relay UI in milesto
 - `safety`: which links and attachments may be opened, tracking cleanup
 - Future: UniFFI surface for Android/iOS
 
+### Shared Rust (`cursus-call`, `call/`)
+
+- Audio calls: native WebRTC (webrtc-rs) speaking the official clients'
+  format, SimpleX signaling packing, end-to-end frame encryption, the jitter
+  buffer. Platforms plug in their microphone / speaker through
+  `cursus_call::audio::AudioDevice` (Linux: sound-server tools + echo
+  canceller; macOS: AVAudioEngine voice processing) and keep their own call
+  screens and signaling glue.
+
 ### Platform-specific
 
 | Concern | Owner |

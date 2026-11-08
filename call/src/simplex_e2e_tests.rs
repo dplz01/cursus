@@ -4,7 +4,7 @@
 //! (`call_flow.rs`): invite → callInvitation → offer → callOffer → answer →
 //! callAnswer → extras → connected, audio both ways, end → callEnded.
 //!
-//! Needs libsimplex and network: `cargo test -p cursus-linux simplex_e2e -- --ignored --nocapture`
+//! Needs libsimplex and network: `cargo test -p cursus-call simplex_e2e -- --ignored --nocapture`
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -120,7 +120,7 @@ async fn simplex_e2e_call() {
     assert!(bob_key.is_some(), "invitation must carry a shared key (encryption)");
 
     // Bob accepts: offer.
-    let (bob_engine, mut bob_ev) = CallEngine::with_devices(bob_key.as_deref(), false).await.unwrap();
+    let (bob_engine, mut bob_ev) = CallEngine::with_devices(bob_key.as_deref(), None).await.unwrap();
     let offer = bob_engine.create_offer().await.unwrap();
     blocking({
         let b = bob.clone();
@@ -132,7 +132,7 @@ async fn simplex_e2e_call() {
     let off = wait_for(&mut ea, 60, "alice: callOffer", |ev| other(ev, "callOffer").cloned()).await;
     let alice_key = off.get("sharedKey").and_then(|k| k.as_str()).map(str::to_string);
     assert_eq!(alice_key, bob_key, "both sides derive the same key");
-    let (alice_engine, mut alice_ev) = CallEngine::with_devices(alice_key.as_deref(), false).await.unwrap();
+    let (alice_engine, mut alice_ev) = CallEngine::with_devices(alice_key.as_deref(), None).await.unwrap();
     let answer = alice_engine
         .accept_offer(
             off.pointer("/offer/rtcSession").and_then(|v| v.as_str()).expect("offer.rtcSession"),

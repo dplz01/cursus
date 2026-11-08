@@ -527,7 +527,7 @@ impl App {
         let contact_id = inv.contact_id;
         iced::Task::perform(
             async move {
-                let (engine, rx) = CallEngine::new(key.as_deref()).await?;
+                let (engine, rx) = crate::call::new_engine(key.as_deref()).await?;
                 let sent = async {
                     let local = engine.create_offer().await?;
                     let encryption = key.is_some();
@@ -635,7 +635,7 @@ impl App {
                 let ice = str_at(body, "/offer/rtcIceCandidates").to_string();
                 iced::Task::perform(
                     async move {
-                        let (engine, rx) = CallEngine::new(key.as_deref()).await?;
+                        let (engine, rx) = crate::call::new_engine(key.as_deref()).await?;
                         let sent = async {
                             let local = engine.accept_offer(&offer, &ice).await?;
                             blocking(move || {

@@ -203,6 +203,8 @@ struct FileAttachment: Decodable, Equatable {
     let nonce: String?
     let progress: Double?
     let error: String?
+    /// Downloaded without asking (core rule; Settings → auto-download).
+    let autoReceive: Bool?
 
     var isComplete: Bool { state == "complete" && path != nil }
 }
@@ -332,6 +334,13 @@ struct CoreEvent: Decodable {
     let chat: String?
     let progress: FileProgress?
     let incoming: [IncomingMessage]
+}
+
+/// A clicked link after the core's checks: `url` nil = can't be opened;
+/// `simplex` set = a SimpleX link (connect instead of opening a browser).
+struct PreparedLink: Decodable {
+    let url: String?
+    let simplex: String?
 }
 
 struct ReceiveResult: Decodable {

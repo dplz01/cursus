@@ -268,6 +268,12 @@ struct ChatRow: View {
     let chat: Chat
     let selected: Bool
     let action: () -> Void
+    @AppStorage(Prefs.chatPreviews) private var previews = true
+
+    private var previewText: String {
+        if chat.pendingRequestId != nil { return "Wants to connect" }
+        return previews ? chat.preview : ""
+    }
 
     var body: some View {
         Button(action: action) {
@@ -287,7 +293,7 @@ struct ChatRow: View {
                         }
                     }
                     HStack(alignment: .top, spacing: 4) {
-                        Text(chat.pendingRequestId != nil ? "Wants to connect" : chat.preview)
+                        Text(previewText)
                             .font(.cMeta)
                             .foregroundColor(chat.pendingRequestId != nil ? Theme.gold : Theme.secondaryText)
                             .lineLimit(2)

@@ -122,13 +122,16 @@ enum Radius {
     static let bubble: CGFloat = 16
 }
 
-/// Type scale (desktop): title 18 / body 14 / meta 12.
+/// Type scale (desktop): title 18 / body 14 / meta 12, times the text size
+/// chosen in Settings → Appearance (RootView rebuilds when it changes).
 extension Font {
-    static let cTitle = Font.system(size: 18, weight: .semibold)
-    static let cBody = Font.system(size: 14)
-    static let cBodyBold = Font.system(size: 14, weight: .semibold)
-    static let cMeta = Font.system(size: 12)
-    static let cMetaBold = Font.system(size: 12, weight: .semibold)
+    private static var scale: CGFloat { Prefs.currentTextSize.scale }
+
+    static var cTitle: Font { .system(size: 18 * scale, weight: .semibold) }
+    static var cBody: Font { .system(size: 14 * scale) }
+    static var cBodyBold: Font { .system(size: 14 * scale, weight: .semibold) }
+    static var cMeta: Font { .system(size: 12 * scale) }
+    static var cMetaBold: Font { .system(size: 12 * scale, weight: .semibold) }
 }
 
 /// Cursus's own outlined icons (linux/assets/icons, converted to vector PDF

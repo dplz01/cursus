@@ -88,8 +88,25 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, String> {
             Ok(Value::Null)
         }
         "selfTest" => self_test(p),
+        "prepareLink" => prepare_link(p),
+        // Executables a sender named are never opened (core safety rule).
+        "riskyFile" => Ok(json!(cursus_core::safety::is_risky_to_open(std::path::Path::new(str_param(p, "path")?)))),
         _ => with_session(method, p),
     }
+}
+
+/// A link clicked in a message: SimpleX links go to the connect flow; other
+/// links only when safe (web / mail / phone), tracking codes removed when
+/// `clean` is on. `{ url, simplex }`, or `{ url: null }` when it can't open.
+fn prepare_link(p: &Value) -> Result<Value, String> {
+    use cursus_core::safety::{safe_external_url, strip_tracking_params};
+    let raw = str_param(p, "url")?;
+    if let Some(kind) = cursus_core::SimplexLinkKind::from_uri(raw) {
+        return Ok(json!({ "url": raw, "simplex": dto::simplex_kind(kind) }));
+    }
+    let clean = p.get("clean").and_then(Value::as_bool).unwrap_or(true);
+    let url = safe_external_url(raw).map(|u| if clean { strip_tracking_params(&u) } else { u });
+    Ok(json!({ "url": url, "simplex": null }))
 }
 
 fn app_info() -> Value {
@@ -505,5 +522,21 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             Ok(Value::Null)
         }
         other => Err(format!("unknown method: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn links_are_checked_and_cleaned() {
+        let web = prepare_link(&json!({ "url": "https://a.b/x?utm_source=n&id=1" })).unwrap();
+        assert_eq!(web["url"], "https://a.b/x?id=1");
+        let kept = prepare_link(&json!({ "url": "https://a.b/x?utm_source=n", "clean": false })).unwrap();
+        assert_eq!(kept["url"], "https://a.b/x?utm_source=n");
+        assert_eq!(prepare_link(&json!({ "url": "file:///etc/passwd" })).unwrap()["url"], Value::Null);
+        let sx = prepare_link(&json!({ "url": "https://simplex.chat/contact#/?v=2-7&smp=x" })).unwrap();
+        assert!(sx["simplex"].is_string(), "{sx}");
     }
 }

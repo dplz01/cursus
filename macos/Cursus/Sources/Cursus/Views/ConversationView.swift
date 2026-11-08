@@ -70,6 +70,11 @@ struct ConversationView: View {
         .background(Color.clear.sheet(item: $model.infoMessage) { message in
             MessageInfoSheet(message: message).environmentObject(model)
         })
+        // Message links are untrusted: checked by the core and confirmed.
+        .environment(\.openURL, OpenURLAction { url in
+            model.openLink(url)
+            return .handled
+        })
         .onDrop(of: [UTType.fileURL], isTargeted: $dropTargeted, perform: drop)
         .overlay {
             if dropTargeted {
@@ -492,6 +497,10 @@ struct AttachmentView: View {
     let file: FileAttachment
     let messageId: Int64
     @State private var image: NSImage?
+    @AppStorage(Prefs.blurMedia) private var blurMedia = false
+
+    /// Blurred until clicked when "Blur photos and videos" is on.
+    private var hidden: Bool { blurMedia && !model.revealedMessages.contains(messageId) }
 
     var body: some View {
         if file.kind == "image" && file.isComplete {
@@ -501,9 +510,26 @@ struct AttachmentView: View {
                         .resizable()
                         .scaledToFit()
                         .frame(maxWidth: 300, maxHeight: 320)
+                        .blur(radius: hidden ? 24 : 0)
                         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-                        .onTapGesture { Task { await model.open(file) } }
-                        .help("Open in Preview")
+                        .overlay {
+                            if hidden {
+                                Text("Click to show")
+                                    .font(.cMetaBold)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Capsule().fill(Color.black.opacity(0.45)))
+                            }
+                        }
+                        .onTapGesture {
+                            if hidden {
+                                model.revealedMessages.insert(messageId)
+                            } else {
+                                Task { await model.open(file) }
+                            }
+                        }
+                        .help(hidden ? "Show photo" : "Open in Preview")
                 } else {
                     RoundedRectangle(cornerRadius: 10)
                         .fill(Color.primary.opacity(0.06))
@@ -649,7 +675,10 @@ struct VoiceView: View {
 struct ComposerView: View {
     @EnvironmentObject private var model: AppModel
     let chat: Chat
-    @FocusState private var focused: Bool
+    @AppStorage(Prefs.enterSends) private var enterSends = true
+    @State private var fieldHeight = ComposerField.lineHeight
+    /// Bumped to give the field the keyboard focus.
+    @State private var focusToken = 0
 
     private var canSend: Bool {
         !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -668,17 +697,26 @@ struct ComposerView: View {
                 contextBar
                 HStack(spacing: 6) {
                     IconTool(icon: "sf:paperclip", help: "Send a file", action: attach)
-                    TextField(placeholder, text: $model.draft)
-                        .textFieldStyle(.plain)
-                        .font(.cBody)
-                        .focused($focused)
-                        .onSubmit(send)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        .background(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).fill(Theme.fieldFill))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                                .strokeBorder(focused ? Theme.accent : Theme.border, lineWidth: 1))
+                    ZStack(alignment: .topLeading) {
+                        ComposerField(text: $model.draft, height: $fieldHeight, enterSends: enterSends,
+                                      focusToken: focusToken, onSend: send,
+                                      onEscape: { model.cancelCompose() })
+                            .frame(height: fieldHeight)
+                        if model.draft.isEmpty {
+                            Text(placeholder)
+                                .font(.cBody)
+                                .foregroundColor(Theme.mutedText)
+                                .padding(.top, 2)
+                                .padding(.leading, 5) // NSTextView line-fragment padding
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).fill(Theme.fieldFill))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                            .strokeBorder(Theme.border, lineWidth: 1))
                     Button(action: send) {
                         CIcon("send", size: 18, color: canSend ? Theme.accentOn : Theme.mutedText)
                             .frame(width: 34, height: 34)
@@ -686,15 +724,14 @@ struct ComposerView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!canSend)
-                    .help("Send (Return)")
+                    .help(enterSends ? "Send (Return)" : "Send (⌘Return)")
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
             }
             .background(Theme.list)
-            .onAppear { focused = true }
-            .onChange(of: model.composeMode) { _ in focused = true }
-            .onExitCommand { model.cancelCompose() }
+            .onAppear { focusToken += 1 }
+            .onChange(of: model.composeMode) { _ in focusToken += 1 }
         }
     }
 

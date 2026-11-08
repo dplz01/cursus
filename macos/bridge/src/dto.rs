@@ -163,6 +163,16 @@ fn color_name(c: FormatColor) -> &'static str {
     }
 }
 
+pub fn simplex_kind(k: SimplexLinkKind) -> &'static str {
+    match k {
+        SimplexLinkKind::Invitation => "invitation",
+        SimplexLinkKind::Address => "address",
+        SimplexLinkKind::Group => "group",
+        SimplexLinkKind::Channel => "channel",
+        SimplexLinkKind::Relay => "relay",
+    }
+}
+
 fn segment(s: &TextSegment) -> Value {
     let (style, color) = match s.style {
         TextStyle::Plain => ("plain", None),
@@ -179,13 +189,7 @@ fn segment(s: &TextSegment) -> Value {
         TextStyle::Mention => ("mention", None),
         TextStyle::Command => ("command", None),
     };
-    let simplex = s.simplex.map(|k| match k {
-        SimplexLinkKind::Invitation => "invitation",
-        SimplexLinkKind::Address => "address",
-        SimplexLinkKind::Group => "group",
-        SimplexLinkKind::Channel => "channel",
-        SimplexLinkKind::Relay => "relay",
-    });
+    let simplex = s.simplex.map(simplex_kind);
     json!({ "text": s.text, "style": style, "color": color, "link": s.link, "simplex": simplex })
 }
 
@@ -215,6 +219,8 @@ fn file(f: &FileInfo) -> Value {
         "nonce": f.crypto_nonce,
         "progress": f.progress_fraction(),
         "error": f.error_detail,
+        // The official client downloads this by itself (core rule).
+        "autoReceive": f.should_auto_receive(),
     })
 }
 

@@ -58,8 +58,10 @@ struct SettingsDetailView: View {
             Page {
                 switch model.settingsPage ?? .profile {
                 case .profile: ProfilePage()
+                case .address: AddressPage()
                 case .privacy: PrivacyPage()
                 case .notifications: NotificationsPage()
+                case .appearance: AppearancePage()
                 case .about: AboutPage()
                 }
             }
@@ -179,32 +181,128 @@ private struct ProfilePage: View {
     }
 }
 
+/// Asks before a setting makes you less private (Linux: the same warnings).
+enum PrivacyConfirm {
+    static func ask(_ title: String, _ detail: String, action: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: action)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+/// A toggle stored in UserDefaults; turning it to `riskyValue` asks first.
+private struct GuardedToggle: View {
+    let label: String
+    var note: String? = nil
+    let key: String
+    let defaultValue: Bool
+    let riskyValue: Bool
+    let warning: (title: String, detail: String, action: String)
+    @State private var value = false
+
+    var body: some View {
+        ToggleRow(label: label, note: note, isOn: Binding(
+            get: { value },
+            set: { new in
+                if new == riskyValue && !PrivacyConfirm.ask(warning.title, warning.detail, action: warning.action) {
+                    return
+                }
+                value = new
+                UserDefaults.standard.set(new, forKey: key)
+            }))
+            .onAppear { value = Prefs.bool(key, default: defaultValue) }
+    }
+}
+
 private struct PrivacyPage: View {
     @EnvironmentObject private var model: AppModel
+    @AppStorage(Prefs.lockAfter) private var lockAfter = LockAfter.never.rawValue
     @State private var remember = Keychain.hasPassword
     @State private var confirmWipe = false
 
     var body: some View {
-        SettingsSection(icon: "check-read", title: "Delivery receipts",
-                        subtitle: "Let senders see that their messages arrived.") {
-            ToggleRow(label: "Send receipts to contacts", isOn: Binding(
-                get: { model.user?.sendRcptsContacts ?? true },
-                set: { on in Task { await model.setDeliveryReceipts(groups: false, on: on) } }))
-            ToggleRow(label: "Send receipts in small groups", isOn: Binding(
-                get: { model.user?.sendRcptsSmallGroups ?? true },
-                set: { on in Task { await model.setDeliveryReceipts(groups: true, on: on) } }))
-        }
-        SettingsSection(icon: "lock", title: "This Mac", subtitle: "How Cursus keeps your data here.") {
-            ToggleRow(label: "Encrypt received files", isOn: Binding(
-                get: { model.info?.encryptLocalFiles ?? true },
-                set: { on in Task { await model.setEncryptLocalFiles(on) } }))
+        SettingsSection(icon: "lock", title: "Lock", subtitle: "Who can open Cursus on this Mac.") {
+            PrefRow(label: "Lock Cursus", note: "Closes your chats; the database password opens them again.") {
+                Picker("", selection: $lockAfter) {
+                    ForEach(LockAfter.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+            }
             ToggleRow(label: "Remember database password in Keychain",
                       note: remember && !Keychain.hasPassword ? "The password is saved the next time you unlock." : nil,
                       isOn: $remember)
                 .onChange(of: remember) { on in
                     if !on { Keychain.delete() }
                 }
-            ActionTile(icon: "lock", title: "Lock now") { model.lock() }
+            ActionTile(icon: "lock", title: "Lock now (⇧⌘L)") { model.lock() }
+        }
+        SettingsSection(icon: "shield-check", title: "Screen", subtitle: "What someone looking at your screen sees.") {
+            GuardedToggle(label: "Show message previews", note: "The last message under each chat.",
+                          key: Prefs.chatPreviews, defaultValue: true, riskyValue: true,
+                          warning: ("Show message previews?",
+                                    "The last message of every chat will be visible in the chat list to anyone who can see your screen.",
+                                    "Show previews"))
+            GuardedToggle(label: "Blur photos and videos", note: "Click to see them.",
+                          key: Prefs.blurMedia, defaultValue: false, riskyValue: false,
+                          warning: ("Stop blurring media?",
+                                    "Photos and videos will be shown in full in your chats, visible to anyone who can see your screen.",
+                                    "Show media"))
+        }
+        SettingsSection(icon: "download", title: "Files and links", subtitle: "What Cursus fetches and opens for you.") {
+            GuardedToggle(label: "Download media automatically", note: "Images, voice messages and short videos.",
+                          key: Prefs.autoDownload, defaultValue: true, riskyValue: true,
+                          warning: ("Download media automatically?",
+                                    "Images, voice messages and short videos from anyone who writes to you will download without asking — including from strangers in groups.",
+                                    "Download automatically"))
+            GuardedToggle(label: "Protect IP address",
+                          note: "Ask before downloading from file servers you don't use.",
+                          key: Prefs.protectIP, defaultValue: true, riskyValue: false,
+                          warning: ("Stop protecting your IP address?",
+                                    "Files will download from any server the sender chooses, including automatic downloads. Without Tor or VPN, those servers see your IP address.",
+                                    "Turn off"))
+            ToggleRow(label: "Encrypt stored files", isOn: Binding(
+                get: { model.info?.encryptLocalFiles ?? true },
+                set: { on in
+                    if !on && !PrivacyConfirm.ask(
+                        "Store new files unencrypted?",
+                        "Photos, videos, voice messages and files you send or receive from now on will be saved readable on disk. Files already stored stay encrypted.",
+                        action: "Store unencrypted") { return }
+                    Task { await model.setEncryptLocalFiles(on) }
+                }))
+            GuardedToggle(label: "Remove tracking from links",
+                          note: "Drops codes like utm_source before opening a link.",
+                          key: Prefs.cleanLinks, defaultValue: true, riskyValue: false,
+                          warning: ("Keep tracking codes in links?",
+                                    "Links will open exactly as sent, including codes like utm_source or fbclid that let websites track where you came from.",
+                                    "Keep codes"))
+        }
+        SettingsSection(icon: "check-read", title: "What contacts see",
+                        subtitle: "Let senders see that their messages arrived.") {
+            ToggleRow(label: "Delivery receipts to contacts", isOn: Binding(
+                get: { model.user?.sendRcptsContacts ?? true },
+                set: { on in
+                    if on && !PrivacyConfirm.ask("Send delivery receipts?",
+                                                 "Your contacts will see when their messages reach this Mac.",
+                                                 action: "Send receipts") { return }
+                    Task { await model.setDeliveryReceipts(groups: false, on: on) }
+                }))
+            ToggleRow(label: "Delivery receipts in small groups", isOn: Binding(
+                get: { model.user?.sendRcptsSmallGroups ?? true },
+                set: { on in
+                    if on && !PrivacyConfirm.ask("Send delivery receipts?",
+                                                 "Members of small groups will see when their messages reach this Mac.",
+                                                 action: "Send receipts") { return }
+                    Task { await model.setDeliveryReceipts(groups: true, on: on) }
+                }))
+        }
+        SettingsSection(icon: "trash-delete", title: "Data on this Mac", subtitle: "Erase everything Cursus stored here.") {
             if confirmWipe {
                 InlineConfirm(question: "Erase all Cursus data on this Mac?",
                               detail: "All chats, contacts and files stored on this Mac are deleted. This can't be undone.",
@@ -221,15 +319,86 @@ private struct PrivacyPage: View {
     }
 }
 
+/// Your SimpleX address: the link, sharing it on your profile, auto-accept.
+private struct AddressPage: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var link: ConnLink?
+    @State private var autoAccept = false
+    @State private var loading = true
+
+    var body: some View {
+        SettingsSection(icon: "link-minimalistic-2", title: "Your address",
+                        subtitle: "A link anyone can use to send you a contact request. You can change who gets in.") {
+            if let link = link {
+                LinkBox(text: link.short ?? link.display, copyText: link.short ?? link.full)
+            } else if loading {
+                ProgressView().controlSize(.small).padding(8)
+            }
+            ToggleRow(label: "Share address on profile",
+                      note: "Your contacts see it and can pass it on.",
+                      isOn: Binding(
+                        get: { !(model.user?.contactLink ?? "").isEmpty },
+                        set: { on in Task { await model.setProfileAddress(on) } }))
+            ToggleRow(label: "Auto-accept contact requests",
+                      note: "Anyone with the link connects without asking you.",
+                      isOn: Binding(
+                        get: { autoAccept },
+                        set: { on in Task { autoAccept = await model.setAddressAutoAccept(on) } }))
+        }
+        .task {
+            link = await model.addressLink()
+            autoAccept = await model.addressAutoAccept()
+            loading = false
+        }
+    }
+}
+
+private struct AppearancePage: View {
+    @AppStorage(Prefs.theme) private var theme = AppTheme.system.rawValue
+    @AppStorage(Prefs.textSize) private var textSize = TextSize.medium.rawValue
+    @AppStorage(Prefs.enterSends) private var enterSends = true
+
+    var body: some View {
+        SettingsSection(icon: "image-square", title: "Appearance", subtitle: "How Cursus looks on this Mac.") {
+            PrefRow(label: "Theme") {
+                Picker("", selection: $theme) {
+                    ForEach(AppTheme.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+            PrefRow(label: "Text size") {
+                Picker("", selection: $textSize) {
+                    ForEach(TextSize.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+            }
+        }
+        SettingsSection(icon: "edit-3", title: "Typing", subtitle: "The message field.") {
+            ToggleRow(label: "Enter sends messages",
+                      note: enterSends ? "Shift+Enter starts a new line." : "Enter starts a new line; ⌘Enter sends.",
+                      isOn: $enterSends)
+        }
+    }
+}
+
 private struct NotificationsPage: View {
     @AppStorage(AppModel.notificationsEnabledKey) private var enabled = true
-    @AppStorage(AppModel.notificationsHideTextKey) private var hideText = false
 
     var body: some View {
         SettingsSection(icon: "sf:bell", title: "Notifications",
                         subtitle: Notifier.available ? "Banners and sounds for new messages." : "Notifications need Cursus to run as Cursus.app.") {
             ToggleRow(label: "Show notifications for new messages", isOn: $enabled)
-            ToggleRow(label: "Hide message text in notifications", isOn: $hideText)
+            GuardedToggle(label: "Hide message text in notifications",
+                          note: "Banners say only “New message”.",
+                          key: AppModel.notificationsHideTextKey, defaultValue: true, riskyValue: false,
+                          warning: ("Show message text in notifications?",
+                                    "Anyone who can see your screen will be able to read incoming messages, and Notification Center keeps them after Cursus closes.",
+                                    "Show text"))
                 .disabled(!enabled)
         }
     }

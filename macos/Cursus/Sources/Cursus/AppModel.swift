@@ -30,14 +30,17 @@ enum Destination: String, CaseIterable, Identifiable {
 }
 
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case profile, privacy, notifications, about
+    // Linux order.
+    case profile, address, privacy, notifications, appearance, about
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .profile: return "Profile"
+        case .address: return "Address"
         case .privacy: return "Privacy & security"
         case .notifications: return "Notifications"
+        case .appearance: return "Appearance"
         case .about: return "About"
         }
     }
@@ -45,8 +48,10 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .profile: return "user-alt-1"
+        case .address: return "link-minimalistic-2"
         case .privacy: return "shield-check"
         case .notifications: return "sf:bell"
+        case .appearance: return "image-square"
         case .about: return "info-circle"
         }
     }
@@ -54,8 +59,10 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .profile: return "Name, picture and bio"
-        case .privacy: return "Receipts, files, password"
+        case .address: return "How people reach you"
+        case .privacy: return "Lock, screen, files and receipts"
         case .notifications: return "Banners for new messages"
+        case .appearance: return "Theme, text size and typing"
         case .about: return "Version, data and licences"
         }
     }
@@ -117,11 +124,18 @@ final class AppModel: ObservableObject {
     private var notificationsEnabled: Bool {
         UserDefaults.standard.object(forKey: Self.notificationsEnabledKey) as? Bool ?? true
     }
+    /// On by default (Linux too): banners say only "New message".
     private var notificationsHideText: Bool {
-        UserDefaults.standard.bool(forKey: Self.notificationsHideTextKey)
+        UserDefaults.standard.object(forKey: Self.notificationsHideTextKey) as? Bool ?? true
     }
 
     private var pump: EventPump?
+    private lazy var idleLock = IdleLock { [weak self] in
+        guard let self = self, self.phase == .ready else { return }
+        self.lock()
+    }
+    /// Files already asked for (auto-download), so each is requested once.
+    private var autoReceived: Set<Int64> = []
     private var chatsRefresh: Task<Void, Never>?
     private var messagesRefresh: Task<Void, Never>?
     private var drafts: [String: String] = [:]
@@ -205,6 +219,7 @@ final class AppModel: ObservableObject {
             }
             info = try? await Core.call("appInfo", as: AppInfo.self)
             phase = .ready
+            idleLock.start()
             Notifier.requestAuthorization()
             await reloadChats()
         } catch {
@@ -307,6 +322,7 @@ final class AppModel: ObservableObject {
             let list = try await Core.call("listMessages", ["chat": ref, "count": pageSize], as: [Message].self)
             guard selection == ref else { return }
             if list != messages { messages = list }
+            autoDownload(list)
         } catch {
             report(error)
         }
@@ -763,7 +779,22 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Images, voice and short videos download by themselves (official
+    /// caps, decided by the core). With "Protect IP address" on, files on
+    /// servers you don't use are skipped; Download asks for them later.
+    private func autoDownload(_ list: [Message]) {
+        guard Prefs.autoDownloadOn else { return }
+        for message in list where !message.outgoing {
+            guard let file = message.file, file.autoReceive == true, file.state == "offer",
+                  !autoReceived.contains(file.id) else { continue }
+            autoReceived.insert(file.id)
+            let approved = !Prefs.protectIPOn
+            Task { _ = try? await Core.call("receiveFile", ["fileId": file.id, "approved": approved], as: ReceiveResult.self) }
+        }
+    }
+
     func download(_ file: FileAttachment, approved: Bool = false) async {
+        let approved = approved || !Prefs.protectIPOn
         do {
             let result = try await Core.call("receiveFile", ["fileId": file.id, "approved": approved], as: ReceiveResult.self)
             if !result.accepted {
@@ -797,7 +828,44 @@ final class AppModel: ObservableObject {
 
     func open(_ file: FileAttachment) async {
         guard let url = await readablePath(file) else { return }
+        // A sender names the file: never launch something that could run code.
+        let risky = (try? await Core.call("riskyFile", ["path": url.path], as: Bool.self)) ?? true
+        if risky {
+            errorMessage = "This file type could run code, so Cursus won't open it. Use Save As… if you trust it."
+            return
+        }
         NSWorkspace.shared.open(url)
+    }
+
+    /// A link clicked in a message: checked by the core (only web / mail /
+    /// phone; tracking codes removed when "Clean links" is on), then opened
+    /// after you confirm. SimpleX links offer to connect instead.
+    func openLink(_ url: URL) {
+        Task {
+            let prepared = try? await Core.call(
+                "prepareLink", ["url": url.absoluteString, "clean": Prefs.cleanLinksOn], as: PreparedLink.self)
+            guard let target = prepared?.url, !target.isEmpty else {
+                errorMessage = "This kind of link can't be opened from Cursus."
+                return
+            }
+            let alert = NSAlert()
+            if prepared?.simplex != nil {
+                alert.messageText = "Connect via this SimpleX link?"
+                alert.informativeText = target
+                alert.addButton(withTitle: "Connect")
+            } else {
+                alert.messageText = "Open this link?"
+                alert.informativeText = target
+                alert.addButton(withTitle: "Open")
+            }
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            if prepared?.simplex != nil {
+                _ = await connect(link: target)
+            } else if let open = URL(string: target) {
+                NSWorkspace.shared.open(open)
+            }
+        }
     }
 
     func saveAs(_ file: FileAttachment) async {
@@ -894,6 +962,30 @@ final class AppModel: ObservableObject {
     func setDeliveryReceipts(groups: Bool, on: Bool) async {
         do {
             user = try await Core.call("setDeliveryReceipts", ["groups": groups, "on": on], as: User.self)
+        } catch {
+            report(error)
+        }
+    }
+
+    // MARK: - Address
+
+    func addressAutoAccept() async -> Bool {
+        (try? await Core.call("addressAutoAccept", as: Bool.self)) ?? false
+    }
+
+    func setAddressAutoAccept(_ on: Bool) async -> Bool {
+        do {
+            return try await Core.call("setAddressAutoAccept", ["on": on], as: Bool.self)
+        } catch {
+            report(error)
+            return !on
+        }
+    }
+
+    /// Show your address on your profile (contacts can share it).
+    func setProfileAddress(_ on: Bool) async {
+        do {
+            user = try await Core.call("setProfileAddress", ["on": on], as: User.self)
         } catch {
             report(error)
         }

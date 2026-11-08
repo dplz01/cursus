@@ -3,10 +3,16 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
+    @AppStorage(Prefs.theme) private var theme = AppTheme.system.rawValue
+    @AppStorage(Prefs.textSize) private var textSize = TextSize.medium.rawValue
 
     var body: some View {
         content
+            // Fonts read the text size when built: rebuild on change.
+            .id(textSize)
             .background(WindowChrome())
+            .onAppear { Prefs.currentTheme.apply() }
+            .onChange(of: theme) { _ in Prefs.currentTheme.apply() }
             .task { await model.bootstrap() }
             .alert("Cursus", isPresented: errorShown) {
                 Button("OK", role: .cancel) { model.errorMessage = nil }

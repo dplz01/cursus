@@ -14,6 +14,12 @@ struct ComposerField: NSViewRepresentable {
     let focusToken: Int
     let onSend: () -> Void
     let onEscape: () -> Void
+    /// Return while emoji suggestions show: accept one. `true` = handled.
+    var onAccept: () -> Bool = { false }
+    /// Tab / Shift+Tab: cycle the suggestions. `true` = handled.
+    var onTab: (_ backwards: Bool) -> Bool = { _ in false }
+    /// ↑ in an empty field: edit your last message. `true` = handled.
+    var onUp: () -> Bool = { false }
 
     static let maxLines: CGFloat = 6
 
@@ -41,6 +47,10 @@ struct ComposerField: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.onKey = { [weak coordinator = context.coordinator] key in
             coordinator?.handle(key) ?? false
+        }
+        // Narrower / wider window: lines re-wrap, so the height changes.
+        textView.onWidthChange = { [weak coordinator = context.coordinator] in
+            DispatchQueue.main.async { coordinator?.updateHeight() }
         }
 
         let scroll = NSScrollView()
@@ -98,7 +108,12 @@ struct ComposerField: NSViewRepresentable {
             case .escape:
                 parent.onEscape()
                 return true
+            case .tab(let backwards):
+                return parent.onTab(backwards)
+            case .up:
+                return parent.text.isEmpty && parent.onUp()
             case .returnKey(let modifiers):
+                if modifiers.subtracting(.numericPad).isEmpty, parent.onAccept() { return true }
                 let send: Bool
                 if parent.enterSends {
                     send = !modifiers.contains(.shift) && !modifiers.contains(.option)
@@ -133,9 +148,18 @@ final class KeyTextView: NSTextView {
     enum Key {
         case returnKey(NSEvent.ModifierFlags)
         case escape
+        case tab(backwards: Bool)
+        case up
     }
 
     var onKey: ((Key) -> Bool)?
+    var onWidthChange: (() -> Void)?
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let oldWidth = frame.width
+        super.setFrameSize(newSize)
+        if abs(oldWidth - newSize.width) > 0.5 { onWidthChange?() }
+    }
 
     override func keyDown(with event: NSEvent) {
         // While an input method is composing (accents, CJK), keys are its.
@@ -149,6 +173,11 @@ final class KeyTextView: NSTextView {
             if onKey?(.returnKey(modifiers)) == true { return }
         case 53: // Esc
             if onKey?(.escape) == true { return }
+        case 48: // Tab
+            if onKey?(.tab(backwards: modifiers.contains(.shift))) == true { return }
+        case 126: // ↑
+            if modifiers.intersection([.command, .option, .control, .shift]).isEmpty,
+               onKey?(.up) == true { return }
         default:
             break
         }

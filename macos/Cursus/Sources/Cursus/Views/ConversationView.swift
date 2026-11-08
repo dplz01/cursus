@@ -8,6 +8,9 @@ struct ConversationView: View {
     let chat: Chat
     @State private var dropTargeted = false
     @State private var shownCount = 0
+    /// The end of the history is on screen (new incoming messages follow).
+    @State private var atBottom = true
+    @State private var viewportHeight: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,20 +34,49 @@ struct ConversationView: View {
                             ProgressView().padding(30)
                         }
                         ForEach(model.messages) { message in
+                            if message.id == model.newMessagesFrom {
+                                NewMessagesDivider()
+                            }
                             MessageRow(message: message, showSender: chat.isGroup && !message.outgoing,
                                        inNotes: chat.isNotes)
                                 .id(message.id)
                         }
+                        // Where the end of the history is (see `atBottom`).
+                        Color.clear
+                            .frame(height: 1)
+                            .background(GeometryReader { geo in
+                                Color.clear.preference(key: HistoryEndKey.self,
+                                                       value: geo.frame(in: .named("history")).minY)
+                            })
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                 }
+                .coordinateSpace(name: "history")
+                .background(GeometryReader { geo in
+                    Color.clear
+                        .onAppear { viewportHeight = geo.size.height }
+                        .onChange(of: geo.size.height) { viewportHeight = $0 }
+                })
+                .onPreferenceChange(HistoryEndKey.self) { endY in
+                    atBottom = endY <= viewportHeight + 80
+                }
                 .background(Theme.panel)
                 .onChange(of: model.messages.last?.id) { _ in
-                    // First load jumps; new messages after that animate.
-                    let animate = shownCount > 0
+                    let firstLoad = shownCount == 0
                     shownCount = model.messages.count
-                    scrollToBottom(proxy, animated: animate)
+                    if firstLoad {
+                        // Opened with unread messages: start at the first one.
+                        if let from = model.newMessagesFrom {
+                            proxy.scrollTo(from, anchor: .top)
+                        } else {
+                            scrollToBottom(proxy, animated: false)
+                        }
+                    } else if model.messages.last?.outgoing == true || atBottom {
+                        // Your message, or you're reading the end: follow it.
+                        // Otherwise stay put; the divider marks what's new.
+                        scrollToBottom(proxy, animated: true)
+                    }
                 }
                 .onChange(of: model.composeMode) { mode in
                     if mode != .new { scrollToBottom(proxy, animated: true) }
@@ -129,6 +161,31 @@ struct ConversationView: View {
             Task { await model.sendFiles(urls) }
         }
         return true
+    }
+}
+
+/// Bottom edge of the history in its scroll view (∞ when not laid out).
+private struct HistoryEndKey: PreferenceKey {
+    static var defaultValue: CGFloat = .infinity
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = min(value, nextValue())
+    }
+}
+
+/// "New messages" line + pill above the first message that just arrived.
+struct NewMessagesDivider: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Rectangle().fill(Theme.accent.opacity(0.45)).frame(height: 1)
+            Text("New messages")
+                .font(.cMetaBold)
+                .foregroundColor(Theme.accent)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Theme.accentSoft))
+            Rectangle().fill(Theme.accent.opacity(0.45)).frame(height: 1)
+        }
+        .padding(.top, 8)
     }
 }
 
@@ -679,9 +736,20 @@ struct ComposerView: View {
     @State private var fieldHeight = ComposerField.lineHeight
     /// Bumped to give the field the keyboard focus.
     @State private var focusToken = 0
+    /// What's typed, kept here: writing every keystroke into the app-wide
+    /// draft re-rendered the whole window (typing lagged). The draft gets it
+    /// after a short pause, and right away when sending.
+    @State private var text = ""
+    @State private var pushedDraft = ""
+    @State private var draftSync: Task<Void, Never>?
+    @State private var editing = false
+    /// `:shortcode` suggestions for what's typed (core rules).
+    @State private var suggestions: [EmojiHit] = []
+    @State private var suggestIndex = 0
+    @State private var emojiTask: Task<Void, Never>?
 
     private var canSend: Bool {
-        !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -695,14 +763,18 @@ struct ComposerView: View {
         } else {
             VStack(spacing: 0) {
                 contextBar
+                if !suggestions.isEmpty { suggestionStrip }
                 HStack(spacing: 6) {
                     IconTool(icon: "sf:paperclip", help: "Send a file", action: attach)
                     ZStack(alignment: .topLeading) {
-                        ComposerField(text: $model.draft, height: $fieldHeight, enterSends: enterSends,
+                        ComposerField(text: $text, height: $fieldHeight, enterSends: enterSends,
                                       focusToken: focusToken, onSend: send,
-                                      onEscape: { model.cancelCompose() })
+                                      onEscape: escape,
+                                      onAccept: acceptHighlighted,
+                                      onTab: cycleSuggestion,
+                                      onUp: { model.editLastOutgoing() })
                             .frame(height: fieldHeight)
-                        if model.draft.isEmpty {
+                        if text.isEmpty {
                             Text(placeholder)
                                 .font(.cBody)
                                 .foregroundColor(Theme.mutedText)
@@ -730,8 +802,28 @@ struct ComposerView: View {
                 .padding(.vertical, 8)
             }
             .background(Theme.list)
-            .onAppear { focusToken += 1 }
-            .onChange(of: model.composeMode) { _ in focusToken += 1 }
+            .onAppear {
+                text = model.draft
+                pushedDraft = model.draft
+                focusToken += 1
+            }
+            .onChange(of: model.composeMode) { mode in
+                focusToken += 1
+                if case .edit = mode { editing = true } else { editing = false }
+            }
+            .onChange(of: text) { new in
+                scheduleDraftSync(new)
+                updateEmoji(new)
+            }
+            // The model changed the draft (edit starts, send clears it).
+            .onChange(of: model.draft) { new in
+                guard new != pushedDraft else { return }
+                pushedDraft = new
+                text = new
+            }
+            // Switching chats: keep what was typed for this chat (an edit
+            // in progress isn't a draft).
+            .onDisappear { model.saveDraft(editing ? "" : text, for: chat.ref) }
         }
     }
 
@@ -770,7 +862,108 @@ struct ComposerView: View {
 
     private func send() {
         guard canSend else { return }
+        pushDraft(text)
         Task { await model.send() }
+    }
+
+    // MARK: Emoji shortcodes
+
+    private var suggestionStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(Array(suggestions.enumerated()), id: \.element) { index, hit in
+                    Button { accept(index) } label: {
+                        HStack(spacing: 4) {
+                            Text(hit.glyph).font(.system(size: 18))
+                            Text(":\(hit.shortcode):").font(.cMeta).foregroundColor(Theme.secondaryText)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                            .fill(index == suggestIndex ? Theme.accentSoft : Color.clear))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Insert (Return) · next (Tab)")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+        }
+    }
+
+    /// Completed `:shortcodes:` turn into emoji as you type; an open
+    /// `:query` shows suggestions. Both decided by the core.
+    private func updateEmoji(_ value: String) {
+        emojiTask?.cancel()
+        guard value.contains(":") else {
+            suggestions = []
+            return
+        }
+        emojiTask = Task { @MainActor in
+            let expanded = await model.expandShortcodes(value)
+            guard !Task.isCancelled, value == text else { return }
+            if expanded != value {
+                suggestions = []
+                text = expanded
+                return
+            }
+            let hits = await model.emojiSuggestions(for: value)
+            guard !Task.isCancelled, value == text else { return }
+            if hits != suggestions { suggestIndex = 0 }
+            suggestions = hits
+        }
+    }
+
+    private func accept(_ index: Int) {
+        guard suggestions.indices.contains(index) else { return }
+        let glyph = suggestions[index].glyph
+        let current = text
+        suggestions = []
+        Task { @MainActor in
+            if let done = await model.acceptShortcode(current, glyph: glyph), current == text {
+                text = done
+            }
+            focusToken += 1
+        }
+    }
+
+    private func acceptHighlighted() -> Bool {
+        guard !suggestions.isEmpty else { return false }
+        accept(suggestIndex)
+        return true
+    }
+
+    private func cycleSuggestion(_ backwards: Bool) -> Bool {
+        guard !suggestions.isEmpty else { return false }
+        let n = suggestions.count
+        suggestIndex = (suggestIndex + (backwards ? n - 1 : 1)) % n
+        return true
+    }
+
+    /// Esc closes the suggestions first, then a reply / edit.
+    private func escape() {
+        if !suggestions.isEmpty {
+            suggestions = []
+        } else {
+            model.cancelCompose()
+        }
+    }
+
+    private func scheduleDraftSync(_ value: String) {
+        draftSync?.cancel()
+        draftSync = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            pushDraft(value)
+        }
+    }
+
+    private func pushDraft(_ value: String) {
+        draftSync?.cancel()
+        guard model.draft != value else { return }
+        pushedDraft = value
+        model.draft = value
     }
 
     private func attach() {

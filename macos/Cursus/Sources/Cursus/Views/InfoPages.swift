@@ -36,29 +36,20 @@ struct ContactPreferencesPage: View {
         let state = prefs.features[feature.key]
         let mine = state?.mine ?? "no"
         PrefRow(icon: feature.icon, label: feature.label, note: note(state)) {
-            Picker("", selection: Binding(
-                get: { mine },
-                set: { v in Task { await model.setContactFeature(chat, feature.key, v) } })) {
-                Text("No").tag("no")
-                Text("Yes").tag("yes")
-                // Disappearing messages: "always" is the per-chat delete
-                // timer, not a negotiated preference.
-                if feature.key != "timedMessages" { Text("Always").tag("always") }
+            // Disappearing messages: no "always" (that is the per-chat delete
+            // timer, not a negotiated preference).
+            ChoiceMenu(options: feature.key == "timedMessages"
+                        ? [Choice("no", "No"), Choice("yes", "Yes")]
+                        : [Choice("no", "No"), Choice("yes", "Yes"), Choice("always", "Always")],
+                       selection: mine) { v in
+                Task { await model.setContactFeature(chat, feature.key, v) }
             }
-            .pickerStyle(.menu)
-            .fixedSize()
         }
         if feature.key == "timedMessages" && mine != "no" {
             PrefRow(icon: "system-pending-line", label: "Delete after") {
-                Picker("", selection: Binding(
-                    get: { prefs.timedTtl },
-                    set: { v in Task { await model.setContactTimedTtl(chat, v) } })) {
-                    ForEach(ttlChoices(prefs.timedTtl), id: \.self) { secs in
-                        Text(Features.duration(secs)).tag(secs)
-                    }
+                ChoiceMenu(options: ttlOptions(prefs.timedTtl), selection: prefs.timedTtl) { v in
+                    Task { await model.setContactTimedTtl(chat, v) }
                 }
-                .pickerStyle(.menu)
-                .fixedSize()
             }
         }
     }
@@ -71,8 +62,10 @@ struct ContactPreferencesPage: View {
 }
 
 /// The preset times plus the current one if it isn't a preset.
-func ttlChoices(_ current: Int64) -> [Int64] {
-    Features.timedChoices.contains(current) ? Features.timedChoices : (Features.timedChoices + [current]).sorted()
+func ttlOptions(_ current: Int64) -> [Choice<Int64>] {
+    let secs = Features.timedChoices.contains(current) ? Features.timedChoices
+        : (Features.timedChoices + [current]).sorted()
+    return secs.map { Choice($0, Features.duration($0)) }
 }
 
 // MARK: - Group preferences
@@ -129,17 +122,9 @@ struct GroupPreferencesPage: View {
         if feature.key == "timedMessages" && isOn("timedMessages") {
             let ttl = prefs?.timedTtl ?? 86_400
             PrefRow(icon: "system-pending-line", label: "Delete after") {
-                Picker("", selection: Binding(
-                    get: { ttl },
-                    set: { v in Task { await model.setGroupFeature(chat, "timedMessages", on: true, ttl: v) } })) {
-                    ForEach(ttlChoices(ttl), id: \.self) { secs in
-                        Text(Features.duration(secs)).tag(secs)
-                    }
+                ChoiceMenu(options: ttlOptions(ttl), selection: ttl, enabled: chat.isOwner) { v in
+                    Task { await model.setGroupFeature(chat, "timedMessages", on: true, ttl: v) }
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .controlSize(.small)
-                .fixedSize()
             }
         }
     }
@@ -222,15 +207,10 @@ struct MemberPage: View {
             Card(spacing: 0) {
                 if chat.isAdmin && canManage && !member.awaitingReview {
                     PrefRow(icon: MemberRoles.icon(member.role), label: "Role") {
-                        Picker("", selection: Binding(
-                            get: { member.role },
-                            set: { role in Task { await model.setMemberRole(chat, member, role) } })) {
-                            ForEach(roleChoices, id: \.self) { role in
-                                Text(role.capitalized).tag(role)
-                            }
+                        ChoiceMenu(options: roleChoices.map { Choice($0, $0.capitalized) },
+                                   selection: member.role) { role in
+                            Task { await model.setMemberRole(chat, member, role) }
                         }
-                        .pickerStyle(.menu)
-                        .fixedSize()
                     }
                 }
                 PrefRow(icon: "eye-observer", label: "Show messages",
@@ -323,15 +303,8 @@ struct InviteMembersPage: View {
             CardTitle(icon: "user-plus-alt-1", title: "Invite contacts",
                       subtitle: "They get an invitation and join when they accept.")
             PrefRow(icon: MemberRoles.icon(role), label: "Role for new members") {
-                Picker("", selection: $role) {
-                    ForEach(MemberRoles.assignable(by: chat.role), id: \.self) { r in
-                        Text(r.capitalized).tag(r)
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .controlSize(.small)
-                .fixedSize()
+                ChoiceMenu(options: MemberRoles.assignable(by: chat.role).map { Choice($0, $0.capitalized) },
+                           selection: role) { r in role = r }
             }
             CursusField(placeholder: "Search contacts", text: $search)
             if contacts.isEmpty {
@@ -394,19 +367,11 @@ struct GroupLinkPage: View {
             }
             if !chat.isChannel && chat.isAdmin && link != nil {
                 PrefRow(icon: MemberRoles.icon(role), label: "People joining become") {
-                    Picker("", selection: Binding(
-                        get: { role },
-                        set: { r in
-                            role = r
-                            Task { await model.setGroupLinkRole(chat, r) }
-                        })) {
-                        Text("Member").tag("member")
-                        Text("Observer").tag("observer")
+                    ChoiceMenu(options: [Choice("member", "Member"), Choice("observer", "Observer")],
+                               selection: role) { r in
+                        role = r
+                        Task { await model.setGroupLinkRole(chat, r) }
                     }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .controlSize(.small)
-                    .fixedSize()
                 }
             }
         }

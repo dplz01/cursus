@@ -95,7 +95,7 @@ Same features as the Linux app, implemented natively; shared rules live in
 |---|---|---|
 | A. Messages | forward, message info, select several, jump to quoted message, reveal secret text / "marked deleted", who reacted | Done |
 | B. Settings | theme, text size, app lock after idle, privacy (protect IP, auto-download, blur media, clean tracking links, chat previews), address settings, Enter sends | Done |
-| C. Chat flow | list filters, "New messages" divider + follow your own sends, `:emoji:` shortcodes, ↑ edits last message (link-open confirmation: done in B) | Next |
-| D. Media | voice recording, video playback / gallery | Todo |
+| C. Chat flow | "New messages" divider (new arrivals, and opening a chat with unread), follow only your own sends, `:emoji:` suggestions + live expansion, ↑ edits your last message | Done |
+| D. Media | voice recording, video playback / gallery | Next |
 | E. Groups | "Chat with admins" support threads | Todo |
 | F. Calls | WebRTC engine moves from the Linux app into the core, then a native call UI | Todo |

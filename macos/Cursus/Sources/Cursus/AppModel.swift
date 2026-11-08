@@ -116,6 +116,12 @@ final class AppModel: ObservableObject {
     @Published var scrollTarget: Int64?
     @Published var highlightedMessage: Int64?
     private var highlightToken = 0
+    /// "New messages" divider above this message (Linux: 5 s after new
+    /// incoming messages, 10 s when the chat opens with unread ones).
+    @Published var newMessagesFrom: Int64?
+    private var newMessagesToken = 0
+    /// Unread count of the chat being opened (its badge clears at once).
+    private var openUnread = 0
     @Published var isLoadingMessages = false
 
     /// Settings → Notifications (`@AppStorage` with these keys in the view).
@@ -165,6 +171,10 @@ final class AppModel: ObservableObject {
     // MARK: - Startup / unlock
 
     func bootstrap() async {
+        // Once per launch. Closing the window keeps Cursus (and the open
+        // database) running; the reopened window must not start over —
+        // that showed the unlock screen and dropped the saved password.
+        guard phase == .starting else { return }
         if pump == nil {
             let pump = EventPump { [weak self] event in
                 self?.handle(event)
@@ -216,6 +226,8 @@ final class AppModel: ObservableObject {
             user = try await Core.call("open", params, as: User.self)
             if remember {
                 Keychain.save(password)
+            } else if !quiet {
+                Keychain.delete()
             }
             info = try? await Core.call("appInfo", as: AppInfo.self)
             phase = .ready
@@ -224,11 +236,13 @@ final class AppModel: ObservableObject {
             await reloadChats()
         } catch {
             let text = error.localizedDescription
+            let wrongKey = text.lowercased().contains("wrong") || text.lowercased().contains("passphrase")
+                || text.lowercased().contains("key")
             if quiet {
-                // A stale Keychain entry: forget it and ask.
-                Keychain.delete()
-            } else if text.lowercased().contains("wrong") || text.lowercased().contains("passphrase")
-                        || text.lowercased().contains("key") {
+                // Only a password the database rejects is stale; anything
+                // else (busy, already open) keeps it for next time.
+                if wrongKey { Keychain.delete() }
+            } else if wrongKey {
                 errorMessage = "Wrong password.\n\n\(text)"
             } else {
                 errorMessage = text
@@ -237,8 +251,11 @@ final class AppModel: ObservableObject {
     }
 
     func lock() {
+        // Unlock waits (busy) until the database is really closed.
+        busy = true
         Task {
             try? await Core.run("close")
+            busy = false
         }
         selection = nil
         chats = []
@@ -308,6 +325,8 @@ final class AppModel: ObservableObject {
         selectedMessages = []
         revealedMessages = []
         highlightedMessage = nil
+        newMessagesFrom = nil
+        openUnread = selection.flatMap { ref in chats.first { $0.ref == ref }?.unread } ?? 0
         guard let ref = selection else { return }
         isLoadingMessages = true
         Task {
@@ -321,7 +340,9 @@ final class AppModel: ObservableObject {
         do {
             let list = try await Core.call("listMessages", ["chat": ref, "count": pageSize], as: [Message].self)
             guard selection == ref else { return }
+            let old = messages
             if list != messages { messages = list }
+            markNewMessages(old: old, new: list)
             autoDownload(list)
         } catch {
             report(error)
@@ -650,6 +671,12 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The composer's text for a chat it is leaving.
+    func saveDraft(_ text: String, for ref: String) {
+        guard ref != selection else { return }
+        drafts[ref] = text.isEmpty ? nil : text
+    }
+
     func startEdit(_ message: Message) {
         composeMode = .edit(message)
         draft = message.text
@@ -777,6 +804,62 @@ final class AppModel: ObservableObject {
             guard let self = self, self.highlightToken == token else { return }
             self.highlightedMessage = nil
         }
+    }
+
+    /// Opening a chat with unread messages: mark the oldest of them. Later
+    /// loads: mark the first new incoming message (the view scrolls only for
+    /// your own messages, or when you're already at the bottom).
+    private func markNewMessages(old: [Message], new: [Message]) {
+        if old.isEmpty {
+            let unread = openUnread
+            openUnread = 0
+            guard unread > 0 else { return }
+            let incoming = new.filter { !$0.outgoing && !$0.announcement }
+            if let first = incoming.suffix(unread).first { showNewMessages(from: first.id, seconds: 10) }
+            return
+        }
+        guard let lastOld = old.last?.id, let at = new.lastIndex(where: { $0.id == lastOld }) else { return }
+        let tail = new[new.index(after: at)...]
+        if let first = tail.first(where: { !$0.outgoing && !$0.announcement }) {
+            showNewMessages(from: newMessagesFrom ?? first.id, seconds: 5)
+        }
+    }
+
+    private func showNewMessages(from id: Int64, seconds: Double) {
+        newMessagesFrom = id
+        newMessagesToken += 1
+        let token = newMessagesToken
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let self = self, self.newMessagesToken == token else { return }
+            self.newMessagesFrom = nil
+        }
+    }
+
+    /// ↑ in an empty composer: edit your latest editable message.
+    func editLastOutgoing() -> Bool {
+        guard let message = messages.last(where: { $0.outgoing && $0.canEdit && $0.deleted == nil }) else { return false }
+        startEdit(message)
+        return true
+    }
+
+    // MARK: - Emoji shortcodes (core rules)
+
+    func emojiSuggestions(for text: String) async -> [EmojiHit] {
+        guard text.contains(":") else { return [] }
+        return (try? await Core.call("emojiSuggest", ["text": text], as: [EmojiHit].self)) ?? []
+    }
+
+    func acceptShortcode(_ text: String, glyph: String) async -> String? {
+        do {
+            return try await Core.call("acceptShortcode", ["text": text, "glyph": glyph], as: String?.self)
+        } catch {
+            return nil
+        }
+    }
+
+    func expandShortcodes(_ text: String) async -> String {
+        (try? await Core.call("expandShortcodes", ["text": text], as: String.self)) ?? text
     }
 
     /// Images, voice and short videos download by themselves (official

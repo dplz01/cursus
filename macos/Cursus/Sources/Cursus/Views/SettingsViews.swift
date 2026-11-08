@@ -227,13 +227,8 @@ private struct PrivacyPage: View {
     var body: some View {
         SettingsSection(icon: "lock", title: "Lock", subtitle: "Who can open Cursus on this Mac.") {
             PrefRow(label: "Lock Cursus", note: "Closes your chats; the database password opens them again.") {
-                Picker("", selection: $lockAfter) {
-                    ForEach(LockAfter.allCases) { Text($0.label).tag($0.rawValue) }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .controlSize(.small)
-                .fixedSize()
+                ChoiceMenu(options: LockAfter.allCases.map { Choice($0.rawValue, $0.label) },
+                           selection: lockAfter) { lockAfter = $0 }
             }
             ToggleRow(label: "Remember database password in Keychain",
                       note: remember && !Keychain.hasPassword ? "The password is saved the next time you unlock." : nil,
@@ -369,13 +364,8 @@ private struct AppearancePage: View {
                 .fixedSize()
             }
             PrefRow(label: "Text size") {
-                Picker("", selection: $textSize) {
-                    ForEach(TextSize.allCases) { Text($0.label).tag($0.rawValue) }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .controlSize(.small)
-                .fixedSize()
+                ChoiceMenu(options: TextSize.allCases.map { Choice($0.rawValue, $0.label) },
+                           selection: textSize) { textSize = $0 }
             }
         }
         SettingsSection(icon: "edit-3", title: "Typing", subtitle: "The message field.") {

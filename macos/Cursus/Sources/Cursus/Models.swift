@@ -336,6 +336,12 @@ struct CoreEvent: Decodable {
     let incoming: [IncomingMessage]
 }
 
+/// A `:shortcode` suggestion for the composer.
+struct EmojiHit: Decodable, Hashable {
+    let shortcode: String
+    let glyph: String
+}
+
 /// A clicked link after the core's checks: `url` nil = can't be opened;
 /// `simplex` set = a SimpleX link (connect instead of opening a browser).
 struct PreparedLink: Decodable {

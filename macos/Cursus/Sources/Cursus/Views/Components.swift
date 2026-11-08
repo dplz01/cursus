@@ -188,6 +188,56 @@ struct PencilButton: View {
     }
 }
 
+// MARK: - Choice menu
+
+/// One option of a `ChoiceMenu`.
+struct Choice<Value: Hashable>: Identifiable {
+    let value: Value
+    let label: String
+    var id: Value { value }
+
+    init(_ value: Value, _ label: String) {
+        self.value = value
+        self.label = label
+    }
+}
+
+/// Linux "choice chip": shows the current value; click for the options
+/// (a native menu, the current one ticked). Replaces menu-style Pickers,
+/// which came out greyed out / blank on macOS 12.
+struct ChoiceMenu<Value: Hashable>: View {
+    let options: [Choice<Value>]
+    let selection: Value
+    var enabled = true
+    let select: (Value) -> Void
+
+    private var current: String {
+        options.first(where: { $0.value == selection })?.label ?? ""
+    }
+
+    var body: some View {
+        Menu {
+            ForEach(options) { option in
+                Button {
+                    if option.value != selection { select(option.value) }
+                } label: {
+                    if option.value == selection {
+                        Label(option.label, systemImage: "checkmark")
+                    } else {
+                        Text(option.label)
+                    }
+                }
+            }
+        } label: {
+            Text(current).font(.cMeta)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(!enabled)
+        .foregroundColor(Theme.accent)
+    }
+}
+
 // MARK: - Pane header
 
 /// Cursus header at the top of a pane (Linux: list title, chat header,

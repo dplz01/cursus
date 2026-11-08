@@ -345,31 +345,34 @@ enum Format {
 
 // MARK: - Window chrome
 
-/// Configures the hosting NSWindow: a plain title bar ("Cursus" + traffic
-/// lights) without the system separator line — each pane draws its own
-/// Cursus header and hairline right below it.
+/// Configures the hosting NSWindow: a full-width title strip ("Cursus" +
+/// traffic lights, like Telegram) with every column below it and no system
+/// separator line — each pane draws its own Cursus header right below it.
+/// Applied whenever the view joins a window (also a window reopened from
+/// the Dock after closing the last one).
 struct WindowChrome: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { configure(view.window) }
-        return view
-    }
-
+    func makeNSView(context: Context) -> NSView { ChromeView() }
     func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { configure(nsView.window) }
+        (nsView as? ChromeView)?.apply()
     }
 
-    private func configure(_ window: NSWindow?) {
-        guard let window = window else { return }
-        window.title = "Cursus"
-        window.titleVisibility = .visible
-        // A full-width title strip with every column below it (like
-        // Telegram): the split view's sidebar otherwise runs up under the
-        // title bar and the strip covers only the detail pane.
-        if window.styleMask.contains(.fullSizeContentView) {
-            window.styleMask.remove(.fullSizeContentView)
+    final class ChromeView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
         }
-        window.titlebarAppearsTransparent = false
-        window.titlebarSeparatorStyle = .none
+
+        func apply() {
+            guard let window = window else { return }
+            window.title = "Cursus"
+            window.titleVisibility = .visible
+            // The split view's sidebar otherwise runs up under the title bar
+            // and the strip covers only the detail pane.
+            if window.styleMask.contains(.fullSizeContentView) {
+                window.styleMask.remove(.fullSizeContentView)
+            }
+            window.titlebarAppearsTransparent = false
+            window.titlebarSeparatorStyle = .none
+        }
     }
 }

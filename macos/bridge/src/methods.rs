@@ -89,6 +89,21 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, String> {
         }
         "selfTest" => self_test(p),
         "prepareLink" => prepare_link(p),
+        // Composer: `:shortcode` suggestions for what's typed, accepting one,
+        // and expanding completed `:shortcodes:` as you type (Linux too).
+        "emojiSuggest" => {
+            let text = str_param(p, "text")?;
+            let hits = cursus_core::pending_shortcode_query(text)
+                .map(|q| cursus_core::suggest_emoji_shortcodes(q, 6))
+                .unwrap_or_default();
+            Ok(Value::Array(
+                hits.iter().map(|h| json!({ "shortcode": h.shortcode, "glyph": h.glyph })).collect(),
+            ))
+        }
+        "acceptShortcode" => {
+            Ok(json!(cursus_core::accept_shortcode(str_param(p, "text")?, str_param(p, "glyph")?)))
+        }
+        "expandShortcodes" => Ok(json!(cursus_core::expand_emoji_shortcodes(str_param(p, "text")?))),
         // Executables a sender named are never opened (core safety rule).
         "riskyFile" => Ok(json!(cursus_core::safety::is_risky_to_open(std::path::Path::new(str_param(p, "path")?)))),
         _ => with_session(method, p),
@@ -222,13 +237,16 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             let msgs = s.list_messages(&chat_param(p)?, count).map_err(err)?;
             Ok(Value::Array(msgs.iter().map(dto::message).collect()))
         }
+        // Texts go out as every Cursus app sends them (core outgoing_text).
         "sendText" => {
             let quote = p.get("quote").and_then(Value::as_i64);
-            s.send_text_quoted(&chat_param(p)?, str_param(p, "text")?, quote).map_err(err)?;
+            let text = cursus_core::outgoing_text(str_param(p, "text")?);
+            s.send_text_quoted(&chat_param(p)?, &text, quote).map_err(err)?;
             Ok(Value::Null)
         }
         "updateText" => {
-            s.update_text(&chat_param(p)?, i64_param(p, "itemId")?, str_param(p, "text")?).map_err(err)?;
+            let text = cursus_core::outgoing_text(str_param(p, "text")?);
+            s.update_text(&chat_param(p)?, i64_param(p, "itemId")?, &text).map_err(err)?;
             Ok(Value::Null)
         }
         "deleteItems" => {
@@ -538,5 +556,14 @@ mod tests {
         assert_eq!(prepare_link(&json!({ "url": "file:///etc/passwd" })).unwrap()["url"], Value::Null);
         let sx = prepare_link(&json!({ "url": "https://simplex.chat/contact#/?v=2-7&smp=x" })).unwrap();
         assert!(sx["simplex"].is_string(), "{sx}");
+    }
+
+    #[test]
+    fn composer_emoji_helpers() {
+        let hits = dispatch("emojiSuggest", &json!({ "text": "hi :smi" })).unwrap();
+        assert!(!hits.as_array().unwrap().is_empty());
+        let done = dispatch("acceptShortcode", &json!({ "text": "hi :smi", "glyph": "😄" })).unwrap();
+        assert_eq!(done, "hi 😄");
+        assert_eq!(dispatch("emojiSuggest", &json!({ "text": "hi" })).unwrap(), json!([]));
     }
 }

@@ -481,43 +481,23 @@ struct ChatSettingsCard: View {
                       subtitle: "Only for you — \(chat.isDirect ? "they don't" : "other members don't") see these.")
                 .padding(.bottom, 6)
             PrefRow(icon: "mute-notification", label: "Notifications") {
-                Picker("", selection: Binding(
-                    get: { chat.notifications },
-                    set: { mode in Task { await model.setNotifications(chat, mode) } })) {
-                    Text("All messages").tag("all")
-                    if chat.isGroup { Text("Mentions only").tag("mentions") }
-                    Text("Muted").tag("none")
+                ChoiceMenu(options: notificationChoices, selection: chat.notifications) { mode in
+                    Task { await model.setNotifications(chat, mode) }
                 }
-                .pickerStyle(.menu)
-                .fixedSize()
             }
             PrefRow(icon: "check-read", label: "Send receipts",
                     note: chat.isGroup ? "Only in groups of up to 20 members." : nil) {
-                Picker("", selection: Binding<Int>(
-                    get: { chat.sendReceipts.map { $0 ? 1 : 0 } ?? -1 },
-                    set: { v in Task { await model.setSendReceipts(chat, v < 0 ? nil : v == 1) } })) {
-                    Text("Default (\(defaultReceipts ? "on" : "off"))").tag(-1)
-                    Text("On").tag(1)
-                    Text("Off").tag(0)
+                ChoiceMenu(options: [Choice(-1, "Default (\(defaultReceipts ? "on" : "off"))"),
+                                     Choice(1, "On"), Choice(0, "Off")],
+                           selection: chat.sendReceipts.map { $0 ? 1 : 0 } ?? -1) { v in
+                    Task { await model.setSendReceipts(chat, v < 0 ? nil : v == 1) }
                 }
-                .pickerStyle(.menu)
-                .fixedSize()
             }
             PrefRow(icon: "history", label: "Delete messages after",
                     note: "On this Mac only — others keep theirs.") {
-                Picker("", selection: Binding<Int64>(
-                    get: { chat.chatItemTtl ?? 0 },
-                    set: { v in Task { await model.setChatTtl(chat, v == 0 ? nil : v) } })) {
-                    Text("Never").tag(Int64(0))
-                    ForEach(Features.deleteAfterChoices.compactMap { $0 }, id: \.self) { secs in
-                        Text(Features.duration(secs)).tag(secs)
-                    }
-                    if let custom = chat.chatItemTtl, !Features.deleteAfterChoices.contains(custom) {
-                        Text(Features.duration(custom)).tag(custom)
-                    }
+                ChoiceMenu(options: deleteAfterChoices, selection: chat.chatItemTtl ?? 0) { v in
+                    Task { await model.setChatTtl(chat, v == 0 ? nil : v) }
                 }
-                .pickerStyle(.menu)
-                .fixedSize()
             }
             PrefRow(icon: "select-multiple", label: "Lists", note: listsNote) {
                 Menu {
@@ -559,6 +539,19 @@ struct ChatSettingsCard: View {
         .labelsHidden()
         .tint(Theme.accent)
         .task { await model.loadChatTags() }
+    }
+
+    private var notificationChoices: [Choice<String>] {
+        var out = [Choice("all", "All messages")]
+        if chat.isGroup { out.append(Choice("mentions", "Mentions only")) }
+        out.append(Choice("none", "Muted"))
+        return out
+    }
+
+    private var deleteAfterChoices: [Choice<Int64>] {
+        var secs = Features.deleteAfterChoices.compactMap { $0 }
+        if let custom = chat.chatItemTtl, !secs.contains(custom) { secs.append(custom) }
+        return [Choice(Int64(0), "Never")] + secs.sorted().map { Choice($0, Features.duration($0)) }
     }
 
     private var defaultReceipts: Bool {

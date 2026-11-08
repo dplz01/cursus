@@ -188,6 +188,33 @@ struct PencilButton: View {
     }
 }
 
+// MARK: - Bubble shape
+
+/// Message bubble: radius 16, with a small "tail" corner at the top-left
+/// for incoming group / channel messages — where the sender's avatar sits
+/// (Linux too). macOS 12 has no per-corner rounded rectangle.
+struct BubbleShape: Shape {
+    var radius: CGFloat = Radius.bubble
+    var topLeading: CGFloat = Radius.bubble
+
+    func path(in rect: CGRect) -> Path {
+        let r = min(radius, rect.width / 2, rect.height / 2)
+        let tl = min(topLeading, r)
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX + tl, y: rect.minY))
+        p.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY),
+                 tangent2End: CGPoint(x: rect.maxX, y: rect.maxY), radius: r)
+        p.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY),
+                 tangent2End: CGPoint(x: rect.minX, y: rect.maxY), radius: r)
+        p.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY),
+                 tangent2End: CGPoint(x: rect.minX, y: rect.minY), radius: r)
+        p.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY),
+                 tangent2End: CGPoint(x: rect.maxX, y: rect.minY), radius: tl)
+        p.closeSubpath()
+        return p
+    }
+}
+
 // MARK: - Choice menu
 
 /// One option of a `ChoiceMenu`.

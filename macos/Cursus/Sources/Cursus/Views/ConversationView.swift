@@ -251,8 +251,8 @@ struct MessageRow: View {
                 VStack(alignment: message.outgoing ? .trailing : .leading, spacing: 3) {
                     bubble
                         .overlay(
-                            RoundedRectangle(cornerRadius: Radius.bubble, style: .continuous)
-                                .strokeBorder(Theme.accent, lineWidth: model.highlightedMessage == message.id ? 2 : 0))
+                            bubbleShape
+                                .stroke(Theme.accent, lineWidth: model.highlightedMessage == message.id ? 2 : 0))
                         .contextMenu { MessageMenu(message: message, canReact: !inNotes) }
                     if !message.reactions.isEmpty {
                         ReactionsBar(message: message, inGroup: model.selectedChat?.isGroup == true)
@@ -275,6 +275,11 @@ struct MessageRow: View {
 
     private var revealed: Bool { model.revealedMessages.contains(message.id) }
 
+    /// Small top-left corner beside a group sender's avatar.
+    private var bubbleShape: BubbleShape {
+        BubbleShape(topLeading: showSender ? 6 : Radius.bubble)
+    }
+
     @ViewBuilder private var bubble: some View {
         if message.emojiOnly {
             VStack(alignment: message.outgoing ? .trailing : .leading, spacing: 0) {
@@ -284,9 +289,16 @@ struct MessageRow: View {
         } else {
             VStack(alignment: .leading, spacing: 5) {
                 if showSender, let sender = message.sender {
-                    Text(sender.name)
-                        .font(.cMetaBold)
-                        .foregroundColor(Theme.accent)
+                    // Name, then the role as its icon only (owner / admin / moderator).
+                    HStack(spacing: 4) {
+                        Text(sender.name)
+                            .font(.cMetaBold)
+                            .foregroundColor(Theme.accent)
+                        if groupRoleRank(sender.role) > groupRoleRank("member") {
+                            CIcon(MemberRoles.icon(sender.role), size: 13, color: Theme.mutedText)
+                                .help(sender.role.capitalized)
+                        }
+                    }
                 }
                 if let quote = message.quote {
                     QuoteView(quote: quote)
@@ -341,8 +353,7 @@ struct MessageRow: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: Radius.bubble, style: .continuous)
-                    .fill(message.outgoing ? Theme.bubbleOut : Theme.bubbleIn)
+                bubbleShape.fill(message.outgoing ? Theme.bubbleOut : Theme.bubbleIn)
             )
         }
     }

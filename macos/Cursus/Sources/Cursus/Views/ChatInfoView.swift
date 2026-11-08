@@ -142,11 +142,34 @@ private struct InfoOverview: View {
         if chat.isGroup { groupActions }
         if chat.isGroup { membersCard }
         dangerCard
-            .sheet(item: $editing) { field in
-                ProfileFieldSheet(chat: chat, field: field)
-                    .environmentObject(model)
-            }
+            .sheet(item: $editing) { field in editor(for: field) }
             .onChange(of: chat.ref) { _ in confirming = nil }
+    }
+
+    // MARK: Edit sheets
+
+    private func editor(for field: ProfileField) -> TextEditSheet {
+        switch field {
+        case .alias:
+            return TextEditSheet(title: "Local name", hint: "Only you see this name.", placeholder: "Local name",
+                                 initial: chat.alias ?? "") { v in Task { await model.setAlias(chat, v) } }
+        case .groupName:
+            return TextEditSheet(title: "Name", hint: "Every member sees this name.", placeholder: "Name",
+                                 required: true, initial: chat.name ?? chat.title) { v in
+                Task { await model.updateGroupProfile(chat, name: v) }
+            }
+        case .groupBio:
+            return TextEditSheet(title: "Short description", hint: "Shown under the name.",
+                                 placeholder: "Short description", initial: chat.shortDescr) { v in
+                Task { await model.updateGroupProfile(chat, shortDescr: String(v.prefix(160))) }
+            }
+        case .welcome:
+            return TextEditSheet(title: "Welcome message", hint: "Sent to every new member when they join.",
+                                 placeholder: "Welcome to the group! Please…", multiline: true,
+                                 initial: chat.description ?? "") { v in
+                Task { await model.updateGroupProfile(chat, welcome: v) }
+            }
+        }
     }
 
     // MARK: Profile card
@@ -377,45 +400,40 @@ struct EditableLine: View {
     }
 }
 
-/// Native sheet with a Cursus card inside: title, hint, field, Cancel / ✓.
-struct ProfileFieldSheet: View {
-    @EnvironmentObject private var model: AppModel
+/// Native sheet with a Cursus card inside: title, hint, field, ✕ / ✓
+/// (Linux: the editor sheet). Used for every editable profile text.
+struct TextEditSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let chat: Chat
-    let field: ProfileField
+    let title: String
+    let hint: String
+    let placeholder: String
+    var multiline = false
+    /// Empty can't be saved (names).
+    var required = false
+    let initial: String
+    let save: (String) -> Void
 
     @State private var value = ""
     @State private var error: String?
-
-    private var meta: (title: String, hint: String, placeholder: String, multiline: Bool) {
-        switch field {
-        case .alias: return ("Local name", "Only you see this name.", "Local name", false)
-        case .groupName: return ("Name", "Every member sees this name.", "Name", false)
-        case .groupBio: return ("Short description", "Shown under the name.", "Short description", false)
-        case .welcome: return ("Welcome message", "Sent to every new member when they join.",
-                               "Welcome to the group! Please…", true)
-        }
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(meta.title).font(.cBodyBold).foregroundColor(Theme.primaryText)
-                    Text(meta.hint).font(.cMeta).foregroundColor(Theme.secondaryText)
+                    Text(title).font(.cBodyBold).foregroundColor(Theme.primaryText)
+                    Text(hint).font(.cMeta).foregroundColor(Theme.secondaryText)
                 }
                 Spacer()
-                // ✕ / ✓ like the Linux editor sheet.
                 IconTool(icon: "cancel", help: "Cancel (Esc)", size: 16) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(action: save) {
+                Button(action: commit) {
                     Image(systemName: "checkmark").font(.system(size: 13, weight: .bold))
                 }
                 .buttonStyle(PrimaryButtonStyle())
-                .keyboardShortcut(meta.multiline ? KeyboardShortcut("s", modifiers: .command) : .defaultAction)
-                .help("Save")
+                .keyboardShortcut(multiline ? KeyboardShortcut("s", modifiers: .command) : .defaultAction)
+                .help(multiline ? "Save (⌘S)" : "Save (Return)")
             }
-            if meta.multiline {
+            if multiline {
                 TextEditor(text: $value)
                     .font(.cBody)
                     .frame(minHeight: 140, maxHeight: 280)
@@ -424,7 +442,7 @@ struct ProfileFieldSheet: View {
                     .overlay(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
                         .strokeBorder(Theme.border, lineWidth: 1))
             } else {
-                CursusField(placeholder: meta.placeholder, text: $value, onSubmit: save)
+                CursusField(placeholder: placeholder, text: $value, onSubmit: commit)
             }
             if let error = error {
                 Text(error).font(.cMeta).foregroundColor(Theme.danger)
@@ -433,31 +451,17 @@ struct ProfileFieldSheet: View {
         .padding(20)
         .frame(width: 440)
         .background(Theme.elevated)
-        .onAppear {
-            switch field {
-            case .alias: value = chat.alias ?? ""
-            case .groupName: value = chat.name ?? chat.title
-            case .groupBio: value = chat.shortDescr
-            case .welcome: value = chat.description ?? ""
-            }
-        }
+        .onAppear { value = initial }
     }
 
-    private func save() {
+    private func commit() {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if field == .groupName && trimmed.isEmpty {
+        if required && trimmed.isEmpty {
             error = "The name can't be empty."
             return
         }
         dismiss()
-        Task {
-            switch field {
-            case .alias: await model.setAlias(chat, trimmed)
-            case .groupName: await model.updateGroupProfile(chat, name: trimmed)
-            case .groupBio: await model.updateGroupProfile(chat, shortDescr: String(trimmed.prefix(160)))
-            case .welcome: await model.updateGroupProfile(chat, welcome: trimmed)
-            }
-        }
+        save(trimmed)
     }
 }
 

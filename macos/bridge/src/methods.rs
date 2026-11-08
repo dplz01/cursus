@@ -186,6 +186,9 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             if let Some(v) = opt_str(p, "shortDescr") {
                 fields.short_descr = v.to_string();
             }
+            if let Some(v) = opt_str(p, "description") {
+                fields.description = v.to_string();
+            }
             if let Some(v) = p.get("image") {
                 fields.image = v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
             }

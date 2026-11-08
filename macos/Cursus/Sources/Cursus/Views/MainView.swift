@@ -85,14 +85,6 @@ struct NavRail: View {
             }
             Spacer(minLength: 8)
             NavDestinationButton(dest: .settings, badge: 0)
-            if let user = model.user {
-                Button { model.destination = .settings; model.settingsPage = .profile } label: {
-                    Avatar(image: user.image, name: user.displayName, size: 32)
-                }
-                .buttonStyle(.plain)
-                .help(user.displayName)
-                .padding(.top, 2)
-            }
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 8)

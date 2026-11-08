@@ -873,8 +873,14 @@ final class AppModel: ObservableObject {
 
     // MARK: - Profile & settings
 
-    func updateProfile(displayName: String, fullName: String, bio: String, image: String??) async {
-        var params: [String: Any] = ["displayName": displayName, "fullName": fullName, "shortDescr": bio]
+    /// Change some of your profile (nil = keep; `image: .some(nil)` removes it).
+    func updateProfile(displayName: String? = nil, fullName: String? = nil, bio: String? = nil,
+                       description: String? = nil, image: String?? = nil) async {
+        var params: [String: Any] = [:]
+        if let v = displayName { params["displayName"] = v }
+        if let v = fullName { params["fullName"] = v }
+        if let v = bio { params["shortDescr"] = v }
+        if let v = description { params["description"] = v }
         if let image = image {
             params["image"] = image ?? ""
         }

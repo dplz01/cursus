@@ -11,10 +11,12 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PaneHeader(title: chat.title, subtitle: subtitle, background: Theme.sidebar) {
+            PaneHeader(title: chat.title, subtitle: subtitle, background: Theme.sidebar,
+                       open: openProfile,
+                       openHelp: chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)") {
                 Avatar(image: chat.image, name: chat.title, size: 36, kind: chat.avatarKind)
             } actions: {
-                if !chat.isNotes && chat.pendingRequestId == nil {
+                if canOpenProfile {
                     IconTool(icon: "info-circle", help: chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)",
                              size: 20) { model.toggleInfo() }
                 }
@@ -77,6 +79,13 @@ struct ConversationView: View {
                     .allowsHitTesting(false)
             }
         }
+    }
+
+    private var canOpenProfile: Bool { !chat.isNotes && chat.pendingRequestId == nil }
+
+    private var openProfile: (() -> Void)? {
+        guard canOpenProfile else { return nil }
+        return { model.toggleInfo() }
     }
 
     private var subtitle: String {

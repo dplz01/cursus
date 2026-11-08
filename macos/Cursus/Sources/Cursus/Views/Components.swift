@@ -200,15 +200,21 @@ struct PaneHeader<Leading: View, Actions: View>: View {
     var subtitle: String?
     var back: (() -> Void)?
     var background: Color
+    /// Click on the avatar + title (chat header → profile page).
+    var open: (() -> Void)?
+    var openHelp: String?
     let leading: Leading
     let actions: Actions
 
     init(title: String, subtitle: String? = nil, back: (() -> Void)? = nil, background: Color = Theme.panel,
+         open: (() -> Void)? = nil, openHelp: String? = nil,
          @ViewBuilder leading: () -> Leading, @ViewBuilder actions: () -> Actions) {
         self.title = title
         self.subtitle = subtitle
         self.back = back
         self.background = background
+        self.open = open
+        self.openHelp = openHelp
         self.leading = leading()
         self.actions = actions()
     }
@@ -222,18 +228,14 @@ struct PaneHeader<Leading: View, Actions: View>: View {
                         .keyboardShortcut(.cancelAction)
                         .help("Back (Esc)")
                 }
-                leading
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.cTitle)
-                        .foregroundColor(Theme.primaryText)
-                        .lineLimit(1)
-                    if let subtitle = subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(.cMeta)
-                            .foregroundColor(Theme.secondaryText)
-                            .lineLimit(1)
+                if let open = open {
+                    Button(action: open) {
+                        identity.contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .help(openHelp ?? "")
+                } else {
+                    identity
                 }
                 Spacer(minLength: 8)
                 HStack(spacing: 4) { actions }
@@ -243,6 +245,24 @@ struct PaneHeader<Leading: View, Actions: View>: View {
             Hairline()
         }
         .background(background)
+    }
+
+    private var identity: some View {
+        HStack(spacing: 10) {
+            leading
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.cTitle)
+                    .foregroundColor(Theme.primaryText)
+                    .lineLimit(1)
+                if let subtitle = subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.cMeta)
+                        .foregroundColor(Theme.secondaryText)
+                        .lineLimit(1)
+                }
+            }
+        }
     }
 }
 

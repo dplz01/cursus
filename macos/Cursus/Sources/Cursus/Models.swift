@@ -16,6 +16,7 @@ struct User: Decodable, Equatable {
     let displayName: String
     let fullName: String
     let shortDescr: String
+    let description: String
     let image: String?
     let contactLink: String?
     let sendRcptsContacts: Bool

@@ -56,6 +56,7 @@ pub fn user(u: &UserProfile) -> Value {
         "displayName": p.display_name,
         "fullName": p.full_name,
         "shortDescr": p.short_descr,
+        "description": p.description,
         "image": p.image,
         "contactLink": p.contact_link,
         "sendRcptsContacts": u.send_rcpts_contacts,

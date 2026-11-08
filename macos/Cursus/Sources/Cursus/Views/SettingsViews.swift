@@ -99,70 +99,71 @@ struct ToggleRow: View {
     }
 }
 
+/// Your profile, like the Linux page: picture actions under the avatar,
+/// then name, bio and description as text with a pencil; each edit is saved
+/// on its own (no Save button).
 private struct ProfilePage: View {
     @EnvironmentObject private var model: AppModel
-    @State private var name = ""
-    @State private var fullName = ""
-    @State private var bio = ""
-    /// nil = unchanged; .some(nil) = remove; .some(url) = new picture.
-    @State private var image: String??
-    @State private var saving = false
+    @State private var editing: OwnField?
 
-    private var shownImage: String? {
-        if let pending = image { return pending }
-        return model.user?.image
-    }
-
-    private var changed: Bool {
-        guard let user = model.user else { return false }
-        return name != user.displayName || fullName != user.fullName || bio != user.shortDescr || image != nil
+    private enum OwnField: String, Identifiable {
+        case name, bio, description
+        var id: String { rawValue }
     }
 
     var body: some View {
-        SettingsSection(icon: "user-alt-1", title: "Your profile",
-                        subtitle: "Sent only to your contacts — SimpleX servers never see it.") {
-            HStack(alignment: .center, spacing: 14) {
-                VStack(spacing: 8) {
-                    Avatar(image: shownImage, name: name.isEmpty ? "?" : name, size: 72)
-                    HStack(spacing: 0) {
-                        IconTool(icon: "image-pen", help: "Choose picture…", size: 18, action: pickImage)
-                        if shownImage != nil {
-                            IconTool(icon: "trash-delete", help: "Remove picture", size: 18) { image = .some(nil) }
+        if let user = model.user {
+            SettingsSection(icon: "user-alt-1", title: "Your profile",
+                            subtitle: "Sent only to your contacts — SimpleX servers never see it.") {
+                HStack(alignment: .center, spacing: 14) {
+                    VStack(spacing: 8) {
+                        Avatar(image: user.image, name: user.displayName, size: 72)
+                        HStack(spacing: 6) {
+                            IconTool(icon: "image-pen", help: "Choose picture…", size: 18, action: pickImage)
+                            if user.image != nil {
+                                IconTool(icon: "cancel", help: "Remove picture", size: 18) {
+                                    Task { await model.updateProfile(image: .some(nil)) }
+                                }
+                            }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        EditableLine(text: user.displayName, placeholder: "Display name", style: .name) {
+                            editing = .name
+                        }
+                        EditableLine(text: user.shortDescr, placeholder: "Add a bio", style: .sub) {
+                            editing = .bio
                         }
                     }
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    RoundedField(placeholder: "Display name", text: $name)
-                    RoundedField(placeholder: "Full name (optional)", text: $fullName)
+                SectionLabel("Description")
+                EditableLine(text: user.description, placeholder: "Add a longer description", style: .body) {
+                    editing = .description
                 }
             }
-            SectionLabel("Bio")
-            CursusField(placeholder: "A short line about you (optional)", text: $bio)
-            HStack {
-                Spacer()
-                Button(saving ? "Saving…" : "Save") {
-                    saving = true
-                    Task {
-                        await model.updateProfile(
-                            displayName: name.trimmingCharacters(in: .whitespaces),
-                            fullName: fullName, bio: String(bio.prefix(160)), image: image)
-                        image = nil
-                        saving = false
-                    }
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(!changed || saving || name.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
+            .sheet(item: $editing) { field in editor(field, user) }
         }
-        .onAppear(perform: load)
-        .onChange(of: model.user) { _ in load() }
     }
 
-    private func load() {
-        guard let user = model.user else { return }
-        name = user.displayName
-        fullName = user.fullName
-        bio = user.shortDescr
+    private func editor(_ field: OwnField, _ user: User) -> TextEditSheet {
+        switch field {
+        case .name:
+            return TextEditSheet(title: "Display name", hint: "How your contacts see you.", placeholder: "Your name",
+                                 required: true, initial: user.displayName) { v in
+                Task { await model.updateProfile(displayName: v) }
+            }
+        case .bio:
+            return TextEditSheet(title: "Bio", hint: "A short line under your name.", placeholder: "Bio",
+                                 initial: user.shortDescr) { v in
+                Task { await model.updateProfile(bio: String(v.prefix(160))) }
+            }
+        case .description:
+            return TextEditSheet(title: "Description", hint: "Shown on your profile.",
+                                 placeholder: "Tell people about yourself", multiline: true,
+                                 initial: user.description) { v in
+                Task { await model.updateProfile(description: v) }
+            }
+        }
     }
 
     private func pickImage() {
@@ -171,7 +172,7 @@ private struct ProfilePage: View {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url, let picked = NSImage(contentsOf: url) else { return }
         if let dataURL = Images.profileDataURL(from: picked) {
-            image = .some(dataURL)
+            Task { await model.updateProfile(image: .some(dataURL)) }
         } else {
             model.errorMessage = "That picture couldn't be used."
         }

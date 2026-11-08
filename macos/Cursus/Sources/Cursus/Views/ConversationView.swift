@@ -738,17 +738,16 @@ struct VoiceView: View {
                     }
                 }
             } label: {
-                CIcon(player.playingId == messageId ? "stop" : "play", size: 16, color: Theme.accentOn)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(Theme.accent))
+                CIcon(player.playingId == messageId ? "stop" : "play", size: 18, color: Theme.accentOn)
+                    .frame(width: 40, height: 40)
+                    // The nav rail buttons' shape (Linux too).
+                    .background(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).fill(Theme.accent))
             }
             .buttonStyle(.plain)
+            .help(player.playingId == messageId ? "Stop" : "Play")
             WaveformView(peaks: peaks ?? Array(repeating: 0.25, count: 48),
                          progress: player.playingId == messageId ? player.progress : 0)
-                .frame(width: 160, height: 26)
-            Text(file.duration.map(Format.duration) ?? "Voice message")
-                .font(.cMeta.monospacedDigit())
-                .foregroundColor(Theme.secondaryText)
+                .frame(width: 180, height: 28)
         }
         .task(id: file.path) {
             guard let url = await model.readablePath(file) else { return }

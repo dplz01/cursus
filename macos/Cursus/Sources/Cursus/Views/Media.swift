@@ -278,9 +278,9 @@ struct VoiceDraftBar: View {
             }
             .keyboardShortcut(.cancelAction)
             Button { player.toggle(id: Self.previewId, url: draft.url) } label: {
-                CIcon(player.playingId == Self.previewId ? "stop" : "play", size: 14, color: Theme.accentOn)
-                    .frame(width: 30, height: 30)
-                    .background(Circle().fill(Theme.accent))
+                CIcon(player.playingId == Self.previewId ? "stop" : "play", size: 16, color: Theme.accentOn)
+                    .frame(width: 34, height: 34)
+                    .background(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).fill(Theme.accent))
             }
             .buttonStyle(.plain)
             .help("Listen")

@@ -57,7 +57,16 @@ data class Chat(
     val isChannel: Boolean = false,
     val role: String? = null,
     val lastTs: String? = null,
+    val sendReceipts: Boolean? = null,
+    val contactPrefs: ContactPrefs? = null,
+    val groupPrefs: GroupPrefs? = null,
+    val memberReview: Boolean = false,
+    val canEditProfile: Boolean = false,
+    val canManageMembers: Boolean = false,
+    val canModerate: Boolean = false,
+    val assignableRoles: List<String> = emptyList(),
 ) {
+    val isContact get() = type == "direct"
     val isGroup get() = type == "group"
     val isNotes get() = type == "local"
     val muted get() = notifications == "none"
@@ -174,3 +183,36 @@ object Stamps {
         else -> date.format(fullDay)
     }
 }
+
+@Serializable
+data class ContactFeature(val mine: String = "no", val contact: String = "no", val enabled: Boolean = false)
+
+@Serializable
+data class ContactPrefs(val features: Map<String, ContactFeature> = emptyMap(), val timedTtl: Long = 86400)
+
+@Serializable
+data class GroupFeature(val on: Boolean = false)
+
+@Serializable
+data class GroupPrefs(val features: Map<String, GroupFeature> = emptyMap(), val timedTtl: Long = 86400)
+
+@Serializable
+data class SupportInfo(val unread: Long = 0, val attention: Long = 0, val mentions: Long = 0)
+
+@Serializable
+data class Member(
+    val id: Long,
+    val contactId: Long? = null,
+    val name: String = "",
+    val publicName: String = "",
+    val role: String = "member",
+    val status: String = "",
+    val image: String? = null,
+    val shortDescr: String = "",
+    val isMe: Boolean = false,
+    val blocked: Boolean = false,
+    val showMessages: Boolean = true,
+    val invited: Boolean = false,
+    val pending: Boolean = false,
+    val support: SupportInfo? = null,
+)

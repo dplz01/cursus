@@ -40,6 +40,11 @@ import chat.cursus.ui.components.CursusCard
 import chat.cursus.ui.components.CursusField
 import chat.cursus.ui.components.IconTool
 import chat.cursus.ui.components.LinkBox
+import chat.cursus.ui.components.EditField
+import chat.cursus.ui.components.EditableLine
+import chat.cursus.ui.components.FieldEditor
+import chat.cursus.ui.components.LineStyle
+import chat.cursus.ui.components.ProfileIdentity
 import chat.cursus.ui.components.NavRow
 import chat.cursus.ui.components.CursusOverlay
 import chat.cursus.ui.components.RoundedField
@@ -143,62 +148,12 @@ private fun CreateChatOverlay(kind: CreateKind, onDismiss: () -> Unit, onCreate:
 }
 
 @Composable
-fun ChatInfoPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
-    val c = Cursus.colors
-    var confirmDelete by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().background(c.bgPanel)) {
-        PaneHeader(if (chat.isChannel) "Channel" else if (chat.isGroup) "Group" else "Contact", onBack = onClose)
-        Column(Modifier.verticalScroll(rememberScrollState())) {
-            PageColumn {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Avatar(chat.title, chat.image, 72.dp, group = chat.isGroup)
-                    Column {
-                        Text(chat.title, style = Cursus.type.title, color = c.textPrimary)
-                        if (chat.alias.isNotBlank() && chat.name != chat.alias) {
-                            Text(chat.name, style = Cursus.type.meta, color = c.textSecondary)
-                        }
-                        if (chat.fullName.isNotBlank()) Text(chat.fullName, style = Cursus.type.meta, color = c.textSecondary)
-                    }
-                }
-                val about = chat.shortDescr.ifBlank { chat.description }
-                if (about.isNotBlank()) {
-                    CursusCard { Text(about, style = Cursus.type.body, color = c.textPrimary) }
-                }
-                CursusCard {
-                    SwitchRow("Favourite", chat.favorite, { model.setFavorite(chat, it) })
-                    SwitchRow("Notifications", !chat.muted, { model.setMuted(chat, !it) })
-                }
-                CursusCard {
-                    ActionTile(R.drawable.ic_clear_all, "Clear messages", { model.clear(chat) })
-                    ActionTile(
-                        R.drawable.ic_trash_delete,
-                        if (chat.isGroup && chat.role != "owner") "Leave and delete" else "Delete",
-                        { confirmDelete = true },
-                        danger = true,
-                    )
-                }
-            }
-        }
-    }
-    if (confirmDelete) {
-        ConfirmDialog(
-            title = "Delete ${chat.title}?",
-            text = "This can't be undone.",
-            action = "Delete",
-            onConfirm = { confirmDelete = false; onClose(); model.delete(chat) },
-            onDismiss = { confirmDelete = false },
-        )
-    }
-}
-
-@Composable
 fun SettingsPane(model: AppModel) {
     val c = Cursus.colors
     val scope = rememberCoroutineScope()
     val uri = LocalUriHandler.current
     val user = model.user
-    var name by rememberSaveable(user?.displayName) { mutableStateOf(user?.displayName ?: "") }
-    var bio by rememberSaveable(user?.shortDescr) { mutableStateOf(user?.shortDescr ?: "") }
+    var editing by remember { mutableStateOf<EditField?>(null) }
     var address by remember { mutableStateOf<ConnLink?>(null) }
     var loadingAddress by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -209,22 +164,13 @@ fun SettingsPane(model: AppModel) {
             PageColumn {
                 CursusCard {
                     CardTitle(R.drawable.ic_user_alt_1, "Profile", "Name, picture and bio")
-                    Row(
-                        Modifier.padding(top = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        Avatar(user?.displayName ?: "", user?.image, 72.dp)
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            CursusField(name, { name = it }, "Your name")
-                            CursusField(bio, { bio = it }, "Bio")
+                    Column(Modifier.padding(top = 12.dp)) {
+                        ProfileIdentity(user?.displayName ?: "", user?.image) {
+                            EditableLine(user?.displayName ?: "", "Your name", LineStyle.Name) { editing = EditField.OwnName }
+                            EditableLine(user?.shortDescr ?: "", "Add a bio", LineStyle.Sub) { editing = EditField.OwnBio }
                         }
-                    }
-                    val changed = name.trim() != (user?.displayName ?: "") || bio != (user?.shortDescr ?: "")
-                    if (changed) {
-                        PrimaryButton("Save", {
-                            model.updateProfile(displayName = name.trim(), shortDescr = bio)
-                        }, Modifier.fillMaxWidth().padding(top = 10.dp), enabled = name.isNotBlank())
+                        SectionLabel("Description")
+                        EditableLine(user?.description ?: "", "Tell people about yourself", LineStyle.Body) { editing = EditField.OwnDescription }
                     }
                 }
                 CursusCard {
@@ -299,6 +245,21 @@ fun SettingsPane(model: AppModel) {
                 }
                 if (model.busy) CircularProgressIndicator(color = c.accent)
             }
+        }
+    }
+    editing?.let { f ->
+        val initial = when (f) {
+            EditField.OwnName -> user?.displayName
+            EditField.OwnBio -> user?.shortDescr
+            else -> user?.description
+        } ?: ""
+        FieldEditor(f, initial, { editing = null }) { v ->
+            when (f) {
+                EditField.OwnName -> model.updateOwnProfile(displayName = v)
+                EditField.OwnBio -> model.updateOwnProfile(shortDescr = v)
+                else -> model.updateOwnProfile(description = v)
+            }
+            editing = null
         }
     }
 }

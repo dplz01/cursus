@@ -140,7 +140,12 @@ fun MainScreen(model: AppModel) {
                 linkToOpen = null
                 model.select(ref)
             }
-            Page.ChatInfo -> model.selectedChat?.let { ChatInfoPage(model, it) { page = null } } ?: run { page = null }
+            Page.ChatInfo -> model.selectedChat?.let { chat ->
+                ChatInfoPage(model, chat, onClose = { page = null }) { ref ->
+                    page = null
+                    model.select(ref)
+                }
+            } ?: run { page = null }
         }
     }
     val conversation: @Composable () -> Unit = {

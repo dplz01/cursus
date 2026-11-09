@@ -22,6 +22,7 @@ import chat.cursus.core.PreparedLink
 import chat.cursus.core.User
 import android.net.Uri
 import chat.cursus.core.FileInfo
+import chat.cursus.core.Member
 import chat.cursus.media.Files
 import chat.cursus.media.VoiceDraft
 import chat.cursus.media.VoicePlayer
@@ -102,7 +103,16 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private var chatsReload: Job? = null
     private var messagesReload: Job? = null
 
-    val selectedChat: Chat? get() = chats.firstOrNull { it.ref == selection }
+    /** The open chat; a group's support thread (`#9(_support:4)`) is shown as its group, retitled. */
+    val selectedChat: Chat?
+        get() {
+            val ref = selection ?: return null
+            chats.firstOrNull { it.ref == ref }?.let { return it }
+            val parent = chats.firstOrNull { ref.startsWith(it.ref + "(") } ?: return null
+            val memberId = ref.substringAfter("_support:", "").removeSuffix(")").toLongOrNull()
+            val title = memberId?.let { id -> members.firstOrNull { it.id == id }?.name } ?: "Chat with admins"
+            return parent.copy(ref = ref, title = "${parent.title} · $title", isChannel = false, role = "member")
+        }
 
     // region Startup / unlock
 
@@ -543,6 +553,120 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     // endregion
 
+    // region Contacts and groups
+
+    /** Members of the group whose page is open. */
+    val members = mutableStateListOf<Member>()
+
+    fun loadMembers(chat: Chat) {
+        viewModelScope.launch {
+            try {
+                val list: List<Member> = Core.call("listMembers", mapOf("groupId" to chat.apiId))
+                members.clear()
+                // Linux order: you first, then by role (owners first), then name.
+                members.addAll(
+                    list.sortedWith(
+                        compareByDescending<Member> { it.isMe }
+                            .thenByDescending { roleRank(it.role) }
+                            .thenBy { it.name.lowercase() },
+                    ),
+                )
+            } catch (e: Exception) {
+                notice = e.message
+            }
+        }
+    }
+
+    private fun roleRank(role: String) = listOf("observer", "member", "moderator", "admin", "owner").indexOf(role)
+
+    /** Change something, then refresh the chat (and its members for groups). */
+    private fun change(chat: Chat, method: String, params: Map<String, Any?>, members: Boolean = false) = act {
+        Core.run(method, params)
+        reloadChats()
+        if (members) loadMembers(chat)
+    }
+
+    fun setAlias(chat: Chat, alias: String) = change(chat, "setAlias", mapOf("chat" to chat.ref, "alias" to alias.trim()))
+
+    fun setSendReceipts(chat: Chat, on: Boolean?) =
+        change(chat, "setChatSettings", mapOf("chat" to chat.ref, "sendReceipts" to on))
+
+    fun setContactFeature(chat: Chat, key: String, allow: String) =
+        change(chat, "setContactPrefs", mapOf("chat" to chat.ref, "changes" to mapOf(key to allow)))
+
+    fun setContactTimedTtl(chat: Chat, secs: Long) =
+        change(chat, "setContactPrefs", mapOf("chat" to chat.ref, "changes" to mapOf("timedMessages" to "yes", "timedTtl" to secs)))
+
+    fun updateGroupProfile(chat: Chat, name: String? = null, shortDescr: String? = null, welcome: String? = null) =
+        change(
+            chat, "updateGroupProfile",
+            buildMap {
+                put("groupId", chat.apiId)
+                name?.let { put("name", it.trim()) }
+                shortDescr?.let { put("shortDescr", it.trim()) }
+                welcome?.let { put("welcome", it.trim()) }
+            },
+        )
+
+    fun setGroupFeature(chat: Chat, key: String, on: Boolean, ttl: Long? = null) =
+        change(chat, "setGroupPref", mapOf("groupId" to chat.apiId, "key" to key, "on" to on, "ttl" to ttl))
+
+    fun setMemberReview(chat: Chat, on: Boolean) = change(chat, "setMemberReview", mapOf("groupId" to chat.apiId, "on" to on))
+
+    suspend fun groupLink(chat: Chat, role: String = "member", quiet: Boolean = false): ConnLink? = try {
+        Core.call("groupLink", mapOf("groupId" to chat.apiId, "role" to role))
+    } catch (e: Exception) {
+        if (!quiet) error = e.message
+        null
+    }
+
+    fun setGroupLinkRole(chat: Chat, role: String) = change(chat, "setGroupLinkRole", mapOf("groupId" to chat.apiId, "role" to role))
+
+    fun deleteGroupLink(chat: Chat) = change(chat, "deleteGroupLink", mapOf("groupId" to chat.apiId))
+
+    fun addMember(chat: Chat, contact: Chat, role: String) =
+        change(chat, "addMember", mapOf("groupId" to chat.apiId, "contactId" to contact.apiId, "role" to role), members = true)
+
+    fun setMemberRole(chat: Chat, m: Member, role: String) =
+        change(chat, "setMemberRole", mapOf("groupId" to chat.apiId, "memberId" to m.id, "role" to role), members = true)
+
+    fun removeMember(chat: Chat, m: Member, withMessages: Boolean) =
+        change(chat, "removeMember", mapOf("groupId" to chat.apiId, "memberId" to m.id, "withMessages" to withMessages), members = true)
+
+    fun blockMember(chat: Chat, m: Member, blocked: Boolean) =
+        change(chat, "blockMember", mapOf("groupId" to chat.apiId, "memberId" to m.id, "blocked" to blocked), members = true)
+
+    fun setMemberShowMessages(chat: Chat, m: Member, show: Boolean) =
+        change(chat, "setMemberShowMessages", mapOf("groupId" to chat.apiId, "memberId" to m.id, "show" to show), members = true)
+
+    fun acceptMember(chat: Chat, m: Member, role: String) =
+        change(chat, "acceptMember", mapOf("groupId" to chat.apiId, "memberId" to m.id, "role" to role), members = true)
+
+    /** Open (or create) the direct chat with a member. */
+    fun messageMember(chat: Chat, m: Member, opened: (String) -> Unit) = act {
+        val ref = m.contactId?.let { "@$it" } ?: Core.call<String>("memberContact", mapOf("groupId" to chat.apiId, "memberId" to m.id))
+        reloadChats()
+        opened(ref)
+    }
+
+    fun leaveGroup(chat: Chat) = act {
+        Core.run("leaveGroup", mapOf("groupId" to chat.apiId))
+        reloadChats()
+    }
+
+    fun updateOwnProfile(displayName: String? = null, shortDescr: String? = null, description: String? = null) = act {
+        user = Core.call(
+            "updateProfile",
+            buildMap {
+                displayName?.let { put("displayName", it.trim()) }
+                shortDescr?.let { put("shortDescr", it.trim()) }
+                description?.let { put("description", it.trim()) }
+            },
+        )
+    }
+
+    // endregion
+
     // region Connect
 
     suspend fun createInvitation(): ConnLink? = try {
@@ -568,21 +692,6 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     suspend fun prepareLink(url: String): PreparedLink =
         runCatching { Core.call<PreparedLink>("prepareLink", mapOf("url" to url, "clean" to prefs.cleanLinks)) }
             .getOrDefault(PreparedLink())
-
-    // endregion
-
-    // region Profile
-
-    fun updateProfile(displayName: String? = null, fullName: String? = null, shortDescr: String? = null) = act {
-        user = Core.call(
-            "updateProfile",
-            buildMap {
-                displayName?.let { put("displayName", it) }
-                fullName?.let { put("fullName", it) }
-                shortDescr?.let { put("shortDescr", it) }
-            },
-        )
-    }
 
     // endregion
 

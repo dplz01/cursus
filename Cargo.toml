@@ -5,6 +5,7 @@ members = [
     "core",
     "linux",
     "bridge",
+    "android/jni",
 ]
 default-members = ["linux"]
 

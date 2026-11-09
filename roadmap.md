@@ -58,8 +58,8 @@ Living progress tracker. Design tokens and IA: [`docs/DESIGN_SYSTEM.md`](docs/DE
 
 | Status | Item |
 |---|---|
-| Todo | UniFFI API on `cursus-core` |
-| Todo | Android shell (Compose) — same four destinations, `NavigationBar` / rail |
+| Done | Shared JSON bridge (`bridge/`) for every native app — replaces the UniFFI plan |
+| In progress | Android app (Kotlin + Compose, `android/`): onboarding/unlock, chats, channels, conversation, connect, settings |
 | Todo | iOS shell (SwiftUI) — same four destinations, `TabView` / split |
 
 ## Milestone 4 — Channels & calls

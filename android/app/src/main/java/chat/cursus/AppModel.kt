@@ -1,0 +1,456 @@
+package chat.cursus
+
+import android.app.Application
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.lifecycle.viewModelScope
+import chat.cursus.core.AppInfo
+import chat.cursus.core.Chat
+import chat.cursus.core.ConnLink
+import chat.cursus.core.Core
+import chat.cursus.core.CoreEvent
+import chat.cursus.core.CoreJson
+import chat.cursus.core.Message
+import chat.cursus.core.Native
+import chat.cursus.core.PreparedLink
+import chat.cursus.core.User
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+sealed interface Phase {
+    data object Starting : Phase
+    data object Welcome : Phase
+    data object Unlock : Phase
+    data object Ready : Phase
+    data class Failed(val message: String) : Phase
+}
+
+/** The four destinations, in the same order on every Cursus app. */
+enum class Section(val title: String, val icon: Int) {
+    Chats("Chats", R.drawable.ic_chats),
+    Channels("Channels", R.drawable.ic_channels),
+    Calls("Calls", R.drawable.ic_calls),
+    Settings("Settings", R.drawable.ic_settings),
+}
+
+sealed interface ComposeMode {
+    data object New : ComposeMode
+    data class Reply(val message: Message) : ComposeMode
+    data class Edit(val message: Message) : ComposeMode
+}
+
+/**
+ * App state and actions. All chat logic lives in cursus-core (through the
+ * bridge); this only keeps what the screens show and calls the core.
+ */
+class AppModel(app: Application) : AndroidViewModel(app) {
+    private val passwords = PasswordStore(app)
+    val prefs = Prefs(app)
+
+    var phase by mutableStateOf<Phase>(Phase.Starting); private set
+    var info by mutableStateOf<AppInfo?>(null); private set
+    var user by mutableStateOf<User?>(null); private set
+    var busy by mutableStateOf(false); private set
+    var error by mutableStateOf<String?>(null)
+    var notice by mutableStateOf<String?>(null)
+
+    var section by mutableStateOf(Section.Chats)
+    val chats = mutableStateListOf<Chat>()
+    var selection by mutableStateOf<String?>(null); private set
+    val messages = mutableStateListOf<Message>()
+    var messagesFor by mutableStateOf<String?>(null); private set
+
+    var draft by mutableStateOf("")
+    var composeMode by mutableStateOf<ComposeMode>(ComposeMode.New)
+    private val drafts = mutableStateMapOf<String, String>()
+
+    /** Readable paths of decrypted images, by file id. */
+    val plainFiles = mutableStateMapOf<Long, String>()
+
+    /** Opened from a notification / a link before the chats were ready. */
+    var pendingChat by mutableStateOf<String?>(null)
+    var pendingLink by mutableStateOf<String?>(null)
+
+    private var pumpStarted = false
+    private var chatsReload: Job? = null
+    private var messagesReload: Job? = null
+
+    val selectedChat: Chat? get() = chats.firstOrNull { it.ref == selection }
+
+    // region Startup / unlock
+
+    fun bootstrap() {
+        if (phase != Phase.Starting) return
+        startPump()
+        viewModelScope.launch {
+            try {
+                val i: AppInfo = Core.call("appInfo")
+                info = i
+                if (!i.setupComplete && !i.databaseExists) {
+                    phase = Phase.Welcome
+                    return@launch
+                }
+                phase = Phase.Unlock
+                passwords.load()?.let { unlock(it, remember = true, quiet = true) }
+            } catch (e: Exception) {
+                phase = Phase.Failed(e.message ?: e.toString())
+            }
+        }
+    }
+
+    fun createAccount(name: String, password: String, remember: Boolean) = open(
+        mapOf("password" to password, "displayName" to name, "encryptLocalFiles" to true, "saveAccount" to true),
+        password, remember, quiet = false,
+    )
+
+    fun unlock(password: String, remember: Boolean, quiet: Boolean = false) = open(
+        mapOf(
+            "password" to password,
+            "displayName" to (info?.displayName ?: ""),
+            "encryptLocalFiles" to (info?.encryptLocalFiles ?: true),
+            "saveAccount" to !(info?.setupComplete ?: false),
+        ),
+        password, remember, quiet,
+    )
+
+    private fun open(params: Map<String, Any?>, password: String, remember: Boolean, quiet: Boolean) {
+        if (busy) return
+        busy = true
+        viewModelScope.launch {
+            try {
+                val libsDir = getApplication<Application>().applicationInfo.nativeLibraryDir
+                user = Core.call("open", params + ("libsDir" to libsDir))
+                if (remember) passwords.save(password) else if (!quiet) passwords.delete()
+                info = runCatching { Core.call<AppInfo>("appInfo") }.getOrNull()
+                phase = Phase.Ready
+                reloadChats()
+            } catch (e: Exception) {
+                val text = e.message ?: e.toString()
+                val wrongKey = listOf("wrong", "passphrase", "key").any { text.lowercase().contains(it) }
+                when {
+                    quiet -> if (wrongKey) passwords.delete()
+                    wrongKey -> error = "Wrong password.\n\n$text"
+                    else -> error = text
+                }
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun lock() {
+        busy = true
+        viewModelScope.launch {
+            runCatching { Core.run("close") }
+            busy = false
+        }
+        selection = null
+        chats.clear()
+        messages.clear()
+        user = null
+        draft = ""
+        drafts.clear()
+        composeMode = ComposeMode.New
+        phase = Phase.Unlock
+    }
+
+    /** Forget everything on this phone (forgotten password). */
+    fun wipeAll() {
+        viewModelScope.launch {
+            try {
+                Core.run("wipeLocalData")
+                passwords.delete()
+                selection = null
+                chats.clear()
+                messages.clear()
+                user = null
+                info = runCatching { Core.call<AppInfo>("appInfo") }.getOrNull()
+                phase = Phase.Welcome
+            } catch (e: Exception) {
+                error = e.message
+            }
+        }
+    }
+
+    val rememberedPassword: Boolean get() = passwords.load() != null
+
+    fun forgetPassword() = passwords.delete()
+
+    // endregion
+
+    // region Events
+
+    private fun startPump() {
+        if (pumpStarted) return
+        pumpStarted = true
+        Thread({
+            while (true) {
+                val raw = Native.nextEvent(500) ?: continue
+                val event = runCatching { CoreJson.decodeFromString<CoreEvent>(raw) }.getOrNull() ?: continue
+                viewModelScope.launch { handle(event) }
+            }
+        }, "cursus-events").apply { isDaemon = true }.start()
+    }
+
+    private fun handle(e: CoreEvent) {
+        if (phase != Phase.Ready) return
+        if (e.refreshChats) scheduleChatsReload()
+        val open = selection
+        if (e.refreshMessages && open != null && (e.chat == null || e.chat == open || e.chat.startsWith("$open("))) {
+            scheduleMessagesReload()
+        }
+        val foreground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        for (msg in e.incoming) {
+            val chat = chats.firstOrNull { it.ref == msg.chat }
+            if (chat?.muted == true) continue
+            if (foreground) continue // the open chat or the list badge shows it
+            Notifier.show(getApplication(), msg, prefs.hideNotificationText)
+        }
+    }
+
+    // endregion
+
+    // region Chats
+
+    fun reloadChats() {
+        viewModelScope.launch {
+            try {
+                val list: List<Chat> = Core.call("listChats")
+                chats.clear()
+                chats.addAll(list)
+            } catch (e: Exception) {
+                notice = e.message
+            }
+        }
+    }
+
+    private fun scheduleChatsReload() {
+        chatsReload?.cancel()
+        chatsReload = viewModelScope.launch {
+            delay(150)
+            reloadChats()
+        }
+    }
+
+    fun select(ref: String?) {
+        val old = selection
+        if (old == ref) return
+        if (old != null) drafts[old] = draft
+        selection = ref
+        draft = ref?.let { drafts[it] } ?: ""
+        composeMode = ComposeMode.New
+        messages.clear()
+        messagesFor = null
+        if (ref != null) {
+            reloadMessages(ref)
+            markRead(ref)
+            Notifier.clear(getApplication(), ref)
+        }
+    }
+
+    fun reloadMessages(ref: String) {
+        viewModelScope.launch {
+            try {
+                val list: List<Message> = Core.call("listMessages", mapOf("chat" to ref, "count" to 200))
+                if (selection != ref) return@launch
+                messages.clear()
+                messages.addAll(list)
+                messagesFor = ref
+                loadImages(list)
+            } catch (e: Exception) {
+                notice = e.message
+            }
+        }
+    }
+
+    private fun scheduleMessagesReload() {
+        val ref = selection ?: return
+        messagesReload?.cancel()
+        messagesReload = viewModelScope.launch {
+            delay(120)
+            reloadMessages(ref)
+            if (ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) markRead(ref)
+        }
+    }
+
+    private fun loadImages(list: List<Message>) {
+        for (m in list) {
+            val f = m.file ?: continue
+            if (f.kind != "image" || f.state != "complete" || f.path == null || plainFiles.containsKey(f.id)) continue
+            viewModelScope.launch {
+                runCatching {
+                    val path: String = Core.call("plainFile", mapOf("path" to f.path, "key" to f.key, "nonce" to f.nonce))
+                    plainFiles[f.id] = path
+                }
+            }
+        }
+    }
+
+    private fun markRead(ref: String) {
+        viewModelScope.launch {
+            val chat = chats.firstOrNull { it.ref == ref }
+            if (chat != null && chat.unread == 0L && !chat.unreadChat) return@launch
+            runCatching { Core.run("markRead", mapOf("chat" to ref)) }
+            reloadChats()
+        }
+    }
+
+    fun markUnread(chat: Chat) = act { Core.run("markUnread", mapOf("chat" to chat.ref)) }
+
+    fun setFavorite(chat: Chat, on: Boolean) =
+        act { Core.run("setChatSettings", mapOf("chat" to chat.ref, "favorite" to on)) }
+
+    fun setMuted(chat: Chat, muted: Boolean) =
+        act { Core.run("setChatSettings", mapOf("chat" to chat.ref, "notifications" to if (muted) "none" else "all")) }
+
+    fun clear(chat: Chat) = act {
+        Core.run("clearChat", mapOf("chat" to chat.ref))
+        if (selection == chat.ref) reloadMessages(chat.ref)
+    }
+
+    fun delete(chat: Chat) = act {
+        Core.run("deleteChat", mapOf("chat" to chat.ref))
+        if (selection == chat.ref) select(null)
+    }
+
+    fun acceptRequest(chat: Chat) = act { Core.run("acceptRequest", mapOf("id" to chat.pendingRequestId)) }
+
+    fun rejectRequest(chat: Chat) = act {
+        Core.run("rejectRequest", mapOf("id" to chat.pendingRequestId))
+        if (selection == chat.ref) select(null)
+    }
+
+    fun joinGroup(groupId: Long) = act { Core.run("joinGroup", mapOf("groupId" to groupId)) }
+
+    fun createGroup(name: String, channel: Boolean, done: (String) -> Unit) = act {
+        val ref = if (channel) {
+            Core.raw("createChannel", mapOf("name" to name)).let {
+                CoreJson.decodeFromJsonElement(kotlinx.serialization.json.JsonObject.serializer(), it)["ref"]
+                    ?.let { r -> (r as kotlinx.serialization.json.JsonPrimitive).content }
+            }
+        } else {
+            Core.call<String>("createGroup", mapOf("name" to name))
+        }
+        reloadChats()
+        if (ref != null) done(ref)
+    }
+
+    // endregion
+
+    // region Messages
+
+    fun send() {
+        val ref = selection ?: return
+        val text = draft.trim()
+        if (text.isEmpty()) return
+        val mode = composeMode
+        draft = ""
+        composeMode = ComposeMode.New
+        drafts.remove(ref)
+        viewModelScope.launch {
+            try {
+                when (mode) {
+                    is ComposeMode.Edit -> Core.run(
+                        "updateText",
+                        mapOf("chat" to ref, "itemId" to mode.message.id, "text" to text, "cleanLinks" to prefs.cleanLinks),
+                    )
+                    is ComposeMode.Reply -> Core.run(
+                        "sendText",
+                        mapOf("chat" to ref, "text" to text, "quote" to mode.message.id, "cleanLinks" to prefs.cleanLinks),
+                    )
+                    ComposeMode.New -> Core.run(
+                        "sendText",
+                        mapOf("chat" to ref, "text" to text, "cleanLinks" to prefs.cleanLinks),
+                    )
+                }
+                reloadMessages(ref)
+            } catch (e: Exception) {
+                draft = text
+                composeMode = mode
+                error = e.message
+            }
+        }
+    }
+
+    fun react(message: Message, emoji: String, add: Boolean) = act {
+        Core.run("react", mapOf("chat" to selection, "itemId" to message.id, "emoji" to emoji, "add" to add))
+        selection?.let { reloadMessages(it) }
+    }
+
+    fun deleteMessage(message: Message, forEveryone: Boolean) = act {
+        Core.run("deleteItems", mapOf("chat" to selection, "itemIds" to listOf(message.id), "forEveryone" to forEveryone))
+        selection?.let { reloadMessages(it) }
+    }
+
+    fun startEdit(message: Message) {
+        composeMode = ComposeMode.Edit(message)
+        draft = message.text
+    }
+
+    fun cancelCompose() {
+        if (composeMode is ComposeMode.Edit) draft = ""
+        composeMode = ComposeMode.New
+    }
+
+    // endregion
+
+    // region Connect
+
+    suspend fun createInvitation(): ConnLink? = try {
+        Core.call("createInvitation")
+    } catch (e: Exception) {
+        error = e.message; null
+    }
+
+    suspend fun addressLink(): ConnLink? = try {
+        Core.call("addressLink")
+    } catch (e: Exception) {
+        error = e.message; null
+    }
+
+    fun connect(link: String, done: () -> Unit = {}) = act {
+        Core.run("connect", mapOf("link" to link))
+        notice = "Connecting… the chat appears in your list."
+        reloadChats()
+        done()
+    }
+
+    /** A link tapped in a message: SimpleX links connect, others open if safe. */
+    suspend fun prepareLink(url: String): PreparedLink =
+        runCatching { Core.call<PreparedLink>("prepareLink", mapOf("url" to url, "clean" to prefs.cleanLinks)) }
+            .getOrDefault(PreparedLink())
+
+    // endregion
+
+    // region Profile
+
+    fun updateProfile(displayName: String? = null, fullName: String? = null, shortDescr: String? = null) = act {
+        user = Core.call(
+            "updateProfile",
+            buildMap {
+                displayName?.let { put("displayName", it) }
+                fullName?.let { put("fullName", it) }
+                shortDescr?.let { put("shortDescr", it) }
+            },
+        )
+    }
+
+    // endregion
+
+    private fun act(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            try {
+                block()
+            } catch (e: Exception) {
+                error = e.message ?: e.toString()
+            }
+        }
+    }
+}

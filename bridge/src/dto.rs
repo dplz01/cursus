@@ -8,6 +8,7 @@ use cursus_core::{
     GroupMemberInfo, SimplexLinkKind, TextSegment, TextStyle, UserProfile,
 };
 use cursus_core::preferences;
+use cursus_core::roles;
 use serde_json::{json, Value};
 
 /// Parse a chat reference (`@3`, `#9`, `#9(_support)`, `#9(_support:4)`, `*1`).
@@ -100,6 +101,11 @@ pub fn chat(c: &ChatPreview) -> Value {
         "groupPrefs": (c.id.chat_type == ChatType::Group).then(|| group_prefs(c)),
         "memberReview": c.member_admission.as_ref().and_then(|m| m.get("review")).is_some(),
         "membersRequireAttention": c.members_require_attention,
+        // What your role allows here (cursus_core::roles), for groups.
+        "canEditProfile": c.membership_role.as_deref().is_some_and(roles::can_edit_group_profile),
+        "canManageMembers": c.membership_role.as_deref().is_some_and(roles::can_manage_members),
+        "canModerate": c.membership_role.as_deref().is_some_and(roles::can_moderate),
+        "assignableRoles": roles::assignable_roles(c.membership_role.as_deref().unwrap_or("")),
         // Your own "Chat with admins" thread.
         "supportUnread": c.membership_support_unread,
         "hasSupportChat": c.membership_has_support_chat,
@@ -150,6 +156,8 @@ pub fn member(m: &GroupMemberInfo) -> Value {
         "isMe": m.is_me,
         "blocked": m.blocked_by_admin,
         "showMessages": m.show_messages,
+        "invited": roles::member_status_is_invited(&m.status),
+        "pending": roles::member_status_is_pending(&m.status),
         // Their support thread with the moderators, when one exists.
         "support": m.support_chat.as_ref().map(|c| json!({
             "unread": c.unread, "attention": c.member_attention, "mentions": c.mentions,

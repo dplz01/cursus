@@ -43,11 +43,11 @@ use iced::{Element, Length, Subscription, Task, Theme};
 use tracing_subscriber::EnvFilter;
 
 use cursus_core::{
-    auto_receive_candidates, data_dir, files_dir, group_role_rank, is_channel_short_link,
+    auto_receive_candidates, data_dir, files_dir, is_channel_short_link,
     load_account, merge_seeded_channels, prune_resolved_seeds, save_account, setup_complete,
     AccountMeta, CallInfo, CallMedia, ChatId, ChatMessage, ChatPreview, ChatSettings, ChatTag,
     ChatType, ConnLink, DeliveryStatus, Event, FileTransferState, GroupMemberInfo,
-    GroupProfileUpdate, ProfileFields, Session, SessionConfig, UserProfile, GROUP_ROLES,
+    GroupProfileUpdate, ProfileFields, Session, SessionConfig, UserProfile,
 };
 
 use crate::layout::{resolve, Density, LayoutMode};
@@ -576,16 +576,10 @@ impl GroupSettingsOverlay {
 
 /// Roles this user may grant when inviting a contact (below own rank).
 pub(crate) fn invite_roles_for(my_role: &str) -> Vec<&'static str> {
-    let max = group_role_rank(my_role).saturating_sub(1).max(1);
-    GROUP_ROLES
-        .iter()
-        .copied()
-        .filter(|r| group_role_rank(r) <= max)
-        .collect()
+    cursus_core::roles::assignable_roles(my_role)
 }
 
-/// Roles a link joiner may receive (core: `CEGroupMemberInitialRole`).
-pub(crate) const LINK_JOINER_ROLES: &[&str] = &["observer", "member"];
+pub(crate) use cursus_core::roles::LINK_JOINER_ROLES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemberDropdown {
@@ -9197,12 +9191,7 @@ async fn leave_group(session: Arc<Session>, group_id: i64) -> Result<(), String>
 }
 
 fn cycle_role_below(current: &str, my_role: &str) -> String {
-    let max = group_role_rank(my_role).saturating_sub(1).max(1);
-    let allowed: Vec<&str> = GROUP_ROLES
-        .iter()
-        .copied()
-        .filter(|r| group_role_rank(r) <= max)
-        .collect();
+    let allowed = cursus_core::roles::assignable_roles(my_role);
     if allowed.is_empty() {
         return "member".into();
     }
@@ -9313,37 +9302,11 @@ pub(crate) fn group_support_allowed(prefs: Option<&serde_json::Value>) -> bool {
     cursus_core::preferences::group_feature_on(prefs, "support")
 }
 
-/// Invite outstanding / connecting — clock glyph, no Accept yet.
-pub(crate) fn member_status_is_invited(status: &str) -> bool {
-    matches!(
-        status.to_ascii_lowercase().as_str(),
-        "invited" | "intro-inv"
-    )
-}
-
-/// Host/moderator must Accept (`/_accept member`) — same clock glyph + Accept/Reject actions.
-pub(crate) fn member_status_is_pending(status: &str) -> bool {
-    matches!(
-        status.to_ascii_lowercase().as_str(),
-        "pending_approval" | "pending_review"
-    )
-}
-
-pub(crate) fn member_status_shows_pending_icon(status: &str) -> bool {
-    member_status_is_pending(status) || member_status_is_invited(status)
-}
-
-pub(crate) fn can_manage_members(my_role: &str) -> bool {
-    group_role_rank(my_role) >= group_role_rank("admin")
-}
-
-pub(crate) fn can_moderate(my_role: &str) -> bool {
-    group_role_rank(my_role) >= group_role_rank("moderator")
-}
-
-pub(crate) fn can_edit_group_profile(my_role: &str) -> bool {
-    group_role_rank(my_role) >= group_role_rank("owner")
-}
+// Role / member-state rules live in the core (shared by every app).
+pub(crate) use cursus_core::roles::{
+    can_edit_group_profile, can_manage_members, can_moderate, member_status_is_pending,
+    member_status_shows_pending_icon,
+};
 
 async fn create_chat_entity(
     session: Arc<Session>,
@@ -10098,38 +10061,6 @@ mod secret_tests {
     }
 }
 
-#[cfg(test)]
-mod member_status_tests {
-    use super::{
-        member_status_is_invited, member_status_is_pending, member_status_shows_pending_icon,
-    };
-
-    #[test]
-    fn pending_is_approval_or_review_only() {
-        assert!(member_status_is_pending("pending_approval"));
-        assert!(member_status_is_pending("pending_review"));
-        assert!(!member_status_is_pending("invited"));
-        assert!(!member_status_is_pending("connected"));
-        assert!(!member_status_is_pending("complete"));
-        assert!(!member_status_is_pending("intro-inv"));
-    }
-
-    #[test]
-    fn invited_is_not_accept_member() {
-        assert!(member_status_is_invited("invited"));
-        assert!(member_status_is_invited("intro-inv"));
-        assert!(!member_status_is_invited("pending_approval"));
-        assert!(!member_status_is_invited("connected"));
-    }
-
-    #[test]
-    fn pending_icon_covers_both_states() {
-        assert!(member_status_shows_pending_icon("pending_approval"));
-        assert!(member_status_shows_pending_icon("invited"));
-        assert!(!member_status_shows_pending_icon("connected"));
-        assert!(!member_status_shows_pending_icon("complete"));
-    }
-}
 
 #[cfg(test)]
 mod voice_draft_tests {

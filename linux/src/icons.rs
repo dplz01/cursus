@@ -260,10 +260,10 @@ pub fn mute_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     )
 }
 
-/// Group preferences / tools — Element Plus Line Interface Icons / element-plus (MIT).
+/// Group preferences / tools — the settings gear (one icon for settings everywhere).
 pub fn preferences_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg_handle!("../assets/icons/preferences.svg"),
+        svg_handle!("../assets/icons/settings.svg"),
         color,
         size,
     )

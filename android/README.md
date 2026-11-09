@@ -52,13 +52,20 @@ glyphs as every Cursus app; attribution in
 
 ## Status
 
-Done: create profile / unlock (password optionally kept in the Android
+Done: create profile / unlock (password optionally in the Android
 Keystore), Chats and Channels lists, conversation (rich text, quotes,
-images, files, reactions, reply / edit / delete), contact requests,
-group invitations, one-time invite links, connect by link (also
-`simplex:` links from other apps), groups and channels creation, your
-address, chat info, settings (profile, theme, privacy), notifications
-while running, phone and tablet layouts.
+images, files, reactions, reply / edit / delete), sending files and
+voice messages (record → draft → send), downloads (with the unknown-relay
+check), voice playback with real waveforms, photo viewer, contact
+requests, group invitations, the New page (one-time invite, address,
+join with a link, new group / channel overlay), contact pages and chat
+preferences, group / channel pages (profile editing, members, roles,
+invite, group link, preferences, support chats, leave / delete), settings
+(profile, address, theme, privacy, notifications), receiving in the
+background (foreground service), phone and tablet layouts.
 
-Next: sending files / images / voice, voice playback, member lists and
-group settings, background delivery (foreground service / push), calls.
+Next: forward / message info / reaction members, emoji shortcodes,
+chat lists (tags), profile pictures, app lock timeout, calls.
+
+UI rule: every screen follows the Linux app's structure, cards and
+wording (see `docs/DESIGN_SYSTEM.md` and `linux/src/ui.rs`).

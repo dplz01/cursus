@@ -12,6 +12,7 @@ mod models;
 mod musl_compat;
 mod paths;
 pub mod preferences;
+pub mod roles;
 pub mod safety;
 mod rich_text;
 mod session;

@@ -1,15 +1,17 @@
 //! Lightweight media helpers (ffmpeg CLI; symphonia for waveform decode).
 
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use base64::Engine;
 use image::metadata::Orientation;
 
+// Shared image rules live in the core (every app uses them).
+pub use cursus_core::media::{
+    encode_profile_image, exif_orientation, open_upright, upright_copy_for_send,
+};
+
 pub const WAVEFORM_BARS: usize = 96;
-/// Official SimpleX `maxProfileImageSize` (characters of the data-URL).
-pub const MAX_PROFILE_IMAGE_CHARS: usize = 12_500;
 /// Official bio cap (`MAX_BIO_LENGTH_BYTES`).
 pub const MAX_BIO_BYTES: usize = 160;
 
@@ -307,30 +309,6 @@ pub fn fit_within(sw: u32, sh: u32, max_w: u32, max_h: u32) -> (u32, u32) {
 
 /// EXIF orientation of an image file (headers only, no pixel decode). Phone
 /// cameras store portrait shots as landscape pixels plus this tag.
-pub fn exif_orientation(path: &Path) -> Option<Orientation> {
-    let mut decoder = image::ImageReader::open(path)
-        .ok()?
-        .with_guessed_format()
-        .ok()?
-        .into_decoder()
-        .ok()?;
-    use image::ImageDecoder;
-    decoder.orientation().ok()
-}
-
-/// Decode budget for received photos. A tiny file can claim gigantic
-/// dimensions ("decompression bomb"); the `image` default allows 512 MiB per
-/// decode, too much on phones where several previews decode at once.
-/// 128 MiB covers ~40 MP RGB photos; larger ones fall back to the placeholder
-/// (sending such a photo still works — it goes out untouched).
-fn photo_limits() -> image::Limits {
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(128 * 1024 * 1024);
-    limits.max_image_width = Some(12_000);
-    limits.max_image_height = Some(12_000);
-    limits
-}
-
 /// Profile pictures are at most a few hundred pixels; anything bigger is junk.
 fn avatar_limits() -> image::Limits {
     let mut limits = image::Limits::default();
@@ -338,22 +316,6 @@ fn avatar_limits() -> image::Limits {
     limits.max_image_width = Some(2_048);
     limits.max_image_height = Some(2_048);
     limits
-}
-
-/// Decode an image file with EXIF orientation applied.
-pub fn open_upright(path: &Path) -> Result<image::DynamicImage, String> {
-    use image::ImageDecoder;
-    let mut reader = image::ImageReader::open(path)
-        .and_then(|r| r.with_guessed_format())
-        .map_err(|e| format!("open image: {e}"))?;
-    reader.limits(photo_limits());
-    let mut decoder = reader
-        .into_decoder()
-        .map_err(|e| format!("decode image: {e}"))?;
-    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
-    let mut img = image::DynamicImage::from_decoder(decoder).map_err(|e| format!("decode image: {e}"))?;
-    img.apply_orientation(orientation);
-    Ok(img)
 }
 
 /// Pixel dimensions as displayed (width/height swapped for 90° EXIF tags).
@@ -368,41 +330,6 @@ pub fn upright_dimensions(path: &Path) -> Option<(u32, u32)> {
         ) => (h, w),
         _ => (w, h),
     })
-}
-
-/// Longest side of a re-encoded outgoing photo (matches official clients' ~1600px).
-const OUTGOING_IMAGE_MAX_SIDE: u32 = 1920;
-
-/// If `path` is a JPEG with a non-identity EXIF orientation, write an upright,
-/// EXIF-free copy under `out_dir` and return its path. Receivers (including
-/// official SimpleX clients) do not all honour EXIF, so we bake the rotation in.
-pub fn upright_copy_for_send(path: &Path, out_dir: &Path) -> Result<Option<PathBuf>, String> {
-    if exif_orientation(path).is_none_or(|o| o == Orientation::NoTransforms) {
-        return Ok(None);
-    }
-    let img = open_upright(path)?;
-    let img = if img.width().max(img.height()) > OUTGOING_IMAGE_MAX_SIDE {
-        img.resize(
-            OUTGOING_IMAGE_MAX_SIDE,
-            OUTGOING_IMAGE_MAX_SIDE,
-            image::imageops::FilterType::Triangle,
-        )
-    } else {
-        img
-    };
-    std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
-    let name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("image.jpg");
-    let out = out_dir.join(name);
-    let file = std::fs::File::create(&out).map_err(|e| e.to_string())?;
-    let mut w = std::io::BufWriter::new(file);
-    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut w, 88);
-    image::DynamicImage::ImageRgb8(img.to_rgb8())
-        .write_with_encoder(enc)
-        .map_err(|e| format!("jpeg encode: {e}"))?;
-    Ok(Some(out))
 }
 
 /// Heavily blurred copy of a (small, already rounded) chat preview, written
@@ -529,41 +456,6 @@ fn rounded_rect_coverage(x: f32, y: f32, w: f32, h: f32, r: f32) -> f32 {
         0.0
     } else {
         ((r + aa - dist) / (2.0 * aa)).clamp(0.0, 1.0)
-    }
-}
-
-/// Resize an image file into a SimpleX profile data-URL (≤ [`MAX_PROFILE_IMAGE_CHARS`]).
-pub fn encode_profile_image(path: &Path) -> Result<String, String> {
-    let img = open_upright(path).map_err(|e| format!("open profile image: {e}"))?;
-    let rgba = img.to_rgba8();
-    let (w, h) = rgba.dimensions();
-    if w == 0 || h == 0 {
-        return Err("empty image".into());
-    }
-    // Shrink until JPEG data-URL fits the official char budget.
-    let mut max_side = 256u32;
-    loop {
-        let scale = (max_side as f32 / w as f32).min(max_side as f32 / h as f32).min(1.0);
-        let rw = ((w as f32) * scale).round().max(1.0) as u32;
-        let rh = ((h as f32) * scale).round().max(1.0) as u32;
-        let resized = image::imageops::resize(&rgba, rw, rh, image::imageops::FilterType::Triangle);
-        for quality in [80u8, 60, 40, 25] {
-            let mut bytes = Vec::new();
-            let mut cursor = Cursor::new(&mut bytes);
-            let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality);
-            image::DynamicImage::ImageRgba8(resized.clone())
-                .write_with_encoder(enc)
-                .map_err(|e| format!("jpeg encode: {e}"))?;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            let data_url = format!("data:image/jpg;base64,{b64}");
-            if data_url.len() <= MAX_PROFILE_IMAGE_CHARS {
-                return Ok(data_url);
-            }
-        }
-        if max_side <= 48 {
-            return Err("image too large for profile (could not fit 12.5KB data-URL)".into());
-        }
-        max_side = (max_side * 3 / 4).max(48);
     }
 }
 

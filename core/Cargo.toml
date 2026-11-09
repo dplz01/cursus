@@ -24,6 +24,8 @@ tracing.workspace = true
 unicode-segmentation.workspace = true
 zeroize.workspace = true
 libc = "0.2"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
 
 [build-dependencies]
 cc = "1"

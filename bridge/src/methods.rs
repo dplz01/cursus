@@ -112,6 +112,8 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, String> {
             Ok(json!(cursus_core::accept_shortcode(str_param(p, "text")?, str_param(p, "glyph")?)))
         }
         "expandShortcodes" => Ok(json!(cursus_core::expand_emoji_shortcodes(str_param(p, "text")?))),
+        // A picked image as a profile picture (core media rule: SimpleX data-URL budget).
+        "encodeProfileImage" => Ok(json!(cursus_core::media::encode_profile_image(std::path::Path::new(str_param(p, "path")?))?)),
         // Executables a sender named are never opened (core safety rule).
         "riskyFile" => Ok(json!(cursus_core::safety::is_risky_to_open(std::path::Path::new(str_param(p, "path")?)))),
         _ => with_session(method, p),

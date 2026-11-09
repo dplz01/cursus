@@ -168,7 +168,6 @@ enum Icons {
         case "session-leave": return "rectangle.portrait.and.arrow.right"
         case "clear-all": return "eraser"
         case "mute-notification": return "bell.slash"
-        case "preferences": return "slider.horizontal.3"
         case "back": return "chevron.left"
         case "chevron-down": return "chevron.down"
         case "info-circle": return "info.circle"

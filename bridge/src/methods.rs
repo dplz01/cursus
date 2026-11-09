@@ -1,4 +1,4 @@
-//! Request dispatch: one arm per method the Swift app calls.
+//! Request dispatch: one arm per method the apps call (macOS, Android).
 
 use std::path::PathBuf;
 

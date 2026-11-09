@@ -4,7 +4,7 @@ members = [
     "call",
     "core",
     "linux",
-    "macos/bridge",
+    "bridge",
 ]
 default-members = ["linux"]
 

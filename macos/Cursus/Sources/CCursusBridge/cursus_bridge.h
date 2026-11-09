@@ -1,4 +1,4 @@
-/* C ABI of macos/bridge (Rust). See macos/bridge/src/lib.rs. */
+/* C ABI of bridge/ (Rust). See bridge/src/lib.rs. */
 #ifndef CURSUS_BRIDGE_H
 #define CURSUS_BRIDGE_H
 

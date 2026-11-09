@@ -1,6 +1,8 @@
-//! C ABI over `cursus-core` for the native macOS app.
+//! JSON API over `cursus-core` for the native apps: the macOS app links this
+//! C ABI directly; Android wraps the same four functions in JNI
+//! (`android/jni`). Requests, replies and events are identical on both.
 //!
-//! Deliberately tiny so the Swift side needs no generated bindings (and builds
+//! Deliberately tiny so the app side needs no generated bindings (Swift builds
 //! with the Swift 5.7 toolchain of the last Xcode that runs on Monterey):
 //!
 //! ```c

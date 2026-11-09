@@ -1,6 +1,6 @@
 import Foundation
 
-// Mirrors the JSON built in macos/bridge/src/dto.rs.
+// Mirrors the JSON built in bridge/src/dto.rs.
 
 struct AppInfo: Decodable {
     let setupComplete: Bool

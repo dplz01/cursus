@@ -7,7 +7,7 @@ newer**, Intel and Apple Silicon.
 ```
 SwiftUI app (macos/Cursus)        views, Keychain, notifications, Dock badge
         │  4 C functions, JSON in/out
-Rust bridge (macos/bridge)        static library over cursus-core
+Rust bridge (../bridge)           static library over cursus-core
         │
 cursus-core  →  libsimplex.dylib  (Contents/Frameworks)
 ```
@@ -16,7 +16,7 @@ The bridge is deliberately small — `cursus_call` (one JSON request, one JSON
 reply), `cursus_next_event`, `cursus_init`, `cursus_free` — so the Swift side
 needs no generated bindings and builds with any Swift 5.5+ toolchain that has
 the macOS 12 SDK (Xcode 13.1 – 14.2 run on Monterey). JSON shapes live in
-`bridge/src/dto.rs` and are mirrored by `Cursus/Sources/Cursus/Models.swift`.
+`../bridge/src/dto.rs` and are mirrored by `Cursus/Sources/Cursus/Models.swift`.
 
 ## Build
 

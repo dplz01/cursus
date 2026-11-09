@@ -92,6 +92,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: docs/releases
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -101,6 +104,10 @@ jobs:
         run: |
           sha256sum * > SHA256SUMS
           {
+            # Per-version changes, written by hand for each release.
+            if [ -f "../docs/releases/${GITHUB_REF_NAME}.md" ]; then
+              cat "../docs/releases/${GITHUB_REF_NAME}.md"
+            fi
             echo "## Downloads"
             echo
             echo "| File | For |"

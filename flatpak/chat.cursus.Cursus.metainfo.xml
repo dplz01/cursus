@@ -34,6 +34,18 @@
     <display_length compare="ge">360</display_length>
   </requires>
   <releases>
+    <release version="0.1.1" date="2026-11-09">
+      <description>
+        <p>Bug fixes and UI polish.</p>
+        <ul>
+          <li>"New messages" divider; incoming messages no longer move the history</li>
+          <li>Sender and role inside group bubbles; captions on files and voice messages</li>
+          <li>"Enter sends messages" setting; on-screen keyboard stays up</li>
+          <li>Single instance: no more "database is locked" when relaunching from the tray</li>
+          <li>Tracking codes removed from links you send, not only links you open</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-06">
       <description>
         <p>First release.</p>

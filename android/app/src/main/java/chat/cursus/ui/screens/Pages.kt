@@ -40,6 +40,9 @@ import chat.cursus.ui.components.CursusCard
 import chat.cursus.ui.components.CursusField
 import chat.cursus.ui.components.IconTool
 import chat.cursus.ui.components.LinkBox
+import chat.cursus.ui.components.NavRow
+import chat.cursus.ui.components.CursusOverlay
+import chat.cursus.ui.components.RoundedField
 import chat.cursus.ui.components.PageColumn
 import chat.cursus.ui.components.PrimaryButton
 import chat.cursus.ui.components.SecondaryButton
@@ -54,70 +57,87 @@ private fun share(context: android.content.Context, text: String) {
     context.startActivity(Intent.createChooser(send, null))
 }
 
+private enum class CreateKind { Group, Channel }
+
+/** Linux "New" page: Connect card + Create card; New group / channel open the name overlay. */
 @Composable
 fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOpened: (String) -> Unit) {
     val c = Cursus.colors
-    val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
-    var invitation by remember { mutableStateOf<ConnLink?>(null) }
-    var creating by remember { mutableStateOf(false) }
+    var shared by remember { mutableStateOf<ConnLink?>(null) }
     var link by rememberSaveable { mutableStateOf(initialLink ?: "") }
-    var groupName by rememberSaveable { mutableStateOf("") }
-    var channelName by rememberSaveable { mutableStateOf("") }
+    var create by remember { mutableStateOf<CreateKind?>(null) }
 
     Column(Modifier.fillMaxSize().background(c.bgPanel)) {
-        PaneHeader("New chat", onBack = onClose)
+        PaneHeader("New", onBack = onClose)
         Column(Modifier.verticalScroll(rememberScrollState())) {
             PageColumn {
                 CursusCard {
-                    CardTitle(R.drawable.ic_link_minimalistic_2, "Invite someone", "A one-time link: whoever opens it first connects with you")
-                    Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        val inv = invitation
-                        if (inv == null) {
-                            PrimaryButton(if (creating) "Creating…" else "Create link", {
-                                creating = true
-                                scope.launch {
-                                    invitation = model.createInvitation()
-                                    creating = false
-                                    model.reloadChats()
-                                }
-                            }, Modifier.fillMaxWidth(), enabled = !creating)
-                        } else {
-                            val shown = inv.short ?: inv.full
-                            LinkBox(shown) { model.notice = "Link copied" }
-                            SecondaryButton("Share link", { share(context, shown) }, Modifier.fillMaxWidth())
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        CardTitle(R.drawable.ic_link_minimalistic_2, "Connect", "Share a link, or paste one you received.")
+                        NavRow(R.drawable.ic_repeat_once, "One-time invite", "A single-use link for one person") {
+                            scope.launch { model.createInvitation()?.let { shared = it }; model.reloadChats() }
+                        }
+                        NavRow(R.drawable.ic_address_card, "My address", "Your reusable contact link") {
+                            scope.launch { model.addressLink()?.let { shared = it } }
+                        }
+                        shared?.let { l ->
+                            SectionLabel("Ready to share — tap to copy")
+                            Column(Modifier.padding(horizontal = 8.dp)) {
+                                LinkBox(l.short ?: l.full) { model.notice = "Link copied" }
+                            }
+                        }
+                        SectionLabel("Join with a link")
+                        Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                RoundedField(link, { link = it }, "Invite or address link…", Modifier.weight(1f))
+                                IconTool(R.drawable.ic_paste, "Paste", { clipboard.getText()?.let { link = it.text.trim() } })
+                            }
+                            PrimaryButton("Connect", { model.connect(link.trim()) { onClose() } }, Modifier.fillMaxWidth(), enabled = link.isNotBlank())
                         }
                     }
                 }
                 CursusCard {
-                    CardTitle(R.drawable.ic_paste, "Connect with a link", "Paste a link someone shared with you")
-                    Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        CursusField(link, { link = it }, "simplex:/… or https://smp…", singleLine = false, trailing = {
-                            IconTool(R.drawable.ic_paste, "Paste", { clipboard.getText()?.let { link = it.text } })
-                        })
-                        PrimaryButton("Connect", { model.connect(link.trim()) { onClose() } }, Modifier.fillMaxWidth(), enabled = link.isNotBlank())
-                    }
-                }
-                CursusCard {
-                    CardTitle(R.drawable.ic_user_group, "New group", "Chat with several people")
-                    Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        CursusField(groupName, { groupName = it }, "Group name")
-                        SecondaryButton("Create group", {
-                            model.createGroup(groupName.trim(), channel = false) { onOpened(it) }
-                        }, Modifier.fillMaxWidth(), enabled = groupName.isNotBlank())
-                    }
-                }
-                CursusCard {
-                    CardTitle(R.drawable.ic_channels, "New channel", "Broadcast to subscribers through relays")
-                    Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        CursusField(channelName, { channelName = it }, "Channel name")
-                        SecondaryButton("Create channel", {
-                            model.createGroup(channelName.trim(), channel = true) { onOpened(it) }
-                        }, Modifier.fillMaxWidth(), enabled = channelName.isNotBlank())
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        CardTitle(R.drawable.ic_plus, "Create", "Start a conversation for many people.")
+                        NavRow(R.drawable.ic_user_group, "New group", "Private group — invite contacts after creating") {
+                            create = CreateKind.Group
+                        }
+                        NavRow(R.drawable.ic_channels, "New channel", "Public channel using enabled chat relays") {
+                            create = CreateKind.Channel
+                        }
                     }
                 }
             }
+        }
+    }
+    create?.let { kind ->
+        CreateChatOverlay(kind, onDismiss = { create = null }) { name ->
+            create = null
+            model.createGroup(name, channel = kind == CreateKind.Channel) { onOpened(it) }
+        }
+    }
+}
+
+/** Linux `create_chat_overlay`. */
+@Composable
+private fun CreateChatOverlay(kind: CreateKind, onDismiss: () -> Unit, onCreate: (String) -> Unit) {
+    val c = Cursus.colors
+    var name by rememberSaveable { mutableStateOf("") }
+    val (title, hint, placeholder) = when (kind) {
+        CreateKind.Group -> Triple("New group", "Private group — invite contacts after creating.", "Group name")
+        CreateKind.Channel -> Triple(
+            "New channel", "Public channel using your enabled chat relays (from SimpleX network settings).", "Channel name",
+        )
+    }
+    CursusOverlay(onDismiss) {
+        Text(title, style = Cursus.type.body, color = c.textPrimary)
+        Text(hint, style = Cursus.type.meta, color = c.textSecondary)
+        CursusField(name, { name = it }, placeholder)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SecondaryButton("Cancel", onDismiss)
+            PrimaryButton("Create", { onCreate(name.trim()) }, enabled = name.isNotBlank())
         }
     }
 }

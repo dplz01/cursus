@@ -359,3 +359,22 @@ fun PageColumn(modifier: Modifier = Modifier, content: @Composable ColumnScope.(
         )
     }
 }
+
+/** Rounded inline field: radius 12, 6×12 padding, placeholder in `text.secondary`. */
+@Composable
+fun RoundedField(value: String, onValueChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier, singleLine: Boolean = true) {
+    val c = Cursus.colors
+    Box(
+        modifier.clip(Radius.lg).background(c.bgSidebar).border(1.dp, c.border, Radius.lg).padding(horizontal = 12.dp, vertical = 9.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        if (value.isEmpty()) Text(placeholder, style = Cursus.type.body, color = c.textSecondary, maxLines = 1)
+        androidx.compose.foundation.text.BasicTextField(
+            value, onValueChange,
+            singleLine = singleLine,
+            textStyle = Cursus.type.body.copy(color = c.textPrimary),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(c.accent),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}

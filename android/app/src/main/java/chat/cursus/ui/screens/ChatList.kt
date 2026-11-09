@@ -2,6 +2,8 @@ package chat.cursus.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -72,6 +74,19 @@ fun PaneHeader(
     }
 }
 
+/** Linux list header "+": secondary button, 36px, accent glyph. */
+@Composable
+fun HeaderPlus(description: String, onClick: () -> Unit) {
+    val c = Cursus.colors
+    Box(
+        Modifier.padding(end = 8.dp).size(36.dp).clip(Radius.md).background(c.bgSidebar)
+            .border(1.dp, c.border, Radius.md).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(painterResource(R.drawable.ic_plus), description, Modifier.size(20.dp), tint = c.accent)
+    }
+}
+
 @Composable
 fun ChatListPane(model: AppModel, channels: Boolean, onNew: () -> Unit) {
     val c = Cursus.colors
@@ -80,7 +95,7 @@ fun ChatListPane(model: AppModel, channels: Boolean, onNew: () -> Unit) {
         .sortedWith(compareByDescending<Chat> { it.isRequest }.thenByDescending { it.favorite }.thenByDescending { it.lastTs ?: "" })
     Column(Modifier.fillMaxSize()) {
         PaneHeader(if (channels) "Channels" else "Chats") {
-            IconTool(R.drawable.ic_plus, if (channels) "New channel" else "New chat", onNew, tint = c.textPrimary)
+            HeaderPlus(if (channels) "New channel" else "New chat", onNew)
         }
         if (chats.isEmpty()) {
             Column(
@@ -194,21 +209,16 @@ fun MenuEntry(text: String, danger: Boolean = false, onClick: () -> Unit) {
     )
 }
 
-/** Confirmation in a card: question + Cancel / solid danger. */
+/** Confirmation in the overlay card: question + Cancel / solid danger. */
 @Composable
 fun ConfirmDialog(title: String, text: String, action: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     val c = Cursus.colors
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier.clip(Radius.lg).background(c.bgElevated).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(title, style = Cursus.type.title, color = c.textPrimary)
-            Text(text, style = Cursus.type.body, color = c.textSecondary)
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SecondaryButton("Cancel", onDismiss, Modifier.weight(1f))
-                DangerButton(action, onConfirm, Modifier.weight(1f))
-            }
+    chat.cursus.ui.components.CursusOverlay(onDismiss) {
+        Text(title, style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+        Text(text, style = Cursus.type.meta, color = c.textSecondary)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SecondaryButton("Cancel", onDismiss, Modifier.weight(1f))
+            DangerButton(action, onConfirm, Modifier.weight(1f))
         }
     }
 }

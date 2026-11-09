@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only Cursus' own data folder (decrypted cache, received files) is shareable, one file per grant. -->
+<paths>
+    <files-path name="cursus" path="cursus/" />
+</paths>

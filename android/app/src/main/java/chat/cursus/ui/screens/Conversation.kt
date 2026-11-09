@@ -338,52 +338,7 @@ private fun MessageBody(model: AppModel, m: Message) {
         return
     }
     m.file?.let { f ->
-        val path = model.plainFiles[f.id]
-        if (f.kind == "image" && path != null) {
-            val bitmap by produceState<ImageBitmap?>(null, path) {
-                value = withContext(Dispatchers.IO) { decodeScaled(path, 720) }
-            }
-            bitmap?.let {
-                Image(
-                    it, f.name,
-                    Modifier.padding(bottom = 4.dp).widthIn(max = 296.dp).heightIn(max = 360.dp).clip(Radius.lg),
-                    contentScale = ContentScale.Fit,
-                )
-            }
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val icon = when (f.kind) {
-                    "voice" -> R.drawable.ic_mic
-                    "image" -> R.drawable.ic_image_square
-                    "video" -> R.drawable.ic_play
-                    else -> R.drawable.ic_download
-                }
-                Icon(painterResource(icon), null, Modifier.size(20.dp), tint = c.accent)
-                Column {
-                    Text(
-                        if (f.kind == "voice") "Voice message" + (f.duration?.let { " (%d:%02d)".format(it / 60, it % 60) } ?: "") else f.name,
-                        style = Cursus.type.body, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        when (f.state) {
-                            "inProgress" -> "Transferring…"
-                            "failed" -> f.error ?: "Transfer failed"
-                            "offer" -> humanSize(f.size)
-                            else -> humanSize(f.size)
-                        },
-                        style = Cursus.type.meta, color = if (f.state == "failed") c.danger else c.textSecondary,
-                    )
-                }
-            }
-            if (f.state == "inProgress" && f.progress != null) {
-                LinearProgressIndicator(
-                    progress = { f.progress.toFloat() },
-                    modifier = Modifier.padding(top = 4.dp).width(180.dp),
-                    color = c.accent,
-                    trackColor = c.bgSidebar,
-                )
-            }
-        }
+        FileBody(model, m, f)
         if (m.caption.isNotBlank()) RichText(model, m.segments.ifEmpty { listOf(Segment(m.caption)) }, m.emojiOnly)
         return
     }
@@ -459,7 +414,7 @@ fun humanSize(bytes: Long): String = when {
     else -> "$bytes B"
 }
 
-private fun decodeScaled(path: String, maxSide: Int): ImageBitmap? = runCatching {
+internal fun decodeScaled(path: String, maxSide: Int): ImageBitmap? = runCatching {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(path, bounds)
     var sample = 1
@@ -492,56 +447,5 @@ private fun MessageMenu(model: AppModel, m: Message, open: Boolean, onDismiss: (
         if (m.outgoing && m.deleted == null) {
             MenuEntry("Delete for everyone", danger = true) { onDismiss(); model.deleteMessage(m, forEveryone = true) }
         }
-    }
-}
-
-@Composable
-private fun Composer(model: AppModel) {
-    val c = Cursus.colors
-    Column(Modifier.fillMaxWidth().background(c.bgPanel)) {
-        when (val mode = model.composeMode) {
-            is ComposeMode.Reply, is ComposeMode.Edit -> {
-                val (label, text) = when (mode) {
-                    is ComposeMode.Reply -> "Reply" to mode.message.text
-                    is ComposeMode.Edit -> "Edit message" to mode.message.text
-                    else -> "" to ""
-                }
-                Row(
-                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.width(3.dp).heightIn(min = 32.dp).background(c.accent))
-                    Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
-                        Text(label, style = Cursus.type.meta, color = c.accent)
-                        Text(text, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    IconTool(R.drawable.ic_cancel, "Cancel", { model.cancelCompose() })
-                }
-            }
-            ComposeMode.New -> Unit
-        }
-        Row(
-            Modifier.fillMaxWidth().padding(8.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            TextField(
-                value = model.draft,
-                onValueChange = { model.draft = it },
-                modifier = Modifier.weight(1f).heightIn(min = 44.dp, max = 160.dp),
-                placeholder = { Text("Message", color = c.textSecondary, style = Cursus.type.body) },
-                textStyle = Cursus.type.body.copy(color = c.textPrimary),
-                shape = Radius.md,
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = c.bgSidebar,
-                    unfocusedContainerColor = c.bgSidebar,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    cursorColor = c.accent,
-                ),
-            )
-            AccentSquare(R.drawable.ic_paperplane, "Send", { model.send() }, enabled = model.draft.isNotBlank())
-        }
-        Spacer(Modifier.size(0.dp))
     }
 }

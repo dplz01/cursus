@@ -192,7 +192,9 @@ fun MainScreen(model: AppModel) {
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp))
+        ImageGallery(model)
     }
+    FileApprovalDialog(model)
 }
 
 @Composable

@@ -20,6 +20,15 @@ import chat.cursus.core.Message
 import chat.cursus.core.Native
 import chat.cursus.core.PreparedLink
 import chat.cursus.core.User
+import android.net.Uri
+import chat.cursus.core.FileInfo
+import chat.cursus.media.Files
+import chat.cursus.media.VoiceDraft
+import chat.cursus.media.VoicePlayer
+import chat.cursus.media.VoiceRecorder
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -73,6 +82,17 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     /** Readable paths of decrypted images, by file id. */
     val plainFiles = mutableStateMapOf<Long, String>()
+
+    // Voice messages: recording → draft → send (as on Linux).
+    private val recorder = VoiceRecorder(app)
+    var recording by mutableStateOf(false); private set
+    var recordLevel by mutableStateOf(0f); private set
+    var recordSecs by mutableStateOf(0); private set
+    var voiceDraft by mutableStateOf<VoiceDraft?>(null); private set
+    /** A download whose relays need your OK (servers not among yours). */
+    var fileApproval by mutableStateOf<Pair<FileInfo, List<String>>?>(null)
+    /** Image shown full screen (file id), over the conversation. */
+    var gallery by mutableStateOf<Long?>(null)
 
     /** Opened from a notification / a link before the chats were ready. */
     var pendingChat by mutableStateOf<String?>(null)
@@ -146,6 +166,11 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun lock() {
+        VoicePlayer.stop()
+        discardRecording()
+        discardVoiceDraft()
+        plainFiles.clear()
+        gallery = null
         busy = true
         viewModelScope.launch {
             runCatching { Core.run("close") }
@@ -246,6 +271,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         selection = ref
         draft = ref?.let { drafts[it] } ?: ""
         composeMode = ComposeMode.New
+        discardRecording()
+        discardVoiceDraft()
+        VoicePlayer.stop()
         messages.clear()
         messagesFor = null
         if (ref != null) {
@@ -283,7 +311,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private fun loadImages(list: List<Message>) {
         for (m in list) {
             val f = m.file ?: continue
-            if (f.kind != "image" || f.state != "complete" || f.path == null || plainFiles.containsKey(f.id)) continue
+            if (f.kind !in setOf("image", "voice") || f.state != "complete" || f.path == null || plainFiles.containsKey(f.id)) continue
             viewModelScope.launch {
                 runCatching {
                     val path: String = Core.call("plainFile", mapOf("path" to f.path, "key" to f.key, "nonce" to f.nonce))
@@ -397,6 +425,120 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     fun cancelCompose() {
         if (composeMode is ComposeMode.Edit) draft = ""
         composeMode = ComposeMode.New
+    }
+
+    // endregion
+
+    // region Attachments and voice
+
+    private fun tmp(sub: String): File = File(info?.dataDir ?: getApplication<Application>().filesDir.path, "tmp/$sub")
+
+    /** A picked document: copied in, then sent (images go as images — core rule on the name). */
+    fun sendFile(uri: Uri) {
+        val ref = selection ?: return
+        act {
+            val file = withContext(Dispatchers.IO) { Files.copyIn(getApplication(), uri, tmp("out")) }
+            try {
+                Core.run("sendFile", mapOf("chat" to ref, "path" to file.absolutePath))
+            } finally {
+                // The core keeps its own (encrypted) copy in files/.
+                withContext(Dispatchers.IO) { file.parentFile?.deleteRecursively() }
+            }
+            reloadMessages(ref)
+        }
+    }
+
+    fun startRecording() {
+        if (recording) return
+        VoicePlayer.stop()
+        try {
+            recorder.start(tmp("rec"))
+        } catch (e: Exception) {
+            error = "The microphone could not start: ${e.message}"
+            return
+        }
+        recording = true
+        viewModelScope.launch {
+            while (recording) {
+                recordLevel = recorder.sample()
+                recordSecs = recorder.elapsedSecs
+                delay(100)
+            }
+        }
+    }
+
+    /** ■: stop to a draft you can review. */
+    fun stopRecording() {
+        if (!recording) return
+        recording = false
+        voiceDraft = recorder.stop()
+        if (voiceDraft == null) notice = "Too short to send"
+    }
+
+    fun discardRecording() {
+        recording = false
+        recorder.discard()
+    }
+
+    fun discardVoiceDraft() {
+        voiceDraft?.file?.delete()
+        voiceDraft = null
+    }
+
+    /** Send while recording: stop and send in one tap. */
+    fun sendVoiceNow() {
+        stopRecording()
+        sendVoiceDraft()
+    }
+
+    fun sendVoiceDraft() {
+        val ref = selection ?: return
+        val draft = voiceDraft ?: return
+        voiceDraft = null
+        act {
+            try {
+                Core.run("sendVoice", mapOf("chat" to ref, "path" to draft.file.absolutePath, "duration" to draft.durationSecs))
+            } finally {
+                withContext(Dispatchers.IO) { draft.file.delete() }
+            }
+            reloadMessages(ref)
+        }
+    }
+
+    /** Download an offered file; unknown relays ask first (core rule). */
+    fun receive(file: FileInfo, approved: Boolean = false) = act {
+        val reply = Core.raw("receiveFile", mapOf("fileId" to file.id, "approved" to approved))
+        val obj = reply as? kotlinx.serialization.json.JsonObject
+        val accepted = (obj?.get("accepted") as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
+        if (!accepted) {
+            val servers = (obj?.get("servers") as? kotlinx.serialization.json.JsonArray)
+                ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.orEmpty()
+            fileApproval = file to servers
+        }
+        selection?.let { reloadMessages(it) }
+    }
+
+    /** Readable path of a complete file (decrypted into the private cache). */
+    suspend fun plainPath(file: FileInfo): String? {
+        plainFiles[file.id]?.let { if (File(it).isFile) return it }
+        val path = file.path ?: return null
+        return runCatching {
+            Core.call<String>("plainFile", mapOf("path" to path, "key" to file.key, "nonce" to file.nonce))
+        }.getOrNull()?.also { plainFiles[file.id] = it }
+    }
+
+    fun openFile(file: FileInfo) = act {
+        val path = plainPath(file) ?: return@act run { notice = "The file isn't on this phone" }
+        if (Core.call<Boolean>("riskyFile", mapOf("path" to file.name))) {
+            error = "Cursus doesn't open apps or scripts someone sent (${file.name})."
+            return@act
+        }
+        if (!Files.open(getApplication(), path, file.name)) notice = "No app on this phone opens ${file.name}"
+    }
+
+    fun playVoice(file: FileInfo) = act {
+        val path = plainPath(file) ?: return@act
+        VoicePlayer.toggle(file.id, path)
     }
 
     // endregion

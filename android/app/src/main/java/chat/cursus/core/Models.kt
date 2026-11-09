@@ -86,6 +86,7 @@ data class FileInfo(
     val nonce: String? = null,
     val progress: Double? = null,
     val error: String? = null,
+    val autoReceive: Boolean = false,
 )
 
 @Serializable

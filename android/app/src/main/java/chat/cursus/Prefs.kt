@@ -36,4 +36,10 @@ class Prefs(context: Context) {
     var secureScreen: Boolean
         get() = secureScreenState.value
         set(v) { secureScreenState.value = v; sp.edit().putBoolean("secureScreen", v).apply() }
+
+    private val backgroundState = bool("background", true)
+    /** Keep receiving while Cursus is in the background (foreground service). */
+    var background: Boolean
+        get() = backgroundState.value
+        set(v) { backgroundState.value = v; sp.edit().putBoolean("background", v).apply() }
 }

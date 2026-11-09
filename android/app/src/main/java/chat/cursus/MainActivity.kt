@@ -9,13 +9,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
 import chat.cursus.ui.screens.Root
 import chat.cursus.ui.theme.CursusTheme
 
 class MainActivity : ComponentActivity() {
-    private val model: AppModel by viewModels()
+    private val model: AppModel get() = (application as CursusApplication).model
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {

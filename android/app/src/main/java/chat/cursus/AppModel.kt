@@ -160,6 +160,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 if (remember) passwords.save(password) else if (!quiet) passwords.delete()
                 info = runCatching { Core.call<AppInfo>("appInfo") }.getOrNull()
                 phase = Phase.Ready
+                syncBackground()
                 reloadChats()
             } catch (e: Exception) {
                 val text = e.message ?: e.toString()
@@ -194,6 +195,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         drafts.clear()
         composeMode = ComposeMode.New
         phase = Phase.Unlock
+        syncBackground()
     }
 
     /** Forget everything on this phone (forgotten password). */
@@ -212,6 +214,12 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 error = e.message
             }
         }
+    }
+
+    /** The background service runs exactly while unlocked with the setting on. */
+    fun syncBackground() {
+        val app = getApplication<Application>()
+        if (phase == Phase.Ready && prefs.background) CursusService.start(app) else CursusService.stop(app)
     }
 
     val rememberedPassword: Boolean get() = passwords.load() != null

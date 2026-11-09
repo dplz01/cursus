@@ -210,14 +210,13 @@ fun SettingsPane(model: AppModel) {
                     }
                 }
                 CursusCard {
-                    CardTitle(R.drawable.ic_shield_check, "Privacy & security", "Lock, screen, links and notifications")
+                    CardTitle(R.drawable.ic_shield_check, "Privacy & security", "Lock, screen, files and receipts")
                     SectionLabel("Links")
                     SwitchRow("Remove tracking from links", model.prefs.cleanLinks, { model.prefs.cleanLinks = it },
                         note = "Cleans utm_*, fbclid… from links you send and open")
                     SectionLabel("Screen")
                     SwitchRow("Hide chats from screenshots", model.prefs.secureScreen, { model.prefs.secureScreen = it },
                         note = "Also blanks Cursus in recent apps")
-                    SwitchRow("Hide message text in notifications", model.prefs.hideNotificationText, { model.prefs.hideNotificationText = it })
                     SectionLabel("Lock")
                     var remembered by remember { mutableStateOf(model.rememberedPassword) }
                     if (remembered) {
@@ -227,6 +226,14 @@ fun SettingsPane(model: AppModel) {
                         })
                     }
                     ActionTile(R.drawable.ic_lock, "Lock now", { model.lock() })
+                }
+                CursusCard {
+                    CardTitle(R.drawable.ic_mute_notification, "Notifications", "Alerts and background running")
+                    SwitchRow("Receive in background", model.prefs.background, {
+                        model.prefs.background = it
+                        model.syncBackground()
+                    }, note = "Keeps Cursus running with a silent notification, so messages arrive when the app is closed")
+                    SwitchRow("Hide message text in notifications", model.prefs.hideNotificationText, { model.prefs.hideNotificationText = it })
                 }
                 CursusCard {
                     CardTitle(R.drawable.ic_info_circle, "About", "Version, source and licences")

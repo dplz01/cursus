@@ -449,6 +449,62 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     // endregion
 
+    // region Composer helpers (core rules: chat::emoji)
+
+    val emojiSuggestions = mutableStateListOf<chat.cursus.core.EmojiHit>()
+
+    /** After each edit: expand completed `:shortcodes:` and refresh the suggestions. */
+    fun draftChanged(text: String) {
+        draft = text
+        viewModelScope.launch {
+            val expanded = runCatching { Core.call<String>("expandShortcodes", mapOf("text" to text)) }.getOrNull()
+            if (expanded != null && expanded != text && draft == text) draft = expanded
+            val hits = runCatching { Core.call<List<chat.cursus.core.EmojiHit>>("emojiSuggest", mapOf("text" to draft)) }
+                .getOrDefault(emptyList())
+            emojiSuggestions.clear()
+            emojiSuggestions.addAll(hits)
+        }
+    }
+
+    fun acceptEmoji(hit: chat.cursus.core.EmojiHit) {
+        viewModelScope.launch {
+            runCatching { Core.call<String>("acceptShortcode", mapOf("text" to draft, "glyph" to hit.glyph)) }
+                .getOrNull()?.let { draft = it }
+            emojiSuggestions.clear()
+        }
+    }
+
+    // endregion
+
+    // region Message actions
+
+    suspend fun messageInfo(m: Message): chat.cursus.core.MessageInfo? = runCatching {
+        Core.call<chat.cursus.core.MessageInfo>("messageInfo", mapOf("chat" to selection, "itemId" to m.id))
+    }.onFailure { error = it.message }.getOrNull()
+
+    fun forward(m: Message, to: Chat) = act {
+        Core.run("forward", mapOf("chat" to selection, "itemIds" to listOf(m.id), "to" to to.ref))
+        notice = "Forwarded to ${to.title}"
+        reloadChats()
+    }
+
+    suspend fun reactionMembers(m: Message, emoji: String): List<String> = runCatching {
+        Core.call<List<String>>("reactionMembers", mapOf("chat" to selection, "itemId" to m.id, "emoji" to emoji))
+    }.getOrDefault(emptyList())
+
+    /** Save a received / sent file where the user picked (decrypted copy). */
+    fun saveFile(file: FileInfo, target: Uri) = act {
+        val path = plainPath(file) ?: return@act run { notice = "The file isn't on this phone" }
+        withContext(Dispatchers.IO) {
+            getApplication<Application>().contentResolver.openOutputStream(target)!!.use { out ->
+                File(path).inputStream().use { it.copyTo(out) }
+            }
+        }
+        notice = "Saved ${file.name}"
+    }
+
+    // endregion
+
     // region Attachments and voice
 
     private fun tmp(sub: String): File = File(info?.dataDir ?: getApplication<Application>().filesDir.path, "tmp/$sub")

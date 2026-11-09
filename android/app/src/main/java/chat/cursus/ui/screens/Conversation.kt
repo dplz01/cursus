@@ -86,8 +86,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 
-/** Quick reactions offered on a message (the official clients' set). */
-private val QuickReactions = listOf("👍", "👎", "😀", "😂", "😢", "❤️", "🚀", "✅")
 
 @Composable
 fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () -> Unit) {
@@ -222,6 +220,8 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
         return
     }
     var menu by remember { mutableStateOf(false) }
+    var whoReacted by remember { mutableStateOf<String?>(null) }
+    whoReacted?.let { emoji -> ReactionMembers(model, m, emoji) { whoReacted = null } }
     val groupIncoming = chat.isGroup && !m.outgoing
     Row(
         Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = if (firstOfRun) 6.dp else 2.dp),
@@ -277,7 +277,7 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
                         if (m.outgoing) DeliveryGlyph(m.delivery, c)
                     }
                 }
-                MessageMenu(model, m, menu) { menu = false }
+                if (menu) MessageMenu(model, m) { menu = false }
             }
             if (m.reactions.isNotEmpty()) {
                 Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -290,7 +290,10 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
                                 .clip(RoundedChip)
                                 .background(if (r.mine) c.accentSoft else c.bgElevated)
                                 .border(1.dp, if (r.mine) c.accent else c.border, RoundedChip)
-                                .clickable { model.react(m, r.emoji, !r.mine) }
+                                .combinedClickable(
+                                    onClick = { model.react(m, r.emoji, !r.mine) },
+                                    onLongClick = { if (chat.isGroup) whoReacted = r.emoji },
+                                )
                                 .padding(horizontal = 8.dp, vertical = 2.dp),
                         )
                     }
@@ -422,30 +425,3 @@ internal fun decodeScaled(path: String, maxSide: Int): ImageBitmap? = runCatchin
     BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
 }.getOrNull()
 
-@Composable
-private fun MessageMenu(model: AppModel, m: Message, open: Boolean, onDismiss: () -> Unit) {
-    val c = Cursus.colors
-    val clipboard = LocalClipboardManager.current
-    DropdownMenu(open, onDismiss, containerColor = c.bgElevated, shape = Radius.lg) {
-        if (m.deleted == null) {
-            Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                for (e in QuickReactions.take(6)) {
-                    val mine = m.reactions.any { it.glyph == e && it.mine }
-                    Text(
-                        e, fontSize = 22.sp,
-                        modifier = Modifier.clip(Radius.sm).background(if (mine) c.accentSoft else Color.Transparent)
-                            .clickable { onDismiss(); model.react(m, e, !mine) }.padding(6.dp),
-                    )
-                }
-            }
-            MenuEntry("Reply") { onDismiss(); model.composeMode = ComposeMode.Reply(m) }
-            val copyText = m.caption.ifBlank { m.text }
-            if (copyText.isNotBlank()) MenuEntry("Copy") { onDismiss(); clipboard.setText(AnnotatedString(copyText)) }
-            if (m.canEdit) MenuEntry("Edit") { onDismiss(); model.startEdit(m) }
-        }
-        MenuEntry("Delete for me", danger = true) { onDismiss(); model.deleteMessage(m, forEveryone = false) }
-        if (m.outgoing && m.deleted == null) {
-            MenuEntry("Delete for everyone", danger = true) { onDismiss(); model.deleteMessage(m, forEveryone = true) }
-        }
-    }
-}

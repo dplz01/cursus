@@ -79,6 +79,7 @@ fun Composer(model: AppModel) {
 
     Column(Modifier.fillMaxWidth().background(c.bgPanel)) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
+        EmojiSuggestions(model)
         ContextBar(model)
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
@@ -104,7 +105,7 @@ fun Composer(model: AppModel) {
                     if (model.draft.isEmpty()) Text("Message", style = Cursus.type.body, color = c.textSecondary)
                     BasicTextField(
                         value = model.draft,
-                        onValueChange = { model.draft = it },
+                        onValueChange = { model.draftChanged(it) },
                         textStyle = Cursus.type.body.copy(color = c.textPrimary),
                         cursorBrush = SolidColor(c.accent),
                         maxLines = 6,
@@ -130,25 +131,50 @@ fun Composer(model: AppModel) {
     }
 }
 
-/** Reply / edit context above the field (Linux `composer_context_bar`). */
+/** Linux `composer_context_bar`: "Editing" / "Replying" with a preview, ✕ cancels. */
 @Composable
 private fun ContextBar(model: AppModel) {
     val c = Cursus.colors
-    val (label, text) = when (val mode = model.composeMode) {
-        is ComposeMode.Reply -> "Reply to ${if (mode.message.outgoing) "yourself" else mode.message.sender?.name ?: "message"}" to mode.message.text
-        is ComposeMode.Edit -> "Edit message" to mode.message.text
+    val (icon, label, text) = when (val mode = model.composeMode) {
+        is ComposeMode.Reply -> Triple(R.drawable.ic_reply, "Replying", mode.message.caption.ifBlank { mode.message.text })
+        is ComposeMode.Edit -> Triple(R.drawable.ic_edit_3, "Editing", mode.message.text)
         ComposeMode.New -> return
     }
     Row(
         Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Box(Modifier.width(3.dp).height(32.dp).background(c.accent))
-        Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+        Icon(painterResource(icon), null, Modifier.size(16.dp), tint = c.accent)
+        Column(Modifier.weight(1f)) {
             Text(label, style = Cursus.type.meta, color = c.accent)
             Text(text, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         IconTool(R.drawable.ic_cancel, "Cancel", { model.cancelCompose() })
+    }
+}
+
+/** Linux emoji suggestions: fixed 5-row card, hits glued to the field. */
+@Composable
+private fun EmojiSuggestions(model: AppModel) {
+    val c = Cursus.colors
+    val hits = model.emojiSuggestions
+    if (hits.isEmpty()) return
+    Column(
+        Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 6.dp).height(38.dp * 5 + 12.dp)
+            .clip(Radius.lg).background(c.bgElevated).border(1.dp, c.border, Radius.lg).padding(6.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.Bottom),
+    ) {
+        for (hit in hits.take(5)) {
+            Row(
+                Modifier.fillMaxWidth().height(36.dp).clip(Radius.sm).clickable { model.acceptEmoji(hit) }.padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(hit.glyph, style = Cursus.type.body)
+                Text(":${hit.shortcode}:", style = Cursus.type.meta, color = c.textPrimary)
+            }
+        }
     }
 }
 

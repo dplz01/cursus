@@ -17,6 +17,7 @@ data class AppInfo(
     val encryptLocalFiles: Boolean = true,
     val dataDir: String = "",
     val version: String = "",
+    val reactions: List<String> = emptyList(),
 )
 
 @Serializable
@@ -216,3 +217,9 @@ data class Member(
     val pending: Boolean = false,
     val support: SupportInfo? = null,
 )
+
+@Serializable
+data class MessageInfo(val time: String? = null, val status: String? = null, val text: String? = null)
+
+@Serializable
+data class EmojiHit(val shortcode: String, val glyph: String)

@@ -8,7 +8,7 @@ use image::metadata::Orientation;
 
 // Shared image rules live in the core (every app uses them).
 pub use cursus_core::media::{
-    encode_profile_image, exif_orientation, open_upright, upright_copy_for_send,
+    encode_profile_image, exif_orientation, open_upright,
 };
 
 pub const WAVEFORM_BARS: usize = 96;
@@ -523,6 +523,7 @@ pub fn truncate_bio_bytes(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cursus_core::media::upright_copy_for_send;
 
     /// 40×20 JPEG with an EXIF Orientation=6 (rotate 90° CW) APP1 segment.
     fn jpeg_with_orientation(orientation: u16) -> Vec<u8> {

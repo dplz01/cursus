@@ -1,7 +1,22 @@
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-/// XDG data directory for Cursus (`~/.local/share/cursus` on Linux).
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Use `dir` as the data directory instead of the platform default. For
+/// platforms where the app is told its private storage at run time (Android:
+/// `Context.filesDir`). Call once, before anything reads [`data_dir`];
+/// returns false if a directory was already set.
+pub fn set_data_dir(dir: PathBuf) -> bool {
+    DATA_DIR.set(dir).is_ok()
+}
+
+/// Data directory for Cursus: the one given to [`set_data_dir`], else XDG
+/// (`~/.local/share/cursus` on Linux).
 pub fn data_dir() -> PathBuf {
+    if let Some(dir) = DATA_DIR.get() {
+        return dir.clone();
+    }
     directories::ProjectDirs::from("chat", "Cursus", "cursus")
         .map(|d| d.data_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from(".").join("cursus-data"))
@@ -146,7 +161,7 @@ fn workspace_root() -> Option<PathBuf> {
     manifest.parent().map(Path::to_path_buf)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn lib_filename() -> &'static str {
     "libsimplex.so"
 }

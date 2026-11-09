@@ -1211,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "cursus-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "cc",
@@ -1230,7 +1230,7 @@ dependencies = [
 
 [[package]]
 name = "cursus-linux"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argon2",
  "audiopus_sys",

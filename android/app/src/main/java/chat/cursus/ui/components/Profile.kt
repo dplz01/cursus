@@ -135,18 +135,15 @@ fun ProfileName(name: String) {
     )
 }
 
-/** Secondary choice chip `value ▾` (opens a choice menu). */
+/** Linux `choice_chip`: a secondary button showing only the current value. */
 @Composable
 fun ChoiceChip(value: String, onClick: () -> Unit, enabled: Boolean = true) {
     val c = Cursus.colors
-    Row(
+    Box(
         Modifier.clip(Radius.md).background(c.bgSidebar).border(1.dp, c.border, Radius.md)
             .clickable(enabled = enabled, onClick = onClick).padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(value, style = Cursus.type.meta, color = if (enabled) c.textPrimary else c.textMuted)
-        if (enabled) Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(12.dp), tint = c.textSecondary)
     }
 }
 
@@ -185,14 +182,14 @@ fun PrefRow(label: String, icon: Int? = null, control: @Composable () -> Unit) {
     }
 }
 
-/** Round header icon button (star / mute / settings in profile headers). */
+/** Header tool (star / mute / settings): no background; accent when on, plain text colour when off. */
 @Composable
 fun HeaderIcon(icon: Int, description: String, active: Boolean = false, onClick: () -> Unit) {
     val c = Cursus.colors
     Box(
-        Modifier.size(40.dp).clip(Radius.pill).background(if (active) c.accentSoft else c.bgPanel).clickable(onClick = onClick),
+        Modifier.size(40.dp).clip(Radius.pill).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(painterResource(icon), description, Modifier.size(20.dp), tint = if (active) c.accent else c.textSecondary)
+        Icon(painterResource(icon), description, Modifier.size(20.dp), tint = if (active) c.accent else c.textPrimary)
     }
 }

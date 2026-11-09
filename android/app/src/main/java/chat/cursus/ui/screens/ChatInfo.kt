@@ -150,7 +150,7 @@ private fun ContactPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
     PageScaffold("Contact", onClose, actions = {
         HeaderIcon(R.drawable.ic_star, "Favourite", chat.favorite) { model.setFavorite(chat, !chat.favorite) }
         HeaderIcon(R.drawable.ic_mute_notification, "Mute", chat.muted) { model.setMuted(chat, !chat.muted) }
-        HeaderIcon(R.drawable.ic_preferences, "Chat preferences") { prefs = true }
+        HeaderIcon(R.drawable.ic_settings, "Chat preferences") { prefs = true }
     }) {
         CursusCard {
             ProfileIdentity(chat.name, chat.image) {
@@ -167,7 +167,7 @@ private fun ContactPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
             }
         }
         ButtonCard {
-            NavRow(R.drawable.ic_preferences, "Chat preferences", "Disappearing messages, receipts, calls…") { prefs = true }
+            NavRow(R.drawable.ic_settings, "Chat preferences", "Disappearing messages, receipts, calls…") { prefs = true }
         }
         ButtonCard {
             ActionTile(R.drawable.ic_clear_all, "Clear chat", { confirm = "clear" })
@@ -213,7 +213,7 @@ private fun ContactPreferencesPage(model: AppModel, chat: Chat, onBack: () -> Un
     val prefs = chat.contactPrefs
     PageScaffold("Preferences", onBack) {
         CursusCard {
-            CardTitle(R.drawable.ic_preferences, "Chat features", "Peer icon: red / green / gold. Changes save immediately.")
+            CardTitle(R.drawable.ic_settings, "Chat features", "Peer icon: red / green / gold. Changes save immediately.")
             for ((key, label) in CONTACT_FEATURES) {
                 val f = prefs?.features?.get(key)
                 PrefRow(label, FEATURE_ICONS[key]) {
@@ -591,7 +591,7 @@ private fun GroupPreferencesPane(model: AppModel, chat: Chat) {
     var menu by remember { mutableStateOf<String?>(null) }
     CursusCard {
         CardTitle(
-            R.drawable.ic_preferences, "Chat features",
+            R.drawable.ic_settings, "Chat features",
             if (owner) "Owners change these for everyone. Changes save immediately." else "View only — only owners can change preferences.",
         )
         for ((key, label) in GROUP_FEATURES) {

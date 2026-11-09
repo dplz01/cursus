@@ -85,11 +85,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     val plainFiles = mutableStateMapOf<Long, String>()
 
     // Voice messages: recording → draft → send (as on Linux).
-    private val recorder = VoiceRecorder(app)
+    private val recorder = VoiceRecorder()
     var recording by mutableStateOf(false); private set
     var recordLevel by mutableStateOf(0f); private set
     var recordSecs by mutableStateOf(0); private set
     var voiceDraft by mutableStateOf<VoiceDraft?>(null); private set
+    /** The take is being filtered and encoded ("Preparing voice…"). */
+    var voicePreparing by mutableStateOf(false); private set
     /** A download whose relays need your OK (servers not among yours). */
     var fileApproval by mutableStateOf<Pair<FileInfo, List<String>>?>(null)
     /** Image shown full screen (file id), over the conversation. */
@@ -485,12 +487,17 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** ■: stop to a draft you can review. */
-    fun stopRecording() {
+    /** ■: stop to a draft you can review (then [then], e.g. send). */
+    fun stopRecording(then: (() -> Unit)? = null) {
         if (!recording) return
         recording = false
-        voiceDraft = recorder.stop()
-        if (voiceDraft == null) notice = "Too short to send"
+        voicePreparing = true
+        viewModelScope.launch {
+            val draft = withContext(Dispatchers.IO) { recorder.stop() }
+            voicePreparing = false
+            voiceDraft = draft
+            if (draft == null) notice = "Too short to send" else then?.invoke()
+        }
     }
 
     fun discardRecording() {
@@ -504,10 +511,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Send while recording: stop and send in one tap. */
-    fun sendVoiceNow() {
-        stopRecording()
-        sendVoiceDraft()
-    }
+    fun sendVoiceNow() = stopRecording { sendVoiceDraft() }
 
     fun sendVoiceDraft() {
         val ref = selection ?: return

@@ -100,19 +100,25 @@ def convert(path):
             if tag in ("defs", "style", "title", "desc", "metadata"):
                 continue
             a = attrs_of(child, inherited)
+            t = child.get("transform")
+            if t:
+                # Any element may carry a transform: wrap it in a <group>.
+                m = re.fullmatch(r"\s*matrix\(([^)]*)\)\s*", t)
+                vals = [float(v) for v in re.split(r"[\s,]+", m.group(1).strip())] if m else None
+                if not vals or vals[1] != 0 or vals[2] != 0:
+                    sys.exit(f"{path}: unsupported transform {t}")
+                lines.append(f'{indent}<group android:scaleX="{fmt(vals[0])}" android:scaleY="{fmt(vals[3])}" '
+                             f'android:translateX="{fmt(vals[4])}" android:translateY="{fmt(vals[5])}">')
+                inner = ET.Element(child.tag, {k: v for k, v in child.attrib.items() if k != "transform"})
+                inner.extend(list(child))
+                inner.text = child.text
+                holder = ET.Element("holder")
+                holder.append(inner)
+                walk(holder, inherited, indent + "    ")
+                lines.append(f"{indent}</group>")
+                continue
             if tag == "g":
-                t = child.get("transform")
-                if t:
-                    m = re.fullmatch(r"\s*matrix\(([^)]*)\)\s*", t)
-                    vals = [float(v) for v in re.split(r"[\s,]+", m.group(1).strip())] if m else None
-                    if not vals or vals[1] != 0 or vals[2] != 0:
-                        sys.exit(f"{path}: unsupported transform {t}")
-                    lines.append(f'{indent}<group android:scaleX="{fmt(vals[0])}" android:scaleY="{fmt(vals[3])}" '
-                                 f'android:translateX="{fmt(vals[4])}" android:translateY="{fmt(vals[5])}">')
-                    walk(child, a, indent + "    ")
-                    lines.append(f"{indent}</group>")
-                else:
-                    walk(child, a, indent)
+                walk(child, a, indent)
                 continue
             d = shape_to_path(tag, {**child.attrib})
             if d is None:

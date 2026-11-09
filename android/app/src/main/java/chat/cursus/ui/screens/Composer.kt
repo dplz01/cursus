@@ -98,6 +98,8 @@ fun Composer(model: AppModel) {
             ) {
                 if (model.recording) {
                     Text("Recording… ${formatDuration(model.recordSecs.toLong())}", style = Cursus.type.body, color = c.danger)
+                } else if (model.voicePreparing) {
+                    Text("Preparing voice…", style = Cursus.type.body, color = c.textSecondary)
                 } else {
                     if (model.draft.isEmpty()) Text("Message", style = Cursus.type.body, color = c.textSecondary)
                     BasicTextField(

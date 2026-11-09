@@ -43,7 +43,7 @@ pub use musl_compat::{compat_status_line, ensure_ld_preload_reexec, is_musl_host
 pub use preferences::FeatureAllow;
 pub use paths::{
     data_dir, db_prefix, default_libs_dir, files_dir, plaintext_cache_path, private_cache_dir,
-    init_process_env, resolve_local_file, runtime_cache_dir,
+    init_process_env, resolve_local_file, runtime_cache_dir, set_data_dir,
     temp_dir,
 };
 pub use session::{

@@ -263,7 +263,8 @@ unsafe fn init_haskell(hs_init: HsInit) {
     let mut args = [
         CString::new("cursus").unwrap(),
         CString::new("+RTS").unwrap(),
-        CString::new("-A64m").unwrap(),
+        // Phones: a smaller allocation area (less resident memory).
+        CString::new(if cfg!(target_os = "android") { "-A16m" } else { "-A64m" }).unwrap(),
         CString::new("-H64m").unwrap(),
         CString::new("-xn").unwrap(),
         CString::new("--install-signal-handlers=no").unwrap(),

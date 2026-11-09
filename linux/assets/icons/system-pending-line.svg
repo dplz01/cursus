@@ -1,6 +1,5 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Bicons Sharp UI Icons — CC0 via SVG Repo; redrawn 24×24 stroke 1.5 -->
-<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-<circle cx="12" cy="12" r="9" stroke="#000000" stroke-width="1.5"/>
-<path d="M12 7V12L15.5 14.5" stroke="#000000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<ns0:svg xmlns:ns0="http://www.w3.org/2000/svg" viewBox="0.3000 0.3000 23.4000 23.4000" fill="none" width="24" height="24" color="currentColor" xmlns="http://www.w3.org/2000/svg">
+<ns0:circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.1060" stroke-linecap="round" stroke-linejoin="round" />
+<ns0:path d="M12 7V12L15.5 14.5" stroke="currentColor" stroke-width="2.1060" stroke-linecap="round" stroke-linejoin="round" />
+</ns0:svg>

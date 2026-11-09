@@ -665,6 +665,21 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     fun setContactTimedTtl(chat: Chat, secs: Long) =
         change(chat, "setContactPrefs", mapOf("chat" to chat.ref, "changes" to mapOf("timedMessages" to "yes", "timedTtl" to secs)))
 
+    /** A picked picture → SimpleX profile data-URL (core rule), then [use] it. */
+    fun withProfileImage(uri: Uri, use: (String) -> Unit) = act {
+        val file = withContext(Dispatchers.IO) { Files.copyIn(getApplication(), uri, tmp("out")) }
+        try {
+            use(Core.call<String>("encodeProfileImage", mapOf("path" to file.absolutePath)))
+        } finally {
+            withContext(Dispatchers.IO) { file.parentFile?.deleteRecursively() }
+        }
+    }
+
+    fun setOwnImage(dataUrl: String) = act { user = Core.call("updateProfile", mapOf("image" to dataUrl)) }
+
+    fun setGroupImage(chat: Chat, dataUrl: String) =
+        change(chat, "updateGroupProfile", mapOf("groupId" to chat.apiId, "image" to dataUrl))
+
     fun updateGroupProfile(chat: Chat, name: String? = null, shortDescr: String? = null, welcome: String? = null) =
         change(
             chat, "updateGroupProfile",

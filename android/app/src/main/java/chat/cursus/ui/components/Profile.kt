@@ -117,11 +117,34 @@ fun FieldEditor(field: EditField, initial: String, onDismiss: () -> Unit, onSave
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
 }
 
-/** Linux `profile_identity`: 72px avatar left, name lines stacked on the right. */
+/** Linux `profile_photo_actions`: set / remove picture, 32px secondary buttons. */
+class PhotoActions(val hasImage: Boolean, val onPick: () -> Unit, val onClear: () -> Unit)
+
 @Composable
-fun ProfileIdentity(name: String, image: String?, group: Boolean = false, lines: @Composable () -> Unit) {
+private fun PhotoButton(icon: Int, description: String, enabled: Boolean, onClick: () -> Unit) {
+    val c = Cursus.colors
+    Box(
+        Modifier.size(32.dp).clip(Radius.md).background(c.bgSidebar).border(1.dp, c.border, Radius.md)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(painterResource(icon), description, Modifier.size(18.dp), tint = if (enabled) c.textSecondary else c.textMuted)
+    }
+}
+
+/** Linux `profile_identity`: 72px avatar (photo buttons under it) left, name lines right. */
+@Composable
+fun ProfileIdentity(name: String, image: String?, group: Boolean = false, photo: PhotoActions? = null, lines: @Composable () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        Avatar(name, image, 72.dp, group = group)
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Avatar(name, image, 72.dp, group = group)
+            if (photo != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    PhotoButton(R.drawable.ic_image_pen, "Set picture", true, photo.onPick)
+                    PhotoButton(R.drawable.ic_cancel, "Remove picture", photo.hasImage, photo.onClear)
+                }
+            }
+        }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) { lines() }
     }
 }

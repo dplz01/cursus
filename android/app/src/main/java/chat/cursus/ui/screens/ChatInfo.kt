@@ -56,6 +56,10 @@ import chat.cursus.ui.components.PageColumn
 import chat.cursus.ui.components.PrefRow
 import chat.cursus.ui.components.PrimaryButton
 import chat.cursus.ui.components.ProfileIdentity
+import chat.cursus.ui.components.PhotoActions
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import chat.cursus.ui.components.ProfileName
 import chat.cursus.ui.components.SecondaryButton
 import chat.cursus.ui.components.SectionLabel
@@ -329,7 +333,15 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
     }) {
         // Profile card
         CursusCard {
-            ProfileIdentity(chat.name, chat.image, group = true) {
+            val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+                uri?.let { model.withProfileImage(it) { url -> model.setGroupImage(chat, url) } }
+            }
+            val photo = if (owner) PhotoActions(
+                hasImage = chat.image != null,
+                onPick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                onClear = { model.setGroupImage(chat, "") },
+            ) else null
+            ProfileIdentity(chat.name, chat.image, group = true, photo = photo) {
                 if (owner) EditableLine(chat.name, "Name", LineStyle.Name) { editing = EditField.GroupName }
                 else ProfileName(chat.name)
                 EditableLine(chat.alias, "Add a local name", LineStyle.Sub) { editing = EditField.GroupAlias }

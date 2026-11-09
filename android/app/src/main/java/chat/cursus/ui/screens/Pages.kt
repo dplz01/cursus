@@ -45,6 +45,10 @@ import chat.cursus.ui.components.EditableLine
 import chat.cursus.ui.components.FieldEditor
 import chat.cursus.ui.components.LineStyle
 import chat.cursus.ui.components.ProfileIdentity
+import chat.cursus.ui.components.PhotoActions
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import chat.cursus.ui.components.NavRow
 import chat.cursus.ui.components.CursusOverlay
 import chat.cursus.ui.components.RoundedField
@@ -165,7 +169,15 @@ fun SettingsPane(model: AppModel) {
                 CursusCard {
                     CardTitle(R.drawable.ic_user_alt_1, "Profile", "Name, picture and bio")
                     Column(Modifier.padding(top = 12.dp)) {
-                        ProfileIdentity(user?.displayName ?: "", user?.image) {
+                        val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+                            uri?.let { model.withProfileImage(it) { url -> model.setOwnImage(url) } }
+                        }
+                        val photo = PhotoActions(
+                            hasImage = user?.image != null,
+                            onPick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                            onClear = { model.setOwnImage("") },
+                        )
+                        ProfileIdentity(user?.displayName ?: "", user?.image, photo = photo) {
                             EditableLine(user?.displayName ?: "", "Your name", LineStyle.Name) { editing = EditField.OwnName }
                             EditableLine(user?.shortDescr ?: "", "Add a bio", LineStyle.Sub) { editing = EditField.OwnBio }
                         }

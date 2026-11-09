@@ -86,6 +86,8 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, String> {
         "open" => open(p),
         "close" => {
             crate::drop_session();
+            // Decrypted media never outlives the session (as on Linux).
+            cursus_core::wipe_plaintext_cache();
             Ok(Value::Null)
         }
         "wipeLocalData" => {

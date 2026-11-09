@@ -141,6 +141,10 @@ fn app_info() -> Value {
         "encryptLocalFiles": account.map(|a| a.encrypt_local_files).unwrap_or(true),
         "dataDir": cursus_core::data_dir().to_string_lossy(),
         "version": env!("CARGO_PKG_VERSION"),
+        // The quick-reaction set every Cursus app offers (core), as glyphs.
+        "reactions": cursus_core::KNOWN_REACTIONS.iter()
+            .map(|e| if *e == "❤" { "❤️" } else { *e })
+            .collect::<Vec<_>>(),
     })
 }
 

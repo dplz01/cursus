@@ -8679,24 +8679,7 @@ async fn attach_and_send_file(session: Arc<Session>, chat: ChatPreview) -> Resul
     .ok_or_else(|| "Attachment cancelled.".to_string())?;
 
     tokio::task::spawn_blocking(move || {
-        // Bake EXIF rotation into camera JPEGs so every receiver sees them upright.
-        let path = if media::is_image_name(&path.to_string_lossy()) {
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            let dir = cursus_core::temp_dir().join(format!("send-{stamp}"));
-            match media::upright_copy_for_send(&path, &dir) {
-                Ok(Some(upright)) => upright,
-                Ok(None) => path,
-                Err(err) => {
-                    tracing::warn!(%err, "upright copy failed; sending original");
-                    path
-                }
-            }
-        } else {
-            path
-        };
+        // The core bakes EXIF rotation into camera photos (Session::send_file).
         let path_str = path.to_string_lossy().to_string();
         session
             .send_file(&chat.id, &path_str)

@@ -120,3 +120,12 @@ Suggested credit line (also shown in Settings):
 License metadata for `438285`, `524804`, and `524954` was confirmed against the public SVG Repo icon index (HuggingFace mirror `nyuuzyou/svgrepo`). `50042` was not present in that mirror snapshot; it is used under SVG Repo’s default open license terms for icons hosted on the site (commercial inclusion in an application is allowed; redistribution as a competing icon library is not). `533306` license metadata was confirmed on the SVG Repo icon page (Dazzle Line Icons / CC Attribution). `509899` confirmed as Zest Interface Icons under MIT on SVG Repo.
 
 Repeat-once (one-time invite) icon: **Phosphor Filled Icons** by phosphor, MIT License, via [SVG Repo](https://www.svgrepo.com/svg/364795/repeat-once-fill).
+
+## Homogenized set
+
+All icons were normalized for Cursus (24×24 viewport, transparent background,
+`currentColor` instead of black / navy, optically centred, ~1.8 px rounded
+strokes); the artwork itself is the original's. These are modifications of the
+works credited above, under the same licences. `preferences.svg` is no longer
+shipped: preferences use `settings.svg`.
+

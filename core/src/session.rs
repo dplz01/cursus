@@ -327,6 +327,23 @@ impl Session {
             .unwrap_or("file")
             .to_string();
         let as_image = is_image_name(&file_name);
+        // Bake EXIF rotation into camera JPEGs so every receiver sees them upright.
+        let upright = if as_image {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            match crate::media::upright_copy_for_send(src, &temp_dir().join(format!("send-{stamp}"))) {
+                Ok(copy) => copy,
+                Err(err) => {
+                    tracing::warn!(%err, "upright copy failed; sending original");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let src = upright.as_deref().unwrap_or(src);
         let prepared = self.prepare_outgoing_file(src, &file_name)?;
         self.send(&Commands::send_file(
             chat,

@@ -24,3 +24,10 @@ build-dir/
 .flatpak-builder/
 repo/
 *.flatpak
+
+# Android build output (also ignored here so branches without android/ never pick it up)
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/jniLibs/

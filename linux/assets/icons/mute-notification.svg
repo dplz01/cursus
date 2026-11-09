@@ -1,8 +1,7 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Outline mute bell — stroke 1.5 / 24×24 to match settings.svg (Solar Linear weight) -->
-<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M9.5 19.5C9.5 20.8807 10.6193 22 12 22C13.3807 22 14.5 20.8807 14.5 19.5" stroke="#000000" stroke-width="1.5" stroke-linecap="round"/>
-<path d="M5.5 10.5C5.5 7.18629 8.18629 4.5 11.5 4.5H12.5C15.8137 4.5 18.5 7.18629 18.5 10.5V14L20.5 17H3.5L5.5 14V10.5Z" stroke="#000000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M12 2.5V4.5" stroke="#000000" stroke-width="1.5" stroke-linecap="round"/>
-<path d="M4 4L20 20" stroke="#000000" stroke-width="1.5" stroke-linecap="round"/>
-</svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<ns0:svg xmlns:ns0="http://www.w3.org/2000/svg" viewBox="0.6141 -0.3703 22.7719 25.2563" fill="none" width="24" height="24" color="currentColor" xmlns="http://www.w3.org/2000/svg">
+<ns0:path d="M9.5 19.5C9.5 20.8807 10.6193 22 12 22C13.3807 22 14.5 20.8807 14.5 19.5" stroke="currentColor" stroke-width="2.2731" stroke-linecap="round" stroke-linejoin="round" />
+<ns0:path d="M5.5 10.5C5.5 7.18629 8.18629 4.5 11.5 4.5H12.5C15.8137 4.5 18.5 7.18629 18.5 10.5V14L20.5 17H3.5L5.5 14V10.5Z" stroke="currentColor" stroke-width="2.2731" stroke-linecap="round" stroke-linejoin="round" />
+<ns0:path d="M12 2.5V4.5" stroke="currentColor" stroke-width="2.2731" stroke-linecap="round" stroke-linejoin="round" />
+<ns0:path d="M4 4L20 20" stroke="currentColor" stroke-width="2.2731" stroke-linecap="round" stroke-linejoin="round" />
+</ns0:svg>

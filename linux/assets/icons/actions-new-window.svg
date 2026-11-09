@@ -1,7 +1,6 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Simple UI Line Icons / Petr Bilek — PD; normalized 24×24 stroke 1.5 -->
-<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M22 14.55V20A2 2 0 0 1 20 22H4A2 2 0 0 1 2 20V4A2 2 0 0 1 4 2H9.53" stroke="#000000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M21.39 2.48L9.26 14.09" stroke="#000000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M17 1.9H20.09A1.83 1.83 0 0 1 22 3.62V6.9" stroke="#000000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<ns0:svg xmlns:ns0="http://www.w3.org/2000/svg" viewBox="-0.9469 -1.0406 25.8938 25.9875" fill="none" width="24" height="24" color="currentColor" xmlns="http://www.w3.org/2000/svg">
+<ns0:path d="M22 14.55V20A2 2 0 0 1 20 22H4A2 2 0 0 1 2 20V4A2 2 0 0 1 4 2H9.53" stroke="currentColor" stroke-width="2.3389" stroke-linecap="round" stroke-linejoin="round" />
+<ns0:path d="M21.39 2.48L9.26 14.09" stroke="currentColor" stroke-width="2.3389" stroke-linecap="round" stroke-linejoin="round" />
+<ns0:path d="M17 1.9H20.09A1.83 1.83 0 0 1 22 3.62V6.9" stroke="currentColor" stroke-width="2.3389" stroke-linecap="round" stroke-linejoin="round" />
+</ns0:svg>

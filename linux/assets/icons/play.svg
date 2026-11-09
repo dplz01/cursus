@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
-<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path d="M8 5.14V18.86C8 19.54 8.74 19.96 9.33 19.61L20.15 13.25C20.72 12.91 20.72 12.09 20.15 11.75L9.33 5.39C8.74 5.04 8 5.46 8 6.14V5.14Z" fill="currentColor"/>
-</svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<ns0:svg xmlns:ns0="http://www.w3.org/2000/svg" viewBox="6.5203 3.8016 15.5062 17.3813" fill="none" width="24" height="24" color="currentColor" xmlns="http://www.w3.org/2000/svg">
+  <ns0:path d="M8 5.14V18.86C8 19.54 8.74 19.96 9.33 19.61L20.15 13.25C20.72 12.91 20.72 12.09 20.15 11.75L9.33 5.39C8.74 5.04 8 5.46 8 6.14V5.14Z" fill="currentColor" />
+</ns0:svg>

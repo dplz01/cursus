@@ -2825,6 +2825,11 @@ fn styled_span(
     }
 
     if let Some(link) = seg.link.as_ref() {
+        // SimpleX links come as the description plus an italic "(via …)"
+        // part: both look like the link they are.
+        if seg.simplex.is_some() {
+            s = s.color(theme::t().accent).underline(true);
+        }
         s = s.link(match seg.simplex {
             Some(kind) => Message::OpenSimplexLink {
                 uri: link.clone(),

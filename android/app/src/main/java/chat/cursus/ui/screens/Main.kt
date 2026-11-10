@@ -84,7 +84,7 @@ fun Root(model: AppModel) {
         Phase.Starting -> StartingScreen()
         Phase.Welcome -> WelcomeScreen(model)
         Phase.Unlock -> UnlockScreen(model)
-        Phase.Ready -> MainScreen(model)
+        Phase.Ready -> if (model.appLocked) AppLockScreen(model) else MainScreen(model)
         is Phase.Failed -> FailedScreen(phase.message)
     }
     model.error?.let { text ->

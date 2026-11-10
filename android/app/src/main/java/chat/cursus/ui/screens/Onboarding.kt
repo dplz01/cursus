@@ -1,5 +1,8 @@
 package chat.cursus.ui.screens
 
+import androidx.compose.runtime.remember
+import kotlinx.coroutines.launch
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -175,5 +178,52 @@ fun FailedScreen(message: String) {
     OnboardingPage {
         Text("Cursus couldn't start", style = Cursus.type.title, color = Cursus.colors.textPrimary)
         Text(message, style = Cursus.type.meta, color = Cursus.colors.textSecondary)
+    }
+}
+
+
+/** Linux app lock screen: the chats stay hidden until the database password
+ *  is entered again; messages keep arriving meanwhile. */
+@Composable
+fun AppLockScreen(model: AppModel) {
+    val c = Cursus.colors
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var password by remember { mutableStateOf("") }
+    var checking by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var retryAt by remember { mutableStateOf(0L) }
+    val submit = submit@{
+        if (checking || password.isEmpty()) return@submit
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now < retryAt) {
+            error = "Too many attempts. Try again in ${(retryAt - now) / 1000 + 1} s."
+            return@submit
+        }
+        checking = true
+        scope.launch {
+            val result = model.unlockApp(password)
+            checking = false
+            if (result != null) {
+                val (message, wait) = result
+                password = ""
+                retryAt = android.os.SystemClock.elapsedRealtime() + wait * 1000
+                error = if (wait > 0) "$message Try again in $wait s." else message
+            }
+        }
+    }
+    OnboardingPage {
+        Icon(painterResource(R.drawable.ic_lock), null, Modifier.size(40.dp), tint = c.accent)
+        Text("Cursus is locked", style = Cursus.type.title, color = c.textPrimary)
+        Text("Enter your database password to continue.", style = Cursus.type.body, color = c.textSecondary)
+        CursusCard {
+            CursusField(password, { password = it; error = null }, "Database password", password = true)
+        }
+        error?.let { Text(it, style = Cursus.type.meta, color = c.danger) }
+        PrimaryButton(
+            if (checking) "Checking…" else "Unlock",
+            { submit() },
+            Modifier.fillMaxWidth(),
+            enabled = password.isNotEmpty() && !checking,
+        )
     }
 }

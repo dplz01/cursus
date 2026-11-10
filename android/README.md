@@ -64,8 +64,15 @@ invite, group link, preferences, support chats, leave / delete), settings
 (profile, address, theme, privacy, notifications), receiving in the
 background (foreground service), phone and tablet layouts.
 
-Next: forward / message info / reaction members, emoji shortcodes,
-chat lists (tags), profile pictures, app lock timeout, calls.
+Also done: forward, message info, reaction members, emoji shortcodes,
+profile pictures, pending one-time links, app lock (screen lock with the
+database password, lock after 0 s – 15 min; messages keep arriving),
+Privacy & security settings as on Linux (previews, blur, protect IP,
+auto-download, encrypted files, receipts, with ⓘ explanations and
+confirmations).
+
+Next: chat lists (tags), selecting several messages, revealing
+marked-deleted messages, saving media, text size, calls.
 
 UI rule: every screen follows the Linux app's structure, cards and
 wording (see `docs/DESIGN_SYSTEM.md` and `linux/src/ui.rs`).

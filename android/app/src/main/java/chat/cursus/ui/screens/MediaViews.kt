@@ -1,5 +1,6 @@
 package chat.cursus.ui.screens
 
+import androidx.compose.ui.draw.blur
 import kotlin.math.roundToInt
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -96,14 +97,18 @@ fun FileBody(model: AppModel, m: Message, f: FileInfo) {
 @Composable
 private fun ImageThumb(model: AppModel, f: FileInfo) {
     val path = model.plainFiles[f.id] ?: return FileRowPlaceholder(f)
-    val bitmap by produceState<ImageBitmap?>(null, path) {
-        value = withContext(Dispatchers.IO) { decodeScaled(path, 720) }
+    // "Blur photos and videos": blurred until tapped. A tiny decode scaled
+    // up blurs on every Android version; Modifier.blur adds to it on 12+.
+    val blurred = model.prefs.blurMedia && f.id !in model.revealedMedia
+    val bitmap by produceState<ImageBitmap?>(null, path, blurred) {
+        value = withContext(Dispatchers.IO) { decodeScaled(path, if (blurred) 24 else 720) }
     }
     bitmap?.let {
         Image(
             it, f.name,
             Modifier.padding(bottom = 4.dp).widthIn(max = 296.dp).heightIn(max = 360.dp).clip(Radius.lg)
-                .clickable { model.gallery = f.id },
+                .then(if (blurred) Modifier.blur(16.dp) else Modifier)
+                .clickable { if (blurred) model.revealedMedia.add(f.id) else model.gallery = f.id },
             contentScale = ContentScale.Fit,
         )
     } ?: FileRowPlaceholder(f)

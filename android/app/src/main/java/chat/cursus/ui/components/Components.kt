@@ -1,5 +1,7 @@
 package chat.cursus.ui.components
 
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.foundation.Image
@@ -378,5 +380,64 @@ fun RoundedField(value: String, onValueChange: (String) -> Unit, placeholder: St
             cursorBrush = androidx.compose.ui.graphics.SolidColor(c.accent),
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+
+/** Linux `info_toggle`: [SwitchRow] whose title carries an ⓘ that opens
+ *  [InfoSheet] with the explanation (`info` = title to paragraphs). */
+@Composable
+fun InfoSwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, info: Pair<String, String>) {
+    val c = Cursus.colors
+    var open by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().clip(Radius.lg).clickable { onChange(!checked) }.padding(horizontal = 8.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.weight(1f, fill = false))
+        IconTool(R.drawable.ic_info_circle, "About this setting", { open = true }, tint = c.textMuted)
+        Spacer(Modifier.weight(1f).width(10.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = c.accent,
+                checkedThumbColor = c.accentOn,
+                uncheckedTrackColor = c.bgField,
+                uncheckedBorderColor = c.border,
+                uncheckedThumbColor = c.textMuted,
+            ),
+        )
+    }
+    if (open) InfoSheet(info.first, info.second) { open = false }
+}
+
+/** Linux `setting_info_overlay`: title with ⓘ, paragraphs, "Got it". */
+@Composable
+fun InfoSheet(title: String, body: String, onDismiss: () -> Unit) {
+    val c = Cursus.colors
+    CursusOverlay(onDismiss) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(painterResource(R.drawable.ic_info_circle), null, Modifier.size(20.dp), tint = c.accent)
+            Text(title, style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+        }
+        for (para in body.split("\n\n")) Text(para, style = Cursus.type.meta, color = c.textSecondary)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            PrimaryButton("Got it", onDismiss)
+        }
+    }
+}
+
+/** Linux `privacy_confirm_overlay`: a change that shows or shares more asks first. */
+@Composable
+fun ConfirmSheet(title: String, body: String, action: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val c = Cursus.colors
+    CursusOverlay(onDismiss) {
+        Text(title, style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+        Text(body, style = Cursus.type.meta, color = c.textSecondary)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+            SecondaryButton("Cancel", onDismiss)
+            PrimaryButton(action, { onConfirm(); onDismiss() })
+        }
     }
 }

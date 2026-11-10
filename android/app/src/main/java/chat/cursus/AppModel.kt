@@ -181,6 +181,98 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // region App lock (Linux app lock): the screen locks, the session keeps
+    // running so messages and notifications ("New message" only) still arrive.
+
+    /** Chats hidden behind the lock screen. */
+    var appLocked by mutableStateOf(false)
+        private set
+    private var lastActive = android.os.SystemClock.elapsedRealtime()
+    private var backgroundAt: Long? = null
+    private var lockFailures = 0
+    /** Blurred photos the user tapped to see (until the next lock). */
+    val revealedMedia = mutableStateListOf<Long>()
+
+    /** Any touch counts as use (the idle timer restarts). */
+    fun touch() { lastActive = android.os.SystemClock.elapsedRealtime() }
+
+    fun onBackground() {
+        backgroundAt = android.os.SystemClock.elapsedRealtime()
+        if (prefs.appLock && prefs.lockAfter == 0) lockApp()
+    }
+
+    fun onForeground() {
+        val at = backgroundAt
+        backgroundAt = null
+        if (at != null && prefs.appLock && (android.os.SystemClock.elapsedRealtime() - at) / 1000 >= prefs.lockAfter) lockApp()
+        touch()
+    }
+
+    /** Called every few seconds while in the foreground. */
+    fun checkIdle() {
+        if (!prefs.appLock || prefs.lockAfter <= 0 || phase != Phase.Ready || appLocked) return
+        if ((android.os.SystemClock.elapsedRealtime() - lastActive) / 1000 >= prefs.lockAfter) lockApp()
+    }
+
+    /** Lock the screen: decrypted media and drafts in progress go away. */
+    fun lockApp() {
+        if (phase != Phase.Ready || appLocked) return
+        VoicePlayer.stop()
+        discardRecording()
+        discardVoiceDraft()
+        plainFiles.clear()
+        gallery = null
+        revealedMedia.clear()
+        appLocked = true
+        viewModelScope.launch { runCatching { Core.run("wipePlaintextCache") } }
+    }
+
+    /** null when unlocked, else the message to show (wrong password, wait). */
+    suspend fun unlockApp(password: String): Pair<String, Long>? {
+        val ok = runCatching { Core.call<Boolean>("verifyPassword", mapOf("password" to password)) }.getOrDefault(false)
+        if (ok) {
+            appLocked = false
+            lockFailures = 0
+            touch()
+            selection?.let { reloadMessages(it) }
+            return null
+        }
+        lockFailures++
+        val wait = runCatching { Core.call<Long>("lockRetryDelay", mapOf("failures" to lockFailures)) }.getOrDefault(0)
+        return "Wrong password." to wait
+    }
+
+    // endregion
+
+    // region Privacy & security
+
+    fun setEncryptLocalFiles(on: Boolean) = act {
+        Core.run("setEncryptLocalFiles", mapOf("on" to on))
+        info = Core.call<AppInfo>("appInfo")
+    }
+
+    fun setDeliveryReceipts(groups: Boolean, on: Boolean) = act {
+        user = Core.call<User>("setDeliveryReceipts", mapOf("groups" to groups, "on" to on))
+    }
+
+    private val autoReceived = mutableSetOf<Long>()
+
+    /** Images, voice and short videos download by themselves (the core's
+     *  caps); with Protect IP on, unknown servers are skipped. */
+    private fun autoDownload(list: List<Message>) {
+        if (!prefs.autoDownload) return
+        for (m in list) {
+            if (m.outgoing) continue
+            val f = m.file ?: continue
+            if (!f.autoReceive || f.state != "offer" || !autoReceived.add(f.id)) continue
+            viewModelScope.launch {
+                runCatching { Core.raw("receiveFile", mapOf("fileId" to f.id, "approved" to !prefs.protectIp)) }
+            }
+        }
+    }
+
+    // endregion
+
     fun lock() {
         VoicePlayer.stop()
         discardRecording()
@@ -199,6 +291,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         draft = ""
         drafts.clear()
         composeMode = ComposeMode.New
+        appLocked = false
+        revealedMedia.clear()
         phase = Phase.Unlock
         syncBackground()
     }
@@ -259,7 +353,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             val chat = chats.firstOrNull { it.ref == msg.chat }
             if (chat?.muted == true) continue
             if (foreground) continue // the open chat or the list badge shows it
-            Notifier.show(getApplication(), msg, prefs.hideNotificationText)
+            Notifier.show(getApplication(), msg, prefs.hideNotificationText || appLocked)
         }
     }
 
@@ -316,6 +410,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 messages.addAll(list)
                 messagesFor = ref
                 loadImages(list)
+                autoDownload(list)
             } catch (e: Exception) {
                 notice = e.message
             }
@@ -590,7 +685,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     /** Download an offered file; unknown relays ask first (core rule). */
     fun receive(file: FileInfo, approved: Boolean = false) = act {
-        val reply = Core.raw("receiveFile", mapOf("fileId" to file.id, "approved" to approved))
+        val reply = Core.raw("receiveFile", mapOf("fileId" to file.id, "approved" to (approved || !prefs.protectIp)))
         val obj = reply as? kotlinx.serialization.json.JsonObject
         val accepted = (obj?.get("accepted") as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
         if (!accepted) {

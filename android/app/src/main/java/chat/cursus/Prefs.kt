@@ -31,6 +31,40 @@ class Prefs(context: Context) {
         get() = hideTextState.value
         set(v) { hideTextState.value = v; sp.edit().putBoolean("hideNotificationText", v).apply() }
 
+    // Privacy & security (same choices and defaults as the Linux app).
+    private val appLockState = bool("appLock", false)
+    /** Ask for the database password again after Cursus sat unused / in the background. */
+    var appLock: Boolean
+        get() = appLockState.value
+        set(v) { appLockState.value = v; sp.edit().putBoolean("appLock", v).apply() }
+
+    private val lockAfterState = mutableStateOf(sp.getInt("lockAfter", 30))
+    /** Seconds unused or in the background before the app lock (0 = as soon as it's left). */
+    var lockAfter: Int
+        get() = lockAfterState.value
+        set(v) { lockAfterState.value = v; sp.edit().putInt("lockAfter", v).apply() }
+
+    private val chatPreviewsState = bool("chatPreviews", true)
+    var chatPreviews: Boolean
+        get() = chatPreviewsState.value
+        set(v) { chatPreviewsState.value = v; sp.edit().putBoolean("chatPreviews", v).apply() }
+
+    private val blurMediaState = bool("blurMedia", false)
+    var blurMedia: Boolean
+        get() = blurMediaState.value
+        set(v) { blurMediaState.value = v; sp.edit().putBoolean("blurMedia", v).apply() }
+
+    private val autoDownloadState = bool("autoDownload", true)
+    var autoDownload: Boolean
+        get() = autoDownloadState.value
+        set(v) { autoDownloadState.value = v; sp.edit().putBoolean("autoDownload", v).apply() }
+
+    private val protectIpState = bool("protectIp", true)
+    /** Ask before downloading from file servers the sender chose. */
+    var protectIp: Boolean
+        get() = protectIpState.value
+        set(v) { protectIpState.value = v; sp.edit().putBoolean("protectIp", v).apply() }
+
     private val incognitoState = bool("incognito", false)
     /** New one-time links and links pasted on the Connect card use a random
      *  incognito profile (the official apps' toggle). */

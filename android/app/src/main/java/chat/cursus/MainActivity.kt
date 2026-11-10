@@ -33,12 +33,35 @@ class MainActivity : ComponentActivity() {
                     window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 }
             }
+            // App lock: idle check while Cursus is on screen.
+            LaunchedEffect(Unit) {
+                while (true) {
+                    kotlinx.coroutines.delay(5_000)
+                    model.checkIdle()
+                }
+            }
             LaunchedEffect(model.phase) {
                 if (model.phase == Phase.Ready && Build.VERSION.SDK_INT >= 33 && !Notifier.allowed(this@MainActivity)) {
                     askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
         }
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        model.touch()
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        model.onForeground()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Not when only rotating (the activity is recreated, the app stays).
+        if (!isChangingConfigurations) model.onBackground()
     }
 
     override fun onNewIntent(intent: Intent) {

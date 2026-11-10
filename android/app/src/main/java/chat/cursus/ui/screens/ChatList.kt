@@ -175,7 +175,12 @@ private fun ChatRow(model: AppModel, chat: Chat, selected: Boolean) {
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        if (chat.isRequest) "Wants to connect with you" else chat.preview,
+                        when {
+                            chat.isRequest -> "Wants to connect with you"
+                            // "Message previews in chat list" off: names only.
+                            !model.prefs.chatPreviews -> ""
+                            else -> chat.preview
+                        },
                         style = Cursus.type.meta,
                         color = if (chat.isRequest) c.gold else c.textSecondary,
                         maxLines = 2,

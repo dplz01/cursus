@@ -1,5 +1,10 @@
 package chat.cursus.ui.screens
 
+import chat.cursus.ui.components.PrefRow
+import chat.cursus.ui.components.ChoiceChip
+import chat.cursus.ui.components.ChoiceMenu
+import chat.cursus.ui.components.ConfirmSheet
+import chat.cursus.ui.components.InfoSwitchRow
 import androidx.compose.ui.res.painterResource
 import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.size
@@ -350,31 +355,13 @@ fun SettingsPane(model: AppModel) {
                         }
                     }
                 }
-                CursusCard {
-                    CardTitle(R.drawable.ic_shield_check, "Privacy & security", "Lock, screen, files and receipts")
-                    SectionLabel("Links")
-                    SwitchRow("Remove tracking from links", model.prefs.cleanLinks, { model.prefs.cleanLinks = it },
-                        note = "Cleans utm_*, fbclid… from links you send and open")
-                    SectionLabel("Screen")
-                    SwitchRow("Hide chats from screenshots", model.prefs.secureScreen, { model.prefs.secureScreen = it },
-                        note = "Also blanks Cursus in recent apps")
-                    SectionLabel("Lock")
-                    var remembered by remember { mutableStateOf(model.rememberedPassword) }
-                    if (remembered) {
-                        ActionTile(R.drawable.ic_lock, "Forget saved password", {
-                            model.forgetPassword(); remembered = false
-                            model.notice = "Cursus will ask for your password next time"
-                        })
-                    }
-                    ActionTile(R.drawable.ic_lock, "Lock now", { model.lock() })
-                }
+                PrivacyCard(model)
                 CursusCard {
                     CardTitle(R.drawable.ic_notifications, "Notifications", "Alerts and background running")
                     SwitchRow("Receive in background", model.prefs.background, {
                         model.prefs.background = it
                         model.syncBackground()
                     }, note = "Keeps Cursus running with a silent notification, so messages arrive when the app is closed")
-                    SwitchRow("Hide message text in notifications", model.prefs.hideNotificationText, { model.prefs.hideNotificationText = it })
                 }
                 CursusCard {
                     CardTitle(R.drawable.ic_info_circle, "About", "Version, source and licences")
@@ -416,6 +403,133 @@ fun SettingsPane(model: AppModel) {
             editing = null
         }
     }
+}
+
+/** A change that shows or shares more, waiting for the user's yes. */
+private data class PrivacyAsk(val title: String, val body: String, val action: String, val apply: () -> Unit)
+
+/** Linux Settings → Privacy & security: same sections, order, wording and
+ *  confirmations; explanations behind ⓘ (phone wording). */
+@Composable
+private fun PrivacyCard(model: AppModel) {
+    val p = model.prefs
+    var ask by remember { mutableStateOf<PrivacyAsk?>(null) }
+    var lockMenu by remember { mutableStateOf(false) }
+    var remembered by remember { mutableStateOf(model.rememberedPassword) }
+    CursusCard {
+        CardTitle(R.drawable.ic_shield_check, "Privacy & security", "Lock, screen, files and receipts")
+        SectionLabel("Lock")
+        InfoSwitchRow("App lock", p.appLock, { on ->
+            if (on) p.appLock = true
+            else ask = PrivacyAsk("Turn off app lock?",
+                "Anyone who has your unlocked phone while Cursus is running can read your chats.",
+                "Turn off") { p.appLock = false }
+        }, InfoText.AppLock)
+        if (p.appLock) {
+            PrefRow("Lock") { ChoiceChip(lockAfterLabel(p.lockAfter), { lockMenu = true }) }
+        }
+        ActionTile(R.drawable.ic_lock, "Lock now", { model.lockApp() })
+        if (remembered) {
+            ActionTile(R.drawable.ic_lock, "Forget saved password", {
+                model.forgetPassword(); remembered = false
+                model.notice = "Cursus will ask for your password next time"
+            })
+        }
+        SectionLabel("On screen")
+        InfoSwitchRow("Message previews in chat list", p.chatPreviews, { on ->
+            if (!on) p.chatPreviews = false
+            else ask = PrivacyAsk("Show message previews?",
+                "The last message of every chat will be visible in the chat list to anyone who can see your screen.",
+                "Show previews") { p.chatPreviews = true }
+        }, InfoText.ChatPreviews)
+        InfoSwitchRow("Blur photos and videos", p.blurMedia, { on ->
+            if (on) p.blurMedia = true
+            else ask = PrivacyAsk("Stop blurring media?",
+                "Photos and videos will be shown in full in your chats, visible to anyone who can see your screen.",
+                "Show media") { p.blurMedia = false }
+        }, InfoText.BlurMedia)
+        InfoSwitchRow("Hide message text in notifications", p.hideNotificationText, { on ->
+            if (on) p.hideNotificationText = true
+            else ask = PrivacyAsk("Show message text in notifications?",
+                "Anyone who can see your screen will be able to read incoming messages, also on the lock screen, and Android may keep them in its notification history.",
+                "Show text") { p.hideNotificationText = false }
+        }, InfoText.HideNotificationText)
+        InfoSwitchRow("Hide chats from screenshots", p.secureScreen, { on ->
+            if (on) p.secureScreen = true
+            else ask = PrivacyAsk("Allow screenshots?",
+                "Screenshots and screen recordings will show your chats, and so will the recent-apps preview.",
+                "Allow") { p.secureScreen = false }
+        }, InfoText.SecureScreen)
+        SectionLabel("Files & network")
+        InfoSwitchRow("Protect IP address", p.protectIp, { on ->
+            if (on) p.protectIp = true
+            else ask = PrivacyAsk("Stop protecting your IP address?",
+                "Files will download from any server the sender chooses, including automatic downloads. Without Tor or VPN, those servers see your IP address.",
+                "Turn off") { p.protectIp = false }
+        }, InfoText.ProtectIp)
+        InfoSwitchRow("Download images and voice automatically", p.autoDownload, { on ->
+            if (!on) p.autoDownload = false
+            else ask = PrivacyAsk("Download media automatically?",
+                "Images, voice messages and short videos from anyone who writes to you will download without asking \u2014 including from strangers in groups.",
+                "Download automatically") { p.autoDownload = true }
+        }, InfoText.AutoDownload)
+        InfoSwitchRow("Encrypt stored files", model.info?.encryptLocalFiles ?: true, { on ->
+            if (on) model.setEncryptLocalFiles(true)
+            else ask = PrivacyAsk("Store new files unencrypted?",
+                "Photos, videos, voice messages and files you send or receive from now on will be saved readable on this phone. Files already stored stay encrypted.",
+                "Store unencrypted") { model.setEncryptLocalFiles(false) }
+        }, InfoText.EncryptFiles)
+        InfoSwitchRow("Remove tracking from links", p.cleanLinks, { on ->
+            if (on) p.cleanLinks = true
+            else ask = PrivacyAsk("Keep tracking codes in links?",
+                "Links you send and open will keep codes like utm_source or fbclid, which let websites track who shared them and where you came from.",
+                "Keep codes") { p.cleanLinks = false }
+        }, InfoText.CleanLinks)
+        SectionLabel("What contacts see")
+        val user = model.user
+        InfoSwitchRow("Delivery receipts to contacts", user?.sendRcptsContacts ?: true, { on ->
+            if (!on) model.setDeliveryReceipts(groups = false, on = false)
+            else ask = PrivacyAsk("Send delivery receipts?",
+                "Your contacts will see when their messages reach this phone.",
+                "Send receipts") { model.setDeliveryReceipts(groups = false, on = true) }
+        }, InfoText.ReceiptsContacts)
+        InfoSwitchRow("Delivery receipts in small groups", user?.sendRcptsSmallGroups ?: true, { on ->
+            if (!on) model.setDeliveryReceipts(groups = true, on = false)
+            else ask = PrivacyAsk("Send delivery receipts?",
+                "Members of small groups will see when their messages reach this phone.",
+                "Send receipts") { model.setDeliveryReceipts(groups = true, on = true) }
+        }, InfoText.ReceiptsGroups)
+    }
+    if (lockMenu) {
+        ChoiceMenu("Lock", LockAfterChoices, p.lockAfter, { lockMenu = false }) { p.lockAfter = it; lockMenu = false }
+    }
+    ask?.let { a -> ConfirmSheet(a.title, a.body, a.action, a.apply) { ask = null } }
+}
+
+/** Linux `LockAfter`, in seconds (0 = as soon as Cursus is left). */
+private val LockAfterChoices = listOf(
+    0 to "Immediately",
+    30 to "After 30 seconds",
+    60 to "After 1 minute",
+    300 to "After 5 minutes",
+    900 to "After 15 minutes",
+)
+
+private fun lockAfterLabel(secs: Int) = LockAfterChoices.firstOrNull { it.first == secs }?.second ?: "After $secs seconds"
+
+/** Linux `SettingInfo` explanations, worded for a phone. */
+private object InfoText {
+    val AppLock = "App lock" to "Cursus asks for your database password again after you leave it alone or switch to another app for a while.\n\nWhile locked, nothing of your chats is shown, decrypted photos and voice messages are deleted from the cache, and notifications show only \u201cNew message\u201d. Messages keep arriving."
+    val ChatPreviews = "Message previews in chat list" to "Shows the last message under each chat in the list. Turn it off so people who can see your screen only see chat names."
+    val BlurMedia = "Blur photos and videos" to "Photos in chats are blurred until you tap them. A tapped photo stays visible until Cursus locks or restarts."
+    val HideNotificationText = "Hide message text in notifications" to "Notifications show the chat name and \u201cNew message\u201d only.\n\nWith it off, the message text appears in the notification \u2014 also on the lock screen \u2014 and Android may keep it in its notification history."
+    val SecureScreen = "Hide chats from screenshots" to "Android blocks screenshots and screen recordings of Cursus, and shows a blank card for it in recent apps."
+    val ProtectIp = "Protect IP address" to "Files are stored on file servers. Your own servers are trusted; servers chosen by the person who sent the file are not.\n\nWhen on, Cursus asks before downloading from a server you don't use, and automatic downloads skip them. Without Tor or a VPN, any server you download from can see your IP address."
+    val AutoDownload = "Download images and voice automatically" to "Images, voice messages and short videos download as soon as you open their chat, so they are ready to view.\n\nWhen off, nothing downloads until you tap it \u2014 useful to save data or to avoid files from strangers in groups."
+    val EncryptFiles = "Encrypt stored files" to "Photos, videos, voice messages and files are saved encrypted on this phone; Cursus decrypts them only while you view them.\n\nTurning it off affects new files only \u2014 files already stored stay encrypted."
+    val CleanLinks = "Remove tracking from links" to "Cursus removes tracking codes such as utm_source or fbclid from links in the messages you send \u2014 so they never reach your contacts \u2014 and from links before opening them. They tell websites who shared the link and where you came from. The page itself is the same."
+    val ReceiptsContacts = "Delivery receipts to contacts" to "Your contacts see a second tick when their messages reach this phone. It does not tell them you read them.\n\nYou can choose differently for a single contact in its chat preferences."
+    val ReceiptsGroups = "Delivery receipts in small groups" to "Members see when their messages reach this phone. SimpleX only sends receipts in groups with up to 20 members.\n\nYou can choose differently for a single group in its preferences."
 }
 
 /** What each bundled notice file covers (licenses/NOTICE.md has the table). */

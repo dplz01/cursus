@@ -9,7 +9,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `calls.svg` | [svgrepo/524804](https://www.svgrepo.com/svg/524804/phone-rounded) | Solar Linear Icons / Solar Icons (480 Design) | **CC BY 4.0** — attribution required | Yes (with credit) |
 | `settings.svg` | [svgrepo/524954](https://www.svgrepo.com/svg/524954/settings) | Solar Linear Icons / Solar Icons (480 Design) | **CC BY 4.0** — attribution required | Yes (with credit) |
 | `send.svg` | [svgrepo/533306](https://www.svgrepo.com/svg/533306/send) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |
-| `star.svg` | [svgrepo/533052](https://www.svgrepo.com/svg/533052/star) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |
+| `star.svg`, `star-filled.svg` | [Line MD](https://github.com/cyberalien/line-md) `star` / `star-filled` | Line MD / Vjacheslav Trushkin | **MIT License** — notice in `licenses/MIT-Line-MD.txt` | Yes (with notice) |
 | `image-pen.svg` | [svgrepo/532570](https://www.svgrepo.com/svg/532570/image-pen) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |
 | `chevron-down.svg` | [svgrepo/509899](https://www.svgrepo.com/svg/509899/down-chevron) | Zest Interface Icons / zest | **MIT License** | Yes |
 | `check.svg` | [svgrepo/510901](https://www.svgrepo.com/svg/510901/check) | Coolicons Line Oval Icons / krystonschwarze | **CC Attribution** | Yes (with credit) |
@@ -22,7 +22,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `copy.svg` | [svgrepo/524469](https://www.svgrepo.com/svg/524469/copy) | Solar Linear Icons / Solar Icons | **CC Attribution** | Yes (with credit) |
 | `session-leave.svg` | [svgrepo/491071](https://www.svgrepo.com/svg/491071/session-leave) | Gitlab Interface Icons / Gitlab | **MIT License** | Yes |
 | `clear-all.svg` | [svgrepo/375990](https://www.svgrepo.com/svg/375990/clear-all) | Keyicons Interface Icons / Elnodos | **CC Attribution** — attribution required | Yes (with credit) |
-| `mute-notification.svg` | [svgrepo/500636](https://www.svgrepo.com/svg/500636/mute-notification) | Element Plus Line Interface Icons / element-plus | **MIT License** | Yes |
+| `notifications.svg`, `notifications-off.svg`, `notifications-off-outline.svg` | [Ionicons](https://github.com/ionic-team/ionicons) | Ionicons by Ben Sperry / Ionic | **MIT License** — notice in `licenses/MIT-Ionicons.txt` | Yes (with notice) |
 | `preferences.svg` | Element Plus Tools (same pack) | Element Plus Line Interface Icons / element-plus | **MIT License** | Yes |
 | `mic.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `play.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
@@ -52,7 +52,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 
 Phone and Settings icons: **Solar Icons** by 480 Design, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Sourced via SVG Repo.
 
-Send, star, image-pen, user-alt-1 and address-card icons: **Dazzle Line Icons** by Dazzle UI, CC Attribution license via [SVG Repo](https://www.svgrepo.com/svg/533306/send) / [star](https://www.svgrepo.com/svg/533052/star) / [image-pen](https://www.svgrepo.com/svg/532570/image-pen) / [user-alt-1](https://www.svgrepo.com/svg/532363/user-alt-1).
+Send, image-pen, user-alt-1 and address-card icons: **Dazzle Line Icons** by Dazzle UI, CC Attribution license via [SVG Repo](https://www.svgrepo.com/svg/533306/send) / [image-pen](https://www.svgrepo.com/svg/532570/image-pen) / [user-alt-1](https://www.svgrepo.com/svg/532363/user-alt-1).
 
 Timer and paste icons: **Gentlecons Interface Icons** by Konstantin Filatov, CC Attribution via [SVG Repo](https://www.svgrepo.com/svg/521887/timer) / [paste](https://www.svgrepo.com/svg/521781/paste).
 
@@ -94,7 +94,11 @@ Leave / session-leave icon: **Gitlab Interface Icons** by Gitlab (MIT), via [SVG
 
 Clear-all icon: **Keyicons Interface Icons** by Elnodos (CC Attribution), via [SVG Repo](https://www.svgrepo.com/svg/375990/clear-all).
 
-Mute icon: outline bell-slash redrawn at 24×24 / stroke 1.5 to match Solar Linear `settings.svg` weight (replaces the heavier Element Plus filled mute). Preferences header actions use the same `settings.svg` as the main nav.
+Favourite star (outline when off, filled when on): **Line MD** by Vjacheslav Trushkin — Copyright 2020 Vjacheslav Trushkin, MIT License ([line-md](https://github.com/cyberalien/line-md)). Full notice: `licenses/MIT-Line-MD.txt`.
+
+Notifications (settings), mute toggle (notifications-off outline when off, filled when on) and the muted badge: **Ionicons** by Ben Sperry — Copyright (c) 2015-present Ionic (http://ionic.io/), MIT License ([ionicons](https://github.com/ionic-team/ionicons)). Full notice: `licenses/MIT-Ionicons.txt`.
+
+Preferences header actions use the same `settings.svg` as the main nav.
 
 Member role / action menus:
 | File | Source | Pack / author | License |
@@ -113,7 +117,7 @@ Member role / action menus:
 
 Suggested credit line (also shown in Settings):
 
-> Icons include Solar Icons (CC BY 4.0 / CC Attribution), Coolicons (CC Attribution), Dazzle Line Icons (CC Attribution), Zest Interface Icons (MIT), and CFPB Design System icons (public domain), via SVG Repo.
+> Icons include Solar Icons (CC BY 4.0 / CC Attribution), Coolicons (CC Attribution), Dazzle Line Icons (CC Attribution), Zest Interface Icons (MIT), and CFPB Design System icons (public domain), via SVG Repo; Ionicons by Ben Sperry / Ionic (MIT) and Line MD by Vjacheslav Trushkin (MIT).
 
 ## Verification notes
 

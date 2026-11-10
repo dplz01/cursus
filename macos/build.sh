@@ -99,8 +99,8 @@ rm -rf "$ICONSET"
 mkdir -p "$APP/Contents/Resources/icons"
 cp "$MAC/Resources/icons/"*.pdf "$APP/Contents/Resources/icons/"
 
-# License notices travel with the binary (AGPL + statically linked crates,
-# icon credits).
+# License notices travel with the binary: AGPL text, Rust crates, the
+# SimpleX core's Haskell/native libraries, icon credits (see NOTICE.md).
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/licenses/"
 cp "$ROOT"/licenses/* "$APP/Contents/Resources/licenses/"
 cp "$ROOT/linux/assets/icons/ATTRIBUTION.md" "$APP/Contents/Resources/licenses/ICONS-ATTRIBUTION.md"

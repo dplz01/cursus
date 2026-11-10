@@ -300,10 +300,10 @@ struct ChatRow: View {
                             .lineLimit(2)
                             .frame(maxWidth: .infinity, alignment: .topLeading)
                         if chat.favorite {
-                            CIcon("star", size: 14, color: Theme.accent).padding(.top, 1)
+                            CIcon("star-filled", size: 14, color: Theme.accent).padding(.top, 1)
                         }
                         if chat.muted {
-                            CIcon("mute-notification", size: 14, color: Theme.mutedText).padding(.top, 1)
+                            CIcon("notifications-off", size: 14, color: Theme.mutedText).padding(.top, 1)
                         }
                         if chat.hasUnread {
                             UnreadPill(count: chat.unread, muted: chat.muted)

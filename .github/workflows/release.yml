@@ -126,7 +126,7 @@ jobs:
             echo
             echo "- **Cursus source** for this release: tag [\`${GITHUB_REF_NAME}\`](https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_REF_NAME}) (also attached below as *Source code*)."
             echo "- **SimpleX core (libsimplex 7.1.0.17, AGPL-3.0)**: [simplex-chat \`1fd7ed8\`](https://github.com/simplex-chat/simplex-chat/tree/1fd7ed8327d8481299215ca3240eb0140400924a) with [simplexmq \`d1f97d3\`](https://github.com/simplex-chat/simplexmq/tree/d1f97d38f7a01f112efb6be753a1b45a40777826), prebuilt by SimpleX as [\`core-7.1.0.17\`](https://github.com/simplex-chat/simplex-chat-libs/releases/tag/core-7.1.0.17)."
-            echo "- **Rust crates**: licenses and notices in \`THIRD_PARTY_LICENSES.txt\`; **fonts**: Noto (SIL OFL 1.1); **icons**: see \`ICONS-ATTRIBUTION.md\`."
+            echo "- **Third-party notices**: Rust crates in \`THIRD_PARTY_LICENSES.txt\`; the SimpleX core's Haskell and native libraries in \`SIMPLEX-CORE-LICENSES.txt\`; **fonts**: Noto (SIL OFL 1.1); **icons**: see \`ICONS-ATTRIBUTION.md\`."
           } > ../NOTES.md
       - uses: softprops/action-gh-release@v2
         with:

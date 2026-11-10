@@ -50,7 +50,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .profile: return "user-alt-1"
         case .address: return "link-minimalistic-2"
         case .privacy: return "shield-check"
-        case .notifications: return "sf:bell"
+        case .notifications: return "notifications"
         case .appearance: return "image-square"
         case .about: return "info-circle"
         }

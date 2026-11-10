@@ -1431,7 +1431,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     );
 
     if let Some(draft) = app.voice_draft() {
-        return voice_draft_bar(draft, send_size, icon_size, d, hover_ok);
+        return voice_draft_bar(draft, send_size, icon_size, d, hover_ok, app.scale_factor());
     }
 
     let recording = app.voice_recording();
@@ -2841,12 +2841,14 @@ fn voice_draft_bar(
     icon_size: f32,
     d: Density,
     hover: bool,
+    scale: f32,
 ) -> Element<'static, Message> {
     let wave = Canvas::new(Waveform {
         peaks: draft.peaks.clone(),
         progress: 1.0,
         played: theme::t().accent,
         rest: theme::t().text_muted,
+        scale,
     })
     .width(Length::Fill)
     .height(36.0);
@@ -3340,6 +3342,7 @@ fn voice_waveform_row(
         progress,
         played: theme::t().accent,
         rest: theme::t().text_muted,
+        scale: app.scale_factor(),
     })
     .width(Length::Fill)
     .height(wave_h);
@@ -3584,6 +3587,61 @@ struct Waveform {
     progress: f32,
     played: Color,
     rest: Color,
+    /// Window scale factor: bars are laid out on whole device pixels.
+    scale: f32,
+}
+
+/// One waveform bar in device pixels: x, width, y, height.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct WaveBar {
+    x: f32,
+    w: f32,
+    y: f32,
+    h: f32,
+    peak: f32,
+}
+
+/// Lay voice-message bars out on the device-pixel grid so every bar and gap
+/// has crisp edges (fractional gaps blur into grey smears). Bar and gap
+/// widths are fixed; the bar count follows the available width and the
+/// peaks are resampled to it (max per bucket so speech stays visible).
+fn wave_layout(peaks: &[f32], width_px: f32, height_px: f32, scale: f32) -> Vec<WaveBar> {
+    const BAR: f32 = 3.0; // logical px
+    const GAP: f32 = 2.0;
+    if peaks.is_empty() || width_px < 1.0 || height_px < 1.0 {
+        return Vec::new();
+    }
+    let bar = (BAR * scale).round().max(1.0);
+    let gap = (GAP * scale).round().max(1.0);
+    let pitch = bar + gap;
+    let n = (((width_px + gap) / pitch).floor() as usize).max(1);
+    // Leftover (< one pitch) splits evenly on both sides, on whole pixels.
+    let left = ((width_px - (n as f32 * pitch - gap)) / 2.0).max(0.0).floor();
+    let src = peaks.len();
+    (0..n)
+        .map(|i| {
+            let a = i * src / n;
+            let b = ((i + 1) * src / n).max(a + 1).min(src);
+            let peak = peaks[a.min(src - 1)..b]
+                .iter()
+                .copied()
+                .fold(0.0_f32, f32::max);
+            // Never shorter than wide: the quietest bars are round dots.
+            let mut h = (peak.clamp(0.08, 1.0) * height_px * 0.92).round().max(bar);
+            // Same parity as the box so the bar centres on a whole pixel.
+            if (height_px.round() - h) as i32 % 2 != 0 {
+                h += 1.0;
+            }
+            let y = ((height_px - h) / 2.0).round();
+            WaveBar {
+                x: left + i as f32 * pitch,
+                w: bar,
+                y,
+                h,
+                peak,
+            }
+        })
+        .collect()
 }
 
 impl canvas::Program<Message> for Waveform {
@@ -3598,18 +3656,25 @@ impl canvas::Program<Message> for Waveform {
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let n = self.peaks.len().max(1) as f32;
-        let gap = 0.75;
-        let bar_w = ((bounds.width - gap * (n - 1.0)) / n).max(1.0);
-        for (i, peak) in self.peaks.iter().enumerate() {
-            let x = i as f32 * (bar_w + gap);
-            let h = (peak.clamp(0.08, 1.0) * bounds.height * 0.92).max(1.5);
-            let y = (bounds.height - h) * 0.5;
+        let s = if self.scale.is_finite() && self.scale > 0.0 { self.scale } else { 1.0 };
+        // The canvas may sit at a fractional offset: shift so bar edges land
+        // on device pixels.
+        let ox = (bounds.x * s).round() / s - bounds.x;
+        let oy = (bounds.y * s).round() / s - bounds.y;
+        let bars = wave_layout(&self.peaks, (bounds.width * s).floor(), (bounds.height * s).floor(), s);
+        let n = bars.len().max(1) as f32;
+        for (i, b) in bars.iter().enumerate() {
             let filled = (i as f32 + 1.0) / n <= self.progress + 0.001;
-            frame.fill_rectangle(
-                Point::new(x, y),
-                Size::new(bar_w, h),
-                Fill::from(if filled { self.played } else { self.rest }),
+            let color = if filled { self.played } else { self.rest };
+            let top_left = Point::new(ox + b.x / s, oy + b.y / s);
+            let size = Size::new(b.w / s, b.h / s);
+            // Short bars are dots / capsules (radius = half the width; they
+            // are never shorter than wide, so no eye shapes); tall bars get
+            // slightly rounded ends.
+            let r = if b.h <= b.w * 1.5 { b.w / 2.0 } else { b.w * 0.4 } / s;
+            frame.fill(
+                &canvas::Path::rounded_rectangle(top_left, size, r.into()),
+                Fill::from(color),
             );
         }
         vec![frame.into_geometry()]
@@ -3864,7 +3929,7 @@ fn settings_section_meta(section: crate::SettingsSection) -> (Element<'static, M
         crate::SettingsSection::Address => (icons::link_icon(18.0, a), "Address", "How people reach you"),
         crate::SettingsSection::Appearance => (icons::image_icon(18.0, a), "Appearance", "Theme, text size and typing"),
         crate::SettingsSection::Privacy => (icons::shield_icon(18.0, a), "Privacy & security", "Lock, screen, files and receipts"),
-        crate::SettingsSection::Desktop => (icons::settings_icon_plain(18.0, a), "Notifications & tray", "Alerts and background running"),
+        crate::SettingsSection::Desktop => (icons::notifications_icon(18.0, a), "Notifications & tray", "Alerts and background running"),
     }
 }
 
@@ -8876,5 +8941,38 @@ mod tests {
         // 2 visible characters, not 2 code points.
         assert_eq!(truncate_graphemes(&s, 2), format!("{family}🇮🇹…"));
         assert_eq!(truncate_graphemes("short", 10), "short");
+    }
+}
+
+#[cfg(test)]
+mod wave_layout_tests {
+    use super::wave_layout;
+
+    #[test]
+    fn bars_and_gaps_sit_on_whole_pixels() {
+        let peaks: Vec<f32> = (0..96).map(|i| i as f32 / 95.0).collect();
+        for &(scale, width) in &[(1.0_f32, 620.0_f32), (1.25, 775.0), (2.0, 1240.0)] {
+            let bars = wave_layout(&peaks, width, 36.0 * scale, scale);
+            assert!(!bars.is_empty());
+            for (i, b) in bars.iter().enumerate() {
+                for v in [b.x, b.w, b.y, b.h] {
+                    assert_eq!(v, v.round(), "scale {scale}: fractional {v}");
+                }
+                assert!(b.x + b.w <= width);
+                assert!(b.h >= b.w, "bar shorter than wide: eye-shaped when rounded");
+                if i > 0 {
+                    let prev = bars[i - 1];
+                    assert_eq!(b.x - (prev.x + prev.w), (2.0 * scale).round());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn resampling_keeps_the_loud_spot() {
+        let mut peaks = vec![0.05; 96];
+        peaks[40] = 1.0;
+        let bars = wave_layout(&peaks, 200.0, 36.0, 1.0);
+        assert!(bars.iter().any(|b| b.peak == 1.0));
     }
 }

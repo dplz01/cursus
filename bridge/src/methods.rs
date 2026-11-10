@@ -422,11 +422,27 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             Ok(Value::Null)
         }
         "createInvitation" => Ok(dto::link(&s.create_invitation_link().map_err(err)?)),
+        // Connect card (cursus_core::invitations): the kept one-time link,
+        // a fresh one replacing it, and its incognito switch.
+        "oneTimeInvitation" => Ok(dto::invitation(
+            &s.one_time_invitation(p.get("incognito").and_then(Value::as_bool).unwrap_or(false)).map_err(err)?,
+        )),
+        "regenerateInvitation" => Ok(dto::invitation(
+            &s.regenerate_invitation(
+                p.get("previous").and_then(Value::as_i64),
+                p.get("incognito").and_then(Value::as_bool).unwrap_or(false),
+            )
+            .map_err(err)?,
+        )),
+        "setInvitationIncognito" => Ok(json!(s
+            .set_invitation_incognito(i64_param(p, "connId")?, bool_param(p, "on")?)
+            .map_err(err)?)),
         "addressLink" => Ok(dto::link(&s.ensure_address_link().map_err(err)?)),
         "addressAutoAccept" => Ok(json!(s.address_auto_accept().map_err(err)?)),
         "setAddressAutoAccept" => Ok(json!(s.set_address_auto_accept(bool_param(p, "on")?).map_err(err)?)),
         "connect" => {
-            s.connect_link(str_param(p, "link")?.trim()).map_err(err)?;
+            let incognito = p.get("incognito").and_then(Value::as_bool).unwrap_or(false);
+            s.connect_link_as(str_param(p, "link")?.trim(), incognito).map_err(err)?;
             Ok(Value::Null)
         }
         "acceptRequest" => {

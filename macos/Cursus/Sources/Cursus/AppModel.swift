@@ -1121,9 +1121,41 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func connect(link: String) async -> Bool {
+    /// The newest one-time link nobody used yet, else a new one (core rule).
+    func oneTimeInvitation(incognito: Bool) async -> Invitation? {
         do {
-            try await Core.run("connect", ["link": link])
+            return try await Core.call("oneTimeInvitation", ["incognito": incognito], as: Invitation.self)
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// A fresh one-time link replacing `previous` (deleted while unused).
+    func regenerateInvitation(previous: Int64?, incognito: Bool) async -> Invitation? {
+        var params: [String: Any] = ["incognito": incognito]
+        if let previous = previous { params["previous"] = previous }
+        do {
+            return try await Core.call("regenerateInvitation", params, as: Invitation.self)
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// Switch an unused link to / from a random profile; nil if it failed.
+    func setInvitationIncognito(connId: Int64, on: Bool) async -> Bool? {
+        do {
+            return try await Core.call("setInvitationIncognito", ["connId": connId, "on": on], as: Bool.self)
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    func connect(link: String, incognito: Bool = false) async -> Bool {
+        do {
+            try await Core.run("connect", ["link": link, "incognito": incognito])
             scheduleChatsReload()
             return true
         } catch {

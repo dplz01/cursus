@@ -14,6 +14,9 @@ enum Prefs {
     static let autoDownload = "autoDownload"
     static let protectIP = "protectIP"
     static let cleanLinks = "cleanLinks"
+    /// New one-time links and links pasted on the Connect card use a random
+    /// incognito profile (the official apps' toggle).
+    static let incognito = "incognito"
 
     private static var defaults: UserDefaults { .standard }
 

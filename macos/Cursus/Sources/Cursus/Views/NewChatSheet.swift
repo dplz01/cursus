@@ -43,18 +43,22 @@ struct NewChatSheet: View {
     }
 }
 
-/// Linux Connect card: the one-time link (shown at once, kept by the core
-/// until someone uses it) with its incognito switch and "New link", then
-/// joining with a pasted link. The reusable address is in Settings.
+/// Linux Connect card: a one-time link created as the sheet opens, its
+/// incognito switch and "New link" (asks first: the shown link is deleted),
+/// then joining with a pasted link. Closing the sheet deletes the link if it
+/// was never copied — nobody can have it. Copied links stay listed under the
+/// gold button beside "+". The reusable address is in Settings.
 private struct ConnectTab: View {
     @EnvironmentObject private var model: AppModel
     let done: () -> Void
     @AppStorage(Prefs.incognito) private var incognito = false
     @State private var invitation: Invitation?
+    @State private var copied = false
     @State private var busy = false
     @State private var link = ""
     @State private var working = false
     @State private var showInfo = false
+    @State private var confirmNew = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -68,7 +72,7 @@ private struct ConnectTab: View {
             SectionLabel("Copy one-time link")
             HStack(spacing: 6) {
                 if let invitation = invitation {
-                    LinkBox(text: invitation.link.display)
+                    LinkBox(text: invitation.link.display, onCopy: { copied = true })
                 } else {
                     Text(busy ? "Creating link…" : "No link yet")
                         .font(.cMeta)
@@ -86,7 +90,7 @@ private struct ConnectTab: View {
                     .font(.cMeta)
                     .foregroundColor(Theme.secondaryText)
                 Spacer(minLength: 8)
-                Button(action: regenerate) {
+                Button(action: { if invitation == nil { create() } else { confirmNew = true } }) {
                     HStack(spacing: 6) {
                         CIcon("repeat-once", size: 14)
                         Text("New link")
@@ -109,17 +113,22 @@ private struct ConnectTab: View {
                     .disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || working)
             }
         }
-        .onAppear(perform: load)
+        .onAppear(perform: create)
+        .onDisappear(perform: dropUnshared)
+        .alert("Create a new link?", isPresented: $confirmNew) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete and create new", role: .destructive, action: regenerate)
+        } message: {
+            Text("The previous link will be deleted. Anyone you already sent it to won't be able to connect with it.")
+        }
     }
 
-    private func load() {
+    private func create() {
         guard !busy else { return }
         busy = true
+        copied = false
         Task {
-            if let inv = await model.oneTimeInvitation(incognito: incognito) {
-                invitation = inv
-                incognito = inv.incognito // a kept link keeps its own state
-            }
+            invitation = await model.newInvitation(incognito: incognito)
             busy = false
         }
     }
@@ -127,12 +136,20 @@ private struct ConnectTab: View {
     private func regenerate() {
         guard !busy else { return }
         busy = true
+        copied = false
         Task {
             if let inv = await model.regenerateInvitation(previous: invitation?.connId, incognito: incognito) {
                 invitation = inv
             }
             busy = false
         }
+    }
+
+    /// Never copied: nobody can have it, so don't leave it behind.
+    private func dropUnshared() {
+        guard let inv = invitation, !copied else { return }
+        invitation = nil
+        Task { await model.deleteInvitation(connId: inv.connId, quiet: true) }
     }
 
     private func toggleIncognito() {
@@ -144,11 +161,11 @@ private struct ConnectTab: View {
             if let state = await model.setInvitationIncognito(connId: current.connId, on: on) {
                 invitation?.incognito = state
                 incognito = state
-                busy = false
             } else {
-                busy = false
-                load() // used meanwhile: show the current link
+                invitation = nil // used or deleted meanwhile
+                model.refreshPendingInvitations()
             }
+            busy = false
         }
     }
 
@@ -167,7 +184,8 @@ private struct ConnectTab: View {
 /// What the Connect card's parts do (same text as the Linux ⓘ sheet).
 private struct ConnectInfo: View {
     private let paragraphs = [
-        "One-time link: send it to one person. Whoever opens it first becomes your contact, then the link stops working. It stays the same until someone uses it, so you can copy it again later; \u{201c}New link\u{201d} replaces it with a fresh one.",
+        "One-time link: a new one is made each time you open this page. Send it to one person \u{2014} whoever opens it first becomes your contact, then it stops working. \u{201c}New link\u{201d} deletes the shown link and makes a fresh one.",
+        "Links you copied that nobody has used yet stay valid: the gold link button next to + lists them, to copy, name or delete. A link you never copied is deleted when you leave this page \u{2014} nobody can have it.",
         "Incognito: when on, the person who connects sees a new random name instead of your profile \u{2014} a different one for each contact. You can switch it until the link is used. It also applies when you connect with a link below.",
         "Join with a link: paste a link someone sent you \u{2014} a one-time link, an address, or a group or channel link \u{2014} and click Connect.",
         "Your reusable address, which many people can use, is in Settings \u{2192} Address.",

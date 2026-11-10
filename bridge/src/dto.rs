@@ -70,7 +70,13 @@ pub fn link(l: &ConnLink) -> Value {
 }
 
 pub fn invitation(i: &cursus_core::Invitation) -> Value {
-    json!({ "link": link(&i.link), "connId": i.conn_id, "incognito": i.incognito })
+    json!({
+        "link": link(&i.link),
+        "connId": i.conn_id,
+        "incognito": i.incognito,
+        "alias": i.alias,
+        "createdAt": i.created_at,
+    })
 }
 
 pub fn chat(c: &ChatPreview) -> Value {

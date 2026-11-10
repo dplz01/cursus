@@ -96,6 +96,9 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var busy = false
     @Published var showNewChat = false
+    /// Unused one-time links (gold counter beside "+", list sheet).
+    @Published var pendingInvitations: [Invitation] = []
+    @Published var showPendingLinks = false
     /// Contact / group info panel beside the conversation (⌘I).
     @Published var showInfo = false
     @Published var members: [Member] = []
@@ -302,6 +305,7 @@ final class AppModel: ObservableObject {
         do {
             let list = try await Core.call("listChats", as: [Chat].self)
             if list != chats { chats = list }
+            refreshPendingInvitations() // same reply carried them
             if let sel = selection, !list.contains(where: { $0.ref == sel }) {
                 selection = nil
             }
@@ -1121,25 +1125,60 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// The newest one-time link nobody used yet, else a new one (core rule).
-    func oneTimeInvitation(incognito: Bool) async -> Invitation? {
+    /// "+" opens the New sheet, which creates a one-time link at once.
+    func newInvitation(incognito: Bool) async -> Invitation? {
         do {
-            return try await Core.call("oneTimeInvitation", ["incognito": incognito], as: Invitation.self)
+            let inv = try await Core.call("newInvitation", ["incognito": incognito], as: Invitation.self)
+            refreshPendingInvitations()
+            return inv
         } catch {
             report(error)
             return nil
         }
     }
 
-    /// A fresh one-time link replacing `previous` (deleted while unused).
+    /// "New link" (after the user confirmed): delete `previous`, create a fresh one.
     func regenerateInvitation(previous: Int64?, incognito: Bool) async -> Invitation? {
         var params: [String: Any] = ["incognito": incognito]
         if let previous = previous { params["previous"] = previous }
         do {
-            return try await Core.call("regenerateInvitation", params, as: Invitation.self)
+            let inv = try await Core.call("regenerateInvitation", params, as: Invitation.self)
+            refreshPendingInvitations()
+            return inv
         } catch {
             report(error)
             return nil
+        }
+    }
+
+    /// Delete an unused link; whoever has it can no longer connect.
+    @discardableResult
+    func deleteInvitation(connId: Int64, quiet: Bool = false) async -> Bool {
+        do {
+            try await Core.run("deleteInvitation", ["connId": connId])
+            refreshPendingInvitations()
+            return true
+        } catch {
+            refreshPendingInvitations()
+            if !quiet { report(error) }
+            return false
+        }
+    }
+
+    /// Name a pending link (empty clears it).
+    func setInvitationAlias(connId: Int64, alias: String) async {
+        do {
+            _ = try await Core.call("setInvitationAlias", ["connId": connId, "alias": alias], as: String.self)
+        } catch {
+            report(error)
+        }
+        refreshPendingInvitations()
+    }
+
+    /// From the core's copy (last chats load + invitation calls since).
+    func refreshPendingInvitations() {
+        if let list = try? Core.callSync("pendingInvitations", as: [Invitation].self), list != pendingInvitations {
+            pendingInvitations = list
         }
     }
 

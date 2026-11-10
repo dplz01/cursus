@@ -142,6 +142,9 @@ data class Message(
     val edited: Boolean = false,
     val canEdit: Boolean = false,
     val emojiOnly: Boolean = false,
+    /// Core `runs` rule: this message continues the previous run / the next one continues it.
+    val joinedPrev: Boolean = false,
+    val joinedNext: Boolean = false,
 )
 
 @Serializable

@@ -143,7 +143,7 @@ private fun RequestBar(model: AppModel, chat: Chat) {
 /** One row of the history: a day label or a message. */
 private sealed interface Row_ {
     data class Day(val date: LocalDate) : Row_
-    data class Msg(val message: Message, val firstOfRun: Boolean) : Row_
+    data class Msg(val message: Message, val firstOfRun: Boolean, val lastOfRun: Boolean) : Row_
 }
 
 @Composable
@@ -151,15 +151,13 @@ private fun MessageList(model: AppModel, chat: Chat) {
     val rows = remember(model.messages.toList()) {
         buildList<Row_> {
             var lastDay: LocalDate? = null
-            var lastSender: Long? = null
             for (m in model.messages) {
                 val day = Stamps.day(m.createdAt)
                 if (day != null && day != lastDay) {
-                    add(Row_.Day(day)); lastDay = day; lastSender = null
+                    add(Row_.Day(day)); lastDay = day
                 }
-                val sender = if (m.outgoing) -1L else m.sender?.memberId ?: -2L
-                add(Row_.Msg(m, sender != lastSender))
-                lastSender = sender
+                // Runs (same sender, same day, ≤5 min) come from the core.
+                add(Row_.Msg(m, firstOfRun = !m.joinedPrev, lastOfRun = !m.joinedNext))
             }
         }.asReversed()
     }
@@ -187,7 +185,7 @@ private fun MessageList(model: AppModel, chat: Chat) {
         }) { i ->
             when (val r = rows[i]) {
                 is Row_.Day -> DayLabel(r.date)
-                is Row_.Msg -> MessageRow(model, chat, r.message, r.firstOfRun)
+                is Row_.Msg -> MessageRow(model, chat, r.message, r.firstOfRun, r.lastOfRun)
             }
         }
     }
@@ -207,7 +205,7 @@ private fun DayLabel(date: LocalDate) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Boolean) {
+private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Boolean, lastOfRun: Boolean) {
     val c = Cursus.colors
     if (m.announcement) {
         Text(
@@ -236,9 +234,9 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
             Box {
                 Column(
                     Modifier
-                        .clip(bubbleShape(m.outgoing, firstOfRun, chat.isGroup))
+                        .clip(bubbleShape(m.outgoing, lastOfRun))
                         .background(if (m.outgoing) c.accentSoft else c.bgElevated)
-                        .then(if (m.outgoing || c.isDark) Modifier else Modifier.border(1.dp, c.border, bubbleShape(false, firstOfRun, chat.isGroup)))
+                        .then(if (m.outgoing || c.isDark) Modifier else Modifier.border(1.dp, c.border, bubbleShape(false, lastOfRun)))
                         .combinedClickable(onClick = {}, onLongClick = { menu = true })
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
@@ -305,14 +303,21 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
 
 private val RoundedChip = androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
 
-/** Bubbles round off at 16; the run's first one keeps a small "tail" corner at the top. */
-private fun bubbleShape(outgoing: Boolean, first: Boolean, group: Boolean) =
-    androidx.compose.foundation.shape.RoundedCornerShape(
-        topStart = if (!outgoing && first) 4.dp else 16.dp,
-        topEnd = if (outgoing && first) 4.dp else 16.dp,
-        bottomStart = 16.dp,
-        bottomEnd = 16.dp,
+/**
+ * Bubbles round off at 16 except on the sender's side (right for sent, left
+ * for received): the top corner there is always small, and the bottom one
+ * too on every bubble of a run but its last, so the run reads as one block.
+ */
+private fun bubbleShape(outgoing: Boolean, lastOfRun: Boolean): androidx.compose.foundation.shape.RoundedCornerShape {
+    val top = 4.dp
+    val bottom = if (lastOfRun) 16.dp else 4.dp
+    return androidx.compose.foundation.shape.RoundedCornerShape(
+        topStart = if (outgoing) 16.dp else top,
+        topEnd = if (outgoing) top else 16.dp,
+        bottomStart = if (outgoing) 16.dp else bottom,
+        bottomEnd = if (outgoing) bottom else 16.dp,
     )
+}
 
 @Composable
 private fun DeliveryGlyph(delivery: String, c: CursusColors) {

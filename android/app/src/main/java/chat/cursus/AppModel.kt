@@ -350,13 +350,14 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun markUnread(chat: Chat) = act { Core.run("markUnread", mapOf("chat" to chat.ref)) }
+    // The core sends no event for these: reload the chats so the change shows.
+    fun markUnread(chat: Chat) = change(chat, "markUnread", mapOf("chat" to chat.ref))
 
     fun setFavorite(chat: Chat, on: Boolean) =
-        act { Core.run("setChatSettings", mapOf("chat" to chat.ref, "favorite" to on)) }
+        change(chat, "setChatSettings", mapOf("chat" to chat.ref, "favorite" to on))
 
     fun setMuted(chat: Chat, muted: Boolean) =
-        act { Core.run("setChatSettings", mapOf("chat" to chat.ref, "notifications" to if (muted) "none" else "all")) }
+        change(chat, "setChatSettings", mapOf("chat" to chat.ref, "notifications" to if (muted) "none" else "all"))
 
     fun clear(chat: Chat) = act {
         Core.run("clearChat", mapOf("chat" to chat.ref))

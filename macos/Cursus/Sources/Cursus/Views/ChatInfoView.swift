@@ -124,6 +124,7 @@ private struct InfoOverview: View {
     @Binding var page: InfoPage
 
     @State private var editing: ProfileField?
+    @State private var photoMenu = false
     @State private var confirming: Danger?
 
     private enum Danger { case clear, leave, delete }
@@ -148,7 +149,7 @@ private struct InfoOverview: View {
         if chat.isDirect && chat.pendingRequestId == nil {
             Card(padding: 0, spacing: 0) {
                 NavRow(icon: "settings", title: "Chat preferences",
-                       subtitle: "Disappearing messages, receipts, calls…", flush: true) { page = .preferences }
+                       flush: true) { page = .preferences }
             }
         }
         if chat.isGroup { groupActions }
@@ -189,9 +190,23 @@ private struct InfoOverview: View {
     private var identity: some View {
         Card(spacing: 6) {
             HStack(alignment: .center, spacing: 14) {
-                VStack(spacing: 8) {
-                    Avatar(image: chat.image, name: chat.title, size: 72, kind: chat.avatarKind)
-                    if ownsGroup { photoActions }
+                if ownsGroup {
+                    // Clicking the picture changes it (no inline buttons).
+                    Button { photoMenu = true } label: {
+                        Avatar(image: chat.image, name: chat.title, size: 84, kind: chat.avatarKind)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Change picture")
+                    .confirmationDialog("Profile picture", isPresented: $photoMenu) {
+                        Button("Change picture…", action: pickImage)
+                        if chat.image != nil {
+                            Button("Remove picture", role: .destructive) {
+                                Task { await model.updateGroupProfile(chat, image: .some(nil)) }
+                            }
+                        }
+                    }
+                } else {
+                    Avatar(image: chat.image, name: chat.title, size: 84, kind: chat.avatarKind)
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     EditableLine(text: publicName, placeholder: "Name", style: .name,
@@ -222,17 +237,6 @@ private struct InfoOverview: View {
                 if let text = chat.description, !text.isEmpty {
                     SectionLabel(chat.isGroup ? "Welcome message" : "About")
                     about(text)
-                }
-            }
-        }
-    }
-
-    private var photoActions: some View {
-        HStack(spacing: 6) {
-            IconTool(icon: "image-pen", help: "Choose picture…", size: 18, action: pickImage)
-            if chat.image != nil {
-                IconTool(icon: "cancel", help: "Remove picture", size: 18) {
-                    Task { await model.updateGroupProfile(chat, image: .some(nil)) }
                 }
             }
         }
@@ -269,23 +273,17 @@ private struct InfoOverview: View {
             Card(padding: 0, spacing: 0) {
                 if chat.isModerator {
                     NavRow(icon: "admin", title: "Chats with members",
-                           subtitle: chat.membersRequireAttention > 0
-                            ? "\(chat.membersRequireAttention) need attention"
-                            : "Join requests and member support",
-                           flush: true) { page = .supportList }
+                           flush: true, badge: chat.membersRequireAttention) { page = .supportList }
                 } else if supportOn && chat.role != nil {
                     NavRow(icon: "admin", title: "Chat with admins",
-                           subtitle: chat.supportUnread > 0
-                            ? "\(chat.supportUnread) unread"
-                            : "Private conversation with moderators",
-                           flush: true) { model.openSupport(chat) }
+                           flush: true, badge: chat.supportUnread) { model.openSupport(chat) }
                 }
                 if ownsGroup {
                     NavRow(icon: "scripture-scroll", title: "Welcome message", subtitle: welcomePreview,
                            trailing: "edit-3", flush: true) { editing = .welcome }
                 }
                 if chat.isAdmin && !chat.isChannel {
-                    NavRow(icon: "user-plus-alt-1", title: "Invite", subtitle: "Your contacts",
+                    NavRow(icon: "user-plus-alt-1", title: "Invite",
                            trailing: "plus", flush: true) { page = .invite }
                 }
                 if chat.isAdmin || chat.isChannel {

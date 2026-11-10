@@ -1116,6 +1116,27 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The address if there is one — never creates it (Settings → Address).
+    func currentAddress() async -> ConnLink? {
+        do {
+            return try await Core.call("currentAddress", as: ConnLink?.self)
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// Delete the address; contacts made through it stay connected.
+    func deleteAddress() async -> Bool {
+        do {
+            user = try await Core.call("deleteAddress", as: User.self)
+            return true
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
     func addressLink() async -> ConnLink? {
         do {
             return try await Core.call("addressLink", as: ConnLink.self)

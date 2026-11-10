@@ -439,6 +439,8 @@ struct NavRow: View {
     var trailing: String? = "chevron"
     /// In a `Card(padding: 0)`: the row spans the card edge to edge.
     var flush = false
+    /// Yellow count before the trailing icon (unread support chats).
+    var badge: Int = 0
     let action: () -> Void
 
     var body: some View {
@@ -452,6 +454,9 @@ struct NavRow: View {
                     }
                 }
                 Spacer(minLength: 0)
+                if badge > 0 {
+                    AttentionCount(count: badge)
+                }
                 if trailing == "chevron" {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
@@ -497,15 +502,9 @@ struct CardTitle: View {
     var body: some View {
         HStack(spacing: 10) {
             IconDisc(icon: icon, size: 36)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.cBodyBold).foregroundColor(Theme.primaryText)
-                if let subtitle = subtitle {
-                    Text(subtitle)
-                        .font(.cMeta)
-                        .foregroundColor(Theme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+            // Titles only: descriptions belong in ⓘ sheets (`subtitle` kept
+            // for call sites, not shown).
+            Text(title).font(.cBodyBold).foregroundColor(Theme.primaryText)
             Spacer(minLength: 0)
         }
     }
@@ -535,13 +534,9 @@ struct PrefRow<Control: View>: View {
             if let icon = icon {
                 CIcon(icon, size: 20, color: Theme.secondaryText).frame(width: 24)
             }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(label).font(.cBody).foregroundColor(Theme.primaryText)
-                if let note = note {
-                    Text(note).font(.cMeta).foregroundColor(Theme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+            // Titles only: `note` is kept for call sites but not shown
+            // (explanations belong in ⓘ sheets).
+            Text(label).font(.cBody).foregroundColor(Theme.primaryText)
             Spacer(minLength: 8)
             control
         }

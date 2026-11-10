@@ -35,6 +35,16 @@ struct ConversationView: View {
                            openHelp: chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)") {
                     Avatar(image: chat.image, name: chat.title, size: 36, kind: chat.avatarKind)
                 } actions: {
+                    // Unread support messages: the yellow counter (Linux header).
+                    if chat.isGroup && !chat.isChannel {
+                        let unread = chat.isModerator ? chat.membersRequireAttention : chat.supportUnread
+                        if unread > 0 {
+                            AttentionButton(icon: "admin", count: unread,
+                                            help: chat.isModerator ? "Chats with members" : "Chat with admins") {
+                                if chat.isModerator { model.toggleInfo() } else { model.openSupport(chat) }
+                            }
+                        }
+                    }
                     if canOpenProfile {
                         IconTool(icon: "info-circle", help: chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)",
                                  size: 20) { model.toggleInfo() }
@@ -351,7 +361,7 @@ struct MessageRow: View {
                         .help("Show the original message")
                 }
                 if let file = message.file, message.deleted == nil {
-                    AttachmentView(file: file, messageId: message.id)
+                    AttachmentView(file: file, messageId: message.id, outgoing: message.outgoing)
                 }
                 if let invite = message.groupInvitation {
                     GroupInviteCard(invite: invite, outgoing: message.outgoing)
@@ -627,6 +637,7 @@ struct AttachmentView: View {
     @EnvironmentObject private var model: AppModel
     let file: FileAttachment
     let messageId: Int64
+    var outgoing = false
     @State private var image: NSImage?
     @AppStorage(Prefs.blurMedia) private var blurMedia = false
 
@@ -684,7 +695,7 @@ struct AttachmentView: View {
                 }
                 .help(hidden ? "Show video" : "Play (← → for the others)")
         } else if file.kind == "voice" && file.isComplete {
-            VoiceView(file: file, messageId: messageId)
+            VoiceView(file: file, messageId: messageId, outgoing: outgoing)
         } else {
             FileRow(file: file, progress: model.fileProgress[file.id] ?? file.progress)
         }
@@ -798,6 +809,7 @@ struct VoiceView: View {
     @ObservedObject private var player = VoicePlayer.shared
     let file: FileAttachment
     let messageId: Int64
+    var outgoing = false
     @State private var peaks: [Float]?
 
     var body: some View {
@@ -817,7 +829,8 @@ struct VoiceView: View {
             .buttonStyle(.plain)
             .help(player.playingId == messageId ? "Stop" : "Play")
             WaveformView(peaks: peaks ?? Array(repeating: 0.25, count: 48),
-                         progress: player.playingId == messageId ? player.progress : 0)
+                         progress: player.playingId == messageId ? player.progress : 0,
+                         rest: outgoing ? Theme.voiceRestOut : Theme.voiceRest)
                 .frame(width: 180, height: 28)
         }
         .task(id: file.path) {

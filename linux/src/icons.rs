@@ -251,10 +251,19 @@ pub fn clear_all_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     )
 }
 
-/// Mute notifications — Element Plus Line Interface Icons / element-plus (MIT via SVG Repo).
+/// Muted badge (chat list) — Ionicons `notifications-off` (filled, MIT).
 pub fn mute_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg_handle!("../assets/icons/mute-notification.svg"),
+        svg_handle!("../assets/icons/notifications-off.svg"),
+        color,
+        size,
+    )
+}
+
+/// Notifications (settings) — Ionicons `notifications` (MIT).
+pub fn notifications_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg_handle!("../assets/icons/notifications.svg"),
         color,
         size,
     )
@@ -269,10 +278,10 @@ pub fn preferences_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     )
 }
 
-/// Favorite star — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
+/// Favorite badge (chat list) — Line MD `star-filled` (MIT).
 pub fn star_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg_handle!("../assets/icons/star.svg"),
+        svg_handle!("../assets/icons/star-filled.svg"),
         color,
         size,
     )
@@ -589,6 +598,7 @@ pub fn phone_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     )
 }
 
+/// Favorite toggle: filled star when on, outline when off (Line MD, MIT).
 pub fn star_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Message> {
     let idle = if active {
         theme::t().accent
@@ -596,7 +606,11 @@ pub fn star_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mess
         theme::t().text_secondary
     };
     profile_tool_icon(
-        svg_handle!("../assets/icons/star.svg"),
+        if active {
+            svg_handle!("../assets/icons/star-filled.svg")
+        } else {
+            svg_handle!("../assets/icons/star.svg")
+        },
         hit,
         idle,
         theme::t().text_primary,
@@ -604,6 +618,7 @@ pub fn star_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mess
     )
 }
 
+/// Mute toggle: filled bell-off when muted, outline when not (Ionicons, MIT).
 pub fn mute_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Message> {
     let idle = if active {
         theme::t().accent
@@ -611,7 +626,11 @@ pub fn mute_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mess
         theme::t().text_secondary
     };
     profile_tool_icon(
-        svg_handle!("../assets/icons/mute-notification.svg"),
+        if active {
+            svg_handle!("../assets/icons/notifications-off.svg")
+        } else {
+            svg_handle!("../assets/icons/notifications-off-outline.svg")
+        },
         hit,
         idle,
         theme::t().text_primary,

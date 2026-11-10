@@ -24,7 +24,6 @@ iced_aw = { version = "0.14.1", default-features = false, features = ["context_m
 libc = "0.2"
 zeroize.workspace = true
 # App lock: in-memory Argon2id verifier of the unlock password (never on disk).
-argon2 = "0.5"
 # Optional "unlock automatically": DB password in the Secret Service keyring.
 oo7 = { version = "0.4", default-features = false, features = ["async-std", "native_crypto"] }
 # Pure-Rust audio decode for waveforms (ffmpeg may be missing on phones).

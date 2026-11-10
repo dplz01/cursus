@@ -426,6 +426,38 @@ pub fn secondary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status)
     }
 }
 
+/// Gold square beside "+" (pending one-time links): same shape as the "+"
+/// button, filled with the theme's gold so it reads as "needs attention".
+pub fn gold_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let c = t();
+        let mut fill = c.always;
+        if matches!(status, button::Status::Pressed) || (hover_ok && matches!(status, button::Status::Hovered)) {
+            fill = Color { a: 0.85, ..fill };
+        }
+        button::Style {
+            background: Some(Background::Color(fill)),
+            text_color: on_gold(),
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 10.0.into(),
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
+/// Icon / text colour on the gold fill (white on the darker light-theme
+/// gold, the app background on the bright dark-theme gold).
+pub fn on_gold() -> Color {
+    if is_light_active() {
+        Color::WHITE
+    } else {
+        t().bg_app
+    }
+}
+
 /// Selectable list row (settings categories): `accent.soft` when selected.
 pub fn list_row(selected: bool, hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {

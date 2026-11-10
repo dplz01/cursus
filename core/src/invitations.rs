@@ -1,28 +1,36 @@
-//! One-time invitation links — the rule every app's Connect card follows.
+//! One-time invitation links — the rules every app's Connect card and
+//! pending-links list follow.
 //!
-//! A one-time link stays valid until someone uses it, and the user may
-//! already have sent it. So opening the Connect card never replaces it: the
-//! apps show the newest *unused* invitation (the core keeps it as a pending
-//! contact connection, `pccConnStatus = "new"`, across restarts) and create a
-//! new one only when there is none or the user asks to regenerate.
+//! Opening the New page ("+") creates a one-time link, as the official apps
+//! do. A link stays valid until someone uses it, so unused links must never
+//! pile up out of sight: the core keeps them as pending contact connections
+//! (`pccConnStatus = "new"`), [`pending_invitations`] lists them from the
+//! chat list the apps load anyway, and the apps show a counter and a list
+//! where each can be copied, named (`/_set alias :<id> …`) or deleted.
+//! "New link" deletes the link it replaces (after the user confirms).
 //!
-//! Incognito follows the official apps: a pending invitation can switch
-//! between the user's profile and a fresh random profile
-//! (`/_set incognito :<connId> on|off`) while it is unused, keeping the same
-//! link; links pasted to connect use the same choice (`/connect incognito …`).
+//! Incognito follows the official apps: an unused link can switch between
+//! the user's profile and a fresh random one (`/_set incognito :<id> on|off`),
+//! keeping the same link; pasted links can connect incognito too
+//! (`/connect incognito …`).
 
 use serde_json::Value;
 
 use crate::models::{parse_conn_link, ConnLink};
 
-/// A one-time invitation the user can share.
+/// A one-time invitation the user created and nobody has used yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invitation {
+    /// `display` is the short link when there is one; `full` always set.
     pub link: ConnLink,
     /// Pending contact connection id (`pccConnId`).
     pub conn_id: i64,
     /// Whoever connects sees a random incognito profile instead of the user's.
     pub incognito: bool,
+    /// Name the user gave the link (empty: none).
+    pub alias: String,
+    /// When it was created (ISO 8601 from the core; may be empty).
+    pub created_at: String,
 }
 
 /// An invitation from a `PendingContactConnection` JSON object; `None` for
@@ -36,34 +44,41 @@ pub(crate) fn parse_pending_invitation(conn: &Value) -> Option<Invitation> {
     {
         return None;
     }
-    let incognito = conn.get("customUserProfileId").is_some_and(|v| !v.is_null());
-    Some(Invitation { link, conn_id, incognito })
+    Some(Invitation {
+        link,
+        conn_id,
+        incognito: conn.get("customUserProfileId").is_some_and(|v| !v.is_null()),
+        alias: str_field(conn, "localAlias"),
+        created_at: str_field(conn, "createdAt"),
+    })
 }
 
-/// Whether the pending connection is still waiting for its first use.
-fn is_unused(conn: &Value) -> bool {
-    conn.get("pccConnStatus").and_then(Value::as_str) == Some("new")
+fn str_field(v: &Value, key: &str) -> String {
+    v.get(key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-/// The newest unused one-time invitation in a `/_get chats … pcc=on` reply.
-pub(crate) fn newest_unused_invitation(chats: &Value) -> Option<Invitation> {
-    let list = chats.get("chats")?.as_array()?;
-    list.iter()
+/// Unused own one-time links in a `/_get chats … pcc=on` reply, newest first.
+pub(crate) fn pending_invitations(chats: &Value) -> Vec<Invitation> {
+    let mut out: Vec<Invitation> = chats
+        .get("chats")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
         .filter_map(|chat| {
             let info = chat.get("chatInfo")?;
             if info.get("type").and_then(Value::as_str) != Some("contactConnection") {
                 return None;
             }
             let conn = info.get("contactConnection")?;
-            if !is_unused(conn) {
+            if conn.get("pccConnStatus").and_then(Value::as_str) != Some("new") {
                 return None;
             }
-            let created = conn.get("createdAt").and_then(Value::as_str).unwrap_or("").to_string();
-            Some((created, parse_pending_invitation(conn)?))
+            parse_pending_invitation(conn)
         })
-        // ISO-8601 timestamps sort chronologically as strings.
-        .max_by(|a, b| a.0.cmp(&b.0).then(a.1.conn_id.cmp(&b.1.conn_id)))
-        .map(|(_, inv)| inv)
+        .collect();
+    // ISO-8601 timestamps sort chronologically as strings.
+    out.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.conn_id.cmp(&a.conn_id)));
+    out
 }
 
 /// The invitation in a `/_connect <userId> incognito=…` reply (`invitation`).
@@ -78,6 +93,8 @@ pub(crate) fn parse_created_invitation(value: &Value) -> Option<Invitation> {
         link,
         conn_id: conn.get("pccConnId")?.as_i64()?,
         incognito: conn.get("customUserProfileId").is_some_and(|v| !v.is_null()),
+        alias: str_field(conn, "localAlias"),
+        created_at: str_field(conn, "createdAt"),
     })
 }
 
@@ -85,6 +102,11 @@ pub(crate) fn parse_created_invitation(value: &Value) -> Option<Invitation> {
 pub(crate) fn parse_incognito_updated(value: &Value) -> Option<bool> {
     let conn = value.get("toConnection")?;
     Some(conn.get("customUserProfileId").is_some_and(|v| !v.is_null()))
+}
+
+/// Alias after `/_set alias :<id>` (`connectionAliasUpdated`).
+pub(crate) fn parse_alias_updated(value: &Value) -> Option<String> {
+    Some(str_field(value.get("toConnection")?, "localAlias"))
 }
 
 #[cfg(test)]
@@ -99,6 +121,7 @@ mod tests {
                 "customUserProfileId": if incognito { json!(9) } else { Value::Null },
                 "connLinkInv": {"connFullLink": format!("simplex:/invitation#{id}"),
                                 "connShortLink": format!("https://smp.example/i#{id}")},
+                "localAlias": if id == 3 { "for Anna" } else { "" },
                 "createdAt": created,
             }},
             "chatItems": [],
@@ -106,17 +129,19 @@ mod tests {
     }
 
     #[test]
-    fn picks_newest_unused_own_invitation() {
+    fn lists_unused_own_invitations_newest_first() {
         let chats = json!({"chats": [
             pcc(1, "new", "2026-11-01T10:00:00Z", false),
             pcc(2, "joined", "2026-11-03T10:00:00Z", false),
             pcc(3, "new", "2026-11-02T10:00:00Z", true),
             {"chatInfo": {"type": "direct", "contact": {"contactId": 5}}, "chatItems": []},
         ]});
-        let inv = newest_unused_invitation(&chats).unwrap();
-        assert_eq!(inv.conn_id, 3);
-        assert!(inv.incognito);
-        assert_eq!(inv.link.display, "https://smp.example/i#3");
+        let list = pending_invitations(&chats);
+        assert_eq!(list.iter().map(|i| i.conn_id).collect::<Vec<_>>(), vec![3, 1]);
+        assert!(list[0].incognito);
+        assert_eq!(list[0].alias, "for Anna");
+        assert_eq!(list[0].link.display, "https://smp.example/i#3");
+        assert_eq!(list[0].link.full, "simplex:/invitation#3");
     }
 
     #[test]
@@ -128,7 +153,7 @@ mod tests {
         let mut accepting = pcc(7, "new", "2026-11-07T00:00:00Z", false);
         accepting["chatInfo"]["contactConnection"]["connLinkInv"] = Value::Null;
         let chats = json!({"chats": [via_address, group, accepting]});
-        assert_eq!(newest_unused_invitation(&chats), None);
+        assert!(pending_invitations(&chats).is_empty());
     }
 
     #[test]
@@ -136,11 +161,14 @@ mod tests {
         let created = json!({
             "type": "invitation",
             "connLinkInvitation": {"connFullLink": "simplex:/invitation#x", "connShortLink": null},
-            "connection": {"pccConnId": 42, "customUserProfileId": 3},
+            "connection": {"pccConnId": 42, "customUserProfileId": 3, "localAlias": "", "createdAt": "2026-11-10T12:00:00Z"},
         });
         let inv = parse_created_invitation(&created).unwrap();
         assert_eq!((inv.conn_id, inv.incognito, inv.link.display.as_str()), (42, true, "simplex:/invitation#x"));
+        assert_eq!(inv.created_at, "2026-11-10T12:00:00Z");
         let updated = json!({"type": "connectionIncognitoUpdated", "toConnection": {"pccConnId": 42, "customUserProfileId": null}});
         assert_eq!(parse_incognito_updated(&updated), Some(false));
+        let named = json!({"type": "connectionAliasUpdated", "toConnection": {"pccConnId": 42, "localAlias": "Bob"}});
+        assert_eq!(parse_alias_updated(&named).as_deref(), Some("Bob"));
     }
 }

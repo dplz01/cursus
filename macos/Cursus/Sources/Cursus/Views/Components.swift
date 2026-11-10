@@ -628,11 +628,14 @@ struct RoundedField: View {
 struct LinkBox: View {
     let text: String
     var copyText: String? = nil
+    /// Told when the user copies (the New sheet keeps copied links).
+    var onCopy: (() -> Void)? = nil
     @State private var copied = false
 
     var body: some View {
         Button {
             Clipboard.copy(copyText ?? text)
+            onCopy?()
             copied = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }
         } label: {

@@ -422,11 +422,20 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             Ok(Value::Null)
         }
         "createInvitation" => Ok(dto::link(&s.create_invitation_link().map_err(err)?)),
-        // Connect card (cursus_core::invitations): the kept one-time link,
-        // a fresh one replacing it, and its incognito switch.
-        "oneTimeInvitation" => Ok(dto::invitation(
-            &s.one_time_invitation(p.get("incognito").and_then(Value::as_bool).unwrap_or(false)).map_err(err)?,
+        // One-time links (cursus_core::invitations): "+" creates one, "New
+        // link" replaces it, pending ones are listed / named / deleted.
+        "newInvitation" => Ok(dto::invitation(
+            &s.create_invitation(p.get("incognito").and_then(Value::as_bool).unwrap_or(false)).map_err(err)?,
         )),
+        // As of the last chats load (no core round trip).
+        "pendingInvitations" => Ok(Value::Array(s.pending_invitations().iter().map(dto::invitation).collect())),
+        "deleteInvitation" => {
+            s.delete_invitation(i64_param(p, "connId")?).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "setInvitationAlias" => Ok(json!(s
+            .set_invitation_alias(i64_param(p, "connId")?, opt_str(p, "alias").unwrap_or(""))
+            .map_err(err)?)),
         "regenerateInvitation" => Ok(dto::invitation(
             &s.regenerate_invitation(
                 p.get("previous").and_then(Value::as_i64),

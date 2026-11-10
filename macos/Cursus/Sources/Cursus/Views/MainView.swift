@@ -22,6 +22,9 @@ struct MainView: View {
         .sheet(isPresented: $model.showNewChat) {
             NewChatSheet().environmentObject(model)
         }
+        .sheet(isPresented: $model.showPendingLinks) {
+            PendingLinksSheet().environmentObject(model)
+        }
     }
 
     @ViewBuilder private var middle: some View {
@@ -150,6 +153,9 @@ struct ChatListView: View {
     var body: some View {
         VStack(spacing: 0) {
             PaneHeader(title: model.destination.title, background: Theme.list) {
+                if !model.pendingInvitations.isEmpty {
+                    PendingLinksButton(count: model.pendingInvitations.count) { model.showPendingLinks = true }
+                }
                 IconTool(icon: "plus", help: "New chat (⌘N)", size: 18) { model.showNewChat = true }
             }
             SearchField(text: $search)

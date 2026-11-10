@@ -29,12 +29,15 @@ struct ConnLink: Decodable, Equatable {
     let short: String?
 }
 
-/// The Connect card's one-time link (`cursus_core::Invitation`): kept by the
-/// core until someone uses it; `incognito` = they'll see a random profile.
-struct Invitation: Decodable, Equatable {
+/// A one-time link the user created and nobody used yet
+/// (`cursus_core::Invitation`); `incognito` = they'll see a random profile.
+struct Invitation: Decodable, Equatable, Identifiable {
     let link: ConnLink
     let connId: Int64
     var incognito: Bool
+    var alias: String
+    let createdAt: String
+    var id: Int64 { connId }
 }
 
 struct Chat: Decodable, Identifiable, Equatable {

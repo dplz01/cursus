@@ -91,6 +91,8 @@ enum Theme {
     static let dangerSoftPress = dynamic(0xC62828, 0xFF6B6B, alpha: 0.24)
     static let success = dynamic(0x2E7D32, 0x6BCB77)
     static let gold = dynamic(0xB58B0F, 0xECC14F)
+    /// Icon on a gold fill (pending-links button): white / app background.
+    static let onGold = dynamic(0xFFFFFF, 0x0E1015)
 
     // Bubbles
     static let bubbleIn = dynamic(0xFFFFFF, 0x1C2028)

@@ -86,7 +86,8 @@ pub fn chat(c: &ChatPreview) -> Value {
         "type": chat_type_name(c.id.chat_type),
         "apiId": c.id.api_id,
         "title": title,
-        "preview": c.preview,
+        // Readable SimpleX link labels, as in the Linux list.
+        "preview": cursus_core::humanize_simplex_links(&c.preview),
         "unread": c.unread,
         "unreadChat": c.unread_chat,
         "notifications": c.settings.enable_ntfs.as_api(),

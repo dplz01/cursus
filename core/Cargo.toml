@@ -26,6 +26,7 @@ unicode-segmentation.workspace = true
 zeroize.workspace = true
 libc = "0.2"
 base64 = "0.22"
+argon2 = { version = "0.5", features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
 
 [build-dependencies]

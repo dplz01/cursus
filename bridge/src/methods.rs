@@ -86,7 +86,19 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, String> {
         "open" => open(p),
         "close" => {
             crate::drop_session();
+            cursus_core::app_lock::forget();
             // Decrypted media never outlives the session (as on Linux).
+            cursus_core::wipe_plaintext_cache();
+            Ok(Value::Null)
+        }
+        // App lock (cursus_core::app_lock): check the password that opened
+        // the database, back-off after wrong ones, and drop decrypted media
+        // while locked. The session keeps running (messages still arrive).
+        "verifyPassword" => Ok(json!(cursus_core::app_lock::verify(str_param(p, "password")?))),
+        "lockRetryDelay" => Ok(json!(cursus_core::app_lock::retry_delay_secs(
+            p.get("failures").and_then(Value::as_u64).unwrap_or(0) as u32
+        ))),
+        "wipePlaintextCache" => {
             cursus_core::wipe_plaintext_cache();
             Ok(Value::Null)
         }
@@ -193,6 +205,8 @@ fn open(p: &Value) -> Result<Value, String> {
     }
     let session = crate::install_session(session)?;
     let user = session.refresh_user().map_err(err)?;
+    // The lock screen checks against this (in memory only).
+    cursus_core::app_lock::remember(password);
     Ok(dto::user(&user))
 }
 

@@ -1,12 +1,7 @@
 //! App lock + optional keyring unlock.
 //!
-//! **Verifier.** Cursus never stores the database password. To re-check it on
-//! the lock screen, the moment the password has just *opened* the database
-//! we derive an Argon2id hash with a fresh random salt and keep that hash in
-//! memory only. Nothing touches disk; whoever could read it from RAM could
-//! already read the SQLCipher key from libsimplex, so it adds no exposure.
-//! (The core's `/db test key` only accepts printable ASCII without spaces,
-//! so it can't verify every password.)
+//! **Verifier.** Lives in `cursus_core::app_lock` (shared with the other
+//! apps): an in-memory Argon2id hash of the password that opened the DB.
 //!
 //! **Idle tracking.** Input events bump [`touch`] from the event filter
 //! without publishing App messages.
@@ -16,40 +11,11 @@
 //! itself encrypted with the login password — never in Cursus' files.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Instant;
 
-use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::Argon2;
-
-static VERIFIER: Mutex<Option<String>> = Mutex::new(None);
-
-/// Remember a verifier for `password` (call only after it opened the DB).
-pub fn remember(password: &str) {
-    let salt = SaltString::generate(&mut OsRng);
-    if let Ok(hash) = Argon2::default().hash_password(password.as_bytes(), &salt) {
-        if let Ok(mut v) = VERIFIER.lock() {
-            *v = Some(hash.to_string());
-        }
-    }
-}
-
-/// Whether `password` matches the remembered one (slow by design, ~0.1–0.5 s).
-pub fn verify(password: &str) -> bool {
-    let Some(stored) = VERIFIER.lock().ok().and_then(|v| v.clone()) else {
-        return false;
-    };
-    let Ok(parsed) = PasswordHash::new(&stored) else {
-        return false;
-    };
-    Argon2::default()
-        .verify_password(password.as_bytes(), &parsed)
-        .is_ok()
-}
-
-pub fn has_verifier() -> bool {
-    VERIFIER.lock().is_ok_and(|v| v.is_some())
-}
+// The password verifier is shared with the other apps' lock screens.
+pub use cursus_core::app_lock::{has_verifier, remember, retry_delay_secs, verify};
 
 fn epoch() -> &'static Instant {
     static START: OnceLock<Instant> = OnceLock::new();
@@ -69,15 +35,6 @@ pub fn idle_secs() -> u64 {
     now.saturating_sub(LAST_INPUT_MS.load(Ordering::Relaxed)) / 1000
 }
 
-/// Delay before another unlock attempt after `failures` wrong passwords:
-/// none for the first three, then 2, 4, 8… seconds, capped at 60.
-pub fn retry_delay_secs(failures: u32) -> u64 {
-    if failures < 3 {
-        0
-    } else {
-        (1u64 << (failures - 2).min(6)).min(60)
-    }
-}
 
 const KEYRING_LABEL: &str = "Cursus database password";
 
@@ -126,15 +83,6 @@ pub async fn keyring_delete() -> Result<(), String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn verifier_accepts_only_the_unlock_password() {
-        remember("correct horse 🐴 battery");
-        assert!(has_verifier());
-        assert!(verify("correct horse 🐴 battery"));
-        assert!(!verify("correct horse battery"));
-        assert!(!verify(""));
-    }
-
     /// Real Secret Service round trip (needs a running keyring).
     #[test]
     #[ignore]
@@ -145,13 +93,5 @@ mod tests {
         assert_eq!(got.as_str(), "cursus keyring test ✓");
         block_on(keyring_delete()).expect("delete");
         assert!(block_on(keyring_load()).expect("load after delete").is_none());
-    }
-
-    #[test]
-    fn retry_delay_grows_and_caps() {
-        assert_eq!(retry_delay_secs(2), 0);
-        assert_eq!(retry_delay_secs(3), 2);
-        assert_eq!(retry_delay_secs(4), 4);
-        assert_eq!(retry_delay_secs(20), 60);
     }
 }

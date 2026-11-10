@@ -3,6 +3,7 @@
 //! Talks to the official `libsimplex` C ABI. Does not reimplement SMP.
 
 mod account;
+pub mod app_lock;
 mod chat_list;
 mod commands;
 mod error;
@@ -56,12 +57,19 @@ pub use session::{
     shareable_conn_uri, Session, SessionConfig,
 };
 
+/// Tests that start libsimplex hold this: Argon2 hashing on another thread
+/// while the Haskell runtime starts up crashes the test process (the apps
+/// only hash after the database is open — covered by the smoke test).
+#[cfg(test)]
+pub(crate) static LIBSIMPLEX_STARTUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod smoke {
     use super::*;
 
     #[test]
     fn open_session_against_downloaded_lib() {
+        let _startup = LIBSIMPLEX_STARTUP.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("cursus-smoke-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -76,6 +84,10 @@ mod smoke {
         let mut session = Session::open(cfg).expect("open session");
         session.start_chat().expect("start chat");
         let _ = session.list_chats().expect("list chats");
+        // What every app does right after the password opened the DB: the
+        // lock-screen verifier, with the core running.
+        app_lock::remember("smoke");
+        assert!(app_lock::verify("smoke"));
     }
 
     #[test]

@@ -7,6 +7,7 @@ mod chat_list;
 mod commands;
 mod error;
 mod ffi;
+mod invitations;
 mod models;
 #[cfg(target_env = "musl")]
 mod musl_compat;
@@ -25,6 +26,7 @@ pub use account::{
 };
 pub use chat_list::{merge_seeded_channels, prune_resolved_seeds};
 pub use commands::Commands;
+pub use invitations::Invitation;
 pub use models::parse_chat_info_id;
 pub use error::{Error, Result};
 pub use models::{
@@ -122,9 +124,13 @@ mod smoke {
 
     #[test]
     fn invite_command_shapes() {
-        assert_eq!(Commands::create_invitation(1), "/_connect 1");
+        assert_eq!(Commands::create_invitation(1, false), "/_connect 1 incognito=off");
+        assert_eq!(Commands::create_invitation(1, true), "/_connect 1 incognito=on");
+        assert_eq!(Commands::set_connection_incognito(7, true), "/_set incognito :7 on");
+        assert_eq!(Commands::delete_pending_connection(7), "/_delete :7");
+        assert_eq!(Commands::connect_link(1, "https://x/i#a", true), "/connect incognito https://x/i#a");
         assert_eq!(
-            Commands::connect_link(1, "https://smp14.simplex.im/i#abc/def"),
+            Commands::connect_link(1, "https://smp14.simplex.im/i#abc/def", false),
             "/connect https://smp14.simplex.im/i#abc/def"
         );
         assert_eq!(Commands::show_address(1), "/_show_address 1");

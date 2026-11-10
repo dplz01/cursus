@@ -426,7 +426,32 @@ fn shots() {
         if want("new") {
             let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);
             app.compose_open = true;
+            app.invitation = Some(cursus_core::Invitation {
+                link: cursus_core::ConnLink {
+                    display: "https://smp12.simplex.im/i#OzM8bkTdaVhHVWJbNe5tUa1Ru3TnHlHsTMx4jjOwTSE".into(),
+                    full: String::new(),
+                    short: None,
+                },
+                conn_id: 1,
+                incognito: false,
+            });
             render(&app, DESKTOP, &format!("new-{t}"));
+            let mut phone = demo_app(dark, MOBILE.width, MOBILE.height);
+            phone.compose_open = true;
+            phone.invitation = app.invitation.clone();
+            phone.desktop_prefs.incognito = true;
+            if let Some(inv) = phone.invitation.as_mut() {
+                inv.incognito = true;
+            }
+            render(&phone, MOBILE, &format!("new-mobile-incognito-{t}"));
+            phone.setting_info = Some(crate::SettingInfo::Connect);
+            render(&phone, MOBILE, &format!("new-info-{t}"));
+            app.compose_open = false;
+            app.nav = NavSection::Settings;
+            app.settings_section = crate::SettingsSection::Address;
+            render(&app, DESKTOP, &format!("settings-address-{t}"));
+            app.address_link = Some("https://smp12.simplex.im/a#lrdvu2d8A1GumSmoKb2krQmtKhWXq-tyGpHuM7aMwsw".into());
+            render(&app, DESKTOP, &format!("settings-address-link-{t}"));
         }
     }
 }

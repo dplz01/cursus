@@ -23,6 +23,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `session-leave.svg` | [svgrepo/491071](https://www.svgrepo.com/svg/491071/session-leave) | Gitlab Interface Icons / Gitlab | **MIT License** | Yes |
 | `clear-all.svg` | [svgrepo/375990](https://www.svgrepo.com/svg/375990/clear-all) | Keyicons Interface Icons / Elnodos | **CC Attribution** — attribution required | Yes (with credit) |
 | `notifications.svg`, `notifications-off.svg`, `notifications-off-outline.svg` | [Ionicons](https://github.com/ionic-team/ionicons) | Ionicons by Ben Sperry / Ionic | **MIT License** — notice in `licenses/MIT-Ionicons.txt` | Yes (with notice) |
+| `incognito.svg`, `incognito-filled.svg` | [Solar Icons](https://www.figma.com/community/file/1166831539721848736) `incognito` (Broken Line / Bold) via SVG Repo | Solar Icons / 480 Design | **CC BY 4.0** — attribution required | Yes (with credit) |
 | `preferences.svg` | Element Plus Tools (same pack) | Element Plus Line Interface Icons / element-plus | **MIT License** | Yes |
 | `mic.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `play.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
@@ -50,7 +51,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 
 ## Required attribution (CC BY)
 
-Phone and Settings icons: **Solar Icons** by 480 Design, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Sourced via SVG Repo.
+Phone, Settings and incognito icons: **Solar Icons** by 480 Design, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Sourced via SVG Repo. The incognito pair (Broken Line outline when off, Bold filled when on) was recoloured to `currentColor` and its strokes set to 1.8 px to match the set — modifications under the same licence.
 
 Send, image-pen, user-alt-1 and address-card icons: **Dazzle Line Icons** by Dazzle UI, CC Attribution license via [SVG Repo](https://www.svgrepo.com/svg/533306/send) / [image-pen](https://www.svgrepo.com/svg/532570/image-pen) / [user-alt-1](https://www.svgrepo.com/svg/532363/user-alt-1).
 

@@ -3690,38 +3690,76 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
         .into()
     };
 
+    // Connect: the one-time link (shown at once, kept until used), its
+    // incognito switch and a fresh-link button, then joining with a link.
     let mut connect = Column::new().spacing(4).width(Length::Fill);
-    connect = connect.push(card_title(
-        icons::link_icon(18.0, theme::t().accent),
-        "Connect",
-        "Share a link, or paste one you received.",
-        d,
-    ));
-    connect = connect.push(nav_row(
-        icons::repeat_once_icon(18.0, theme::t().accent),
-        "One-time invite",
-        Some("A single-use link for one person".to_string()),
-        Message::CreateInvitation,
-        None,
-        d,
-        hover,
-    ));
-    connect = connect.push(nav_row(
-        icons::address_card_icon(18.0, theme::t().accent),
-        "My address",
-        Some("Your reusable contact link".to_string()),
-        Message::EnsureAddress,
-        None,
-        d,
-        hover,
-    ));
-    if let Some(link) = app.invite_link() {
-        connect = connect.push(pref_section("Ready to share — tap to copy", false, d));
-        connect = connect.push(
-            container(link_copy_box(link, Message::CopyInviteLink, d, hover))
-                .padding(Padding::from([0, 8])),
-        );
-    }
+    connect = connect.push(
+        row![
+            icon_disc(icons::link_icon(18.0, theme::t().accent), 36.0),
+            text("Connect")
+                .size(d.body)
+                .font(BOLD)
+                .color(theme::t().text_primary)
+                .width(Length::Fill),
+            button(icons::centered_hit(icons::info_icon(18.0, theme::t().text_muted), 32.0))
+                .on_press(Message::ShowSettingInfo(crate::SettingInfo::Connect))
+                .padding(0)
+                .style(theme::ghost_tile(hover)),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center)
+        .padding(Padding::from([4, 4])),
+    );
+    connect = connect.push(pref_section("Copy one-time link", false, d));
+    let link_box: Element<'_, Message> = match app.invitation() {
+        Some(inv) => link_copy_box(&inv.link.display, Message::CopyInviteLink, d, hover),
+        None => container(
+            text(if app.invitation_busy() { "Creating link…" } else { "No link yet" })
+                .size(d.meta)
+                .color(theme::t().text_muted),
+        )
+        .padding(Padding::from([10, 12]))
+        .width(Length::Fill)
+        .into(),
+    };
+    let incognito_btn = composer_hit(
+        icons::incognito_tool(PROFILE_HEADER_ICON, app.incognito(), hover),
+        PROFILE_HEADER_ICON,
+        Message::ToggleIncognito,
+    );
+    connect = connect.push(
+        container(row![link_box, incognito_btn].spacing(6).align_y(Alignment::Center))
+            .padding(Padding::from([0, 8])),
+    );
+    let regenerate = button(
+        row![
+            icons::repeat_once_icon(16.0, theme::t().text_primary),
+            text("New link").size(d.meta).color(theme::t().text_primary),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .on_press_maybe((!app.invitation_busy()).then_some(Message::RegenerateInvitation))
+    .padding(Padding::from([8, 14]))
+    .style(theme::secondary_action(hover));
+    connect = connect.push(
+        container(
+            row![
+                text(if app.incognito() {
+                    "Incognito: they'll see a random profile."
+                } else {
+                    "They'll see your profile."
+                })
+                .size(d.meta)
+                .color(theme::t().text_secondary)
+                .width(Length::Fill),
+                regenerate,
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .padding(Padding::from([4, 8])),
+    );
 
     let link_field = crate::edit_menu::edit_field(
         text_input("Invite or address link…", app.invite_input())
@@ -3973,6 +4011,23 @@ fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<
             ));
         }
         crate::SettingsSection::Address => {
+            // The reusable address (moved here from the New page): many
+            // people can use it; each sends a request you accept or reject.
+            col = col.push(pref_section("Your address", true, d));
+            col = col.push(match app.address_link() {
+                Some(link) => container(link_copy_box(link, Message::CopyAddressLink, d, hover))
+                    .padding(Padding::from([0, 8]))
+                    .into(),
+                None => nav_row(
+                    icons::address_card_icon(18.0, theme::t().accent),
+                    "Show my address",
+                    Some("Creates one if you don't have it yet".to_string()),
+                    Message::EnsureAddress,
+                    None,
+                    d,
+                    hover,
+                ),
+            });
             let shares = app
                 .own_profile()
                 .fields

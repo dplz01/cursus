@@ -135,9 +135,22 @@ impl Commands {
         format!("/_address_settings {user_id} {settings}")
     }
 
-    /// One-time invitation link (`/_connect <userId>` with no link argument).
-    pub fn create_invitation(user_id: i64) -> String {
-        format!("/_connect {user_id}")
+    /// One-time invitation link (`/_connect <userId> incognito=on|off`, no
+    /// link argument). Official clients always send the incognito flag.
+    pub fn create_invitation(user_id: i64, incognito: bool) -> String {
+        format!("/_connect {user_id} incognito={}", on_off(incognito))
+    }
+
+    /// Switch an unused one-time invitation between the user's profile and a
+    /// random incognito one (`/_set incognito :<connId> on|off`).
+    pub fn set_connection_incognito(conn_id: i64, incognito: bool) -> String {
+        format!("/_set incognito :{conn_id} {}", on_off(incognito))
+    }
+
+    /// Delete a pending contact connection (`/_delete :<connId>`), e.g. the
+    /// unused one-time invitation a regenerated link replaces.
+    pub fn delete_pending_connection(conn_id: i64) -> String {
+        format!("/_delete :{conn_id}")
     }
 
     /// Connect via invitation / address / group link.
@@ -146,8 +159,13 @@ impl Commands {
     /// HTTPS invites (`https://…/i#…`, `/a#…`) are resolved by the core only
     /// on the stringy `/connect` path; `/_connect` expects an already-prepared
     /// `CreatedConnLink` and returns `invalidConnReq` for bare short links.
-    pub fn connect_link(_user_id: i64, link: &str) -> String {
-        format!("/connect {link}")
+    /// `incognito` connects with a new random profile (`/connect incognito …`).
+    pub fn connect_link(_user_id: i64, link: &str, incognito: bool) -> String {
+        if incognito {
+            format!("/connect incognito {link}")
+        } else {
+            format!("/connect {link}")
+        }
     }
 
     /// Mark all items in a chat as read (`/_read chat {ref}`).
@@ -629,5 +647,13 @@ impl Commands {
             to.command_ref(),
             from.command_ref()
         )
+    }
+}
+
+fn on_off(on: bool) -> &'static str {
+    if on {
+        "on"
+    } else {
+        "off"
     }
 }

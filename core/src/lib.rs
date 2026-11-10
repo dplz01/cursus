@@ -14,6 +14,7 @@ mod paths;
 pub mod preferences;
 pub mod media;
 pub mod roles;
+pub mod runs;
 pub mod safety;
 mod rich_text;
 mod session;

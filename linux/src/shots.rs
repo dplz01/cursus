@@ -434,6 +434,8 @@ fn shots() {
                 },
                 conn_id: 1,
                 incognito: false,
+                alias: String::new(),
+                created_at: "2026-11-10T14:05:00Z".into(),
             });
             render(&app, DESKTOP, &format!("new-{t}"));
             let mut phone = demo_app(dark, MOBILE.width, MOBILE.height);
@@ -447,6 +449,33 @@ fn shots() {
             phone.setting_info = Some(crate::SettingInfo::Connect);
             render(&phone, MOBILE, &format!("new-info-{t}"));
             app.compose_open = false;
+            // Pending links: gold counter button beside "+", then its list.
+            let mk = |id: i64, alias: &str, created: &str, incognito: bool| cursus_core::Invitation {
+                link: cursus_core::ConnLink {
+                    display: format!("https://smp12.simplex.im/i#{id}OzM8bkTdaVhHVWJbNe5tUa1Ru3TnHlHs"),
+                    full: format!("simplex:/invitation#/?v=2-7&smp={id}"),
+                    short: Some(format!("https://smp12.simplex.im/i#{id}OzM8bkTdaVhHVWJbNe5tUa1Ru3TnHlHs")),
+                },
+                conn_id: id,
+                incognito,
+                alias: alias.into(),
+                created_at: created.into(),
+            };
+            app.pending_links = vec![
+                mk(3, "For Anna (climbing)", "2026-11-10T14:05:00Z", false),
+                mk(2, "", "2026-11-08T09:30:00Z", true),
+            ];
+            render(&app, DESKTOP, &format!("pending-button-{t}"));
+            app.pending_links_open = true;
+            render(&app, DESKTOP, &format!("pending-list-{t}"));
+            app.renaming_link = Some((2, "Marco".into()));
+            render(&app, MOBILE, &format!("pending-rename-{t}"));
+            app.renaming_link = None;
+            app.link_confirm = Some(crate::LinkConfirm::Regenerate);
+            render(&app, MOBILE, &format!("pending-confirm-{t}"));
+            app.link_confirm = None;
+            app.pending_links_open = false;
+            app.pending_links.clear();
             app.nav = NavSection::Settings;
             app.settings_section = crate::SettingsSection::Address;
             render(&app, DESKTOP, &format!("settings-address-{t}"));

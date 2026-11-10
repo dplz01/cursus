@@ -1249,8 +1249,24 @@ pub enum Message {
         result: Result<String, String>,
     },
     InviteInputChanged(String),
-    /// Replace the shown one-time link with a new one.
+    /// "New link": ask first (the shown link will be deleted)…
     RegenerateInvitation,
+    /// …then delete it and create a fresh one.
+    ConfirmRegenerateInvitation,
+    /// Pending one-time links (header button + list overlay).
+    OpenPendingLinks,
+    ClosePendingLinks,
+    CopyPendingLink { conn_id: i64, full: bool },
+    RenamePendingLink(i64),
+    PendingLinkNameChanged(String),
+    SavePendingLinkName,
+    PendingLinkRenamed(Result<(i64, String), String>),
+    AskDeletePendingLink(i64),
+    ConfirmDeletePendingLink,
+    CancelLinkConfirm,
+    PendingLinkDeleted(Result<i64, String>),
+    /// An uncopied link removed on leaving the New page (no status line).
+    UnsharedLinkDropped,
     InvitationReady(Result<cursus_core::Invitation, String>),
     /// Incognito for the shown link and links pasted to connect.
     ToggleIncognito,
@@ -1339,6 +1355,15 @@ struct App {
     /// used; see `cursus_core::Invitation`), and whether a request is running.
     invitation: Option<cursus_core::Invitation>,
     invitation_busy: bool,
+    /// The shown link was copied (or is otherwise out of our hands). Leaving
+    /// the New page deletes it when not: nobody can have it.
+    invitation_copied: bool,
+    /// Unused one-time links (counter + list), from `Session::pending_invitations`.
+    pending_links: Vec<cursus_core::Invitation>,
+    pending_links_open: bool,
+    /// `(conn_id, draft)` while naming a pending link.
+    renaming_link: Option<(i64, String)>,
+    link_confirm: Option<LinkConfirm>,
     /// Reusable contact address, shown in Settings → Address once loaded.
     address_link: Option<String>,
     /// Full-page compose menu (invite / address / new group / channel).
@@ -1596,6 +1621,11 @@ impl App {
                 invite_input: String::new(),
                 invitation: None,
                 invitation_busy: false,
+                invitation_copied: false,
+                pending_links: Vec::new(),
+                pending_links_open: false,
+                renaming_link: None,
+                link_confirm: None,
                 address_link: None,
                 compose_open: false,
                 hover_ok: true,
@@ -1877,6 +1907,15 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let was_composing = self.compose_open;
+        let task = self.update_inner(message);
+        if was_composing && !self.compose_open {
+            return Task::batch([task, self.drop_unshared_invitation()]);
+        }
+        task
+    }
+
+    fn update_inner(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Navigate(section) => {
                 // Commit dirty settings/profile drafts when leaving Settings.
@@ -3486,8 +3525,11 @@ impl App {
                 Task::none()
             }
             Message::OpenCompose => {
+                if self.compose_open {
+                    return Task::none();
+                }
                 self.compose_open = true;
-                self.load_invitation()
+                self.create_shown_invitation()
             }
             Message::CloseCompose => {
                 self.compose_open = false;
@@ -5359,6 +5401,8 @@ impl App {
                 self.reload_chats()
             }
             Message::ChatsLoaded(Ok(mut chats)) => {
+                // Same reply carried the pending one-time links.
+                self.refresh_pending_links();
                 for chat in &mut chats {
                     if let Some(req_id) = chat.pending_request_id {
                         if self.handled_contact_requests.contains(&req_id) {
@@ -5600,6 +5644,15 @@ impl App {
                 Task::none()
             }
             Message::RegenerateInvitation => {
+                if self.invitation.is_some() {
+                    self.link_confirm = Some(LinkConfirm::Regenerate);
+                    Task::none()
+                } else {
+                    self.create_shown_invitation()
+                }
+            }
+            Message::ConfirmRegenerateInvitation => {
+                self.link_confirm = None;
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
@@ -5607,6 +5660,7 @@ impl App {
                     return Task::none();
                 }
                 self.invitation_busy = true;
+                self.invitation_copied = false;
                 let previous = self.invitation.as_ref().map(|i| i.conn_id);
                 let incognito = self.desktop_prefs.incognito;
                 Task::perform(
@@ -5617,13 +5671,107 @@ impl App {
             Message::InvitationReady(result) => {
                 self.invitation_busy = false;
                 match result {
-                    Ok(inv) => {
-                        // A reused link keeps its own incognito state.
-                        self.desktop_prefs.incognito = inv.incognito;
-                        self.invitation = Some(inv);
+                    // Page closed while it was being created: nobody saw it.
+                    Ok(inv) if !self.compose_open => return self.delete_link_quietly(inv.conn_id),
+                    Ok(inv) => self.invitation = Some(inv),
+                    Err(err) => self.status = err,
+                }
+                self.refresh_pending_links();
+                Task::none()
+            }
+            Message::OpenPendingLinks => {
+                self.refresh_pending_links();
+                self.pending_links_open = true;
+                Task::none()
+            }
+            Message::ClosePendingLinks => {
+                self.pending_links_open = false;
+                self.renaming_link = None;
+                Task::none()
+            }
+            Message::CopyPendingLink { conn_id, full } => {
+                let Some(inv) = self.pending_links.iter().find(|i| i.conn_id == conn_id) else {
+                    return Task::none();
+                };
+                let link = if full { inv.link.full.clone() } else { inv.link.display.clone() };
+                if self.invitation.as_ref().is_some_and(|i| i.conn_id == conn_id) {
+                    self.invitation_copied = true;
+                }
+                self.status = "Link copied.".into();
+                iced::clipboard::write(link)
+            }
+            Message::RenamePendingLink(conn_id) => {
+                let current = self
+                    .pending_links
+                    .iter()
+                    .find(|i| i.conn_id == conn_id)
+                    .map(|i| i.alias.clone())
+                    .unwrap_or_default();
+                self.renaming_link = Some((conn_id, current));
+                Task::none()
+            }
+            Message::PendingLinkNameChanged(value) => {
+                if let Some((_, draft)) = self.renaming_link.as_mut() {
+                    *draft = value;
+                }
+                Task::none()
+            }
+            Message::SavePendingLinkName => {
+                let (Some(session), Some((conn_id, name))) = (self.session.clone(), self.renaming_link.take()) else {
+                    return Task::none();
+                };
+                Task::perform(
+                    blocking(move || session.set_invitation_alias(conn_id, &name).map(|a| (conn_id, a))),
+                    Message::PendingLinkRenamed,
+                )
+            }
+            Message::PendingLinkRenamed(result) => {
+                match result {
+                    Ok((conn_id, alias)) => {
+                        if let Some(inv) = self.invitation.as_mut().filter(|i| i.conn_id == conn_id) {
+                            inv.alias = alias;
+                        }
                     }
                     Err(err) => self.status = err,
                 }
+                self.refresh_pending_links();
+                Task::none()
+            }
+            Message::AskDeletePendingLink(conn_id) => {
+                self.link_confirm = Some(LinkConfirm::Delete(conn_id));
+                Task::none()
+            }
+            Message::ConfirmDeletePendingLink => {
+                let Some(LinkConfirm::Delete(conn_id)) = self.link_confirm.take() else {
+                    return Task::none();
+                };
+                let Some(session) = self.session.clone() else {
+                    return Task::none();
+                };
+                Task::perform(
+                    blocking(move || session.delete_invitation(conn_id).map(|_| conn_id)),
+                    Message::PendingLinkDeleted,
+                )
+            }
+            Message::UnsharedLinkDropped => {
+                self.refresh_pending_links();
+                Task::none()
+            }
+            Message::CancelLinkConfirm => {
+                self.link_confirm = None;
+                Task::none()
+            }
+            Message::PendingLinkDeleted(result) => {
+                match result {
+                    Ok(conn_id) => {
+                        if self.invitation.as_ref().is_some_and(|i| i.conn_id == conn_id) {
+                            self.invitation = None;
+                        }
+                        self.status = "Link deleted — it no longer works.".into();
+                    }
+                    Err(err) => self.status = err,
+                }
+                self.refresh_pending_links();
                 Task::none()
             }
             Message::ToggleIncognito => {
@@ -5651,10 +5799,11 @@ impl App {
                         }
                         self.desktop_prefs.incognito = on;
                     }
-                    // Link already used (or gone): show the current one.
                     Err(err) => {
                         self.status = err;
-                        return self.load_invitation();
+                        // Used or deleted meanwhile: it isn't pending any more.
+                        self.invitation = None;
+                        self.refresh_pending_links();
                     }
                 }
                 desktop::save_prefs(&self.desktop_prefs);
@@ -5712,6 +5861,7 @@ impl App {
             }
             Message::CopyInviteLink => {
                 if let Some(link) = self.invitation.as_ref().map(|i| i.link.display.clone()) {
+                    self.invitation_copied = true;
                     self.status = "One-time link copied.".into();
                     iced::clipboard::write(link)
                 } else {
@@ -7194,22 +7344,50 @@ impl App {
         Task::perform(accept_invite(session, link, incognito), Message::InviteAccepted)
     }
 
-    /// Show the Connect card's one-time link: the newest unused one, else a
-    /// new one (`Session::one_time_invitation`). Runs on every open so a
-    /// link used meanwhile is replaced, a shared one never is.
-    fn load_invitation(&mut self) -> Task<Message> {
+    /// Opening the New page creates a one-time link at once (as the official
+    /// apps do); [`Self::drop_unshared_invitation`] removes it again if the
+    /// page closes without it being copied.
+    fn create_shown_invitation(&mut self) -> Task<Message> {
         let Some(session) = self.session.clone() else {
             return Task::none();
         };
         if self.invitation_busy {
             return Task::none();
         }
+        self.invitation = None;
+        self.invitation_copied = false;
         self.invitation_busy = true;
         let incognito = self.desktop_prefs.incognito;
         Task::perform(
-            blocking(move || session.one_time_invitation(incognito)),
+            blocking(move || session.create_invitation(incognito)),
             Message::InvitationReady,
         )
+    }
+
+    /// Leaving the New page: a link that was never copied can't have reached
+    /// anyone, so delete it rather than leave an unused link behind.
+    fn drop_unshared_invitation(&mut self) -> Task<Message> {
+        self.link_confirm = None;
+        match self.invitation.take() {
+            Some(inv) if !self.invitation_copied => self.delete_link_quietly(inv.conn_id),
+            _ => Task::none(),
+        }
+    }
+
+    fn delete_link_quietly(&mut self, conn_id: i64) -> Task<Message> {
+        let Some(session) = self.session.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            blocking(move || session.delete_invitation(conn_id).map(|_| conn_id)),
+            |_| Message::UnsharedLinkDropped,
+        )
+    }
+
+    fn refresh_pending_links(&mut self) {
+        if let Some(session) = self.session.as_ref() {
+            self.pending_links = session.pending_invitations();
+        }
     }
 
     pub(crate) fn invitation(&self) -> Option<&cursus_core::Invitation> {
@@ -7220,6 +7398,18 @@ impl App {
     }
     pub(crate) fn incognito(&self) -> bool {
         self.desktop_prefs.incognito
+    }
+    pub(crate) fn pending_links(&self) -> &[cursus_core::Invitation] {
+        &self.pending_links
+    }
+    pub(crate) fn pending_links_open(&self) -> bool {
+        self.pending_links_open
+    }
+    pub(crate) fn renaming_link(&self) -> Option<&(i64, String)> {
+        self.renaming_link.as_ref()
+    }
+    pub(crate) fn link_confirm(&self) -> Option<LinkConfirm> {
+        self.link_confirm
     }
     pub(crate) fn address_link(&self) -> Option<&str> {
         self.address_link.as_deref()
@@ -8900,6 +9090,15 @@ async fn open_local_file(path: PathBuf) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// A one-time-link action waiting for the user's yes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkConfirm {
+    /// "New link" deletes the shown one.
+    Regenerate,
+    /// Delete this pending link from the list.
+    Delete(i64),
+}
+
 /// Settings whose explanation opens in an info sheet (ⓘ next to the name).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingInfo {
@@ -8944,7 +9143,7 @@ impl SettingInfo {
             Self::GroupReceipts => ("Send receipts", "Whether this group's members see when their messages reach this device. \u{201c}Default\u{201d} follows the setting in Privacy & security.\n\nSimpleX only sends receipts in groups with up to 20 members."),
             Self::DesktopNotifications => ("Desktop notifications", "Shows a notification for new messages in chats you aren't looking at. Muted chats never notify."),
             Self::Tray => ("System tray icon", "Puts a Cursus icon in your panel's system tray, with Show, Hide and Quit."),
-            Self::Connect => ("Connect", "One-time link: send it to one person. Whoever opens it first becomes your contact, then the link stops working. It stays the same until someone uses it, so you can copy it again later; \u{201c}New link\u{201d} replaces it with a fresh one.\n\nIncognito: when on, the person who connects sees a new random name instead of your profile \u{2014} a different one for each contact. You can switch it until the link is used. It also applies when you connect with a link below.\n\nJoin with a link: paste a link someone sent you \u{2014} a one-time link, an address, or a group or channel link \u{2014} and tap Connect.\n\nYour reusable address, which many people can use, is in Settings \u{2192} Address."),
+            Self::Connect => ("Connect", "One-time link: a new one is made each time you open this page. Send it to one person \u{2014} whoever opens it first becomes your contact, then it stops working. \u{201c}New link\u{201d} deletes the shown link and makes a fresh one.\n\nLinks you copied that nobody has used yet stay valid: the gold link button next to + lists them, to copy, name or delete. A link you never copied is deleted when you leave this page \u{2014} nobody can have it.\n\nIncognito: when on, the person who connects sees a new random name instead of your profile \u{2014} a different one for each contact. You can switch it until the link is used. It also applies when you connect with a link below.\n\nJoin with a link: paste a link someone sent you \u{2014} a one-time link, an address, or a group or channel link \u{2014} and tap Connect.\n\nYour reusable address, which many people can use, is in Settings \u{2192} Address."),
             Self::CloseToTray => ("Close window hides to tray", "Closing the window keeps Cursus running in the tray so messages keep arriving.\n\nIt stays unlocked unless the app lock is on, and decrypted media stays in its private cache until you quit."),
         }
     }

@@ -255,6 +255,12 @@ pub fn shell(app: &App) -> Element<'_, Message> {
     if app.privacy_confirm().is_some() {
         stack = stack.push(privacy_confirm_overlay(app));
     }
+    if app.pending_links_open() {
+        stack = stack.push(pending_links_overlay(app));
+    }
+    if let Some(confirm) = app.link_confirm() {
+        stack = stack.push(link_confirm_overlay(app, confirm));
+    }
     if let Some(info) = app.setting_info() {
         stack = stack.push(setting_info_overlay(app, info));
     }
@@ -800,14 +806,22 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
     // Same header chrome for every section: title + trailing 36px slot so
     // Calls/Settings match the Chats/Channels "title row with button" box.
     let trailing: Element<'_, Message> = if show_compose {
-        button(icons::centered_hit(
+        let plus = button(icons::centered_hit(
             icons::plus_icon(20.0, theme::t().accent),
             36.0,
         ))
         .on_press(Message::OpenCompose)
         .padding(0)
-        .style(theme::secondary_action(app.hover_ok()))
-        .into()
+        .style(theme::secondary_action(app.hover_ok()));
+        let pending = app.pending_links().len();
+        if pending > 0 {
+            row![pending_links_button(pending, app.hover_ok()), plus]
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .into()
+        } else {
+            plus.into()
+        }
     } else {
         horizontal().width(36.0).height(36.0).into()
     };
@@ -8865,4 +8879,221 @@ mod wave_layout_tests {
         let bars = wave_layout(&peaks, 200.0, 36.0, 1.0);
         assert!(bars.iter().any(|b| b.peak == 1.0));
     }
+}
+
+
+/// Gold square beside "+" with the number of unused one-time links; opens
+/// their list.
+fn pending_links_button<'a>(count: usize, hover: bool) -> Element<'a, Message> {
+    let label = if count > 99 { "99+".to_string() } else { count.to_string() };
+    let badge = container(text(label).size(10.0).font(BOLD).color(theme::t().accent_on))
+        .padding(Padding::from([1, 5]))
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().accent)),
+            border: iced::Border {
+                color: theme::t().bg_list,
+                width: 1.5,
+                radius: 9.0.into(),
+            },
+            ..container::Style::default()
+        });
+    let btn = button(icons::centered_hit(icons::link_icon(20.0, theme::on_gold()), 36.0))
+        .on_press(Message::OpenPendingLinks)
+        .padding(0)
+        .style(theme::gold_action(hover));
+    // Same 36×36 box as "+" (header height unchanged); the count sits in
+    // the top-right corner, over the square's edge.
+    Stack::new()
+        .width(36.0)
+        .height(36.0)
+        .push(btn)
+        .push(
+            container(badge)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 })
+                .align_x(Alignment::End)
+                .align_y(Alignment::Start),
+        )
+        .into()
+}
+
+/// Dimmed backdrop (tap closes) with `card` centred — like the other sheets.
+fn sheet_overlay<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a, Message> {
+    let backdrop = mouse_area(
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.45))),
+                ..container::Style::default()
+            }),
+    )
+    .on_press(dismiss);
+    let sheet = container(card)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .padding(Padding::from([24, 20]));
+    Stack::new()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .push(backdrop)
+        .push(sheet)
+        .into()
+}
+
+/// Unused one-time links: copy (short / full), name, delete. Anyone holding
+/// one can still connect, so they stay visible here until used or deleted.
+fn pending_links_overlay(app: &App) -> Element<'_, Message> {
+    let d = app.density();
+    let hover = app.hover_ok();
+    let mut col = Column::new().spacing(12).max_width(480);
+    col = col.push(
+        row![
+            icon_disc(icons::link_icon(18.0, theme::t().always), 36.0),
+            text("Pending links")
+                .size(d.body)
+                .font(BOLD)
+                .color(theme::t().text_primary)
+                .width(Length::Fill),
+            button(icons::centered_hit(icons::cancel_icon(18.0, theme::t().text_secondary), 32.0))
+                .on_press(Message::ClosePendingLinks)
+                .padding(0)
+                .style(theme::ghost_tile(hover)),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center),
+    );
+    col = col.push(
+        text("One-time links you created that nobody has used yet. Anyone who has one can still connect \u{2014} delete the ones you no longer need.")
+            .size(d.meta)
+            .color(theme::t().text_secondary)
+            .wrapping(Wrapping::WordOrGlyph),
+    );
+    let links = app.pending_links();
+    if links.is_empty() {
+        col = col.push(text("No pending links.").size(d.meta).color(theme::t().text_muted));
+    }
+    let small = |label: &'static str, icon: Element<'static, Message>, msg: Message| -> Element<'static, Message> {
+        button(row![icon, text(label).size(d.meta)].spacing(6).align_y(Alignment::Center))
+            .on_press(msg)
+            .padding(Padding::from([6, 10]))
+            .style(theme::secondary_action(hover))
+            .into()
+    };
+    let mut list = Column::new().spacing(10);
+    for inv in links {
+        let id = inv.conn_id;
+        let name = if inv.alias.trim().is_empty() { "Unnamed link".to_string() } else { inv.alias.clone() };
+        let mut when = format_list_time(Some(&inv.created_at)).map(|t| format!("Created {t}")).unwrap_or_default();
+        if inv.incognito {
+            when = if when.is_empty() { "Incognito".into() } else { format!("{when} \u{b7} incognito") };
+        }
+        let mut item = Column::new().spacing(8);
+        match app.renaming_link().filter(|(rid, _)| *rid == id) {
+            Some((_, draft)) => {
+                item = item.push(
+                    row![
+                        text_input("Name, e.g. who it's for", draft)
+                            .on_input(Message::PendingLinkNameChanged)
+                            .on_submit(Message::SavePendingLinkName)
+                            .padding(Padding::from([8, 12]))
+                            .size(d.body)
+                            .width(Length::Fill)
+                            .style(theme::rounded_field()),
+                        button(text("Save").size(d.meta))
+                            .on_press(Message::SavePendingLinkName)
+                            .padding(Padding::from([8, 14]))
+                            .style(theme::primary_action(hover)),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                );
+            }
+            None => {
+                item = item.push(
+                    row![
+                        column![
+                            text(name).size(d.body).color(if inv.alias.trim().is_empty() {
+                                theme::t().text_secondary
+                            } else {
+                                theme::t().text_primary
+                            }),
+                            text(when).size(d.meta).color(theme::t().text_muted),
+                        ]
+                        .spacing(2)
+                        .width(Length::Fill),
+                        button(icons::centered_hit(icons::trash_icon(16.0, theme::t().danger), 32.0))
+                            .on_press(Message::AskDeletePendingLink(id))
+                            .padding(0)
+                            .style(theme::ghost_tile(hover)),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                );
+            }
+        }
+        let mut actions = Row::new().spacing(6).align_y(Alignment::Center);
+        if inv.link.short.is_some() {
+            actions = actions.push(small("Copy", icons::copy_icon(14.0, theme::t().text_primary), Message::CopyPendingLink { conn_id: id, full: false }));
+            actions = actions.push(small("Copy full", icons::copy_icon(14.0, theme::t().text_primary), Message::CopyPendingLink { conn_id: id, full: true }));
+        } else {
+            actions = actions.push(small("Copy", icons::copy_icon(14.0, theme::t().text_primary), Message::CopyPendingLink { conn_id: id, full: true }));
+        }
+        actions = actions.push(small("Name", icons::edit_icon(14.0, theme::t().text_primary), Message::RenamePendingLink(id)));
+        item = item.push(actions);
+        list = list.push(
+            container(item)
+                .padding(Padding::from([10, 12]))
+                .width(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(iced::Background::Color(theme::t().bg_field)),
+                    border: iced::Border { color: theme::t().border, width: 1.0, radius: 12.0.into() },
+                    ..container::Style::default()
+                }),
+        );
+    }
+    col = col.push(scrollable(list).height(Length::Shrink));
+    sheet_overlay(menu_card(col.into(), d), Message::ClosePendingLinks)
+}
+
+/// "New link" / delete a pending link: the link stops working, so ask.
+fn link_confirm_overlay(app: &App, confirm: crate::LinkConfirm) -> Element<'_, Message> {
+    let d = app.density();
+    let hover = app.hover_ok();
+    let (title, body, action, msg) = match confirm {
+        crate::LinkConfirm::Regenerate => (
+            "Create a new link?",
+            "The previous link will be deleted. Anyone you already sent it to won't be able to connect with it.",
+            "Delete and create new",
+            Message::ConfirmRegenerateInvitation,
+        ),
+        crate::LinkConfirm::Delete(_) => (
+            "Delete this link?",
+            "It will stop working. Anyone you sent it to won't be able to connect with it.",
+            "Delete",
+            Message::ConfirmDeletePendingLink,
+        ),
+    };
+    let card = column![
+        text(title).size(d.body).font(BOLD).color(theme::t().text_primary),
+        text(body).size(d.meta).color(theme::t().text_secondary).wrapping(Wrapping::WordOrGlyph),
+        row![
+            horizontal().width(Length::Fill),
+            button(text("Cancel").size(d.meta))
+                .on_press(Message::CancelLinkConfirm)
+                .padding(Padding::from([10, 14]))
+                .style(theme::secondary_action(hover)),
+            button(text(action).size(d.meta))
+                .on_press(msg)
+                .padding(Padding::from([10, 14]))
+                .style(theme::danger_action(hover)),
+        ]
+        .spacing(8),
+    ]
+    .spacing(12)
+    .max_width(420);
+    sheet_overlay(menu_card(card.into(), d), Message::CancelLinkConfirm)
 }

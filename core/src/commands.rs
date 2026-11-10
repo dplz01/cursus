@@ -147,6 +147,17 @@ impl Commands {
         format!("/_set incognito :{conn_id} {}", on_off(incognito))
     }
 
+    /// Name a pending contact connection (`/_set alias :<connId> <name>`;
+    /// no name clears it).
+    pub fn set_connection_alias(conn_id: i64, alias: &str) -> String {
+        let alias = alias.trim();
+        if alias.is_empty() {
+            format!("/_set alias :{conn_id}")
+        } else {
+            format!("/_set alias :{conn_id} {alias}")
+        }
+    }
+
     /// Delete a pending contact connection (`/_delete :<connId>`), e.g. the
     /// unused one-time invitation a regenerated link replaces.
     pub fn delete_pending_connection(conn_id: i64) -> String {

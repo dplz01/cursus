@@ -1228,6 +1228,7 @@ dependencies = [
  "anyhow",
  "base64",
  "cc",
+ "chrono",
  "directories",
  "emojis",
  "image",

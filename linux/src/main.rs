@@ -1300,7 +1300,8 @@ struct App {
     width: f32,
     /// Logical window height (DIP).
     height: f32,
-    /// Window scale factor (physical = logical * scale). Not used for layout.
+    /// Window scale factor (physical = logical * scale). Not used for layout;
+    /// only for snapping fine drawing (waveforms) to device pixels.
     scale_factor: f32,
     status: String,
     session: Option<Arc<Session>>,
@@ -6603,6 +6604,11 @@ impl App {
         }
         let dur = play.duration_secs.max(1) as f32;
         Some((play.started.elapsed().as_secs_f32() / dur).clamp(0.0, 1.0))
+    }
+
+    /// Window scale factor (physical px per logical px), for pixel snapping.
+    pub(crate) fn scale_factor(&self) -> f32 {
+        self.scale_factor
     }
 
     pub(crate) fn waveform_for(&self, path: &PathBuf) -> Option<&[f32]> {

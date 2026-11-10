@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::invitations::{newest_unused_invitation, parse_created_invitation, parse_incognito_updated, Invitation};
+use crate::invitations::{
+    parse_alias_updated, parse_created_invitation, parse_incognito_updated, pending_invitations, Invitation,
+};
 use crate::commands::Commands;
 use crate::error::{Error, Result};
 use crate::ffi::LibSimplex;
@@ -70,6 +72,9 @@ pub struct Session {
     user: Mutex<Option<UserProfile>>,
     /// Mirror of `/_files_encrypt` — encrypt outgoing attachments before send.
     encrypt_local_files: std::sync::atomic::AtomicBool,
+    /// Unused own one-time links, from the last chat-list load and kept up
+    /// to date by create / rename / delete (see `crate::invitations`).
+    pending: Mutex<Vec<Invitation>>,
 }
 
 // Session moves / shares between the UI runtime and blocking tasks after connect.
@@ -169,6 +174,7 @@ impl Session {
             ctrl,
             user: Mutex::new(None),
             encrypt_local_files: std::sync::atomic::AtomicBool::new(config.encrypt_local_files),
+            pending: Mutex::new(Vec::new()),
         };
         let name = if config.initial_display_name.trim().is_empty() {
             "Cursus"
@@ -271,9 +277,26 @@ impl Session {
         Ok(disk)
     }
 
+    /// The chat list. Also refreshes [`Self::pending_invitations`] from the
+    /// same reply (pending connections ride along with `pcc=on`).
     pub fn list_chats(&self) -> Result<Vec<ChatPreview>> {
         let value = self.send(&Commands::get_chats(self.user_id()?))?;
+        if let Ok(mut pending) = self.pending.lock() {
+            *pending = pending_invitations(&value);
+        }
         Ok(parse_chat_previews(&value))
+    }
+
+    /// Unused one-time links the user created, newest first, as of the last
+    /// chat-list load and the invitation calls since (no core round trip).
+    pub fn pending_invitations(&self) -> Vec<Invitation> {
+        self.pending.lock().map(|p| p.clone()).unwrap_or_default()
+    }
+
+    fn update_pending(&self, f: impl FnOnce(&mut Vec<Invitation>)) {
+        if let Ok(mut pending) = self.pending.lock() {
+            f(&mut pending);
+        }
     }
 
     pub fn send_text(&self, chat: &ChatId, text: &str) -> Result<Value> {
@@ -544,39 +567,57 @@ impl Session {
         self.create_invitation(false).map(|inv| inv.link)
     }
 
-    /// The one-time invitation the Connect card shows: the newest one nobody
-    /// has used yet, else a new one (see [`crate::invitations`]). `incognito`
-    /// only applies when a new link has to be created.
-    pub fn one_time_invitation(&self, incognito: bool) -> Result<Invitation> {
-        let chats = self.send(&Commands::get_chats(self.user_id()?))?;
-        match newest_unused_invitation(&chats) {
-            Some(inv) => Ok(inv),
-            None => self.create_invitation(incognito),
-        }
+    /// A new one-time link — what opening the New page ("+") does.
+    pub fn create_invitation(&self, incognito: bool) -> Result<Invitation> {
+        let value = self.send(&Commands::create_invitation(self.user_id()?, incognito))?;
+        let inv = parse_created_invitation(&value)
+            .ok_or_else(|| Error::Command(format!("invitation missing link: {value}")))?;
+        self.update_pending(|p| p.insert(0, inv.clone()));
+        Ok(inv)
     }
 
-    /// A fresh one-time invitation replacing `previous` (deleted if nobody
-    /// has used it yet, so unshared links don't pile up).
+    /// "New link": delete `previous` (the user confirmed) and create a fresh one.
     pub fn regenerate_invitation(&self, previous: Option<i64>, incognito: bool) -> Result<Invitation> {
         if let Some(conn_id) = previous {
-            // Already used (now a contact) or gone: nothing to delete.
-            let _ = self.send(&Commands::delete_pending_connection(conn_id));
+            // Used meanwhile (now a contact) or already gone: nothing to delete.
+            let _ = self.delete_invitation(conn_id);
         }
         self.create_invitation(incognito)
+    }
+
+    /// Delete an unused one-time link; whoever has it can no longer connect.
+    pub fn delete_invitation(&self, conn_id: i64) -> Result<()> {
+        let result = self.send(&Commands::delete_pending_connection(conn_id));
+        // Gone from the list either way: deleted now, or already used / gone.
+        self.update_pending(|p| p.retain(|i| i.conn_id != conn_id));
+        result.map(|_| ())
+    }
+
+    /// Name a pending link so the user knows whom it was for (empty clears).
+    pub fn set_invitation_alias(&self, conn_id: i64, alias: &str) -> Result<String> {
+        let value = self.send(&Commands::set_connection_alias(conn_id, alias))?;
+        let alias = parse_alias_updated(&value)
+            .ok_or_else(|| Error::Command(format!("unexpected alias reply: {value}")))?;
+        self.update_pending(|p| {
+            if let Some(i) = p.iter_mut().find(|i| i.conn_id == conn_id) {
+                i.alias = alias.clone();
+            }
+        });
+        Ok(alias)
     }
 
     /// Switch an unused invitation to / from a random incognito profile; the
     /// link stays the same. Returns the new state.
     pub fn set_invitation_incognito(&self, conn_id: i64, incognito: bool) -> Result<bool> {
         let value = self.send(&Commands::set_connection_incognito(conn_id, incognito))?;
-        parse_incognito_updated(&value)
-            .ok_or_else(|| Error::Command(format!("unexpected incognito reply: {value}")))
-    }
-
-    fn create_invitation(&self, incognito: bool) -> Result<Invitation> {
-        let value = self.send(&Commands::create_invitation(self.user_id()?, incognito))?;
-        parse_created_invitation(&value)
-            .ok_or_else(|| Error::Command(format!("invitation missing link: {value}")))
+        let on = parse_incognito_updated(&value)
+            .ok_or_else(|| Error::Command(format!("unexpected incognito reply: {value}")))?;
+        self.update_pending(|p| {
+            if let Some(i) = p.iter_mut().find(|i| i.conn_id == conn_id) {
+                i.incognito = on;
+            }
+        });
+        Ok(on)
     }
 
     /// Accept an invitation / address / group link (short HTTPS or full `simplex:` URI).

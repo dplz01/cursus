@@ -216,6 +216,7 @@ private fun VoiceRow(model: AppModel, m: Message, f: FileInfo) {
             peaks ?: List(96) { 0.35f },
             if (playing) VoicePlayer.progress else 0f,
             Modifier.weight(1f).height(28.dp),
+            rest = if (m.outgoing) c.voiceRestOut else c.voiceRest,
         )
         Text(f.duration?.let { formatDuration(it) } ?: "voice", style = Cursus.type.meta, color = c.textSecondary)
         OfferAction(model, m, f)
@@ -230,9 +231,8 @@ private fun VoiceRow(model: AppModel, m: Message, f: FileInfo) {
  * shapes); tall bars get slightly rounded ends.
  */
 @Composable
-fun Waveform(peaks: List<Float>, progress: Float, modifier: Modifier = Modifier) {
+fun Waveform(peaks: List<Float>, progress: Float, modifier: Modifier = Modifier, rest: Color = Cursus.colors.voiceRest) {
     val played = Cursus.colors.accent
-    val rest = Cursus.colors.textMuted
     Canvas(modifier) {
         if (peaks.isEmpty() || size.width < 1f || size.height < 1f) return@Canvas
         val bar = 3.dp.toPx().roundToInt().coerceAtLeast(1).toFloat()

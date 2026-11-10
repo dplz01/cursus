@@ -852,6 +852,34 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     // region Connect
 
+    /** The address if there is one — never creates it (Settings → Address). */
+    suspend fun currentAddress(): ConnLink? = try {
+        Core.call<ConnLink?>("currentAddress")
+    } catch (e: Exception) {
+        error = e.message; null
+    }
+
+    /** Delete the address; contacts made through it stay connected. */
+    suspend fun deleteAddress(): Boolean = try {
+        user = Core.call<User>("deleteAddress")
+        true
+    } catch (e: Exception) {
+        error = e.message; false
+    }
+
+    fun setProfileAddress(on: Boolean) = act {
+        user = Core.call<User>("setProfileAddress", mapOf("on" to on))
+    }
+
+    suspend fun addressAutoAccept(): Boolean =
+        runCatching { Core.call<Boolean>("addressAutoAccept") }.getOrDefault(false)
+
+    suspend fun setAddressAutoAccept(on: Boolean): Boolean = try {
+        Core.call<Boolean>("setAddressAutoAccept", mapOf("on" to on))
+    } catch (e: Exception) {
+        error = e.message; !on
+    }
+
     suspend fun addressLink(): ConnLink? = try {
         Core.call("addressLink")
     } catch (e: Exception) {

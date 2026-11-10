@@ -1,5 +1,9 @@
 package chat.cursus.ui.components
 
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import android.graphics.BitmapFactory
@@ -188,16 +192,14 @@ fun CardTitle(icon: Int, title: String, subtitle: String? = null) {
     val c = Cursus.colors
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         IconDisc(icon, size = 36.dp)
-        Column {
-            Text(title, style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.Medium)
-            if (subtitle != null) Text(subtitle, style = Cursus.type.meta, color = c.textSecondary)
-        }
+        // Titles only: descriptions belong in ⓘ sheets (`subtitle` not shown).
+        Text(title, style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.Medium)
     }
 }
 
 /** Navigation row: icon disc · title / subtitle · chevron. */
 @Composable
-fun NavRow(icon: Int, title: String, subtitle: String? = null, onClick: () -> Unit) {
+fun NavRow(icon: Int, title: String, subtitle: String? = null, badge: Long = 0, onClick: () -> Unit) {
     val c = Cursus.colors
     Row(
         Modifier.fillMaxWidth().clip(Radius.lg).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 8.dp),
@@ -207,8 +209,9 @@ fun NavRow(icon: Int, title: String, subtitle: String? = null, onClick: () -> Un
         IconDisc(icon)
         Column(Modifier.weight(1f)) {
             Text(title, style = Cursus.type.body, color = c.textPrimary)
-            if (subtitle != null) Text(subtitle, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (!subtitle.isNullOrEmpty()) Text(subtitle, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        if (badge > 0) AttentionCount(badge)
         Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(16.dp).rotate(-90f), tint = c.textMuted)
     }
 }
@@ -223,7 +226,7 @@ fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, note
     ) {
         Column(Modifier.weight(1f)) {
             Text(title, style = Cursus.type.body, color = c.textPrimary)
-            if (note != null) Text(note, style = Cursus.type.meta, color = c.textSecondary)
+            // Titles only: `note` is not shown (explanations live in ⓘ sheets).
         }
         Spacer(Modifier.width(10.dp))
         Switch(
@@ -438,6 +441,54 @@ fun ConfirmSheet(title: String, body: String, action: String, onConfirm: () -> U
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
             SecondaryButton("Cancel", onDismiss)
             PrimaryButton(action, { onConfirm(); onDismiss() })
+        }
+    }
+}
+
+
+/** Count in the yellow attention style, for list rows (support chats). */
+@Composable
+fun AttentionCount(count: Long) {
+    Box(
+        Modifier.defaultMinSize(minWidth = 20.dp, minHeight = 20.dp).clip(Radius.pill)
+            .background(Cursus.colors.attention).padding(horizontal = if (count < 10) 0.dp else 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            if (count > 99) "99+" else "$count",
+            style = Cursus.type.meta.copy(fontSize = 11.sp, lineHeight = 11.sp),
+            color = OnAttention, fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+/** Icon colour on the attention yellow (dark in both themes). */
+val OnAttention = androidx.compose.ui.graphics.Color(0xFF1F1A05)
+
+/** Yellow "needs attention" square with a round count on its top-right
+ *  corner (Linux `attention_button`): pending links, unread support chats. */
+@Composable
+fun AttentionButton(icon: Int, count: Long, description: String, onClick: () -> Unit) {
+    val c = Cursus.colors
+    Box(Modifier.padding(end = 8.dp).size(36.dp)) {
+        Box(
+            Modifier.fillMaxSize().clip(Radius.md).background(c.attention).clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(painterResource(icon), description, Modifier.size(20.dp), tint = OnAttention)
+        }
+        Box(
+            Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp)
+                .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
+                .clip(Radius.pill).background(c.accent)
+                .padding(horizontal = if (count < 10) 0.dp else 4.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                if (count > 99) "99+" else "$count",
+                style = Cursus.type.meta.copy(fontSize = 10.sp, lineHeight = 10.sp),
+                color = c.accentOn, fontWeight = FontWeight.Bold,
+            )
         }
     }
 }

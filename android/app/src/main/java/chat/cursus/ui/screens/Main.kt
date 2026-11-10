@@ -183,11 +183,14 @@ fun MainScreen(model: AppModel) {
             }
         } else {
             val p = page
+            // Fade only when a page or chat is pushed / popped. Switching
+            // sections from the bottom bar swaps the list in place — keying
+            // on the section cross-faded the whole screen (flicker).
             AnimatedContent(
-                targetState = Triple(p, chatOpen, model.section),
+                targetState = p to chatOpen,
                 transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(120)) },
                 label = "push",
-            ) { (shownPage, open, _) ->
+            ) { (shownPage, open) ->
                 when {
                     shownPage != null -> Box(Modifier.fillMaxSize().background(c.bgPanel).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))) {
                         pageContent(shownPage)

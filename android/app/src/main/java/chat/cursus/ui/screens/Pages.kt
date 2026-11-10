@@ -1,5 +1,6 @@
 package chat.cursus.ui.screens
 
+import androidx.compose.foundation.border
 import chat.cursus.ui.components.PrefRow
 import chat.cursus.ui.components.ChoiceChip
 import chat.cursus.ui.components.ChoiceMenu
@@ -77,11 +78,6 @@ import chat.cursus.ui.theme.Cursus
 import chat.cursus.ui.theme.Radius
 import kotlinx.coroutines.launch
 
-private fun share(context: android.content.Context, text: String) {
-    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
-    context.startActivity(Intent.createChooser(send, null))
-}
-
 private enum class CreateKind { Group, Channel }
 
 /** Linux "New" page: Connect card + Create card; New group / channel open the name overlay. */
@@ -101,10 +97,10 @@ fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOp
                 CursusCard {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         CardTitle(R.drawable.ic_plus, "Create", "Start a conversation for many people.")
-                        NavRow(R.drawable.ic_user_group, "New group", "Private group — invite contacts after creating") {
+                        NavRow(R.drawable.ic_user_group, "New group") {
                             create = CreateKind.Group
                         }
-                        NavRow(R.drawable.ic_channels, "New channel", "Public channel using enabled chat relays") {
+                        NavRow(R.drawable.ic_channels, "New channel") {
                             create = CreateKind.Channel
                         }
                     }
@@ -292,17 +288,16 @@ fun SettingsPane(model: AppModel) {
     val user = model.user
     var editing by remember { mutableStateOf<EditField?>(null) }
     var showLicences by remember { mutableStateOf(false) }
-    var address by remember { mutableStateOf<ConnLink?>(null) }
-    var loadingAddress by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     Column(Modifier.fillMaxSize()) {
         PaneHeader("Settings")
         Column(Modifier.verticalScroll(rememberScrollState())) {
             PageColumn {
+                // The profile card is the profile itself (picture first, like
+                // a contact page): no title row; tapping the picture changes it.
                 CursusCard {
-                    CardTitle(R.drawable.ic_user_alt_1, "Profile", "Name, picture and bio")
-                    Column(Modifier.padding(top = 12.dp)) {
+                    Column {
                         val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
                             uri?.let { model.withProfileImage(it) { url -> model.setOwnImage(url) } }
                         }
@@ -319,22 +314,7 @@ fun SettingsPane(model: AppModel) {
                         EditableLine(user?.description ?: "", "Tell people about yourself", LineStyle.Body) { editing = EditField.OwnDescription }
                     }
                 }
-                CursusCard {
-                    CardTitle(R.drawable.ic_link_minimalistic_2, "Address", "How people reach you")
-                    Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        val a = address
-                        if (a == null) {
-                            SecondaryButton(if (loadingAddress) "Loading…" else "Show my address", {
-                                loadingAddress = true
-                                scope.launch { address = model.addressLink(); loadingAddress = false }
-                            }, Modifier.fillMaxWidth(), enabled = !loadingAddress)
-                        } else {
-                            val shown = a.short ?: a.full
-                            LinkBox(shown) { model.notice = "Address copied" }
-                            SecondaryButton("Share address", { share(context, shown) }, Modifier.fillMaxWidth())
-                        }
-                    }
-                }
+                AddressCard(model)
                 CursusCard {
                     CardTitle(R.drawable.ic_image_square, "Appearance", "Theme")
                     Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -361,7 +341,7 @@ fun SettingsPane(model: AppModel) {
                     SwitchRow("Receive in background", model.prefs.background, {
                         model.prefs.background = it
                         model.syncBackground()
-                    }, note = "Keeps Cursus running with a silent notification, so messages arrive when the app is closed")
+                    })
                 }
                 CursusCard {
                     CardTitle(R.drawable.ic_info_circle, "About", "Version, source and licences")
@@ -401,6 +381,82 @@ fun SettingsPane(model: AppModel) {
                 else -> model.updateOwnProfile(description = v)
             }
             editing = null
+        }
+    }
+}
+
+/** Linux Settings → Address (official apps): "Create address" when there is
+ *  none; hidden until "Show address"; share on profile / auto-accept;
+ *  "Delete address" asks first. */
+@Composable
+private fun AddressCard(model: AppModel) {
+    val c = Cursus.colors
+    val scope = rememberCoroutineScope()
+    var loaded by remember { mutableStateOf(false) }
+    var address by remember { mutableStateOf<ConnLink?>(null) }
+    var revealed by remember { mutableStateOf(false) }
+    var autoAccept by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        address = model.currentAddress()
+        if (address != null) autoAccept = model.addressAutoAccept()
+        loaded = true
+    }
+    CursusCard {
+        CardTitle(R.drawable.ic_link_minimalistic_2, "Address")
+        SectionLabel("Your address")
+        val a = address
+        when {
+            !loaded -> Text("Loading…", style = Cursus.type.meta, color = c.textMuted, modifier = Modifier.padding(8.dp))
+            a == null -> NavRow(R.drawable.ic_address_card, "Create address") {
+                scope.launch { address = model.addressLink(); revealed = address != null }
+            }
+            else -> {
+                if (revealed) {
+                    Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(Modifier.weight(1f)) { LinkBox(a.short ?: a.full) { model.notice = "Address copied" } }
+                        IconTool(R.drawable.ic_eye_observer, "Hide address", { revealed = false }, tint = c.accent)
+                    }
+                } else {
+                    NavRow(R.drawable.ic_eye_observer, "Show address") { revealed = true }
+                }
+                SwitchRow("Share address on profile", !model.user?.contactLink.isNullOrEmpty(), { model.setProfileAddress(it) })
+                SwitchRow("Auto-accept address requests", autoAccept, { on ->
+                    autoAccept = on
+                    scope.launch { autoAccept = model.setAddressAutoAccept(on) }
+                })
+                Row(
+                    Modifier.padding(8.dp).clip(Radius.md).border(1.dp, c.danger, Radius.md)
+                        .clickable { confirmDelete = true }.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(painterResource(R.drawable.ic_trash_delete), null, Modifier.size(16.dp), tint = c.danger)
+                    Text("Delete address", style = Cursus.type.body, color = c.danger)
+                }
+            }
+        }
+    }
+    if (confirmDelete) {
+        CursusOverlay({ confirmDelete = false }) {
+            Text("Delete address?", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+            Text(
+                "All your contacts will remain connected. Nobody new can use the address, and your profile is updated for your contacts.",
+                style = Cursus.type.meta, color = c.textSecondary,
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                SecondaryButton("Cancel", { confirmDelete = false })
+                DangerButton("Delete address", {
+                    confirmDelete = false
+                    scope.launch {
+                        if (model.deleteAddress()) {
+                            address = null
+                            revealed = false
+                            autoAccept = false
+                        }
+                    }
+                })
+            }
         }
     }
 }

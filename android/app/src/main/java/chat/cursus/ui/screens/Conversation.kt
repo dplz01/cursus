@@ -1,5 +1,6 @@
 package chat.cursus.ui.screens
 
+import chat.cursus.ui.components.AttentionButton
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -113,6 +114,12 @@ fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () 
                         else -> chat.shortDescr.ifBlank { null }
                     }
                     if (sub != null) Text(sub, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            // Unread support messages: the yellow counter (Linux header).
+            if (chat.isGroup && !chat.isChannel && chat.supportBadge > 0) {
+                AttentionButton(R.drawable.ic_admin, chat.supportBadge, if (chat.canModerate) "Chats with members" else "Chat with admins") {
+                    if (chat.canModerate) onInfo() else model.select("${chat.ref}(_support)")
                 }
             }
             IconTool(R.drawable.ic_info_circle, "Info", onInfo)

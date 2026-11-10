@@ -76,6 +76,10 @@ data class Chat(
     val canEditProfile: Boolean = false,
     val canManageMembers: Boolean = false,
     val canModerate: Boolean = false,
+    /** Unread support messages: members needing attention (moderators) /
+     *  your own "Chat with admins" (members). */
+    val membersRequireAttention: Long = 0,
+    val supportUnread: Long = 0,
     val assignableRoles: List<String> = emptyList(),
 ) {
     val isContact get() = type == "direct"
@@ -83,6 +87,8 @@ data class Chat(
     val isNotes get() = type == "local"
     val muted get() = notifications == "none"
     val isRequest get() = pendingRequestId != null
+    /** The yellow support counter (Linux `support_badge_count`). */
+    val supportBadge get() = if (canModerate) membersRequireAttention else supportUnread
 }
 
 @Serializable

@@ -171,7 +171,7 @@ private fun ContactPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
             }
         }
         ButtonCard {
-            NavRow(R.drawable.ic_settings, "Chat preferences", "Disappearing messages, receipts, calls…") { prefs = true }
+            NavRow(R.drawable.ic_settings, "Chat preferences") { prefs = true }
         }
         ButtonCard {
             ActionTile(R.drawable.ic_clear_all, "Clear chat", { confirm = "clear" })
@@ -364,21 +364,21 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
             ButtonCard {
                 if (owner) {
                     val preview = chat.description.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
-                    NavRow(R.drawable.ic_scripture_scroll, "Welcome message", preview.ifEmpty { "Greet the members who join" }) {
+                    NavRow(R.drawable.ic_scripture_scroll, "Welcome message", preview) {
                         editing = EditField.GroupWelcome
                     }
                 }
                 if (supportOk || moderate) {
                     if (moderate) {
-                        NavRow(R.drawable.ic_admin, "Chats with members", "Join requests and member support") { onOpenPane(GroupPane.SupportList) }
+                        NavRow(R.drawable.ic_admin, "Chats with members", badge = chat.membersRequireAttention) { onOpenPane(GroupPane.SupportList) }
                     } else {
-                        NavRow(R.drawable.ic_admin, "Chat with admins", "Private conversation with moderators") {
+                        NavRow(R.drawable.ic_admin, "Chat with admins", badge = chat.supportUnread) {
                             model.select("${chat.ref}(_support)"); onClose()
                         }
                     }
                 }
                 if (admin && !chat.isChannel) {
-                    NavRow(R.drawable.ic_user_plus_alt_1, "Invite", "Group link and contacts") { onOpenPane(GroupPane.AddMember) }
+                    NavRow(R.drawable.ic_user_plus_alt_1, "Invite") { onOpenPane(GroupPane.AddMember) }
                 }
                 if (chat.isChannel) {
                     NavRow(

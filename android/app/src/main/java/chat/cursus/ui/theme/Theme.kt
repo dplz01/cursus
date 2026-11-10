@@ -46,6 +46,10 @@ data class CursusColors(
     val gold: Color,
     /** Bright yellow for things that need attention (pending-links button). */
     val attention: Color,
+    /** Unplayed waveform bars (soft accent in light, calmer than grey);
+     *  `voiceRestOut` on the tinted outgoing bubble. */
+    val voiceRest: Color,
+    val voiceRestOut: Color,
     val disabledFill: Color,
     /** Text fields, composer pill and quiet buttons (Linux `bg_field`). */
     val bgField: Color,
@@ -83,6 +87,8 @@ val LightTokens = CursusColors(
     success = Color(0xFF2E7D32),
     gold = Color(0xFFB58B0F),
     attention = Color(0xFFF5B800),
+    voiceRest = Accent.copy(alpha = 0.32f),
+    voiceRestOut = Accent.copy(alpha = 0.45f),
     disabledFill = Color(0xFFD1D5DA),
     bgField = Color(0xFFF2F4F7),
     bubbleIn = Color(0xFFFFFFFF),
@@ -113,6 +119,8 @@ val DarkTokens = CursusColors(
     success = Color(0xFF6BCB77),
     gold = Color(0xFFECD04F),
     attention = Color(0xFFF5C518),
+    voiceRest = Color(0xFF6E7585),
+    voiceRestOut = Color(0xFF7F93BC),
     disabledFill = Color(0xFF404D66),
     bgField = Color(0xFF181B22),
     bubbleIn = Color(0xFF262B36),

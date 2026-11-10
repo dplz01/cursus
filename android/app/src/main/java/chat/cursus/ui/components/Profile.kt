@@ -120,32 +120,41 @@ fun FieldEditor(field: EditField, initial: String, onDismiss: () -> Unit, onSave
 /** Linux `profile_photo_actions`: set / remove picture, 32px secondary buttons. */
 class PhotoActions(val hasImage: Boolean, val onPick: () -> Unit, val onClear: () -> Unit)
 
+/** Linux `profile_identity`: 84dp picture left, name lines right. When the
+ *  picture can be changed, tapping it opens a Change / Remove sheet. */
 @Composable
-private fun PhotoButton(icon: Int, description: String, enabled: Boolean, onClick: () -> Unit) {
+fun ProfileIdentity(name: String, image: String?, group: Boolean = false, photo: PhotoActions? = null, lines: @Composable () -> Unit) {
     val c = Cursus.colors
-    Box(
-        Modifier.size(32.dp).clip(Radius.md).background(c.bgField).border(1.dp, c.border, Radius.md)
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(painterResource(icon), description, Modifier.size(18.dp), tint = if (enabled) c.textSecondary else c.textMuted)
+    var sheet by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Box(if (photo != null) Modifier.clip(Radius.pill).clickable { sheet = true } else Modifier) {
+            Avatar(name, image, 84.dp, group = group)
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) { lines() }
+    }
+    if (sheet && photo != null) {
+        CursusOverlay({ sheet = false }) {
+            Text("Profile picture", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+            Column {
+                SheetItem(R.drawable.ic_image_pen, "Change picture", c.textPrimary, c.accent) { sheet = false; photo.onPick() }
+                if (photo.hasImage) {
+                    SheetItem(R.drawable.ic_trash_delete, "Remove picture", c.danger, c.danger) { sheet = false; photo.onClear() }
+                }
+                SheetItem(R.drawable.ic_cancel, "Cancel", c.textPrimary, c.textSecondary) { sheet = false }
+            }
+        }
     }
 }
 
-/** Linux `profile_identity`: 72px avatar (photo buttons under it) left, name lines right. */
 @Composable
-fun ProfileIdentity(name: String, image: String?, group: Boolean = false, photo: PhotoActions? = null, lines: @Composable () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Avatar(name, image, 72.dp, group = group)
-            if (photo != null) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    PhotoButton(R.drawable.ic_image_pen, "Set picture", true, photo.onPick)
-                    PhotoButton(R.drawable.ic_cancel, "Remove picture", photo.hasImage, photo.onClear)
-                }
-            }
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) { lines() }
+private fun SheetItem(icon: Int, label: String, color: androidx.compose.ui.graphics.Color, tint: androidx.compose.ui.graphics.Color, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(Radius.lg).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(painterResource(icon), null, Modifier.size(20.dp), tint = tint)
+        Text(label, style = Cursus.type.body, color = color)
     }
 }
 

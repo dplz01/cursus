@@ -1,5 +1,6 @@
 package chat.cursus.ui.screens
 
+import chat.cursus.ui.components.AttentionButton
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.defaultMinSize
 import chat.cursus.ui.components.RoundedField
@@ -243,34 +244,10 @@ fun ConfirmDialog(title: String, text: String, action: String, onConfirm: () -> 
 }
 
 
-/** Linux `pending_links_button`: attention-yellow square (same box as "+")
- *  with the number of unused one-time links; opens their list. The count is
- *  round (a pill past 9), borderless, centred on the top-right corner. */
+/** Linux `pending_links_button`: the yellow counter for unused one-time links. */
 @Composable
-private fun PendingLinksButton(count: Int, onClick: () -> Unit) {
-    val c = Cursus.colors
-    Box(Modifier.padding(end = 8.dp).size(36.dp)) {
-        Box(
-            Modifier.fillMaxSize().clip(Radius.md).background(c.attention).clickable(onClick = onClick),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(painterResource(R.drawable.ic_link_minimalistic_2), "Pending links", Modifier.size(20.dp), tint = Color(0xFF1F1A05))
-        }
-        Box(
-            Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp)
-                .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
-                .clip(Radius.pill).background(c.accent)
-                .padding(horizontal = if (count < 10) 0.dp else 4.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                if (count > 99) "99+" else "$count",
-                style = Cursus.type.meta.copy(fontSize = 10.sp, lineHeight = 10.sp),
-                color = c.accentOn, fontWeight = FontWeight.Bold,
-            )
-        }
-    }
-}
+private fun PendingLinksButton(count: Int, onClick: () -> Unit) =
+    AttentionButton(R.drawable.ic_link_minimalistic_2, count.toLong(), "Pending links", onClick)
 
 /** Unused one-time links: copy (short / full), name, delete (asks first).
  *  Anyone holding one can still connect, so they stay visible here. */

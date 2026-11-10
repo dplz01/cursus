@@ -86,17 +86,15 @@ private struct ConnectTab: View {
                          active: incognito, size: 20, action: toggleIncognito)
             }
             HStack {
-                Text(incognito ? "Incognito: they'll see a random profile." : "They'll see your profile.")
-                    .font(.cMeta)
-                    .foregroundColor(Theme.secondaryText)
-                Spacer(minLength: 8)
+                Spacer()
+                // Same look as Connect below.
                 Button(action: { if invitation == nil { create() } else { confirmNew = true } }) {
                     HStack(spacing: 6) {
                         CIcon("repeat-once", size: 14)
                         Text("New link")
                     }
                 }
-                .buttonStyle(SecondaryButtonStyle(small: true))
+                .buttonStyle(PrimaryButtonStyle())
                 .disabled(busy)
             }
             SectionLabel("Join with a link")

@@ -8,9 +8,9 @@ struct PendingLinksButton: View {
 
     var body: some View {
         Button(action: action) {
-            CIcon("link-minimalistic-2", size: 16, color: Theme.onGold)
+            CIcon("link-minimalistic-2", size: 16, color: Theme.onAttention)
                 .frame(width: 28, height: 28)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.gold))
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.attention))
                 .overlay(badge, alignment: .topTrailing)
                 .contentShape(Rectangle())
         }
@@ -18,15 +18,18 @@ struct PendingLinksButton: View {
         .help("\(count) pending one-time link\(count == 1 ? "" : "s")")
     }
 
+    /// Round for one digit, a pill for more, no border; centred on the
+    /// button's top-right corner.
     private var badge: some View {
         Text(count > 99 ? "99+" : "\(count)")
             .font(.system(size: 9, weight: .bold))
             .foregroundColor(Theme.accentOn)
-            .padding(.horizontal, 4)
+            .padding(.horizontal, count < 10 ? 0 : 4)
             .frame(minWidth: 15, minHeight: 15)
             .background(Capsule().fill(Theme.accent))
-            .overlay(Capsule().strokeBorder(Theme.list, lineWidth: 1.5))
-            .offset(x: 6, y: -6)
+            .fixedSize()
+            .alignmentGuide(.trailing) { $0[HorizontalAlignment.center] }
+            .alignmentGuide(.top) { $0[VerticalAlignment.center] }
     }
 }
 
@@ -42,7 +45,7 @@ struct PendingLinksSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                CIcon("link-minimalistic-2", size: 18, color: Theme.gold)
+                CIcon("link-minimalistic-2", size: 18, color: Theme.attention)
                     .frame(width: 36, height: 36)
                     .background(Circle().fill(Theme.accentSoft))
                 Text("Pending links").font(.cBodyBold).foregroundColor(Theme.primaryText)

@@ -161,6 +161,7 @@ enum Icons {
         case "settings": return "gearshape"
         case "send", "paperplane": return "paperplane"
         case "star": return "star"
+        case "incognito", "incognito-filled": return "eyeglasses"
         case "star-filled": return "star.fill"
         case "notifications": return "bell.fill"
         case "notifications-off": return "bell.slash.fill"

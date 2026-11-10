@@ -69,6 +69,10 @@ pub fn link(l: &ConnLink) -> Value {
     json!({ "display": l.display, "full": l.full, "short": l.short })
 }
 
+pub fn invitation(i: &cursus_core::Invitation) -> Value {
+    json!({ "link": link(&i.link), "connId": i.conn_id, "incognito": i.incognito })
+}
+
 pub fn chat(c: &ChatPreview) -> Value {
     let title = if c.local_alias.trim().is_empty() { c.title.clone() } else { c.local_alias.clone() };
     json!({

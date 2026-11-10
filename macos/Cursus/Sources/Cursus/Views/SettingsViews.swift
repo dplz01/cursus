@@ -380,7 +380,7 @@ private struct NotificationsPage: View {
     @AppStorage(AppModel.notificationsEnabledKey) private var enabled = true
 
     var body: some View {
-        SettingsSection(icon: "sf:bell", title: "Notifications",
+        SettingsSection(icon: "notifications", title: "Notifications",
                         subtitle: Notifier.available ? "Banners and sounds for new messages." : "Notifications need Cursus to run as Cursus.app.") {
             ToggleRow(label: "Show notifications for new messages", isOn: $enabled)
             GuardedToggle(label: "Hide message text in notifications",

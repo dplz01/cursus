@@ -62,46 +62,67 @@ enum Waveform {
     }
 }
 
-/// Bars, the played part in `played`, the rest in `rest`. Split into small
-/// typed helpers: one big expression was too much for Swift 5.7's checker.
+/// Bars, the played part in `played`, the rest in `rest` — the Linux
+/// `wave_layout`: fixed 3pt bars with 2pt gaps on whole device pixels (so
+/// edges stay crisp), as many bars as fit, peaks resampled to them (max per
+/// bucket). Short bars are dots / capsules (never shorter than wide, so no
+/// eye shapes); tall bars get slightly rounded ends.
+/// Split into small typed helpers: one big expression was too much for
+/// Swift 5.7's checker.
 struct WaveformView: View {
     let peaks: [Float]
     var progress: Double = 0
     var played: Color = Theme.accent
     var rest: Color = Theme.mutedText
 
-    private static let gap: CGFloat = 2
+    @Environment(\.displayScale) private var scale: CGFloat
 
     var body: some View {
-        GeometryReader { geo in
-            bars(in: geo.size)
+        Canvas { context, size in
+            draw(in: &context, size: size)
         }
     }
 
-    private func bars(in size: CGSize) -> some View {
-        let count = max(peaks.count, 1)
-        let width = barWidth(total: size.width, count: count)
-        return HStack(alignment: .center, spacing: Self.gap) {
-            ForEach(0..<peaks.count, id: \.self) { index in
-                bar(index: index, count: count, width: width, height: size.height)
-            }
+    private func draw(in context: inout GraphicsContext, size: CGSize) {
+        let s: CGFloat = scale > 0 ? scale : 1
+        let bars: [CGRect] = WaveformView.layout(peaks: peaks,
+                                                 width: (size.width * s).rounded(.down),
+                                                 height: (size.height * s).rounded(.down),
+                                                 scale: s)
+        let count: Double = Double(max(bars.count, 1))
+        for (index, px) in bars.enumerated() {
+            let rect = CGRect(x: px.minX / s, y: px.minY / s, width: px.width / s, height: px.height / s)
+            let isPlayed: Bool = (Double(index) + 1) / count <= progress + 0.001
+            let radius: CGFloat = px.height <= px.width * 1.5 ? rect.width / 2 : rect.width * 0.4
+            let path = Path(roundedRect: rect, cornerRadius: radius)
+            context.fill(path, with: .color(isPlayed ? played : rest))
         }
-        .frame(width: size.width, height: size.height, alignment: .leading)
     }
 
-    private func barWidth(total: CGFloat, count: Int) -> CGFloat {
-        let gaps: CGFloat = Self.gap * CGFloat(count - 1)
-        let each: CGFloat = (total - gaps) / CGFloat(count)
-        return max(1.5, each)
-    }
-
-    private func bar(index: Int, count: Int, width: CGFloat, height: CGFloat) -> some View {
-        let isPlayed: Bool = Double(index) / Double(count) < progress
-        let level: CGFloat = CGFloat(peaks[index])
-        let barHeight: CGFloat = max(3, height * level)
-        return Capsule()
-            .fill(isPlayed ? played : rest)
-            .frame(width: width, height: barHeight)
+    /// Bar rectangles in device pixels.
+    static func layout(peaks: [Float], width: CGFloat, height: CGFloat, scale: CGFloat) -> [CGRect] {
+        guard !peaks.isEmpty, width >= 1, height >= 1 else { return [] }
+        let bar: CGFloat = max(1, (3 * scale).rounded())
+        let gap: CGFloat = max(1, (2 * scale).rounded())
+        let pitch: CGFloat = bar + gap
+        let n: Int = max(1, Int(((width + gap) / pitch).rounded(.down)))
+        let used: CGFloat = CGFloat(n) * pitch - gap
+        let left: CGFloat = max(0, ((width - used) / 2).rounded(.down))
+        let src: Int = peaks.count
+        var out: [CGRect] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            let a: Int = min(i * src / n, src - 1)
+            let b: Int = min(max((i + 1) * src / n, a + 1), src)
+            let peak: Float = peaks[a..<b].max() ?? 0
+            let level: CGFloat = CGFloat(min(max(peak, 0.08), 1))
+            // Never shorter than wide: the quietest bars are round dots.
+            var h: CGFloat = max(bar, (level * height * 0.92).rounded())
+            if Int(height - h) % 2 != 0 { h += 1 }
+            let y: CGFloat = ((height - h) / 2).rounded()
+            out.append(CGRect(x: left + CGFloat(i) * pitch, y: y, width: bar, height: h))
+        }
+        return out
     }
 }
 

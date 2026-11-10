@@ -43,11 +43,11 @@ struct ChatInfoView: View {
         VStack(spacing: 0) {
             PaneHeader(title: pageTitle, back: back) {
                 if page == .overview {
-                    IconTool(icon: "star", help: chat.favorite ? "Remove from favorites" : "Add to favorites",
+                    IconTool(icon: chat.favorite ? "star-filled" : "star", help: chat.favorite ? "Remove from favorites" : "Add to favorites",
                              active: chat.favorite, size: 18) {
                         Task { await model.setFavorite(chat, !chat.favorite) }
                     }
-                    IconTool(icon: "mute-notification", help: chat.muted ? "Unmute" : "Mute",
+                    IconTool(icon: chat.muted ? "notifications-off" : "notifications-off-outline", help: chat.muted ? "Unmute" : "Mute",
                              active: chat.muted, size: 18) {
                         Task { await model.setMuted(chat, !chat.muted) }
                     }
@@ -508,7 +508,7 @@ struct ChatSettingsCard: View {
             CardTitle(icon: "user-alt-1", title: "Your settings",
                       subtitle: "Only for you — \(chat.isDirect ? "they don't" : "other members don't") see these.")
                 .padding(.bottom, 6)
-            PrefRow(icon: "mute-notification", label: "Notifications") {
+            PrefRow(icon: "notifications", label: "Notifications") {
                 ChoiceMenu(options: notificationChoices, selection: chat.notifications) { mode in
                     Task { await model.setNotifications(chat, mode) }
                 }

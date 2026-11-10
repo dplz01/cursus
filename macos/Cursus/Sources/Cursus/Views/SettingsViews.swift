@@ -37,7 +37,7 @@ struct SettingsListView: View {
                     .padding(.bottom, 6)
                 }
                 ForEach(SettingsPage.allCases) { page in
-                    NavRow(icon: page.icon, title: page.title, subtitle: page.subtitle,
+                    NavRow(icon: page.icon, title: page.title,
                            selected: model.settingsPage == page) {
                         model.settingsPage = page
                     }
@@ -107,6 +107,7 @@ struct ToggleRow: View {
 private struct ProfilePage: View {
     @EnvironmentObject private var model: AppModel
     @State private var editing: OwnField?
+    @State private var photoMenu = false
 
     private enum OwnField: String, Identifiable {
         case name, bio, description
@@ -115,17 +116,20 @@ private struct ProfilePage: View {
 
     var body: some View {
         if let user = model.user {
-            SettingsSection(icon: "user-alt-1", title: "Your profile",
-                            subtitle: "Sent only to your contacts — SimpleX servers never see it.") {
+            // The profile card is the profile itself (picture first, like a
+            // contact page): no title row. Clicking the picture changes it.
+            Card(spacing: 6) {
                 HStack(alignment: .center, spacing: 14) {
-                    VStack(spacing: 8) {
-                        Avatar(image: user.image, name: user.displayName, size: 72)
-                        HStack(spacing: 6) {
-                            IconTool(icon: "image-pen", help: "Choose picture…", size: 18, action: pickImage)
-                            if user.image != nil {
-                                IconTool(icon: "cancel", help: "Remove picture", size: 18) {
-                                    Task { await model.updateProfile(image: .some(nil)) }
-                                }
+                    Button { photoMenu = true } label: {
+                        Avatar(image: user.image, name: user.displayName, size: 84)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Change picture")
+                    .confirmationDialog("Profile picture", isPresented: $photoMenu) {
+                        Button("Change picture…", action: pickImage)
+                        if user.image != nil {
+                            Button("Remove picture", role: .destructive) {
+                                Task { await model.updateProfile(image: .some(nil)) }
                             }
                         }
                     }
@@ -314,35 +318,68 @@ private struct PrivacyPage: View {
     }
 }
 
-/// Your SimpleX address: the link, sharing it on your profile, auto-accept.
+/// Your SimpleX address, as in the official apps (and Linux): create it,
+/// show / hide it (hidden by default), share it on your profile,
+/// auto-accept, delete it (asks first).
 private struct AddressPage: View {
     @EnvironmentObject private var model: AppModel
     @State private var link: ConnLink?
     @State private var autoAccept = false
     @State private var loading = true
+    @State private var revealed = false
+    @State private var confirmDelete = false
 
     var body: some View {
-        SettingsSection(icon: "link-minimalistic-2", title: "Your address",
-                        subtitle: "A link anyone can use to send you a contact request. You can change who gets in.") {
-            if let link = link {
-                LinkBox(text: link.short ?? link.display, copyText: link.short ?? link.full)
-            } else if loading {
+        SettingsSection(icon: "link-minimalistic-2", title: "Your address") {
+            if loading {
                 ProgressView().controlSize(.small).padding(8)
+            } else if let link = link {
+                if revealed {
+                    HStack(spacing: 6) {
+                        LinkBox(text: link.short ?? link.display, copyText: link.short ?? link.full)
+                        IconTool(icon: "eye-observer", help: "Hide address", active: true) { revealed = false }
+                    }
+                } else {
+                    NavRow(icon: "eye-observer", title: "Show address", trailing: nil) { revealed = true }
+                }
+                ToggleRow(label: "Share address on profile",
+                          isOn: Binding(
+                            get: { !(model.user?.contactLink ?? "").isEmpty },
+                            set: { on in Task { await model.setProfileAddress(on) } }))
+                ToggleRow(label: "Auto-accept contact requests",
+                          isOn: Binding(
+                            get: { autoAccept },
+                            set: { on in Task { autoAccept = await model.setAddressAutoAccept(on) } }))
+                if confirmDelete {
+                    InlineConfirm(question: "Delete address?",
+                                  detail: "All your contacts will remain connected. Nobody new can use the address, and your profile is updated for your contacts.",
+                                  confirmTitle: "Delete address",
+                                  onCancel: { confirmDelete = false },
+                                  onConfirm: {
+                                      confirmDelete = false
+                                      Task {
+                                          if await model.deleteAddress() {
+                                              self.link = nil
+                                              revealed = false
+                                              autoAccept = false
+                                          }
+                                      }
+                                  })
+                } else {
+                    ActionTile(icon: "trash-delete", title: "Delete address", danger: true) { confirmDelete = true }
+                }
+            } else {
+                NavRow(icon: "address-card", title: "Create address", trailing: nil) {
+                    Task {
+                        link = await model.addressLink()
+                        revealed = link != nil
+                    }
+                }
             }
-            ToggleRow(label: "Share address on profile",
-                      note: "Your contacts see it and can pass it on.",
-                      isOn: Binding(
-                        get: { !(model.user?.contactLink ?? "").isEmpty },
-                        set: { on in Task { await model.setProfileAddress(on) } }))
-            ToggleRow(label: "Auto-accept contact requests",
-                      note: "Anyone with the link connects without asking you.",
-                      isOn: Binding(
-                        get: { autoAccept },
-                        set: { on in Task { autoAccept = await model.setAddressAutoAccept(on) } }))
         }
         .task {
-            link = await model.addressLink()
-            autoAccept = await model.addressAutoAccept()
+            link = await model.currentAddress()
+            if link != nil { autoAccept = await model.addressAutoAccept() }
             loading = false
         }
     }
@@ -412,10 +449,10 @@ private struct AboutPage: View {
         }
         if let dir = model.info?.dataDir {
             Card(spacing: 4) {
-                NavRow(icon: "sf:folder", title: "Data folder", subtitle: "Show in Finder") {
+                NavRow(icon: "sf:folder", title: "Data folder") {
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir)
                 }
-                NavRow(icon: "review-file", title: "Licences", subtitle: "AGPL-3.0-or-later and third-party notices") {
+                NavRow(icon: "review-file", title: "Licences") {
                     let dir = Bundle.main.bundlePath + "/Contents/Resources/licenses"
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir)
                 }

@@ -461,6 +461,13 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             .set_invitation_incognito(i64_param(p, "connId")?, bool_param(p, "on")?)
             .map_err(err)?)),
         "addressLink" => Ok(dto::link(&s.ensure_address_link().map_err(err)?)),
+        // Settings → Address: the address if there is one (never creates it),
+        // and deleting it (contacts made through it stay connected).
+        "currentAddress" => Ok(s.address_link().map_err(err)?.map(|l| dto::link(&l)).unwrap_or(Value::Null)),
+        "deleteAddress" => {
+            s.delete_address().map_err(err)?;
+            Ok(dto::user(&s.refresh_user().map_err(err)?))
+        }
         "addressAutoAccept" => Ok(json!(s.address_auto_accept().map_err(err)?)),
         "setAddressAutoAccept" => Ok(json!(s.set_address_auto_accept(bool_param(p, "on")?).map_err(err)?)),
         "connect" => {

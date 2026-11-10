@@ -323,6 +323,9 @@ fn shots() {
             app.nav = NavSection::Settings;
             app.own_profile.fields = profile("Davide", "Building Cursus");
             render(&app, MOBILE, &format!("msettings-{t}"));
+            app.photo_menu = Some(crate::PhotoTarget::Own);
+            render(&app, MOBILE, &format!("msettings-photo-{t}"));
+            app.photo_menu = None;
         }
         if want("links") {
             let mut app = demo_app(dark, MOBILE.width, MOBILE.height);
@@ -402,6 +405,47 @@ fn shots() {
                     peaks: (0..96).map(|i| (i as f32 * 0.37).sin().abs() * 0.9 + 0.1).collect(),
                 });
                 render(&app, size, &format!("{name}-draft-{t}"));
+                // Voice messages in the chat, one half played.
+                let voice = |id: i64, outgoing: bool| {
+                    let path = std::env::temp_dir().join(format!("cursus-shot-voice-{id}.m4a"));
+                    let _ = std::fs::write(&path, b"shot");
+                    let mut m = msg(id, "", outgoing, "16:51");
+                    m.file = Some(cursus_core::FileInfo {
+                        file_id: id,
+                        file_name: "voice.m4a".into(),
+                        file_size: 12_000,
+                        state: cursus_core::FileTransferState::Complete,
+                        kind: cursus_core::FileKind::Voice,
+                        duration_secs: Some(7),
+                        local_path: Some(path.clone()),
+                        encrypted: false,
+                        crypto_key: None,
+                        crypto_nonce: None,
+                        transferred: None,
+                        transfer_total: None,
+                        error_detail: None,
+                    });
+                    (m, path)
+                };
+                let peaks: Vec<f32> = (0..96).map(|i| (i as f32 * 0.29).sin().abs() * 0.85 + 0.08).collect();
+                for (id, out) in [(41, false), (42, true)] {
+                    let (m, path) = voice(id, out);
+                    app.waveforms.insert(path.clone(), peaks.clone());
+                    app.plaintext_files.insert(path.clone(), path);
+                    app.messages.push(m);
+                }
+                app.voice_draft = None;
+                app.voice_playback = Some(crate::VoicePlayback {
+                    file_id: 41,
+                    path: std::env::temp_dir().join("cursus-shot-voice-41.m4a"),
+                    duration_secs: 7,
+                    started: std::time::Instant::now() - std::time::Duration::from_secs(3),
+                    child: std::process::Command::new("true").spawn().unwrap(),
+                });
+                render(&app, size, &format!("{name}-messages-{t}"));
+                if let Some(mut play) = app.voice_playback.take() {
+                    let _ = play.child.wait();
+                }
                 // Recording: a short-lived dummy process stands in for the recorder.
                 app.voice_draft = None;
                 let child = std::process::Command::new("sleep").arg("5").spawn().unwrap();
@@ -513,9 +557,15 @@ fn shots() {
             app.pending_links.clear();
             app.nav = NavSection::Settings;
             app.settings_section = crate::SettingsSection::Address;
+            app.address_link = Some(None);
             render(&app, DESKTOP, &format!("settings-address-{t}"));
-            app.address_link = Some("https://smp12.simplex.im/a#lrdvu2d8A1GumSmoKb2krQmtKhWXq-tyGpHuM7aMwsw".into());
+            app.address_link = Some(Some("https://smp12.simplex.im/a#lrdvu2d8A1GumSmoKb2krQmtKhWXq-tyGpHuM7aMwsw".into()));
+            render(&app, DESKTOP, &format!("settings-address-hidden-{t}"));
+            app.address_revealed = true;
             render(&app, DESKTOP, &format!("settings-address-link-{t}"));
+            app.link_confirm = Some(crate::LinkConfirm::DeleteAddress);
+            render(&app, MOBILE, &format!("settings-address-delete-{t}"));
+            app.link_confirm = None;
         }
     }
 }

@@ -1,26 +1,34 @@
 import SwiftUI
 
-/// Gold square beside "+" with the number of unused one-time links (Linux
-/// `pending_links_button`); opens their list.
-struct PendingLinksButton: View {
+/// Yellow "needs attention" square with a round count on its top-right
+/// corner (Linux `attention_button`): pending links, unread support chats.
+struct AttentionButton: View {
+    let icon: String
     let count: Int
+    let help: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            CIcon("link-minimalistic-2", size: 16, color: Theme.onAttention)
+            CIcon(icon, size: 16, color: Theme.onAttention)
                 .frame(width: 28, height: 28)
                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.attention))
-                .overlay(badge, alignment: .topTrailing)
+                .overlay(CountBadge(count: count)
+                            .alignmentGuide(.trailing) { $0[HorizontalAlignment.center] }
+                            .alignmentGuide(.top) { $0[VerticalAlignment.center] },
+                         alignment: .topTrailing)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("\(count) pending one-time link\(count == 1 ? "" : "s")")
+        .help(help)
     }
+}
 
-    /// Round for one digit, a pill for more, no border; centred on the
-    /// button's top-right corner.
-    private var badge: some View {
+/// Round accent count (a pill past 9), no border.
+struct CountBadge: View {
+    let count: Int
+
+    var body: some View {
         Text(count > 99 ? "99+" : "\(count)")
             .font(.system(size: 9, weight: .bold))
             .foregroundColor(Theme.accentOn)
@@ -28,8 +36,32 @@ struct PendingLinksButton: View {
             .frame(minWidth: 15, minHeight: 15)
             .background(Capsule().fill(Theme.accent))
             .fixedSize()
-            .alignmentGuide(.trailing) { $0[HorizontalAlignment.center] }
-            .alignmentGuide(.top) { $0[VerticalAlignment.center] }
+    }
+}
+
+/// Count in the yellow attention style, for list rows (support chats).
+struct AttentionCount: View {
+    let count: Int
+
+    var body: some View {
+        Text(count > 99 ? "99+" : "\(count)")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundColor(Theme.onAttention)
+            .padding(.horizontal, count < 10 ? 0 : 6)
+            .frame(minWidth: 20, minHeight: 20)
+            .background(Capsule().fill(Theme.attention))
+            .fixedSize()
+    }
+}
+
+/// Pending one-time links beside "+".
+struct PendingLinksButton: View {
+    let count: Int
+    let action: () -> Void
+
+    var body: some View {
+        AttentionButton(icon: "link-minimalistic-2", count: count,
+                        help: "\(count) pending one-time link\(count == 1 ? "" : "s")", action: action)
     }
 }
 

@@ -191,7 +191,7 @@ struct MemberPage: View {
         if chat.isModerator && !member.isMe && !member.gone {
             Card(padding: 0, spacing: 0) {
                 NavRow(icon: "admin", title: "Private chat",
-                       subtitle: "Between \(member.name) and the moderators", flush: true) {
+                       flush: true) {
                     model.openSupport(chat, member: member)
                 }
             }

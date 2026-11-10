@@ -1042,6 +1042,9 @@ pub enum Message {
     OwnProfileBio(String),
     OwnProfileDescription(String),
     PickOwnProfileImage,
+    /// Tap on a profile picture you can change: Change / Remove sheet.
+    OpenPhotoMenu(PhotoTarget),
+    ClosePhotoMenu,
     OwnProfileImagePicked(Result<String, String>),
     ClearOwnProfileImage,
     SaveOwnProfile,
@@ -1273,10 +1276,19 @@ pub enum Message {
     /// Incognito for the shown link and links pasted to connect.
     ToggleIncognito,
     IncognitoSet(Result<bool, String>),
-    /// Show (creating if needed) the reusable address in Settings.
+    /// Create the reusable address (Settings → Address, when there is none).
     EnsureAddress,
     AddressReady(Result<ConnLink, String>),
     CopyAddressLink,
+    /// Whether an address exists (never creates one).
+    LoadAddress,
+    AddressLoaded(Result<Option<ConnLink>, String>),
+    ToggleAddressReveal,
+    AskDeleteAddress,
+    ConfirmDeleteAddress,
+    AddressDeleted(Result<(), String>),
+    /// Profile re-read after the address changed (only its link is taken).
+    OwnAddressSynced(Result<cursus_core::UserProfile, String>),
     AcceptInvite,
     /// Paste the clipboard into the invite field (no connect).
     PasteInviteLink,
@@ -1366,8 +1378,13 @@ struct App {
     /// `(conn_id, draft)` while naming a pending link.
     renaming_link: Option<(i64, String)>,
     link_confirm: Option<LinkConfirm>,
-    /// Reusable contact address, shown in Settings → Address once loaded.
-    address_link: Option<String>,
+    /// Change / Remove picture sheet (opened by tapping the picture).
+    photo_menu: Option<PhotoTarget>,
+    /// Reusable contact address for Settings → Address: `None` until
+    /// loaded, then `Some(None)` when the user has none.
+    address_link: Option<Option<String>>,
+    /// The address is shown (hidden by default, like a password).
+    address_revealed: bool,
     /// Full-page compose menu (invite / address / new group / channel).
     compose_open: bool,
     /// When false, `Hovered` button styles match idle (fixes sticky touch hover).
@@ -1626,7 +1643,9 @@ impl App {
                 pending_links_open: false,
                 renaming_link: None,
                 link_confirm: None,
+                photo_menu: None,
                 address_link: None,
+                address_revealed: false,
                 compose_open: false,
                 hover_ok: true,
                 contact_request_busy: false,
@@ -1916,6 +1935,16 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         let was_composing = self.compose_open;
+        // Picking from the picture sheet closes it.
+        if matches!(
+            message,
+            Message::PickOwnProfileImage
+                | Message::ClearOwnProfileImage
+                | Message::PickGroupProfileImage
+                | Message::ClearGroupProfileImage
+        ) {
+            self.photo_menu = None;
+        }
         let task = self.update_inner(message);
         if was_composing && !self.compose_open {
             return Task::batch([task, self.drop_unshared_invitation()]);
@@ -1953,6 +1982,11 @@ impl App {
                 };
                 if leaving_settings && self.own_profile.dirty {
                     return Task::batch([history, self.update(Message::SaveOwnProfile)]);
+                }
+                if section == NavSection::Settings {
+                    // Settings → Address shows whether there is an address.
+                    self.address_revealed = false;
+                    return Task::batch([history, self.update(Message::LoadAddress)]);
                 }
                 history
             }
@@ -5770,15 +5804,73 @@ impl App {
                 Task::perform(ensure_address(session), Message::AddressReady)
             }
             Message::AddressReady(Ok(link)) => {
-                self.address_link = Some(link.display);
+                self.address_link = Some(Some(link.display));
+                self.address_revealed = true;
                 self.status.clear();
+                self.refresh_own_profile()
+            }
+            Message::LoadAddress => {
+                let Some(session) = self.session.clone() else {
+                    return Task::none();
+                };
+                Task::perform(
+                    blocking(move || session.address_link().map(|l| l)),
+                    Message::AddressLoaded,
+                )
+            }
+            Message::AddressLoaded(Ok(link)) => {
+                self.address_link = Some(link.map(|l| l.display));
                 Task::none()
+            }
+            Message::AddressLoaded(Err(err)) => {
+                self.status = err;
+                Task::none()
+            }
+            Message::OwnAddressSynced(Ok(user)) => {
+                self.own_profile.fields.contact_link = user.profile.contact_link.clone();
+                Task::none()
+            }
+            Message::OwnAddressSynced(Err(_)) => Task::none(),
+            Message::OpenPhotoMenu(target) => {
+                self.photo_menu = Some(target);
+                Task::none()
+            }
+            Message::ClosePhotoMenu => {
+                self.photo_menu = None;
+                Task::none()
+            }
+            Message::ToggleAddressReveal => {
+                self.address_revealed = !self.address_revealed;
+                Task::none()
+            }
+            Message::AskDeleteAddress => {
+                self.link_confirm = Some(LinkConfirm::DeleteAddress);
+                Task::none()
+            }
+            Message::ConfirmDeleteAddress => {
+                self.link_confirm = None;
+                let Some(session) = self.session.clone() else {
+                    return Task::none();
+                };
+                Task::perform(blocking(move || session.delete_address()), Message::AddressDeleted)
+            }
+            Message::AddressDeleted(result) => {
+                match result {
+                    Ok(()) => {
+                        self.address_link = Some(None);
+                        self.address_revealed = false;
+                        self.desktop_prefs.auto_accept_address = false;
+                        self.status = "Address deleted.".into();
+                    }
+                    Err(err) => self.status = err,
+                }
+                self.refresh_own_profile()
             }
             Message::AddressReady(Err(err)) => {
                 self.status = err;
                 Task::none()
             }
-            Message::CopyAddressLink => match self.address_link.clone() {
+            Message::CopyAddressLink => match self.address_link.clone().flatten() {
                 Some(link) => {
                     self.status = "Address copied.".into();
                     iced::clipboard::write(link)
@@ -5978,6 +6070,9 @@ impl App {
             }
             Message::OpenSettingsSection(section) => {
                 self.settings_section = section;
+                if section == SettingsSection::Address {
+                    return self.update(Message::LoadAddress);
+                }
                 Task::none()
             }
             Message::FieldMenu(action) => match action {
@@ -7354,11 +7449,27 @@ impl App {
     pub(crate) fn renaming_link(&self) -> Option<&(i64, String)> {
         self.renaming_link.as_ref()
     }
+    pub(crate) fn photo_menu(&self) -> Option<PhotoTarget> {
+        self.photo_menu
+    }
     pub(crate) fn link_confirm(&self) -> Option<LinkConfirm> {
         self.link_confirm
     }
-    pub(crate) fn address_link(&self) -> Option<&str> {
-        self.address_link.as_deref()
+    /// `None`: not loaded yet; `Some(None)`: the user has no address.
+    pub(crate) fn address_link(&self) -> Option<Option<&str>> {
+        self.address_link.as_ref().map(|l| l.as_deref())
+    }
+    /// Re-read the profile after the address changed: "Share address on
+    /// profile" must reflect it.
+    fn refresh_own_profile(&self) -> Task<Message> {
+        match self.session.clone() {
+            Some(session) => Task::perform(blocking(move || session.refresh_user()), Message::OwnAddressSynced),
+            None => Task::none(),
+        }
+    }
+
+    pub(crate) fn address_revealed(&self) -> bool {
+        self.address_revealed
     }
     pub(crate) fn compose_open(&self) -> bool {
         self.compose_open
@@ -9040,6 +9151,13 @@ async fn open_local_file(path: PathBuf) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Whose picture the photo sheet changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhotoTarget {
+    Own,
+    Group,
+}
+
 /// A one-time-link action waiting for the user's yes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkConfirm {
@@ -9047,6 +9165,8 @@ pub enum LinkConfirm {
     Regenerate,
     /// Delete this pending link from the list.
     Delete(i64),
+    /// Delete the reusable address (Settings → Address).
+    DeleteAddress,
 }
 
 /// Settings whose explanation opens in an info sheet (ⓘ next to the name).

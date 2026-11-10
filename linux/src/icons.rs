@@ -738,6 +738,11 @@ pub fn pending_status_icon<'a>(size: f32, color: Color) -> Element<'a, Message> 
     )
 }
 
+/// Show / hide something private (the address in Settings).
+pub fn eye_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(svg_handle!("../assets/icons/eye-observer.svg"), color, size)
+}
+
 pub fn observer_role_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
         svg_handle!("../assets/icons/eye-observer.svg"),

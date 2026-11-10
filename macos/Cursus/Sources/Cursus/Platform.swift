@@ -93,6 +93,10 @@ enum Theme {
     static let gold = dynamic(0xB58B0F, 0xECC14F)
     /// Bright yellow for things that need attention (pending-links button).
     static let attention = dynamic(0xF5B800, 0xF5C518)
+    /// Unplayed waveform bars: soft accent in light (calmer than grey next
+    /// to the blue play button), stronger on the tinted outgoing bubble.
+    static let voiceRest = dynamic(0x2F6FED, 0x6E7585, alpha: 0.32, darkAlpha: 1)
+    static let voiceRestOut = dynamic(0x2F6FED, 0x7F93BC, alpha: 0.45, darkAlpha: 1)
     /// Icon on the attention yellow (dark in both appearances).
     static let onAttention = dynamic(0x1F1A05, 0x1F1A05)
 

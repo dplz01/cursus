@@ -1927,8 +1927,8 @@ fn history_column(app: &App, d: Density) -> Element<'static, Message> {
             col = col.push(announcement_row(msg, d));
             continue;
         }
-        let joined_prev = i > 0 && same_group(msgs[i - 1], msg);
-        let joined_next = i + 1 < msgs.len() && same_group(msg, msgs[i + 1]);
+        let joined_prev = i > 0 && cursus_core::runs::continues_run(msgs[i - 1], msg);
+        let joined_next = i + 1 < msgs.len() && cursus_core::runs::continues_run(msg, msgs[i + 1]);
         let show_header = if show_members {
             !msg.outgoing
                 && msg.sender.as_ref().is_some_and(|s| {
@@ -1961,7 +1961,7 @@ fn history_column(app: &App, d: Density) -> Element<'static, Message> {
             msg,
             d,
             show_header,
-            BubbleRun { joined_prev, joined_next },
+            BubbleRun { joined_next },
         ));
     }
     col.into()
@@ -2122,34 +2122,8 @@ fn announcement_row(msg: &ChatMessage, d: Density) -> Element<'static, Message> 
 /// Position of a bubble inside a run of consecutive messages from one sender.
 #[derive(Debug, Clone, Copy, Default)]
 struct BubbleRun {
-    joined_prev: bool,
     /// The next message continues this run (same sender, close in time).
     joined_next: bool,
-}
-
-/// Whether `b` continues `a`'s run (same side, same sender, same day, ≤5 min apart).
-fn same_group(a: &ChatMessage, b: &ChatMessage) -> bool {
-    if a.outgoing != b.outgoing
-        || a.is_announcement
-        || b.is_announcement
-        || a.group_invitation.is_some()
-        || b.group_invitation.is_some()
-    {
-        return false;
-    }
-    let sender = |m: &ChatMessage| m.sender.as_ref().map(|s| s.group_member_id);
-    if sender(a) != sender(b) {
-        return false;
-    }
-    match (
-        a.created_at.as_deref().and_then(parse_local_ts),
-        b.created_at.as_deref().and_then(parse_local_ts),
-    ) {
-        (Some(x), Some(y)) => {
-            x.date_naive() == y.date_naive() && (y - x).num_seconds().abs() <= 300
-        }
-        _ => true,
-    }
 }
 
 /// Temporary accent line + pill above the first message that just arrived.
@@ -2347,25 +2321,14 @@ fn message_bubble<'a>(
     let focused = app.focus_item() == Some(msg.item_id);
     let selected = app.selection_mode() && app.selected_items().contains(&msg.item_id);
     let border_w = if focused || selected { 2.0 } else { 0.0 };
-    // Rounded everywhere except the sender's side, which tightens where the
-    // run continues and ends in a small "tail" corner on the last bubble.
+    // Rounded everywhere except the sender's side (right for sent, left for
+    // received): its top corner is always small, its bottom corner too on
+    // every bubble of a run but the last (`cursus_core::runs`).
     const R: f32 = 18.0;
     const JOIN: f32 = 6.0;
-    let side_top = if run.joined_prev { JOIN } else { R };
-    let side_bottom = JOIN;
-    // Groups / channels: the avatar sits at the top of the sender's first
-    // message, so the tail is there — top corner small on every bubble of
-    // the run, bottom corner small until the run's last bubble.
-    let avatar_on_top = !msg.outgoing
-        && ((msg.sender.is_some() && app.selected_shows_member_headers()) || app.selected_is_channel());
-    let radius = if avatar_on_top {
-        iced::border::Radius {
-            top_left: JOIN,
-            top_right: R,
-            bottom_right: R,
-            bottom_left: if run.joined_next { JOIN } else { R },
-        }
-    } else if msg.outgoing {
+    let side_top = JOIN;
+    let side_bottom = if run.joined_next { JOIN } else { R };
+    let radius = if msg.outgoing {
         iced::border::Radius {
             top_left: R,
             top_right: side_top,

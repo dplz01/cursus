@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+use crate::invitations::{newest_unused_invitation, parse_created_invitation, parse_incognito_updated, Invitation};
 use crate::commands::Commands;
 use crate::error::{Error, Result};
 use crate::ffi::LibSimplex;
@@ -540,24 +541,58 @@ impl Session {
 
     /// Create a one-time invitation link.
     pub fn create_invitation_link(&self) -> Result<ConnLink> {
-        let value = self.send(&Commands::create_invitation(self.user_id()?))?;
-        parse_conn_link(
-            &value,
-            "/connLinkInvitation/connFullLink",
-            "/connLinkInvitation/connShortLink",
-        )
-        .ok_or_else(|| Error::Command(format!("invitation missing link: {value}")))
+        self.create_invitation(false).map(|inv| inv.link)
+    }
+
+    /// The one-time invitation the Connect card shows: the newest one nobody
+    /// has used yet, else a new one (see [`crate::invitations`]). `incognito`
+    /// only applies when a new link has to be created.
+    pub fn one_time_invitation(&self, incognito: bool) -> Result<Invitation> {
+        let chats = self.send(&Commands::get_chats(self.user_id()?))?;
+        match newest_unused_invitation(&chats) {
+            Some(inv) => Ok(inv),
+            None => self.create_invitation(incognito),
+        }
+    }
+
+    /// A fresh one-time invitation replacing `previous` (deleted if nobody
+    /// has used it yet, so unshared links don't pile up).
+    pub fn regenerate_invitation(&self, previous: Option<i64>, incognito: bool) -> Result<Invitation> {
+        if let Some(conn_id) = previous {
+            // Already used (now a contact) or gone: nothing to delete.
+            let _ = self.send(&Commands::delete_pending_connection(conn_id));
+        }
+        self.create_invitation(incognito)
+    }
+
+    /// Switch an unused invitation to / from a random incognito profile; the
+    /// link stays the same. Returns the new state.
+    pub fn set_invitation_incognito(&self, conn_id: i64, incognito: bool) -> Result<bool> {
+        let value = self.send(&Commands::set_connection_incognito(conn_id, incognito))?;
+        parse_incognito_updated(&value)
+            .ok_or_else(|| Error::Command(format!("unexpected incognito reply: {value}")))
+    }
+
+    fn create_invitation(&self, incognito: bool) -> Result<Invitation> {
+        let value = self.send(&Commands::create_invitation(self.user_id()?, incognito))?;
+        parse_created_invitation(&value)
+            .ok_or_else(|| Error::Command(format!("invitation missing link: {value}")))
     }
 
     /// Accept an invitation / address / group link (short HTTPS or full `simplex:` URI).
     pub fn connect_link(&self, link: &str) -> Result<Value> {
+        self.connect_link_as(link, false)
+    }
+
+    /// [`Self::connect_link`], optionally with a new random incognito profile.
+    pub fn connect_link_as(&self, link: &str, incognito: bool) -> Result<Value> {
         let link = link.trim().trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == '“' || c == '”');
         let link = link.trim();
         if link.is_empty() {
             return Err(Error::Command("empty invite link".into()));
         }
         // `/connect` resolves short links; `/_connect <userId> …` does not.
-        self.send(&Commands::connect_link(self.user_id()?, link))
+        self.send(&Commands::connect_link(self.user_id()?, link, incognito))
     }
 
     /// Clear unread state for a chat (badge goes to zero after list refresh).

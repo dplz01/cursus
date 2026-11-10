@@ -688,7 +688,7 @@ impl ChatMessage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnLink {
     /// Prefer short HTTPS link when present; otherwise full `simplex:` URI.
     pub display: String,

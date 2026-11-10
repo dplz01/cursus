@@ -618,6 +618,27 @@ pub fn star_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Mess
     )
 }
 
+/// Incognito toggle: filled when on, outline when off — Solar Icons by
+/// 480 Design (Bold / Broken Line, CC BY 4.0).
+pub fn incognito_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Message> {
+    let idle = if active {
+        theme::t().accent
+    } else {
+        theme::t().text_secondary
+    };
+    profile_tool_icon(
+        if active {
+            svg_handle!("../assets/icons/incognito-filled.svg")
+        } else {
+            svg_handle!("../assets/icons/incognito.svg")
+        },
+        hit,
+        idle,
+        theme::t().text_primary,
+        hover_ok,
+    )
+}
+
 /// Mute toggle: filled bell-off when muted, outline when not (Ionicons, MIT).
 pub fn mute_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Message> {
     let idle = if active {

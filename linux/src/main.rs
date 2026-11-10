@@ -1251,13 +1251,20 @@ pub enum Message {
         result: Result<String, String>,
     },
     InviteInputChanged(String),
-    CreateInvitation,
+    /// Replace the shown one-time link with a new one.
+    RegenerateInvitation,
+    InvitationReady(Result<cursus_core::Invitation, String>),
+    /// Incognito for the shown link and links pasted to connect.
+    ToggleIncognito,
+    IncognitoSet(Result<bool, String>),
+    /// Show (creating if needed) the reusable address in Settings.
     EnsureAddress,
+    AddressReady(Result<ConnLink, String>),
+    CopyAddressLink,
     AcceptInvite,
     /// Paste the clipboard into the invite field (no connect).
     PasteInviteLink,
     InviteLinkPasted(Option<String>),
-    InviteReady(Result<ConnLink, String>),
     InviteAccepted(Result<String, String>),
     CopyInviteLink,
     OpenCompose,
@@ -1330,7 +1337,12 @@ struct App {
     composer: text_editor::Content,
     connecting: bool,
     invite_input: String,
-    invite_link: Option<String>,
+    /// One-time link on the New page's Connect card (core keeps it until
+    /// used; see `cursus_core::Invitation`), and whether a request is running.
+    invitation: Option<cursus_core::Invitation>,
+    invitation_busy: bool,
+    /// Reusable contact address, shown in Settings → Address once loaded.
+    address_link: Option<String>,
     /// Full-page compose menu (invite / address / new group / channel).
     compose_open: bool,
     /// When false, `Hovered` button styles match idle (fixes sticky touch hover).
@@ -1582,7 +1594,9 @@ impl App {
                 composer: text_editor::Content::new(),
                 connecting: false,
                 invite_input: String::new(),
-                invite_link: None,
+                invitation: None,
+                invitation_busy: false,
+                address_link: None,
                 compose_open: false,
                 hover_ok: true,
                 contact_request_busy: false,
@@ -3486,7 +3500,7 @@ impl App {
             }
             Message::OpenCompose => {
                 self.compose_open = true;
-                Task::none()
+                self.load_invitation()
             }
             Message::CloseCompose => {
                 self.compose_open = false;
@@ -5538,24 +5552,93 @@ impl App {
                 self.invite_input = value;
                 Task::none()
             }
-            Message::CreateInvitation => {
+            Message::RegenerateInvitation => {
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
-                self.compose_open = true;
-                self.status = "Creating one-time invite…".into();
-                Task::perform(create_invitation(session), Message::InviteReady)
+                if self.invitation_busy {
+                    return Task::none();
+                }
+                self.invitation_busy = true;
+                let previous = self.invitation.as_ref().map(|i| i.conn_id);
+                let incognito = self.desktop_prefs.incognito;
+                Task::perform(
+                    blocking(move || session.regenerate_invitation(previous, incognito)),
+                    Message::InvitationReady,
+                )
+            }
+            Message::InvitationReady(result) => {
+                self.invitation_busy = false;
+                match result {
+                    Ok(inv) => {
+                        // A reused link keeps its own incognito state.
+                        self.desktop_prefs.incognito = inv.incognito;
+                        self.invitation = Some(inv);
+                    }
+                    Err(err) => self.status = err,
+                }
+                Task::none()
+            }
+            Message::ToggleIncognito => {
+                let on = !self.desktop_prefs.incognito;
+                self.desktop_prefs.incognito = on;
+                desktop::save_prefs(&self.desktop_prefs);
+                match (self.session.clone(), self.invitation.as_ref()) {
+                    (Some(session), Some(inv)) if !self.invitation_busy => {
+                        self.invitation_busy = true;
+                        let conn_id = inv.conn_id;
+                        Task::perform(
+                            blocking(move || session.set_invitation_incognito(conn_id, on)),
+                            Message::IncognitoSet,
+                        )
+                    }
+                    _ => Task::none(),
+                }
+            }
+            Message::IncognitoSet(result) => {
+                self.invitation_busy = false;
+                match result {
+                    Ok(on) => {
+                        if let Some(inv) = self.invitation.as_mut() {
+                            inv.incognito = on;
+                        }
+                        self.desktop_prefs.incognito = on;
+                    }
+                    // Link already used (or gone): show the current one.
+                    Err(err) => {
+                        self.status = err;
+                        return self.load_invitation();
+                    }
+                }
+                desktop::save_prefs(&self.desktop_prefs);
+                Task::none()
             }
             Message::EnsureAddress => {
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
-                self.compose_open = true;
                 self.status = "Preparing contact address…".into();
-                Task::perform(ensure_address(session), Message::InviteReady)
+                Task::perform(ensure_address(session), Message::AddressReady)
             }
+            Message::AddressReady(Ok(link)) => {
+                self.address_link = Some(link.display);
+                self.status.clear();
+                Task::none()
+            }
+            Message::AddressReady(Err(err)) => {
+                self.status = err;
+                Task::none()
+            }
+            Message::CopyAddressLink => match self.address_link.clone() {
+                Some(link) => {
+                    self.status = "Address copied.".into();
+                    iced::clipboard::write(link)
+                }
+                None => Task::none(),
+            },
             Message::AcceptInvite => {
-                let task = self.accept_invite_link(self.invite_input.clone());
+                let incognito = self.desktop_prefs.incognito;
+                let task = self.accept_invite_link_as(self.invite_input.clone(), incognito);
                 // Connecting started (non-empty link): leave the New page.
                 if !self.invite_input.trim().is_empty() {
                     self.close_compose_to_chats();
@@ -5570,16 +5653,6 @@ impl App {
                 }
                 Task::none()
             }
-            Message::InviteReady(Ok(link)) => {
-                self.invite_link = Some(link.display.clone());
-                self.compose_open = true;
-                self.status = "Invite ready — copy and share the link.".into();
-                iced::clipboard::write(link.display)
-            }
-            Message::InviteReady(Err(err)) => {
-                self.status = err;
-                Task::none()
-            }
             Message::InviteAccepted(Ok(summary)) => {
                 self.invite_input.clear();
                 self.compose_open = false;
@@ -5591,8 +5664,8 @@ impl App {
                 Task::none()
             }
             Message::CopyInviteLink => {
-                if let Some(link) = self.invite_link.clone() {
-                    self.status = "Invite link copied.".into();
+                if let Some(link) = self.invitation.as_ref().map(|i| i.link.display.clone()) {
+                    self.status = "One-time link copied.".into();
                     iced::clipboard::write(link)
                 } else {
                     Task::none()
@@ -7050,6 +7123,11 @@ impl App {
     }
 
     fn accept_invite_link(&mut self, raw: String) -> Task<Message> {
+        self.accept_invite_link_as(raw, false)
+    }
+
+    /// Connect via a pasted link, with a new incognito profile if asked.
+    fn accept_invite_link_as(&mut self, raw: String, incognito: bool) -> Task<Message> {
         let Some(session) = self.session.clone() else {
             return Task::none();
         };
@@ -7059,11 +7137,38 @@ impl App {
             return Task::none();
         }
         self.status = "Accepting link…".into();
-        Task::perform(accept_invite(session, link), Message::InviteAccepted)
+        Task::perform(accept_invite(session, link, incognito), Message::InviteAccepted)
     }
 
-    pub(crate) fn invite_link(&self) -> Option<&str> {
-        self.invite_link.as_deref()
+    /// Show the Connect card's one-time link: the newest unused one, else a
+    /// new one (`Session::one_time_invitation`). Runs on every open so a
+    /// link used meanwhile is replaced, a shared one never is.
+    fn load_invitation(&mut self) -> Task<Message> {
+        let Some(session) = self.session.clone() else {
+            return Task::none();
+        };
+        if self.invitation_busy {
+            return Task::none();
+        }
+        self.invitation_busy = true;
+        let incognito = self.desktop_prefs.incognito;
+        Task::perform(
+            blocking(move || session.one_time_invitation(incognito)),
+            Message::InvitationReady,
+        )
+    }
+
+    pub(crate) fn invitation(&self) -> Option<&cursus_core::Invitation> {
+        self.invitation.as_ref()
+    }
+    pub(crate) fn invitation_busy(&self) -> bool {
+        self.invitation_busy
+    }
+    pub(crate) fn incognito(&self) -> bool {
+        self.desktop_prefs.incognito
+    }
+    pub(crate) fn address_link(&self) -> Option<&str> {
+        self.address_link.as_deref()
     }
     pub(crate) fn compose_open(&self) -> bool {
         self.compose_open
@@ -8765,6 +8870,8 @@ pub enum SettingInfo {
     DesktopNotifications,
     Tray,
     CloseToTray,
+    /// The New page's Connect card: one-time link, incognito, pasted links.
+    Connect,
 }
 
 impl SettingInfo {
@@ -8787,6 +8894,7 @@ impl SettingInfo {
             Self::GroupReceipts => ("Send receipts", "Whether this group's members see when their messages reach this device. \u{201c}Default\u{201d} follows the setting in Privacy & security.\n\nSimpleX only sends receipts in groups with up to 20 members."),
             Self::DesktopNotifications => ("Desktop notifications", "Shows a notification for new messages in chats you aren't looking at. Muted chats never notify."),
             Self::Tray => ("System tray icon", "Puts a Cursus icon in your panel's system tray, with Show, Hide and Quit."),
+            Self::Connect => ("Connect", "One-time link: send it to one person. Whoever opens it first becomes your contact, then the link stops working. It stays the same until someone uses it, so you can copy it again later; \u{201c}New link\u{201d} replaces it with a fresh one.\n\nIncognito: when on, the person who connects sees a new random name instead of your profile \u{2014} a different one for each contact. You can switch it until the link is used. It also applies when you connect with a link below.\n\nJoin with a link: paste a link someone sent you \u{2014} a one-time link, an address, or a group or channel link \u{2014} and tap Connect.\n\nYour reusable address, which many people can use, is in Settings \u{2192} Address."),
             Self::CloseToTray => ("Close window hides to tray", "Closing the window keeps Cursus running in the tray so messages keep arriving.\n\nIt stays unlocked unless the app lock is on, and decrypted media stays in its private cache until you quit."),
         }
     }
@@ -9767,8 +9875,11 @@ fn file_detail_line(
     }
 }
 
-async fn create_invitation(session: Arc<Session>) -> Result<ConnLink, String> {
-    tokio::task::spawn_blocking(move || session.create_invitation_link().map_err(|e| e.to_string()))
+/// Run a blocking core call off the UI thread, errors as text.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> cursus_core::Result<T> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(move || f().map_err(|e| e.to_string()))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -9904,9 +10015,9 @@ async fn reject_contact_request(
     .map_err(|e| e.to_string())?
 }
 
-async fn accept_invite(session: Arc<Session>, link: String) -> Result<String, String> {
+async fn accept_invite(session: Arc<Session>, link: String, incognito: bool) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let value = session.connect_link(&link).map_err(|e| e.to_string())?;
+        let value = session.connect_link_as(&link, incognito).map_err(|e| e.to_string())?;
         let ty = value
             .get("type")
             .and_then(|v| v.as_str())

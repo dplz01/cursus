@@ -378,7 +378,8 @@ private fun RichText(model: AppModel, segments: List<Segment>, emojiOnly: Boolea
             }
             val link = s.link
             when {
-                link != null && s.style in setOf("uri", "email", "phone") -> withLink(
+                // SimpleX links also come with an italic "(via …)" part: same link.
+                link != null && (s.style in setOf("uri", "email", "phone") || s.simplex != null) -> withLink(
                     LinkAnnotation.Clickable("l$i") {
                         scope.launch {
                             val prepared = model.prepareLink(link)
@@ -391,7 +392,7 @@ private fun RichText(model: AppModel, segments: List<Segment>, emojiOnly: Boolea
                             }
                         }
                     },
-                ) { withStyle(SpanStyle(color = c.accent, textDecoration = TextDecoration.Underline)) { append(s.text) } }
+                ) { withStyle(style.merge(SpanStyle(color = c.accent, textDecoration = TextDecoration.Underline))) { append(s.text) } }
                 s.style == "secret" -> withLink(
                     LinkAnnotation.Clickable("s$i") { revealed = if (i in revealed) revealed - i else revealed + i },
                 ) { withStyle(style) { append(s.text) } }

@@ -190,24 +190,32 @@ struct PencilButton: View {
 
 // MARK: - Bubble shape
 
-/// Message bubble: radius 16, with a small "tail" corner at the top-left
-/// for incoming group / channel messages — where the sender's avatar sits
-/// (Linux too). macOS 12 has no per-corner rounded rectangle.
+/// Message bubble: radius 16 except on the sender's side (right for sent,
+/// left for received), where the top corner is always small and the bottom
+/// one too on every bubble of a run but its last — the rule of every Cursus
+/// app. macOS 12 has no per-corner rounded rectangle.
 struct BubbleShape: Shape {
+    var outgoing: Bool
+    var runContinues: Bool
     var radius: CGFloat = Radius.bubble
-    var topLeading: CGFloat = Radius.bubble
+    var small: CGFloat = 6
 
     func path(in rect: CGRect) -> Path {
         let r = min(radius, rect.width / 2, rect.height / 2)
-        let tl = min(topLeading, r)
+        let s = min(small, r)
+        let bottom = runContinues ? s : r
+        let tl = outgoing ? r : s
+        let tr = outgoing ? s : r
+        let br = outgoing ? bottom : r
+        let bl = outgoing ? r : bottom
         var p = Path()
         p.move(to: CGPoint(x: rect.minX + tl, y: rect.minY))
         p.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY),
-                 tangent2End: CGPoint(x: rect.maxX, y: rect.maxY), radius: r)
+                 tangent2End: CGPoint(x: rect.maxX, y: rect.maxY), radius: tr)
         p.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY),
-                 tangent2End: CGPoint(x: rect.minX, y: rect.maxY), radius: r)
+                 tangent2End: CGPoint(x: rect.minX, y: rect.maxY), radius: br)
         p.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY),
-                 tangent2End: CGPoint(x: rect.minX, y: rect.minY), radius: r)
+                 tangent2End: CGPoint(x: rect.minX, y: rect.minY), radius: bl)
         p.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY),
                  tangent2End: CGPoint(x: rect.maxX, y: rect.minY), radius: tl)
         p.closeSubpath()

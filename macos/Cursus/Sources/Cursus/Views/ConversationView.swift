@@ -321,9 +321,8 @@ struct MessageRow: View {
 
     private var revealed: Bool { model.revealedMessages.contains(message.id) }
 
-    /// Small top-left corner beside a group sender's avatar.
     private var bubbleShape: BubbleShape {
-        BubbleShape(topLeading: showSender ? 6 : Radius.bubble)
+        BubbleShape(outgoing: message.outgoing, runContinues: message.runContinues)
     }
 
     @ViewBuilder private var bubble: some View {

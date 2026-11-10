@@ -13,6 +13,7 @@ musl-glibc-compat = []
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 directories.workspace = true
 emojis.workspace = true
 libloading.workspace = true

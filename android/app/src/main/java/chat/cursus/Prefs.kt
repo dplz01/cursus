@@ -31,6 +31,13 @@ class Prefs(context: Context) {
         get() = hideTextState.value
         set(v) { hideTextState.value = v; sp.edit().putBoolean("hideNotificationText", v).apply() }
 
+    private val incognitoState = bool("incognito", false)
+    /** New one-time links and links pasted on the Connect card use a random
+     *  incognito profile (the official apps' toggle). */
+    var incognito: Boolean
+        get() = incognitoState.value
+        set(v) { incognitoState.value = v; sp.edit().putBoolean("incognito", v).apply() }
+
     private val secureScreenState = bool("secureScreen", true)
     /** Keep chats out of screenshots and the recent-apps preview. */
     var secureScreen: Boolean

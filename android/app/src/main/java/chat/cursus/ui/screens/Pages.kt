@@ -1,5 +1,11 @@
 package chat.cursus.ui.screens
 
+import androidx.compose.ui.res.painterResource
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.LaunchedEffect
+import chat.cursus.core.Invitation
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -78,7 +84,6 @@ fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOp
     val c = Cursus.colors
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
-    var shared by remember { mutableStateOf<ConnLink?>(null) }
     var link by rememberSaveable { mutableStateOf(initialLink ?: "") }
     var create by remember { mutableStateOf<CreateKind?>(null) }
 
@@ -86,31 +91,7 @@ fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOp
         PaneHeader("New", onBack = onClose)
         Column(Modifier.verticalScroll(rememberScrollState())) {
             PageColumn {
-                CursusCard {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        CardTitle(R.drawable.ic_link_minimalistic_2, "Connect", "Share a link, or paste one you received.")
-                        NavRow(R.drawable.ic_repeat_once, "One-time invite", "A single-use link for one person") {
-                            scope.launch { model.createInvitation()?.let { shared = it }; model.reloadChats() }
-                        }
-                        NavRow(R.drawable.ic_address_card, "My address", "Your reusable contact link") {
-                            scope.launch { model.addressLink()?.let { shared = it } }
-                        }
-                        shared?.let { l ->
-                            SectionLabel("Ready to share — tap to copy")
-                            Column(Modifier.padding(horizontal = 8.dp)) {
-                                LinkBox(l.short ?: l.full) { model.notice = "Link copied" }
-                            }
-                        }
-                        SectionLabel("Join with a link")
-                        Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                RoundedField(link, { link = it }, "Invite or address link…", Modifier.weight(1f))
-                                IconTool(R.drawable.ic_paste, "Paste", { clipboard.getText()?.let { link = it.text.trim() } })
-                            }
-                            PrimaryButton("Connect", { model.connect(link.trim()) { onClose() } }, Modifier.fillMaxWidth(), enabled = link.isNotBlank())
-                        }
-                    }
-                }
+                ConnectCard(model, link, { link = it }, onClose)
                 CursusCard {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         CardTitle(R.drawable.ic_plus, "Create", "Start a conversation for many people.")
@@ -132,6 +113,118 @@ fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOp
         }
     }
 }
+
+/**
+ * Linux Connect card: title + ⓘ sheet, the one-time link (loaded on open,
+ * kept by the core until someone uses it) with its incognito switch and
+ * "New link", then joining with a pasted link. The reusable address is in
+ * Settings → Address.
+ */
+@Composable
+private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit, onClose: () -> Unit) {
+    val c = Cursus.colors
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var invitation by remember { mutableStateOf<Invitation?>(null) }
+    var busy by remember { mutableStateOf(true) }
+    var info by remember { mutableStateOf(false) }
+    val incognito = model.prefs.incognito
+    LaunchedEffect(Unit) {
+        invitation = model.oneTimeInvitation()
+        busy = false
+    }
+    CursusCard {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.padding(4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.size(36.dp).clip(Radius.pill).background(c.accentSoft), contentAlignment = Alignment.Center) {
+                    Icon(painterResource(R.drawable.ic_link_minimalistic_2), null, Modifier.size(18.dp), tint = c.accent)
+                }
+                Text("Connect", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                IconTool(R.drawable.ic_info_circle, "What do these do?", { info = true }, tint = c.textMuted)
+            }
+            SectionLabel("Copy one-time link")
+            Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(Modifier.weight(1f)) {
+                    val inv = invitation
+                    if (inv != null) {
+                        LinkBox(inv.link.display) { model.notice = "One-time link copied" }
+                    } else {
+                        Text(
+                            if (busy) "Creating link…" else "No link yet",
+                            style = Cursus.type.meta, color = c.textMuted,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        )
+                    }
+                }
+                IconTool(
+                    if (incognito) R.drawable.ic_incognito_filled else R.drawable.ic_incognito,
+                    if (incognito) "Incognito on" else "Incognito off",
+                    {
+                        val on = !incognito
+                        model.prefs.incognito = on
+                        val inv = invitation
+                        if (inv != null && !busy) {
+                            busy = true
+                            scope.launch {
+                                val state = model.setInvitationIncognito(inv.connId, on)
+                                if (state != null) {
+                                    invitation = inv.copy(incognito = state)
+                                } else {
+                                    invitation = model.oneTimeInvitation() // used meanwhile
+                                }
+                                busy = false
+                            }
+                        }
+                    },
+                    tint = if (incognito) c.accent else c.textSecondary,
+                )
+            }
+            Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (incognito) "Incognito: they'll see a random profile." else "They'll see your profile.",
+                    style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.weight(1f),
+                )
+                SecondaryButton("New link", {
+                    busy = true
+                    scope.launch {
+                        model.regenerateInvitation(invitation?.connId)?.let { invitation = it }
+                        busy = false
+                    }
+                }, enabled = !busy)
+            }
+            SectionLabel("Join with a link")
+            Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    RoundedField(link, onLink, "Invite or address link…", Modifier.weight(1f))
+                    IconTool(R.drawable.ic_paste, "Paste", { clipboard.getText()?.let { onLink(it.text.trim()) } })
+                }
+                PrimaryButton("Connect", { model.connect(link.trim(), incognito) { onClose() } }, Modifier.fillMaxWidth(), enabled = link.isNotBlank())
+            }
+        }
+    }
+    if (info) {
+        CursusOverlay({ info = false }) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(painterResource(R.drawable.ic_info_circle), null, Modifier.size(20.dp), tint = c.accent)
+                Text("Connect", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+            }
+            for (para in ConnectInfoText) {
+                Text(para, style = Cursus.type.meta, color = c.textSecondary)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                PrimaryButton("Got it", { info = false })
+            }
+        }
+    }
+}
+
+/** Same text as the Linux ⓘ sheet (`SettingInfo::Connect`). */
+private val ConnectInfoText = listOf(
+    "One-time link: send it to one person. Whoever opens it first becomes your contact, then the link stops working. It stays the same until someone uses it, so you can copy it again later; \u201cNew link\u201d replaces it with a fresh one.",
+    "Incognito: when on, the person who connects sees a new random name instead of your profile \u2014 a different one for each contact. You can switch it until the link is used. It also applies when you connect with a link below.",
+    "Join with a link: paste a link someone sent you \u2014 a one-time link, an address, or a group or channel link \u2014 and tap Connect.",
+    "Your reusable address, which many people can use, is in Settings \u2192 Address.",
+)
 
 /** Linux `create_chat_overlay`. */
 @Composable

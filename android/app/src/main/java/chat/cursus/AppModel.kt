@@ -1,5 +1,6 @@
 package chat.cursus
 
+import chat.cursus.core.Invitation
 import android.app.Application
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -753,20 +754,37 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     // region Connect
 
-    suspend fun createInvitation(): ConnLink? = try {
-        Core.call("createInvitation")
-    } catch (e: Exception) {
-        error = e.message; null
-    }
-
     suspend fun addressLink(): ConnLink? = try {
         Core.call("addressLink")
     } catch (e: Exception) {
         error = e.message; null
     }
 
-    fun connect(link: String, done: () -> Unit = {}) = act {
-        Core.run("connect", mapOf("link" to link))
+    /** The newest one-time link nobody used yet, else a new one (core rule). */
+    suspend fun oneTimeInvitation(): Invitation? = try {
+        Core.call<Invitation>("oneTimeInvitation", mapOf("incognito" to prefs.incognito))
+            .also { prefs.incognito = it.incognito } // a kept link keeps its own state
+    } catch (e: Exception) {
+        error = e.message; null
+    }
+
+    /** A fresh one-time link replacing [previous] (deleted while unused). */
+    suspend fun regenerateInvitation(previous: Long?): Invitation? = try {
+        Core.call<Invitation>("regenerateInvitation", mapOf("previous" to previous, "incognito" to prefs.incognito))
+    } catch (e: Exception) {
+        error = e.message; null
+    }
+
+    /** Switch an unused link to / from a random profile; null if that failed. */
+    suspend fun setInvitationIncognito(connId: Long, on: Boolean): Boolean? = try {
+        Core.call<Boolean>("setInvitationIncognito", mapOf("connId" to connId, "on" to on))
+            .also { prefs.incognito = it }
+    } catch (e: Exception) {
+        error = e.message; null
+    }
+
+    fun connect(link: String, incognito: Boolean = false, done: () -> Unit = {}) = act {
+        Core.run("connect", mapOf("link" to link, "incognito" to incognito))
         notice = "Connecting… the chat appears in your list."
         reloadChats()
         done()

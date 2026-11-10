@@ -44,6 +44,8 @@ data class CursusColors(
     val danger: Color,
     val success: Color,
     val gold: Color,
+    /** Bright yellow for things that need attention (pending-links button). */
+    val attention: Color,
     val disabledFill: Color,
     /** Text fields, composer pill and quiet buttons (Linux `bg_field`). */
     val bgField: Color,
@@ -80,6 +82,7 @@ val LightTokens = CursusColors(
     danger = Color(0xFFC62828),
     success = Color(0xFF2E7D32),
     gold = Color(0xFFB58B0F),
+    attention = Color(0xFFF5B800),
     disabledFill = Color(0xFFD1D5DA),
     bgField = Color(0xFFF2F4F7),
     bubbleIn = Color(0xFFFFFFFF),
@@ -109,6 +112,7 @@ val DarkTokens = CursusColors(
     danger = Color(0xFFFF6B6B),
     success = Color(0xFF6BCB77),
     gold = Color(0xFFECD04F),
+    attention = Color(0xFFF5C518),
     disabledFill = Color(0xFF404D66),
     bgField = Color(0xFF181B22),
     bubbleIn = Color(0xFF262B36),

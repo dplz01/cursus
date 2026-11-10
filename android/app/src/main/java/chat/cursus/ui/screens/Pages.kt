@@ -191,19 +191,16 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
                     tint = if (incognito) c.accent else c.textSecondary,
                 )
             }
-            Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (incognito) "Incognito: they'll see a random profile." else "They'll see your profile.",
-                    style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.weight(1f),
-                )
-                SecondaryButton("New link", {
+            // Same look as the Connect button below (full width on phones).
+            Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                PrimaryButton("New link", {
                     if (invitation != null) {
                         confirmNew = true
                     } else {
                         busy = true
                         scope.launch { invitation = model.newInvitation(); copied = false; busy = false }
                     }
-                }, enabled = !busy)
+                }, Modifier.fillMaxWidth(), enabled = !busy)
             }
             SectionLabel("Join with a link")
             Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

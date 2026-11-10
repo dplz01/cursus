@@ -1,5 +1,7 @@
 package chat.cursus.ui.screens
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.defaultMinSize
 import chat.cursus.ui.components.RoundedField
 import chat.cursus.ui.components.CursusOverlay
 import androidx.compose.ui.unit.sp
@@ -236,25 +238,31 @@ fun ConfirmDialog(title: String, text: String, action: String, onConfirm: () -> 
 }
 
 
-/** Linux `pending_links_button`: gold square (same box as "+") with the
- *  number of unused one-time links; opens their list. */
+/** Linux `pending_links_button`: attention-yellow square (same box as "+")
+ *  with the number of unused one-time links; opens their list. The count is
+ *  round (a pill past 9), borderless, centred on the top-right corner. */
 @Composable
 private fun PendingLinksButton(count: Int, onClick: () -> Unit) {
     val c = Cursus.colors
-    val onGold = if (c.isDark) c.bgApp else androidx.compose.ui.graphics.Color.White
     Box(Modifier.padding(end = 8.dp).size(36.dp)) {
         Box(
-            Modifier.fillMaxSize().clip(Radius.md).background(c.gold).clickable(onClick = onClick),
+            Modifier.fillMaxSize().clip(Radius.md).background(c.attention).clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(painterResource(R.drawable.ic_link_minimalistic_2), "Pending links", Modifier.size(20.dp), tint = onGold)
+            Icon(painterResource(R.drawable.ic_link_minimalistic_2), "Pending links", Modifier.size(20.dp), tint = Color(0xFF1F1A05))
         }
         Box(
-            Modifier.align(Alignment.TopEnd).offset(x = 5.dp, y = (-5).dp)
-                .border(1.5.dp, c.bgList, Radius.pill).clip(Radius.pill).background(c.accent)
-                .padding(horizontal = 5.dp, vertical = 1.dp),
+            Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp)
+                .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
+                .clip(Radius.pill).background(c.accent)
+                .padding(horizontal = if (count < 10) 0.dp else 4.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Text(if (count > 99) "99+" else "$count", style = Cursus.type.meta.copy(fontSize = 10.sp), color = c.accentOn, fontWeight = FontWeight.Bold)
+            Text(
+                if (count > 99) "99+" else "$count",
+                style = Cursus.type.meta.copy(fontSize = 10.sp, lineHeight = 10.sp),
+                color = c.accentOn, fontWeight = FontWeight.Bold,
+            )
         }
     }
 }
@@ -272,7 +280,7 @@ private fun PendingLinksOverlay(model: AppModel, onDismiss: () -> Unit) {
     CursusOverlay(onDismiss) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Box(Modifier.size(36.dp).clip(Radius.pill).background(c.accentSoft), contentAlignment = Alignment.Center) {
-                Icon(painterResource(R.drawable.ic_link_minimalistic_2), null, Modifier.size(18.dp), tint = c.gold)
+                Icon(painterResource(R.drawable.ic_link_minimalistic_2), null, Modifier.size(18.dp), tint = c.attention)
             }
             Text("Pending links", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             IconTool(R.drawable.ic_cancel, "Close", onDismiss)

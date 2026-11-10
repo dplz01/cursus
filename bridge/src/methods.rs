@@ -249,7 +249,20 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
         "listMessages" => {
             let count = p.get("count").and_then(Value::as_u64).unwrap_or(100).min(1000) as u32;
             let msgs = s.list_messages(&chat_param(p)?, count).map_err(err)?;
-            Ok(Value::Array(msgs.iter().map(dto::message).collect()))
+            // `joinedPrev` / `joinedNext`: the message continues the previous
+            // run / the next one continues it (core rule, shapes the bubbles).
+            let links = cursus_core::runs::run_links(&msgs);
+            Ok(Value::Array(
+                msgs.iter()
+                    .zip(links)
+                    .map(|(m, (prev, next))| {
+                        let mut v = dto::message(m);
+                        v["joinedPrev"] = Value::Bool(prev);
+                        v["joinedNext"] = Value::Bool(next);
+                        v
+                    })
+                    .collect(),
+            ))
         }
         // Texts go out as every Cursus app sends them (core outgoing_text,
         // links cleaned of tracking codes unless `cleanLinks` is false).

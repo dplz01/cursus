@@ -317,8 +317,12 @@ struct Message: Decodable, Identifiable, Equatable {
     let edited: Bool
     let canEdit: Bool
     let emojiOnly: Bool
+    /// The next message continues this one's run (core `runs` rule).
+    let joinedNext: Bool?
 
     var date: Date? { createdAt.flatMap(Dates.parse) }
+    /// Not the last bubble of its run: the sender-side bottom corner stays small.
+    var runContinues: Bool { joinedNext ?? false }
     var hasSecret: Bool { segments.contains { $0.style == "secret" } }
 }
 

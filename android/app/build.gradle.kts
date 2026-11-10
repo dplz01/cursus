@@ -61,7 +61,14 @@ val cargoBuild by tasks.registering(Exec::class) {
         "build", profile, "-p", "cursus-android", "--locked",
     ))
 }
-tasks.named("preBuild") { dependsOn(cargoBuild) }
+// The official SimpleX core (pinned tag + SHA-256); a no-op once it is in
+// jniLibs, so a wiped jniLibs can't produce an APK without libsimplex.so.
+val fetchLibsimplex by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Fetch libsimplex.so from the pinned official SimpleX APK"
+    commandLine(rootDir.resolve("fetch-libsimplex.sh").absolutePath)
+}
+tasks.named("preBuild") { dependsOn(cargoBuild, fetchLibsimplex) }
 
 dependencies {
     implementation(libs.androidx.core.ktx)

@@ -178,11 +178,12 @@ pub fn link_host(uri: &str) -> Option<String> {
 }
 
 /// Human-readable label for a SimpleX link: "SimpleX group link (via smp.simplex.im)".
+/// Only the first server is named, as the official apps do — a server's
+/// `.onion` address is the same server and would only make the label wrap.
 pub fn simplex_link_label(kind: SimplexLinkKind, hosts: &[String]) -> String {
-    if hosts.is_empty() {
-        kind.description().to_string()
-    } else {
-        format!("{} (via {})", kind.description(), hosts.join(", "))
+    match hosts.first() {
+        Some(host) => format!("{} (via {host})", kind.description()),
+        None => kind.description().to_string(),
     }
 }
 
@@ -594,7 +595,37 @@ pub fn parse_formatted_text(value: Option<&Value>) -> Vec<TextSegment> {
     let Some(Value::Array(items)) = value else {
         return Vec::new();
     };
-    items.iter().filter_map(parse_one_segment).collect()
+    items
+        .iter()
+        .filter_map(parse_one_segment)
+        .flat_map(split_simplex_via)
+        .collect()
+}
+
+/// "SimpleX one-time invitation (via smp10.simplex.im)" → the description
+/// and an italic " (via …)" part, both the same link (official apps style).
+fn split_simplex_via(seg: TextSegment) -> Vec<TextSegment> {
+    let Some(kind) = seg.simplex else {
+        return vec![seg];
+    };
+    let Some(via) = seg
+        .text
+        .strip_prefix(kind.description())
+        .filter(|rest| rest.starts_with(" (via "))
+        .map(str::to_string)
+    else {
+        return vec![seg];
+    };
+    let head = TextSegment {
+        text: kind.description().to_string(),
+        ..seg.clone()
+    };
+    let tail = TextSegment {
+        text: via,
+        style: TextStyle::Italic,
+        ..seg
+    };
+    vec![head, tail]
 }
 
 fn parse_one_segment(item: &Value) -> Option<TextSegment> {
@@ -826,11 +857,31 @@ mod tests {
         ]);
         let segs = parse_formatted_text(Some(&v));
         assert_eq!(segs[0].simplex, None);
-        assert_eq!(segs[1].text, "SimpleX group link (via smp9.simplex.im)");
+        // Description + italic "(via …)", both the same link.
+        assert_eq!(segs[1].text, "SimpleX group link");
         assert_eq!(segs[1].simplex, Some(SimplexLinkKind::Group));
         assert_eq!(segs[1].link.as_deref(), Some("https://smp9.simplex.im/g#abc"));
-        assert_eq!(segs[2].text, "my link");
-        assert_eq!(segs[2].simplex, Some(SimplexLinkKind::Invitation));
+        assert_eq!(segs[2].text, " (via smp9.simplex.im)");
+        assert_eq!(segs[2].style, TextStyle::Italic);
+        assert_eq!(segs[2].link, segs[1].link);
+        assert_eq!(segs[2].simplex, Some(SimplexLinkKind::Group));
+        assert_eq!(segs[3].text, "my link");
+        assert_eq!(segs[3].simplex, Some(SimplexLinkKind::Invitation));
+    }
+
+    #[test]
+    fn simplex_label_names_only_the_first_server() {
+        // A server with an onion address: the label must not list both.
+        let v = json!([
+            {"format": {"type": "simplexLink", "linkType": "invitation",
+                        "simplexUri": "https://smp10.simplex.im/i#x",
+                        "smpHosts": ["smp10.simplex.im", "rb2pbttocvnbrngnwziclp2f4ckjq65kebafws6g4hy22cdaiv5dwjqd.onion"]},
+             "text": "https://smp10.simplex.im/i#x"}
+        ]);
+        let segs = parse_formatted_text(Some(&v));
+        let shown: String = segs.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(shown, "SimpleX one-time invitation (via smp10.simplex.im)");
+        assert_eq!(segs.len(), 2);
     }
 
     #[test]

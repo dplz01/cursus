@@ -569,6 +569,11 @@ enum RichText {
                 part.inlinePresentationIntent = .stronglyEmphasized
             case "italic":
                 part.inlinePresentationIntent = .emphasized
+                // SimpleX links: the italic "(via …)" part is the same link.
+                if let link = seg.link, let url = URL(string: link) {
+                    part.link = url
+                    part[AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self] = Theme.accent
+                }
             case "strike":
                 part.inlinePresentationIntent = .strikethrough
             case "snippet":

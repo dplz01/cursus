@@ -6,7 +6,7 @@ use iced::keyboard;
 use iced::keyboard::key;
 use iced::widget::text_editor::Binding as EditorBinding;
 use iced::widget::space::{horizontal, vertical};
-use iced::widget::{
+use iced::widget::{float, 
     button, column, container, image, mouse_area, progress_bar, rich_text, row, scrollable, span,
     text, text_editor, text_input, toggler, Column, Row, Space, Stack,
 };
@@ -3745,34 +3745,28 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
         container(row![link_box, incognito_btn].spacing(6).align_y(Alignment::Center))
             .padding(Padding::from([0, 8])),
     );
+    // Same look as the Connect button below: accent, full width on phones.
     let regenerate = button(
-        row![
-            icons::repeat_once_icon(16.0, theme::t().text_primary),
-            text("New link").size(d.meta).color(theme::t().text_primary),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-    )
-    .on_press_maybe((!app.invitation_busy()).then_some(Message::RegenerateInvitation))
-    .padding(Padding::from([8, 14]))
-    .style(theme::secondary_action(hover));
-    connect = connect.push(
         container(
             row![
-                text(if app.incognito() {
-                    "Incognito: they'll see a random profile."
-                } else {
-                    "They'll see your profile."
-                })
-                .size(d.meta)
-                .color(theme::t().text_secondary)
-                .width(Length::Fill),
-                regenerate,
+                icons::repeat_once_icon(16.0, theme::t().accent_on),
+                text("New link").size(d.meta),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
         )
-        .padding(Padding::from([4, 8])),
+        .width(if narrow { Length::Fill } else { Length::Shrink })
+        .center_x(if narrow { Length::Fill } else { Length::Shrink }),
+    )
+    .on_press_maybe((!app.invitation_busy()).then_some(Message::RegenerateInvitation))
+    .padding(Padding::from([9, 18]))
+    .width(if narrow { Length::Fill } else { Length::Shrink })
+    .style(theme::primary_action(hover));
+    connect = connect.push(
+        container(regenerate)
+            .width(Length::Fill)
+            .align_x(Alignment::End)
+            .padding(Padding::from([4, 8])),
     );
 
     let link_field = crate::edit_menu::edit_field(
@@ -8886,34 +8880,36 @@ mod wave_layout_tests {
 /// their list.
 fn pending_links_button<'a>(count: usize, hover: bool) -> Element<'a, Message> {
     let label = if count > 99 { "99+".to_string() } else { count.to_string() };
+    // Round for one digit, a pill for more; no border.
     let badge = container(text(label).size(10.0).font(BOLD).color(theme::t().accent_on))
-        .padding(Padding::from([1, 5]))
+        .height(16.0)
+        .width(if count < 10 { Length::Fixed(16.0) } else { Length::Shrink })
+        .padding(Padding::from([0, if count < 10 { 0 } else { 5 }]))
+        .center_x(if count < 10 { Length::Fixed(16.0) } else { Length::Shrink })
+        .center_y(16.0)
         .style(|_| container::Style {
             background: Some(iced::Background::Color(theme::t().accent)),
-            border: iced::Border {
-                color: theme::t().bg_list,
-                width: 1.5,
-                radius: 9.0.into(),
-            },
+            border: iced::Border { radius: 8.0.into(), ..iced::Border::default() },
             ..container::Style::default()
         });
-    let btn = button(icons::centered_hit(icons::link_icon(20.0, theme::on_gold()), 36.0))
+    let btn = button(icons::centered_hit(icons::link_icon(20.0, theme::on_attention()), 36.0))
         .on_press(Message::OpenPendingLinks)
         .padding(0)
-        .style(theme::gold_action(hover));
-    // Same 36×36 box as "+" (header height unchanged); the count sits in
-    // the top-right corner, over the square's edge.
+        .style(theme::attention_action(hover));
+    // Same 36×36 box as "+" (header height unchanged); the count is centred
+    // on the top-right corner, drawn over the edge with `float`.
     Stack::new()
         .width(36.0)
         .height(36.0)
         .push(btn)
         .push(
-            container(badge)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 })
-                .align_x(Alignment::End)
-                .align_y(Alignment::Start),
+            container(float(badge).translate(|bounds, _| {
+                iced::Vector::new(bounds.width / 2.0, -bounds.height / 2.0)
+            }))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::End)
+            .align_y(Alignment::Start),
         )
         .into()
 }
@@ -8930,18 +8926,21 @@ fn sheet_overlay<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a
             }),
     )
     .on_press(dismiss);
-    let sheet = container(card)
+    // Opaque card: taps on its empty parts neither close the sheet nor
+    // reach the backdrop; opaque stack: nothing underneath gets them either.
+    let sheet = container(iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
         .padding(Padding::from([24, 20]));
-    Stack::new()
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .push(backdrop)
-        .push(sheet)
-        .into()
+    iced::widget::opaque(
+        Stack::new()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .push(backdrop)
+            .push(sheet),
+    )
 }
 
 /// Unused one-time links: copy (short / full), name, delete. Anyone holding
@@ -8952,7 +8951,7 @@ fn pending_links_overlay(app: &App) -> Element<'_, Message> {
     let mut col = Column::new().spacing(12).max_width(480);
     col = col.push(
         row![
-            icon_disc(icons::link_icon(18.0, theme::t().always), 36.0),
+            icon_disc(icons::link_icon(18.0, theme::t().attention), 36.0),
             text("Pending links")
                 .size(d.body)
                 .font(BOLD)

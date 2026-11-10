@@ -42,6 +42,8 @@ pub struct Tokens {
     pub success: Color,
     /// Peer allows `always` (asymmetric) — warm gold, readable on dark/light.
     pub always: Color,
+    /// Bright yellow fill for things that need attention (pending links).
+    pub attention: Color,
     pub accent_hover: Color,
     pub accent_press: Color,
     pub danger_hover: Color,
@@ -83,6 +85,7 @@ impl Tokens {
             danger: rgb(0xFF6B6B),
             success: rgb(0x6BCB77),
             always: Color::from_rgb(0.925, 0.757, 0.310), // gold
+            attention: rgb(0xF5C518),
             accent_hover: Color::from_rgb(0.42, 0.60, 1.0),
             accent_press: Color::from_rgb(0.30, 0.48, 0.92),
             danger_hover: Color::from_rgb(0.85, 0.28, 0.28),
@@ -117,6 +120,7 @@ impl Tokens {
             danger: rgb(0xC62828),
             success: rgb(0x2E7D32),
             always: Color::from_rgb(0.710, 0.545, 0.060), // gold
+            attention: rgb(0xF5B800),
             accent_hover: Color::from_rgb(0.145, 0.365, 0.820),
             accent_press: Color::from_rgb(0.110, 0.300, 0.720),
             danger_hover: Color::from_rgb(0.690, 0.110, 0.110),
@@ -426,18 +430,18 @@ pub fn secondary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status)
     }
 }
 
-/// Gold square beside "+" (pending one-time links): same shape as the "+"
-/// button, filled with the theme's gold so it reads as "needs attention".
-pub fn gold_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+/// Yellow square beside "+" (pending one-time links): same shape as the
+/// "+" button, filled with the `attention` yellow — something to look at.
+pub fn attention_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
         let c = t();
-        let mut fill = c.always;
+        let mut fill = c.attention;
         if matches!(status, button::Status::Pressed) || (hover_ok && matches!(status, button::Status::Hovered)) {
             fill = Color { a: 0.85, ..fill };
         }
         button::Style {
             background: Some(Background::Color(fill)),
-            text_color: on_gold(),
+            text_color: on_attention(),
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
@@ -448,14 +452,9 @@ pub fn gold_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> b
     }
 }
 
-/// Icon / text colour on the gold fill (white on the darker light-theme
-/// gold, the app background on the bright dark-theme gold).
-pub fn on_gold() -> Color {
-    if is_light_active() {
-        Color::WHITE
-    } else {
-        t().bg_app
-    }
+/// Icon / text colour on the `attention` yellow (dark in both themes).
+pub fn on_attention() -> Color {
+    rgb(0x1F1A05)
 }
 
 /// Selectable list row (settings categories): `accent.soft` when selected.

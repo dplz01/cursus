@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -46,7 +47,7 @@ private val PillShape = RoundedCornerShape(20.dp)
 private fun SendHit(active: Boolean, description: String, onClick: () -> Unit) {
     val c = Cursus.colors
     Box(
-        Modifier.size(SEND).clip(Radius.pill).background(if (active) c.accent else c.bgPanel)
+        Modifier.size(SEND).clip(Radius.pill).background(if (active) c.accent else Color.Transparent)
             .clickable(enabled = active, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -77,7 +78,7 @@ fun Composer(model: AppModel) {
         return
     }
 
-    Column(Modifier.fillMaxWidth().background(c.bgPanel)) {
+    Column(Modifier.fillMaxWidth().background(c.bgSidebar)) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
         EmojiSuggestions(model)
         ContextBar(model)
@@ -93,7 +94,7 @@ fun Composer(model: AppModel) {
             }
             // Rounded pill holds the text (Linux: radius 20, 1px border, field fill).
             Box(
-                Modifier.weight(1f).heightIn(min = SEND).clip(PillShape).background(c.bgSidebar)
+                Modifier.weight(1f).heightIn(min = SEND).clip(PillShape).background(c.bgField)
                     .border(1.dp, c.border, PillShape).padding(horizontal = 14.dp, vertical = 8.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {

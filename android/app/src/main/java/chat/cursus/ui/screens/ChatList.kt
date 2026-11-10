@@ -79,7 +79,7 @@ fun PaneHeader(
 fun HeaderPlus(description: String, onClick: () -> Unit) {
     val c = Cursus.colors
     Box(
-        Modifier.padding(end = 8.dp).size(36.dp).clip(Radius.md).background(c.bgSidebar)
+        Modifier.padding(end = 8.dp).size(36.dp).clip(Radius.md).background(c.bgField)
             .border(1.dp, c.border, Radius.md).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -151,10 +151,10 @@ private fun ChatRow(model: AppModel, chat: Chat, selected: Boolean) {
                         modifier = Modifier.weight(1f, fill = false),
                     )
                     if (chat.favorite) {
-                        Icon(painterResource(R.drawable.ic_star), "Favourite", Modifier.padding(start = 4.dp).size(14.dp), tint = c.gold)
+                        Icon(painterResource(R.drawable.ic_star_filled), "Favourite", Modifier.padding(start = 4.dp).size(14.dp), tint = c.gold)
                     }
                     if (chat.muted) {
-                        Icon(painterResource(R.drawable.ic_mute_notification), "Muted", Modifier.padding(start = 4.dp).size(14.dp), tint = c.textMuted)
+                        Icon(painterResource(R.drawable.ic_notifications_off), "Muted", Modifier.padding(start = 4.dp).size(14.dp), tint = c.textMuted)
                     }
                     Box(Modifier.weight(1f, fill = true))
                     Text(Stamps.list(chat.lastTs), style = Cursus.type.meta, color = c.textMuted)

@@ -32,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -81,7 +82,7 @@ fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modi
     Box(
         modifier
             .clip(Radius.md)
-            .background(c.bgSidebar)
+            .background(c.bgField)
             .border(1.dp, c.border, Radius.md)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -164,18 +165,19 @@ fun ActionTile(icon: Int, text: String, onClick: () -> Unit, danger: Boolean = f
 }
 
 /** Card: `bg.elevated`, 1px border, radius 12, 10px padding. */
+private val CardShape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
+
 @Composable
 fun CursusCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     val c = Cursus.colors
-    Column(
-        modifier
-            .fillMaxWidth()
-            .clip(Radius.lg)
-            .background(c.bgElevated)
-            .border(1.dp, c.border, Radius.lg)
-            .padding(10.dp),
-        content = content,
-    )
+    // Light: Linux `card` — tone, not lines: white on the grey page, radius
+    // 16, a whisper of shadow. Dark keeps the bordered card.
+    val m = if (c.isDark) {
+        modifier.fillMaxWidth().clip(Radius.lg).background(c.bgElevated).border(1.dp, c.border, Radius.lg)
+    } else {
+        modifier.fillMaxWidth().shadow(1.dp, CardShape).clip(CardShape).background(c.bgElevated)
+    }
+    Column(m.padding(10.dp), content = content)
 }
 
 /** Card title: 36px icon disc, title and one-line explanation. */
@@ -228,7 +230,7 @@ fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, note
             colors = SwitchDefaults.colors(
                 checkedTrackColor = c.accent,
                 checkedThumbColor = c.accentOn,
-                uncheckedTrackColor = c.bgSidebar,
+                uncheckedTrackColor = c.bgField,
                 uncheckedBorderColor = c.border,
                 uncheckedThumbColor = c.textMuted,
             ),
@@ -289,9 +291,9 @@ fun CursusField(
         keyboardOptions = if (password) KeyboardOptions(keyboardType = KeyboardType.Password) else KeyboardOptions.Default,
         trailingIcon = trailing,
         colors = TextFieldDefaults.colors(
-            focusedContainerColor = c.bgSidebar,
-            unfocusedContainerColor = c.bgSidebar,
-            disabledContainerColor = c.bgSidebar,
+            focusedContainerColor = c.bgField,
+            unfocusedContainerColor = c.bgField,
+            disabledContainerColor = c.bgField,
             focusedIndicatorColor = Color.Transparent,
             unfocusedIndicatorColor = Color.Transparent,
             cursorColor = c.accent,
@@ -335,7 +337,7 @@ fun decodeDataUrl(url: String): ImageBitmap? = runCatching {
 fun UnreadBadge(count: Long, muted: Boolean = false) {
     val c = Cursus.colors
     Box(
-        Modifier.widthIn(min = 22.dp).clip(Radius.pill).background(if (muted) c.bgSidebar else c.accentSoft)
+        Modifier.widthIn(min = 22.dp).clip(Radius.pill).background(if (muted) c.bgField else c.accentSoft)
             .padding(horizontal = 7.dp, vertical = 2.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -365,7 +367,7 @@ fun PageColumn(modifier: Modifier = Modifier, content: @Composable ColumnScope.(
 fun RoundedField(value: String, onValueChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier, singleLine: Boolean = true) {
     val c = Cursus.colors
     Box(
-        modifier.clip(Radius.lg).background(c.bgSidebar).border(1.dp, c.border, Radius.lg).padding(horizontal = 12.dp, vertical = 9.dp),
+        modifier.clip(Radius.lg).background(c.bgField).border(1.dp, c.border, Radius.lg).padding(horizontal = 12.dp, vertical = 9.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
         if (value.isEmpty()) Text(placeholder, style = Cursus.type.body, color = c.textSecondary, maxLines = 1)

@@ -39,6 +39,10 @@ android {
 
     buildFeatures { compose = true }
 
+    // Licence texts and third-party notices (incl. the icon sets' MIT
+    // notices), shown under Settings → About → Licences and credits.
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/licenseAssets"))
+
     packaging {
         // libsimplex is loaded by path from nativeLibraryDir (cursus-core
         // dlopens it), so the libraries must be extracted on install.
@@ -68,7 +72,15 @@ val fetchLibsimplex by tasks.registering(Exec::class) {
     description = "Fetch libsimplex.so from the pinned official SimpleX APK"
     commandLine(rootDir.resolve("fetch-libsimplex.sh").absolutePath)
 }
-tasks.named("preBuild") { dependsOn(cargoBuild, fetchLibsimplex) }
+// The repo's licence notices into the APK: LICENSE (AGPL) and every file
+// under licenses/ — they cover all three apps and say which build contains
+// what (Rust crates, the SimpleX core's libraries, AndroidX/Kotlin, icons).
+val copyLicenses by tasks.registering(Sync::class) {
+    into(layout.buildDirectory.dir("generated/licenseAssets/licenses"))
+    from(rootDir.resolve("../LICENSE"))
+    from(rootDir.resolve("../licenses"))
+}
+tasks.named("preBuild") { dependsOn(cargoBuild, fetchLibsimplex, copyLicenses) }
 
 dependencies {
     implementation(libs.androidx.core.ktx)

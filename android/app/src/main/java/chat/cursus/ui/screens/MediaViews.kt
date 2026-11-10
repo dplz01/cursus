@@ -1,5 +1,6 @@
 package chat.cursus.ui.screens
 
+import kotlin.math.roundToInt
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -166,7 +167,7 @@ private fun FileRow(model: AppModel, m: Message, f: FileInfo) {
                 progress = { f.progress.toFloat() },
                 modifier = Modifier.padding(top = 4.dp).fillMaxWidth(),
                 color = c.accent,
-                trackColor = c.bgSidebar,
+                trackColor = c.bgField,
             )
         }
     }
@@ -216,22 +217,42 @@ private fun VoiceRow(model: AppModel, m: Message, f: FileInfo) {
     }
 }
 
-/** Bars; the played part in accent (Linux `Waveform` canvas). */
+/**
+ * Bars; the played part in accent (Linux `Waveform` canvas, same layout):
+ * fixed 3dp bars with 2dp gaps on whole pixels so edges stay crisp, the bar
+ * count follows the width and peaks are resampled to it (max per bucket).
+ * Short bars are dots / capsules (never shorter than wide, so no eye
+ * shapes); tall bars get slightly rounded ends.
+ */
 @Composable
 fun Waveform(peaks: List<Float>, progress: Float, modifier: Modifier = Modifier) {
     val played = Cursus.colors.accent
     val rest = Cursus.colors.textMuted
     Canvas(modifier) {
-        if (peaks.isEmpty()) return@Canvas
-        val slot = size.width / peaks.size
-        val bar = (slot * 0.6f).coerceAtLeast(1f)
-        peaks.forEachIndexed { i, p ->
-            val h = (size.height * p).coerceAtLeast(2f)
+        if (peaks.isEmpty() || size.width < 1f || size.height < 1f) return@Canvas
+        val bar = 3.dp.toPx().roundToInt().coerceAtLeast(1).toFloat()
+        val gap = 2.dp.toPx().roundToInt().coerceAtLeast(1).toFloat()
+        val pitch = bar + gap
+        val width = kotlin.math.floor(size.width)
+        val height = kotlin.math.floor(size.height)
+        val n = kotlin.math.floor((width + gap) / pitch).toInt().coerceAtLeast(1)
+        val left = kotlin.math.floor(((width - (n * pitch - gap)) / 2f).coerceAtLeast(0f))
+        val src = peaks.size
+        for (i in 0 until n) {
+            val a = i * src / n
+            val b = ((i + 1) * src / n).coerceAtLeast(a + 1).coerceAtMost(src)
+            var peak = 0f
+            for (k in a.coerceAtMost(src - 1) until b) peak = maxOf(peak, peaks[k])
+            // Never shorter than wide: the quietest bars are round dots.
+            var h = (peak.coerceIn(0.08f, 1f) * height * 0.92f).roundToInt().toFloat().coerceAtLeast(bar)
+            if ((height - h).toInt() % 2 != 0) h += 1f
+            val y = ((height - h) / 2f).roundToInt().toFloat()
+            val color = if ((i + 1f) / n <= progress + 0.001f) played else rest
             drawRoundRect(
-                color = if ((i + 0.5f) / peaks.size <= progress) played else rest,
-                topLeft = Offset(i * slot + (slot - bar) / 2, (size.height - h) / 2),
+                color = color,
+                topLeft = Offset(left + i * pitch, y),
                 size = Size(bar, h),
-                cornerRadius = CornerRadius(bar / 2),
+                cornerRadius = CornerRadius(if (h <= bar * 1.5f) bar / 2f else bar * 0.4f),
             )
         }
     }

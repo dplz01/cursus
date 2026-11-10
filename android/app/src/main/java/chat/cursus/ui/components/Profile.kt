@@ -101,7 +101,7 @@ fun FieldEditor(field: EditField, initial: String, onDismiss: () -> Unit, onSave
             ) { Icon(painterResource(R.drawable.ic_check), "Save", Modifier.size(18.dp), tint = c.accentOn) }
         }
         Box(
-            Modifier.fillMaxWidth().clip(Radius.md).background(c.bgSidebar).border(1.dp, c.accent, Radius.md)
+            Modifier.fillMaxWidth().clip(Radius.md).background(c.bgField).border(1.dp, c.accent, Radius.md)
                 .heightIn(min = if (field.multiline) 140.dp else 0.dp).padding(12.dp),
         ) {
             if (value.isEmpty()) Text(field.placeholder, style = Cursus.type.body, color = c.textSecondary)
@@ -124,7 +124,7 @@ class PhotoActions(val hasImage: Boolean, val onPick: () -> Unit, val onClear: (
 private fun PhotoButton(icon: Int, description: String, enabled: Boolean, onClick: () -> Unit) {
     val c = Cursus.colors
     Box(
-        Modifier.size(32.dp).clip(Radius.md).background(c.bgSidebar).border(1.dp, c.border, Radius.md)
+        Modifier.size(32.dp).clip(Radius.md).background(c.bgField).border(1.dp, c.border, Radius.md)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -163,7 +163,7 @@ fun ProfileName(name: String) {
 fun ChoiceChip(value: String, onClick: () -> Unit, enabled: Boolean = true) {
     val c = Cursus.colors
     Box(
-        Modifier.clip(Radius.md).background(c.bgSidebar).border(1.dp, c.border, Radius.md)
+        Modifier.clip(Radius.md).background(c.bgField).border(1.dp, c.border, Radius.md)
             .clickable(enabled = enabled, onClick = onClick).padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
         Text(value, style = Cursus.type.meta, color = if (enabled) c.textPrimary else c.textMuted)

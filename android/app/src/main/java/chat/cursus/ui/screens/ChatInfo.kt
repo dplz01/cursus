@@ -152,8 +152,8 @@ private fun ContactPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
         return
     }
     PageScaffold("Contact", onClose, actions = {
-        HeaderIcon(R.drawable.ic_star, "Favourite", chat.favorite) { model.setFavorite(chat, !chat.favorite) }
-        HeaderIcon(R.drawable.ic_mute_notification, "Mute", chat.muted) { model.setMuted(chat, !chat.muted) }
+        HeaderIcon(if (chat.favorite) R.drawable.ic_star_filled else R.drawable.ic_star, "Favourite", chat.favorite) { model.setFavorite(chat, !chat.favorite) }
+        HeaderIcon(if (chat.muted) R.drawable.ic_notifications_off else R.drawable.ic_notifications_off_outline, "Mute", chat.muted) { model.setMuted(chat, !chat.muted) }
         HeaderIcon(R.drawable.ic_settings, "Chat preferences") { prefs = true }
     }) {
         CursusCard {
@@ -327,8 +327,8 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
     var editing by remember { mutableStateOf<EditField?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     PageScaffold(if (chat.isChannel) "Channel" else "Group", onClose, actions = {
-        HeaderIcon(R.drawable.ic_star, "Favourite", chat.favorite) { model.setFavorite(chat, !chat.favorite) }
-        HeaderIcon(R.drawable.ic_mute_notification, "Mute", chat.muted) { model.setMuted(chat, !chat.muted) }
+        HeaderIcon(if (chat.favorite) R.drawable.ic_star_filled else R.drawable.ic_star, "Favourite", chat.favorite) { model.setFavorite(chat, !chat.favorite) }
+        HeaderIcon(if (chat.muted) R.drawable.ic_notifications_off else R.drawable.ic_notifications_off_outline, "Mute", chat.muted) { model.setMuted(chat, !chat.muted) }
         HeaderIcon(R.drawable.ic_settings, "Group preferences") { onOpenPane(GroupPane.Preferences) }
     }) {
         // Profile card
@@ -614,7 +614,7 @@ private fun GroupPreferencesPane(model: AppModel, chat: Chat) {
                     onCheckedChange = { model.setGroupFeature(chat, key, it) },
                     colors = androidx.compose.material3.SwitchDefaults.colors(
                         checkedTrackColor = Cursus.colors.accent, checkedThumbColor = Cursus.colors.accentOn,
-                        uncheckedTrackColor = Cursus.colors.bgSidebar, uncheckedBorderColor = Cursus.colors.border,
+                        uncheckedTrackColor = Cursus.colors.bgField, uncheckedBorderColor = Cursus.colors.border,
                         uncheckedThumbColor = Cursus.colors.textMuted,
                     ),
                 )

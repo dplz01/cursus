@@ -72,6 +72,27 @@ def shape_to_path(tag, a):
     return None
 
 
+
+def axis_aligned(t):
+    """`matrix(a 0 0 d e f)` or a `translate(..)` / `scale(..)` chain, as
+    [a, 0, 0, d, e, f]; None for anything with rotation or skew."""
+    a, d, e, f = 1.0, 1.0, 0.0, 0.0
+    for name, args in re.findall(r"(\w+)\(([^)]*)\)", t):
+        v = [float(x) for x in re.split(r"[\s,]+", args.strip()) if x]
+        if name == "matrix" and len(v) == 6:
+            if v[1] or v[2]:
+                return None
+            na, nd, ne, nf = v[0], v[3], v[4], v[5]
+        elif name == "translate" and v:
+            na, nd, ne, nf = 1.0, 1.0, v[0], v[1] if len(v) > 1 else 0.0
+        elif name == "scale" and v:
+            na, nd, ne, nf = v[0], v[1] if len(v) > 1 else v[0], 0.0, 0.0
+        else:
+            return None
+        # current ∘ new (SVG applies the rightmost transform first)
+        a, d, e, f = a * na, d * nd, a * ne + e, d * nf + f
+    return [a, 0.0, 0.0, d, e, f]
+
 def convert(path):
     tree = ET.parse(path)
     svg = tree.getroot()
@@ -103,11 +124,10 @@ def convert(path):
             t = child.get("transform")
             if t:
                 # Any element may carry a transform: wrap it in a <group>.
-                m = re.fullmatch(r"\s*matrix\(([^)]*)\)\s*", t)
-                vals = [float(v) for v in re.split(r"[\s,]+", m.group(1).strip())] if m else None
+                vals = axis_aligned(t)
                 if not vals or vals[1] != 0 or vals[2] != 0:
                     sys.exit(f"{path}: unsupported transform {t}")
-                lines.append(f'{indent}<group android:scaleX="{fmt(vals[0])}" android:scaleY="{fmt(vals[3])}" '
+                lines.append(f'{indent}<group android:scaleX="{vals[0]:.8g}" android:scaleY="{vals[3]:.8g}" '
                              f'android:translateX="{fmt(vals[4])}" android:translateY="{fmt(vals[5])}">')
                 inner = ET.Element(child.tag, {k: v for k, v in child.attrib.items() if k != "transform"})
                 inner.extend(list(child))

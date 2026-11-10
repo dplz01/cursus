@@ -45,6 +45,13 @@ data class CursusColors(
     val success: Color,
     val gold: Color,
     val disabledFill: Color,
+    /** Text fields, composer pill and quiet buttons (Linux `bg_field`). */
+    val bgField: Color,
+    /** Message bubbles; meta (time) and delivered tick inside sent ones. */
+    val bubbleIn: Color,
+    val bubbleOut: Color,
+    val bubbleOutMeta: Color,
+    val bubbleOutTick: Color,
     val isDark: Boolean,
 )
 
@@ -52,12 +59,14 @@ private val Accent = Color(0xFF2F6FED)
 private val AccentDark = Color(0xFF5B8CFF)
 
 val LightTokens = CursusColors(
-    bgApp = Color(0xFFF4F5F7),
-    bgSidebar = Color(0xFFEBEDF0),
+    // Sidebar, list and bars are white; the conversation / detail panes sit
+    // on a soft grey so white bubbles and cards lift off it (linux theme.rs).
+    bgApp = Color(0xFFEEF0F4),
+    bgSidebar = Color(0xFFFFFFFF),
     bgList = Color(0xFFFFFFFF),
-    bgPanel = Color(0xFFFFFFFF),
+    bgPanel = Color(0xFFEEF0F4),
     bgElevated = Color(0xFFFFFFFF),
-    bgHover = Color(0xFFE2E5EA),
+    bgHover = Color(0xFFEDEFF3),
     textPrimary = Color(0xFF12141A),
     textSecondary = Color(0xFF5C6370),
     textMuted = Color(0xFF8B919C),
@@ -65,13 +74,18 @@ val LightTokens = CursusColors(
     accentHover = Color(0xFF255DD1),
     accentPress = Color(0xFF1C4CB8),
     accentOn = Color(0xFFFFFFFF),
-    accentSoft = Accent.copy(alpha = 0.16f),
-    accentSoftPress = Accent.copy(alpha = 0.36f),
-    border = Color(0xFFD7DBE2),
+    accentSoft = Accent.copy(alpha = 0.12f),
+    accentSoftPress = Accent.copy(alpha = 0.30f),
+    border = Color(0xFFDDE1E7),
     danger = Color(0xFFC62828),
     success = Color(0xFF2E7D32),
     gold = Color(0xFFB58B0F),
     disabledFill = Color(0xFFD1D5DA),
+    bgField = Color(0xFFF2F4F7),
+    bubbleIn = Color(0xFFFFFFFF),
+    bubbleOut = Color(0xFFD8E5FF),
+    bubbleOutMeta = Color(0xFF5A6C8F),
+    bubbleOutTick = Accent,
     isDark = false,
 )
 
@@ -96,6 +110,11 @@ val DarkTokens = CursusColors(
     success = Color(0xFF6BCB77),
     gold = Color(0xFFECD04F),
     disabledFill = Color(0xFF404D66),
+    bgField = Color(0xFF181B22),
+    bubbleIn = Color(0xFF262B36),
+    bubbleOut = AccentDark.copy(alpha = 0.18f),
+    bubbleOutMeta = Color(0xFF6E7585),
+    bubbleOutTick = AccentDark,
     isDark = true,
 )
 

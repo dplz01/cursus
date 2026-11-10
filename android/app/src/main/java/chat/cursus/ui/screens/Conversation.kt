@@ -46,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -91,8 +92,9 @@ import java.time.LocalDate
 fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () -> Unit) {
     val c = Cursus.colors
     Column(Modifier.fillMaxSize().background(c.bgPanel).windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
+        // Header and composer are bars (sidebar tone); the history sits on the panel.
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().background(c.bgSidebar).padding(horizontal = 4.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (showBack) IconTool(R.drawable.ic_back, "Back", { model.select(null) })
@@ -234,9 +236,10 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
             Box {
                 Column(
                     Modifier
+                        // Light mode: a whisper of shadow lifts white bubbles off the grey (Linux).
+                        .then(if (c.isDark) Modifier else Modifier.shadow(1.dp, bubbleShape(m.outgoing, lastOfRun)))
                         .clip(bubbleShape(m.outgoing, lastOfRun))
-                        .background(if (m.outgoing) c.accentSoft else c.bgElevated)
-                        .then(if (m.outgoing || c.isDark) Modifier else Modifier.border(1.dp, c.border, bubbleShape(false, lastOfRun)))
+                        .background(if (m.outgoing) c.bubbleOut else c.bubbleIn)
                         .combinedClickable(onClick = {}, onLongClick = { menu = true })
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
@@ -251,7 +254,7 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
                     }
                     m.quote?.let { q ->
                         Row(
-                            Modifier.padding(bottom = 6.dp).clip(Radius.sm).background(c.bgSidebar.copy(alpha = 0.7f)),
+                            Modifier.padding(bottom = 6.dp).clip(Radius.sm).background(c.bgField.copy(alpha = 0.7f)),
                         ) {
                             Box(Modifier.width(3.dp).heightIn(min = 32.dp).background(c.accent))
                             Text(
@@ -271,7 +274,7 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         if (m.edited) Text("edited", style = Cursus.type.meta.copy(fontSize = 11.sp), color = c.textMuted)
-                        Text(Stamps.time(m.createdAt), style = Cursus.type.meta.copy(fontSize = 11.sp), color = c.textMuted)
+                        Text(Stamps.time(m.createdAt), style = Cursus.type.meta.copy(fontSize = 11.sp), color = if (m.outgoing) c.bubbleOutMeta else c.textMuted)
                         if (m.outgoing) DeliveryGlyph(m.delivery, c)
                     }
                 }
@@ -323,10 +326,10 @@ private fun bubbleShape(outgoing: Boolean, lastOfRun: Boolean): androidx.compose
 private fun DeliveryGlyph(delivery: String, c: CursusColors) {
     val (icon, tint) = when (delivery) {
         "pending" -> R.drawable.ic_history to c.textMuted
-        "delivered" -> R.drawable.ic_check_read to c.accent
+        "delivered" -> R.drawable.ic_check_read to c.bubbleOutTick
         "error" -> R.drawable.ic_block_prohibited to c.danger
         "warning" -> R.drawable.ic_history to c.gold
-        else -> R.drawable.ic_check to c.textMuted
+        else -> R.drawable.ic_check to c.bubbleOutMeta
     }
     Icon(painterResource(icon), delivery, Modifier.size(14.dp), tint = tint)
 }
@@ -366,11 +369,11 @@ private fun RichText(model: AppModel, segments: List<Segment>, emojiOnly: Boolea
                 "bold" -> SpanStyle(fontWeight = FontWeight.Bold)
                 "italic" -> SpanStyle(fontStyle = FontStyle.Italic)
                 "strike" -> SpanStyle(textDecoration = TextDecoration.LineThrough)
-                "snippet" -> SpanStyle(fontFamily = FontFamily.Monospace, background = c.bgSidebar)
+                "snippet" -> SpanStyle(fontFamily = FontFamily.Monospace, background = c.bgField)
                 "small" -> SpanStyle(fontSize = 13.sp, color = c.textSecondary)
                 "colored" -> SpanStyle(color = segmentColor(s.color, c))
                 "mention" -> SpanStyle(color = c.accent, fontWeight = FontWeight.Medium)
-                "secret" -> if (i in revealed) SpanStyle(background = c.bgSidebar) else SpanStyle(color = Color.Transparent, background = c.textMuted)
+                "secret" -> if (i in revealed) SpanStyle(background = c.bgField) else SpanStyle(color = Color.Transparent, background = c.textMuted)
                 else -> SpanStyle()
             }
             val link = s.link

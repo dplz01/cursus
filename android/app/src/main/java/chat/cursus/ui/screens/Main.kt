@@ -1,6 +1,17 @@
 package chat.cursus.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -22,9 +33,6 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.NavigationRailItemDefaults
@@ -157,11 +165,12 @@ fun MainScreen(model: AppModel) {
         }
     }
 
+    val listTone = if (model.section == Section.Settings) c.bgPanel else c.bgList
     Box(Modifier.fillMaxSize().background(c.bgApp)) {
         if (mode == LayoutMode.Desktop) {
             Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Top))) {
                 Rail(model)
-                Box(Modifier.width(320.dp).fillMaxHeight().background(c.bgList)) { list() }
+                Box(Modifier.width(320.dp).fillMaxHeight().background(listTone)) { list() }
                 VerticalDivider(color = c.border, thickness = 1.dp)
                 Box(Modifier.weight(1f).fillMaxHeight().background(c.bgPanel)) {
                     val p = page
@@ -186,12 +195,16 @@ fun MainScreen(model: AppModel) {
                     open -> Box(Modifier.fillMaxSize().background(c.bgPanel).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))) {
                         conversation()
                     }
-                    else -> Column(Modifier.fillMaxSize()) {
+                    // Linux main page: the section nav floats over the list
+                    // page's bottom, with a clearance band so nothing hides
+                    // under it; Settings sits on the panel tone (cards here).
+                    else -> Box(Modifier.fillMaxSize().background(listTone)) {
                         Box(
-                            Modifier.weight(1f).background(c.bgList)
-                                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)),
+                            Modifier.fillMaxSize()
+                                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+                                .padding(bottom = NavBarHeight + NavInset),
                         ) { list() }
-                        BottomBar(model)
+                        BottomBar(model, Modifier.align(Alignment.BottomCenter))
                     }
                 }
             }
@@ -202,24 +215,47 @@ fun MainScreen(model: AppModel) {
     FileApprovalDialog(model)
 }
 
+private val NavBarHeight = 54.dp
+private val NavInset = 12.dp
+private val NavShape = RoundedCornerShape(18.dp)
+private val NavItemShape = RoundedCornerShape(12.dp)
+
+/**
+ * Linux `bottom_nav` + `floating_nav_style`: a rounded elevated card inset
+ * 12dp from the edges, 1px border and a soft drop shadow; each destination
+ * fills an equal cell, the active one on an accent-soft rounded square.
+ */
 @Composable
-private fun BottomBar(model: AppModel) {
+private fun BottomBar(model: AppModel, modifier: Modifier = Modifier) {
     val c = Cursus.colors
-    NavigationBar(containerColor = c.bgSidebar, tonalElevation = 0.dp) {
-        for (s in Section.entries) {
-            val badge = sectionUnread(model, s)
-            NavigationBarItem(
-                selected = model.section == s,
-                onClick = { model.section = s },
-                icon = { NavIcon(s, badge) },
-                label = null,
-                alwaysShowLabel = false,
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = c.accent,
-                    unselectedIconColor = c.textSecondary,
-                    indicatorColor = c.accentSoft,
-                ),
+    Row(
+        modifier
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+            .padding(start = NavInset, end = NavInset, bottom = NavInset)
+            .fillMaxWidth()
+            .height(NavBarHeight)
+            .shadow(
+                if (c.isDark) 12.dp else 8.dp, NavShape,
+                ambientColor = Color.Black, spotColor = Color.Black,
             )
+            .clip(NavShape)
+            .background(c.bgElevated)
+            .border(1.dp, c.border, NavShape)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        for (s in Section.entries) {
+            val active = model.section == s
+            Box(
+                Modifier.weight(1f).fillMaxHeight().clip(NavItemShape)
+                    .background(if (active) c.accentSoft else Color.Transparent)
+                    .clickable { model.section = s },
+                contentAlignment = Alignment.Center,
+            ) {
+                CompositionLocalProvider(LocalContentColor provides if (active) c.accent else c.textSecondary) {
+                    NavIcon(s, sectionUnread(model, s))
+                }
+            }
         }
     }
 }

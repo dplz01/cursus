@@ -28,6 +28,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import chat.cursus.AppModel
 import chat.cursus.R
 import chat.cursus.ThemeMode
@@ -158,6 +162,7 @@ fun SettingsPane(model: AppModel) {
     val uri = LocalUriHandler.current
     val user = model.user
     var editing by remember { mutableStateOf<EditField?>(null) }
+    var showLicences by remember { mutableStateOf(false) }
     var address by remember { mutableStateOf<ConnLink?>(null) }
     var loadingAddress by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -212,7 +217,7 @@ fun SettingsPane(model: AppModel) {
                                 color = if (on) c.accent else c.textPrimary,
                                 fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
                                 modifier = Modifier.weight(1f).clip(Radius.md)
-                                    .background(if (on) c.accentSoft else c.bgSidebar)
+                                    .background(if (on) c.accentSoft else c.bgField)
                                     .clickable { model.prefs.theme = mode }
                                     .padding(vertical = 10.dp)
                                     .then(Modifier),
@@ -240,7 +245,7 @@ fun SettingsPane(model: AppModel) {
                     ActionTile(R.drawable.ic_lock, "Lock now", { model.lock() })
                 }
                 CursusCard {
-                    CardTitle(R.drawable.ic_mute_notification, "Notifications", "Alerts and background running")
+                    CardTitle(R.drawable.ic_notifications, "Notifications", "Alerts and background running")
                     SwitchRow("Receive in background", model.prefs.background, {
                         model.prefs.background = it
                         model.syncBackground()
@@ -260,12 +265,18 @@ fun SettingsPane(model: AppModel) {
                             style = Cursus.type.body, color = c.accent,
                             modifier = Modifier.clickable { uri.openUri("https://github.com/dplz01/cursus") },
                         )
+                        Text(
+                            "Licences and credits",
+                            style = Cursus.type.body, color = c.accent,
+                            modifier = Modifier.clickable { showLicences = true },
+                        )
                     }
                 }
                 if (model.busy) CircularProgressIndicator(color = c.accent)
             }
         }
     }
+    if (showLicences) LicencesOverlay { showLicences = false }
     editing?.let { f ->
         val initial = when (f) {
             EditField.OwnName -> user?.displayName
@@ -279,6 +290,82 @@ fun SettingsPane(model: AppModel) {
                 else -> model.updateOwnProfile(description = v)
             }
             editing = null
+        }
+    }
+}
+
+/** What each bundled notice file covers (licenses/NOTICE.md has the table). */
+private val LicenceFiles = listOf(
+    "NOTICE.md" to "Overview: every component, its licence and source",
+    "LICENSE" to "Cursus — GNU Affero General Public License v3",
+    "ANDROID-LIBRARIES.txt" to "AndroidX, Jetpack Compose, Kotlin (Apache-2.0)",
+    "THIRD_PARTY_LICENSES.txt" to "Rust crates in the Cursus core",
+    "SIMPLEX-CORE-LICENSES.txt" to "Libraries inside the SimpleX Chat core",
+    "ICONS-ATTRIBUTION.md" to "Icon authors and licences",
+    "MIT-Ionicons.txt" to "Ionicons by Ben Sperry / Ionic (MIT)",
+    "MIT-Line-MD.txt" to "Line MD by Vjacheslav Trushkin (MIT)",
+)
+
+/**
+ * Licence texts bundled in the APK (`assets/licenses`, copied from the repo's
+ * `LICENSE` and `licenses/` by the build): a list of the notice files, each
+ * opening in a reader. The big ones (Rust crates, SimpleX core) run to a few
+ * MB, so the reader renders lines lazily and loads off the main thread.
+ */
+@Composable
+private fun LicencesOverlay(onDismiss: () -> Unit) {
+    val c = Cursus.colors
+    val context = LocalContext.current
+    val files = remember {
+        val present = context.assets.list("licenses")?.toSet().orEmpty()
+        val known = LicenceFiles.filter { it.first in present }
+        known + (present - known.map { it.first }.toSet()).sorted().map { it to "" }
+    }
+    var open by remember { mutableStateOf<String?>(null) }
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        val name = open
+        androidx.activity.compose.BackHandler { if (name != null) open = null else onDismiss() }
+        Column(
+            Modifier.fillMaxSize().background(c.bgPanel)
+                .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.safeDrawing),
+        ) {
+            if (name == null) {
+                PaneHeader("Licences and credits", onBack = onDismiss)
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    PageColumn {
+                        Text(
+                            "Cursus is free software under the GNU AGPL v3. It is built on the SimpleX Chat core " +
+                                "and on the open-source libraries, icons and fonts credited here.",
+                            style = Cursus.type.meta, color = c.textSecondary,
+                            modifier = Modifier.padding(horizontal = 8.dp),
+                        )
+                        CursusCard {
+                            for ((file, about) in files) {
+                                NavRow(R.drawable.ic_review_file, file, about.ifEmpty { null }) { open = file }
+                            }
+                        }
+                    }
+                }
+            } else {
+                PaneHeader(name, onBack = { open = null })
+                val lines by androidx.compose.runtime.produceState<List<String>?>(null, name) {
+                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        runCatching { context.assets.open("licenses/$name").bufferedReader().use { it.readLines() } }
+                            .getOrDefault(listOf("Could not read $name."))
+                    }
+                }
+                val mono = Cursus.type.meta.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, fontSize = 11.sp)
+                androidx.compose.foundation.lazy.LazyColumn(
+                    Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    val l = lines.orEmpty()
+                    items(l.size) { i -> Text(l[i].ifEmpty { " " }, style = mono, color = c.textPrimary) }
+                }
+            }
         }
     }
 }

@@ -74,6 +74,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     var section by mutableStateOf(Section.Chats)
     val chats = mutableStateListOf<Chat>()
+    /** Unused one-time links (gold counter beside "+", list overlay). */
+    val pendingInvitations = mutableStateListOf<Invitation>()
     var selection by mutableStateOf<String?>(null); private set
     val messages = mutableStateListOf<Message>()
     var messagesFor by mutableStateOf<String?>(null); private set
@@ -271,6 +273,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 val list: List<Chat> = Core.call("listChats")
                 chats.clear()
                 chats.addAll(list)
+                refreshPendingInvitations() // same reply carried them
             } catch (e: Exception) {
                 notice = e.message
             }
@@ -760,25 +763,60 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         error = e.message; null
     }
 
-    /** The newest one-time link nobody used yet, else a new one (core rule). */
-    suspend fun oneTimeInvitation(): Invitation? = try {
-        Core.call<Invitation>("oneTimeInvitation", mapOf("incognito" to prefs.incognito))
-            .also { prefs.incognito = it.incognito } // a kept link keeps its own state
+    /** "+" opens the New page, which creates a one-time link at once. */
+    suspend fun newInvitation(): Invitation? = try {
+        Core.call<Invitation>("newInvitation", mapOf("incognito" to prefs.incognito))
+            .also { refreshPendingInvitations() }
     } catch (e: Exception) {
         error = e.message; null
     }
 
-    /** A fresh one-time link replacing [previous] (deleted while unused). */
+    /** "New link" (after the user confirmed): delete [previous], create a fresh one. */
     suspend fun regenerateInvitation(previous: Long?): Invitation? = try {
         Core.call<Invitation>("regenerateInvitation", mapOf("previous" to previous, "incognito" to prefs.incognito))
+            .also { refreshPendingInvitations() }
     } catch (e: Exception) {
         error = e.message; null
+    }
+
+    /** Delete an unused link; whoever has it can no longer connect. [quiet]: no error shown. */
+    fun deleteInvitation(connId: Long, quiet: Boolean = false) {
+        viewModelScope.launch {
+            try {
+                Core.run("deleteInvitation", mapOf("connId" to connId))
+                if (!quiet) notice = "Link deleted — it no longer works"
+            } catch (e: Exception) {
+                if (!quiet) error = e.message
+            }
+            refreshPendingInvitations()
+        }
+    }
+
+    /** Name a pending link (empty clears it). */
+    fun setInvitationAlias(connId: Long, alias: String) {
+        viewModelScope.launch {
+            try {
+                Core.call<String>("setInvitationAlias", mapOf("connId" to connId, "alias" to alias))
+            } catch (e: Exception) {
+                error = e.message
+            }
+            refreshPendingInvitations()
+        }
+    }
+
+    /** From the core's copy (last chats load + invitation calls since). */
+    suspend fun refreshPendingInvitations() {
+        val list = runCatching { Core.call<List<Invitation>>("pendingInvitations") }.getOrNull() ?: return
+        if (list != pendingInvitations.toList()) {
+            pendingInvitations.clear()
+            pendingInvitations.addAll(list)
+        }
     }
 
     /** Switch an unused link to / from a random profile; null if that failed. */
     suspend fun setInvitationIncognito(connId: Long, on: Boolean): Boolean? = try {
         Core.call<Boolean>("setInvitationIncognito", mapOf("connId" to connId, "on" to on))
-            .also { prefs.incognito = it }
+            .also { prefs.incognito = it; refreshPendingInvitations() }
     } catch (e: Exception) {
         error = e.message; null
     }

@@ -36,10 +36,16 @@ data class User(
 @Serializable
 data class ConnLink(val display: String = "", val full: String = "", val short: String? = null)
 
-/** The Connect card's one-time link (`cursus_core::Invitation`): kept by the
- *  core until someone uses it; [incognito] = they'll see a random profile. */
+/** A one-time link the user created and nobody used yet
+ *  (`cursus_core::Invitation`); [incognito] = they'll see a random profile. */
 @Serializable
-data class Invitation(val link: ConnLink = ConnLink(), val connId: Long = 0, val incognito: Boolean = false)
+data class Invitation(
+    val link: ConnLink = ConnLink(),
+    val connId: Long = 0,
+    val incognito: Boolean = false,
+    val alias: String = "",
+    val createdAt: String = "",
+)
 
 @Serializable
 data class Chat(

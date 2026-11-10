@@ -61,6 +61,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import chat.cursus.ui.components.NavRow
 import chat.cursus.ui.components.CursusOverlay
+import chat.cursus.ui.components.DangerButton
 import chat.cursus.ui.components.RoundedField
 import chat.cursus.ui.components.PageColumn
 import chat.cursus.ui.components.PrimaryButton
@@ -115,10 +116,11 @@ fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOp
 }
 
 /**
- * Linux Connect card: title + ⓘ sheet, the one-time link (loaded on open,
- * kept by the core until someone uses it) with its incognito switch and
- * "New link", then joining with a pasted link. The reusable address is in
- * Settings → Address.
+ * Linux Connect card: title + ⓘ sheet, a one-time link created as the page
+ * opens with its incognito switch and "New link" (asks first: the shown link
+ * is deleted), then joining with a pasted link. Leaving the page deletes the
+ * link if it was never copied — nobody can have it; copied ones stay listed
+ * under the gold button beside "+". The reusable address is in Settings.
  */
 @Composable
 private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit, onClose: () -> Unit) {
@@ -126,12 +128,22 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     var invitation by remember { mutableStateOf<Invitation?>(null) }
+    var copied by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(true) }
     var info by remember { mutableStateOf(false) }
+    var confirmNew by remember { mutableStateOf(false) }
     val incognito = model.prefs.incognito
     LaunchedEffect(Unit) {
-        invitation = model.oneTimeInvitation()
+        invitation = model.newInvitation()
         busy = false
+    }
+    // Never copied: nobody can have it, so don't leave it behind.
+    val latest by androidx.compose.runtime.rememberUpdatedState(invitation to copied)
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            val (inv, wasCopied) = latest
+            if (inv != null && !wasCopied) model.deleteInvitation(inv.connId, quiet = true)
+        }
     }
     CursusCard {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -147,7 +159,7 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
                 Box(Modifier.weight(1f)) {
                     val inv = invitation
                     if (inv != null) {
-                        LinkBox(inv.link.display) { model.notice = "One-time link copied" }
+                        LinkBox(inv.link.display) { copied = true; model.notice = "One-time link copied" }
                     } else {
                         Text(
                             if (busy) "Creating link…" else "No link yet",
@@ -170,7 +182,7 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
                                 if (state != null) {
                                     invitation = inv.copy(incognito = state)
                                 } else {
-                                    invitation = model.oneTimeInvitation() // used meanwhile
+                                    invitation = null // used or deleted meanwhile
                                 }
                                 busy = false
                             }
@@ -185,10 +197,11 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
                     style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.weight(1f),
                 )
                 SecondaryButton("New link", {
-                    busy = true
-                    scope.launch {
-                        model.regenerateInvitation(invitation?.connId)?.let { invitation = it }
-                        busy = false
+                    if (invitation != null) {
+                        confirmNew = true
+                    } else {
+                        busy = true
+                        scope.launch { invitation = model.newInvitation(); copied = false; busy = false }
                     }
                 }, enabled = !busy)
             }
@@ -199,6 +212,26 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
                     IconTool(R.drawable.ic_paste, "Paste", { clipboard.getText()?.let { onLink(it.text.trim()) } })
                 }
                 PrimaryButton("Connect", { model.connect(link.trim(), incognito) { onClose() } }, Modifier.fillMaxWidth(), enabled = link.isNotBlank())
+            }
+        }
+    }
+    if (confirmNew) {
+        CursusOverlay({ confirmNew = false }) {
+            Text("Create a new link?", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+            Text(
+                "The previous link will be deleted. Anyone you already sent it to won't be able to connect with it.",
+                style = Cursus.type.meta, color = c.textSecondary,
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                SecondaryButton("Cancel", { confirmNew = false })
+                DangerButton("Delete and create new", {
+                    confirmNew = false
+                    busy = true
+                    scope.launch {
+                        model.regenerateInvitation(invitation?.connId)?.let { invitation = it; copied = false }
+                        busy = false
+                    }
+                })
             }
         }
     }
@@ -220,7 +253,8 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
 
 /** Same text as the Linux ⓘ sheet (`SettingInfo::Connect`). */
 private val ConnectInfoText = listOf(
-    "One-time link: send it to one person. Whoever opens it first becomes your contact, then the link stops working. It stays the same until someone uses it, so you can copy it again later; \u201cNew link\u201d replaces it with a fresh one.",
+    "One-time link: a new one is made each time you open this page. Send it to one person \u2014 whoever opens it first becomes your contact, then it stops working. \u201cNew link\u201d deletes the shown link and makes a fresh one.",
+    "Links you copied that nobody has used yet stay valid: the gold link button next to + lists them, to copy, name or delete. A link you never copied is deleted when you leave this page \u2014 nobody can have it.",
     "Incognito: when on, the person who connects sees a new random name instead of your profile \u2014 a different one for each contact. You can switch it until the link is used. It also applies when you connect with a link below.",
     "Join with a link: paste a link someone sent you \u2014 a one-time link, an address, or a group or channel link \u2014 and tap Connect.",
     "Your reusable address, which many people can use, is in Settings \u2192 Address.",

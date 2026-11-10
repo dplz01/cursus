@@ -1,5 +1,12 @@
 package chat.cursus.ui.screens
 
+import chat.cursus.ui.components.RoundedField
+import chat.cursus.ui.components.CursusOverlay
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -94,9 +101,14 @@ fun ChatListPane(model: AppModel, channels: Boolean, onNew: () -> Unit) {
         .filter { it.isChannel == channels }
         .sortedWith(compareByDescending<Chat> { it.isRequest }.thenByDescending { it.favorite }.thenByDescending { it.lastTs ?: "" })
     Column(Modifier.fillMaxSize()) {
+        var pendingOpen by remember { mutableStateOf(false) }
         PaneHeader(if (channels) "Channels" else "Chats") {
+            if (model.pendingInvitations.isNotEmpty()) {
+                PendingLinksButton(model.pendingInvitations.size) { pendingOpen = true }
+            }
             HeaderPlus(if (channels) "New channel" else "New chat", onNew)
         }
+        if (pendingOpen) PendingLinksOverlay(model) { pendingOpen = false }
         if (chats.isEmpty()) {
             Column(
                 Modifier.fillMaxSize().padding(24.dp),
@@ -219,6 +231,114 @@ fun ConfirmDialog(title: String, text: String, action: String, onConfirm: () -> 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SecondaryButton("Cancel", onDismiss, Modifier.weight(1f))
             DangerButton(action, onConfirm, Modifier.weight(1f))
+        }
+    }
+}
+
+
+/** Linux `pending_links_button`: gold square (same box as "+") with the
+ *  number of unused one-time links; opens their list. */
+@Composable
+private fun PendingLinksButton(count: Int, onClick: () -> Unit) {
+    val c = Cursus.colors
+    val onGold = if (c.isDark) c.bgApp else androidx.compose.ui.graphics.Color.White
+    Box(Modifier.padding(end = 8.dp).size(36.dp)) {
+        Box(
+            Modifier.fillMaxSize().clip(Radius.md).background(c.gold).clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(painterResource(R.drawable.ic_link_minimalistic_2), "Pending links", Modifier.size(20.dp), tint = onGold)
+        }
+        Box(
+            Modifier.align(Alignment.TopEnd).offset(x = 5.dp, y = (-5).dp)
+                .border(1.5.dp, c.bgList, Radius.pill).clip(Radius.pill).background(c.accent)
+                .padding(horizontal = 5.dp, vertical = 1.dp),
+        ) {
+            Text(if (count > 99) "99+" else "$count", style = Cursus.type.meta.copy(fontSize = 10.sp), color = c.accentOn, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/** Unused one-time links: copy (short / full), name, delete (asks first).
+ *  Anyone holding one can still connect, so they stay visible here. */
+@Composable
+private fun PendingLinksOverlay(model: AppModel, onDismiss: () -> Unit) {
+    val c = Cursus.colors
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    var renaming by remember { mutableStateOf<Long?>(null) }
+    var draft by remember { mutableStateOf("") }
+    var deleting by remember { mutableStateOf<Long?>(null) }
+    val copy = { text: String -> clipboard.setText(androidx.compose.ui.text.AnnotatedString(text)); model.notice = "Link copied" }
+    CursusOverlay(onDismiss) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(Modifier.size(36.dp).clip(Radius.pill).background(c.accentSoft), contentAlignment = Alignment.Center) {
+                Icon(painterResource(R.drawable.ic_link_minimalistic_2), null, Modifier.size(18.dp), tint = c.gold)
+            }
+            Text("Pending links", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            IconTool(R.drawable.ic_cancel, "Close", onDismiss)
+        }
+        Text(
+            "One-time links you created that nobody has used yet. Anyone who has one can still connect \u2014 delete the ones you no longer need.",
+            style = Cursus.type.meta, color = c.textSecondary,
+        )
+        if (model.pendingInvitations.isEmpty()) {
+            Text("No pending links.", style = Cursus.type.meta, color = c.textMuted)
+        }
+        Column(
+            Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            for (inv in model.pendingInvitations) {
+                Column(
+                    Modifier.fillMaxWidth().clip(Radius.lg).background(c.bgField).border(1.dp, c.border, Radius.lg)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (renaming == inv.connId) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            RoundedField(draft, { draft = it }, "Name, e.g. who it's for", Modifier.weight(1f))
+                            PrimaryButton("Save", {
+                                model.setInvitationAlias(inv.connId, draft.trim())
+                                renaming = null
+                            })
+                        }
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    inv.alias.ifBlank { "Unnamed link" }, style = Cursus.type.body,
+                                    color = if (inv.alias.isBlank()) c.textSecondary else c.textPrimary,
+                                )
+                                val created = Stamps.list(inv.createdAt).takeIf { it.isNotEmpty() }?.let { "Created $it" }
+                                Text(
+                                    listOfNotNull(created, if (inv.incognito) "incognito" else null).joinToString(" \u00b7 "),
+                                    style = Cursus.type.meta, color = c.textMuted,
+                                )
+                            }
+                            IconTool(R.drawable.ic_trash_delete, "Delete link", { deleting = inv.connId }, tint = c.danger)
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (inv.link.short != null) {
+                            SecondaryButton("Copy", { copy(inv.link.display) })
+                            SecondaryButton("Copy full", { copy(inv.link.full) })
+                        } else {
+                            SecondaryButton("Copy", { copy(inv.link.full) })
+                        }
+                        SecondaryButton("Name", { draft = inv.alias; renaming = inv.connId })
+                    }
+                }
+            }
+        }
+    }
+    deleting?.let { id ->
+        CursusOverlay({ deleting = null }) {
+            Text("Delete this link?", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+            Text("It will stop working. Anyone you sent it to won't be able to connect with it.", style = Cursus.type.meta, color = c.textSecondary)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                SecondaryButton("Cancel", { deleting = null })
+                DangerButton("Delete", { model.deleteInvitation(id); deleting = null })
+            }
         }
     }
 }

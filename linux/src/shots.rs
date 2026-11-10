@@ -314,6 +314,16 @@ fn shots() {
             let mut m = msg(6, "", false, "09:10");
             m.segments = cursus_core::parse_formatted_text(Some(&v));
             app.messages.push(m);
+            // A one-time invitation on a server with an onion address.
+            let inv = serde_json::json!([
+                {"format": {"type": "simplexLink", "linkType": "invitation",
+                            "simplexUri": "https://smp10.simplex.im/i#Xk2pQ7vN1sLm9aR4",
+                            "smpHosts": ["smp10.simplex.im", "rb2pbttocvnbrngnwziclp2f4ckjq65kebafws6g4hy22cdaiv5dwjqd.onion"]},
+                 "text": "https://smp10.simplex.im/i#Xk2pQ7vN1sLm9aR4"}
+            ]);
+            let mut m = msg(7, "", true, "16:51");
+            m.segments = cursus_core::parse_formatted_text(Some(&inv));
+            app.messages.push(m);
             render(&app, MOBILE, &format!("links-{t}"));
             app.pending_url = Some(crate::PendingLink {
                 url: "https://smp9.simplex.im/g#Xk2pQ7vN1sLm9aR4tY8uW3eZ6cB0dF5hJ".into(),

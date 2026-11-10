@@ -1226,6 +1226,7 @@ name = "cursus-core"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "argon2",
  "base64",
  "cc",
  "chrono",
@@ -1247,7 +1248,6 @@ dependencies = [
 name = "cursus-linux"
 version = "0.1.1"
 dependencies = [
- "argon2",
  "audiopus_sys",
  "base64",
  "chrono",

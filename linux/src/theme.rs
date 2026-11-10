@@ -44,6 +44,10 @@ pub struct Tokens {
     pub always: Color,
     /// Bright yellow fill for things that need attention (pending links).
     pub attention: Color,
+    /// Unplayed waveform bars (played ones are `accent`); `_out` on the
+    /// outgoing bubble, which is already tinted.
+    pub voice_rest: Color,
+    pub voice_rest_out: Color,
     pub accent_hover: Color,
     pub accent_press: Color,
     pub danger_hover: Color,
@@ -86,6 +90,8 @@ impl Tokens {
             success: rgb(0x6BCB77),
             always: Color::from_rgb(0.925, 0.757, 0.310), // gold
             attention: rgb(0xF5C518),
+            voice_rest: rgb(0x6E7585),
+            voice_rest_out: rgb(0x7F93BC),
             accent_hover: Color::from_rgb(0.42, 0.60, 1.0),
             accent_press: Color::from_rgb(0.30, 0.48, 0.92),
             danger_hover: Color::from_rgb(0.85, 0.28, 0.28),
@@ -121,6 +127,9 @@ impl Tokens {
             success: rgb(0x2E7D32),
             always: Color::from_rgb(0.710, 0.545, 0.060), // gold
             attention: rgb(0xF5B800),
+            // Soft accent instead of grey: calmer next to the blue play button.
+            voice_rest: Color::from_rgba(0.184, 0.435, 0.929, 0.32),
+            voice_rest_out: Color::from_rgba(0.184, 0.435, 0.929, 0.45),
             accent_hover: Color::from_rgb(0.145, 0.365, 0.820),
             accent_press: Color::from_rgb(0.110, 0.300, 0.720),
             danger_hover: Color::from_rgb(0.690, 0.110, 0.110),

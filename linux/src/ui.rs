@@ -258,6 +258,9 @@ pub fn shell(app: &App) -> Element<'_, Message> {
     if app.pending_links_open() {
         stack = stack.push(pending_links_overlay(app));
     }
+    if let Some(target) = app.photo_menu() {
+        stack = stack.push(photo_menu_overlay(app, target));
+    }
     if let Some(confirm) = app.link_confirm() {
         stack = stack.push(link_confirm_overlay(app, confirm));
     }
@@ -1165,11 +1168,12 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
         } else {
             Message::OpenUserSupportChat
         };
-        composer_hit(
-            icons::admin_tool(36.0, badge > 0, app.hover_ok()),
-            36.0,
-            open,
-        )
+        if badge > 0 {
+            // Unread support messages: the yellow counter button.
+            attention_button(icons::admin_icon(20.0, theme::on_attention()), badge, open, app.hover_ok())
+        } else {
+            composer_hit(icons::admin_tool(36.0, false, app.hover_ok()), 36.0, open)
+        }
     } else {
         horizontal().width(0).into()
     };
@@ -2841,7 +2845,7 @@ fn voice_draft_bar(
         peaks: draft.peaks.clone(),
         progress: 1.0,
         played: theme::t().accent,
-        rest: theme::t().text_muted,
+        rest: theme::t().voice_rest,
         scale,
     })
     .width(Length::Fill)
@@ -3335,7 +3339,7 @@ fn voice_waveform_row(
         peaks,
         progress,
         played: theme::t().accent,
-        rest: theme::t().text_muted,
+        rest: if msg.outgoing { theme::t().voice_rest_out } else { theme::t().voice_rest },
         scale: app.scale_factor(),
     })
     .width(Length::Fill)
@@ -3371,9 +3375,9 @@ fn voice_waveform_row(
         if let Some(path) = plain.filter(|p| p.is_file()) {
             let playing = app.voice_playback_progress(file.file_id).is_some();
             let icon = if playing {
-                icons::stop_icon(20.0, Color::from_rgb(0.043, 0.063, 0.125))
+                icons::stop_icon(20.0, theme::t().accent_on)
             } else {
-                icons::play_icon(20.0, Color::from_rgb(0.043, 0.063, 0.125))
+                icons::play_icon(20.0, theme::t().accent_on)
             };
             // mouse_area + release: button.on_press blocks swipe-scroll on voice rows.
             mouse_area(
@@ -3440,7 +3444,7 @@ fn offer_action(
     let hit = 28.0;
     mouse_area(
         container(icons::centered_hit(
-            icons::download_icon(16.0, Color::from_rgb(0.043, 0.063, 0.125)),
+            icons::download_icon(16.0, theme::t().accent_on),
             hit,
         ))
         .width(hit)
@@ -3832,7 +3836,7 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
     create = create.push(nav_row(
         icons::user_group_icon(18.0, theme::t().accent),
         "New group",
-        Some("Private group — invite contacts after creating".to_string()),
+        None,
         Message::OpenCreateGroup,
         None,
         d,
@@ -3841,7 +3845,7 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
     create = create.push(nav_row(
         icons::nav_icon(icons::NavIcon::Channels, true, 18.0),
         "New channel",
-        Some("Public channel using enabled chat relays".to_string()),
+        None,
         Message::OpenCreateChannel,
         None,
         d,
@@ -3888,18 +3892,13 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
         );
         col = col.push(vertical().height(6));
         for section in crate::SettingsSection::ALL {
-            let (icon, title, sub) = settings_section_meta(section);
+            let (icon, title, _) = settings_section_meta(section);
             let selected = app.settings_section() == section;
             col = col.push(
                 button(
                     row![
                         icon_disc(icon, 32.0),
-                        column![
-                            text(title).size(d.body).color(theme::t().text_primary),
-                            text(sub).size(d.meta).color(theme::t().text_secondary),
-                        ]
-                        .spacing(1)
-                        .width(Length::Fill),
+                        text(title).size(d.body).color(theme::t().text_primary).width(Length::Fill),
                     ]
                     .spacing(12)
                     .align_y(Alignment::Center),
@@ -3977,23 +3976,25 @@ fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<
     let prefs = app.desktop_prefs();
     let (icon, title, sub) = settings_section_meta(section);
     let mut col = Column::new().spacing(0).width(Length::Fill);
-    col = col.push(card_title(icon, title, sub, d));
+    // The profile card is the profile itself (picture first, like a
+    // contact page): no title row.
+    if section != crate::SettingsSection::Profile {
+        col = col.push(card_title(icon, title, sub, d));
+    }
     match section {
         crate::SettingsSection::Profile => {
             let draft = app.own_profile();
             col = col.push(vertical().height(6));
             col = col.push(profile_identity(
-                profile_avatar(
-                    draft.fields.image.as_deref(),
-                    &draft.fields.display_name,
-                    PROFILE_AVATAR,
+                tappable_avatar(
+                    profile_avatar(
+                        draft.fields.image.as_deref(),
+                        &draft.fields.display_name,
+                        PROFILE_AVATAR,
+                    ),
+                    Message::OpenPhotoMenu(crate::PhotoTarget::Own),
                 ),
-                Some(profile_photo_actions(
-                    draft.fields.image.is_some(),
-                    Message::PickOwnProfileImage,
-                    Message::ClearOwnProfileImage,
-                    hover,
-                )),
+                None,
                 vec![
                     editable_line(
                         &draft.fields.display_name,
@@ -4024,36 +4025,87 @@ fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<
             ));
         }
         crate::SettingsSection::Address => {
-            // The reusable address (moved here from the New page): many
-            // people can use it; each sends a request you accept or reject.
+            // The reusable address, as in the official apps: create it,
+            // show / hide it (hidden by default), delete it. Sharing options
+            // only exist while there is one.
             col = col.push(pref_section("Your address", true, d));
-            col = col.push(match app.address_link() {
-                Some(link) => container(link_copy_box(link, Message::CopyAddressLink, d, hover))
-                    .padding(Padding::from([0, 8]))
-                    .into(),
-                None => nav_row(
-                    icons::address_card_icon(18.0, theme::t().accent),
-                    "Show my address",
-                    Some("Creates one if you don't have it yet".to_string()),
-                    Message::EnsureAddress,
-                    None,
-                    d,
-                    hover,
-                ),
-            });
-            let shares = app
-                .own_profile()
-                .fields
-                .contact_link
-                .as_ref()
-                .is_some_and(|s| !s.is_empty());
-            col = col.push(settings_toggle_row("Share address on profile", shares, Message::SetProfileAddress, d));
-            col = col.push(settings_toggle_row(
-                "Auto-accept address requests",
-                prefs.auto_accept_address,
-                Message::SetAddressAutoAccept,
-                d,
-            ));
+            match app.address_link() {
+                None => {
+                    col = col.push(
+                        container(text("Loading…").size(d.meta).color(theme::t().text_muted))
+                            .padding(Padding::from([6, 8])),
+                    );
+                }
+                Some(None) => {
+                    col = col.push(nav_row(
+                        icons::address_card_icon(18.0, theme::t().accent),
+                        "Create address",
+                        None,
+                        Message::EnsureAddress,
+                        None,
+                        d,
+                        hover,
+                    ));
+                }
+                Some(Some(link)) => {
+                    if app.address_revealed() {
+                        col = col.push(
+                            container(
+                                row![
+                                    link_copy_box(link, Message::CopyAddressLink, d, hover),
+                                    composer_hit(
+                                        icons::eye_icon(20.0, theme::t().accent),
+                                        PROFILE_HEADER_ICON,
+                                        Message::ToggleAddressReveal,
+                                    ),
+                                ]
+                                .spacing(6)
+                                .align_y(Alignment::Center),
+                            )
+                            .padding(Padding::from([0, 8])),
+                        );
+                    } else {
+                        col = col.push(nav_row(
+                            icons::eye_icon(18.0, theme::t().accent),
+                            "Show address",
+                            None,
+                            Message::ToggleAddressReveal,
+                            None,
+                            d,
+                            hover,
+                        ));
+                    }
+                    let shares = app
+                        .own_profile()
+                        .fields
+                        .contact_link
+                        .as_ref()
+                        .is_some_and(|s| !s.is_empty());
+                    col = col.push(settings_toggle_row("Share address on profile", shares, Message::SetProfileAddress, d));
+                    col = col.push(settings_toggle_row(
+                        "Auto-accept address requests",
+                        prefs.auto_accept_address,
+                        Message::SetAddressAutoAccept,
+                        d,
+                    ));
+                    col = col.push(
+                        container(
+                            button(
+                                row![
+                                    icons::trash_icon(16.0, theme::t().danger),
+                                    text("Delete address").size(d.body),
+                                ]
+                                .spacing(8)
+                                .align_y(Alignment::Center),
+                            )
+                            .on_press(Message::AskDeleteAddress)
+                            .padding(Padding::from([8, 12]))
+                            .style(theme::danger_quiet(hover)),
+                        )
+                        .padding(Padding::from([8, 8])),
+                    );
+                }
+            }
         }
         crate::SettingsSection::Appearance => {
             col = col.push(settings_choice_row(
@@ -4387,7 +4439,9 @@ fn setting_info_overlay(app: &App, info: crate::SettingInfo) -> Element<'_, Mess
             }),
     )
     .on_press(Message::CloseSettingInfo);
-    let sheet = container(card)
+    // Opaque card: taps on its empty parts stay on the card (they neither
+    // close the sheet through the backdrop nor reach anything underneath).
+    let sheet = container(iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
@@ -4694,7 +4748,9 @@ fn chat_menu_overlay(app: &App) -> Element<'_, Message> {
     )
     .on_press(Message::CloseChatMenu);
 
-    let sheet = container(card)
+    // Opaque card: taps on its empty parts stay on the card (they neither
+    // close the sheet through the backdrop nor reach anything underneath).
+    let sheet = container(iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
@@ -4947,7 +5003,9 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
             }),
     )
     .on_press(Message::ClosePrefMenu);
-    let sheet = container(card)
+    // Opaque card: taps on its empty parts stay on the card (they neither
+    // close the sheet through the backdrop nor reach anything underneath).
+    let sheet = container(iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
@@ -5261,7 +5319,9 @@ fn message_menu_overlay(app: &App) -> Element<'_, Message> {
     )
     .on_press(Message::CloseMessageMenu);
 
-    let sheet = container(card)
+    // Opaque card: taps on its empty parts stay on the card (they neither
+    // close the sheet through the backdrop nor reach anything underneath).
+    let sheet = container(iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
@@ -5619,7 +5679,7 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
     body = body.push(button_card(card_row(
         icons::settings_icon_plain(18.0, theme::t().accent),
         "Chat preferences",
-        Some("Disappearing messages, receipts, calls…".to_string()),
+        None,
         Message::OpenContactPreferences,
         None,
         d,
@@ -5741,7 +5801,9 @@ fn reaction_members_overlay(app: &App) -> Element<'_, Message> {
     )
     .on_press(Message::CloseReactionMembers);
 
-    let sheet = container(card)
+    // Opaque card: taps on its empty parts stay on the card (they neither
+    // close the sheet through the backdrop nor reach anything underneath).
+    let sheet = container(iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
@@ -5835,7 +5897,9 @@ fn open_url_confirm_overlay(app: &App) -> Element<'_, Message> {
     )
     .on_press(Message::CancelOpenUrl);
 
-    let sheet = container(card)
+    // Opaque card: taps on its empty parts stay on the card (they neither
+    // close the sheet through the backdrop nor reach anything underneath).
+    let sheet = container(iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
@@ -6005,7 +6069,9 @@ fn privacy_confirm_overlay(app: &App) -> Element<'_, Message> {
             }),
     )
     .on_press(Message::CancelPrivacy);
-    let sheet = container(card)
+    // Opaque card: taps on its empty parts stay on the card (they neither
+    // close the sheet through the backdrop nor reach anything underneath).
+    let sheet = container(iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
@@ -6264,31 +6330,49 @@ fn calls_detail(app: &App) -> Element<'_, Message> {
 }
 
 /// Image-pen (set) + cancel/X (clear) for own / group / channel profile photos.
-fn profile_photo_actions(
-    has_image: bool,
-    pick: Message,
-    clear: Message,
-    hover: bool,
-) -> Element<'static, Message> {
-    let tint = theme::t().text_secondary;
-    let hit = PROFILE_HEADER_ICON;
-    row![
-        button(icons::centered_hit(icons::image_pen_icon(18.0, tint), hit))
-            .on_press(pick)
-            .padding(0)
-            .width(hit)
-            .height(hit)
-            .style(theme::secondary_action(hover)),
-        button(icons::centered_hit(icons::cancel_icon(18.0, tint), hit))
-            .on_press_maybe(if has_image { Some(clear) } else { None })
-            .padding(0)
-            .width(hit)
-            .height(hit)
-            .style(theme::secondary_action(hover)),
+/// A profile picture you can change: tap opens the Change / Remove sheet.
+fn tappable_avatar<'a>(avatar: Element<'a, Message>, on_press: Message) -> Element<'a, Message> {
+    mouse_area(avatar)
+        .on_release(on_press)
+        .interaction(mouse::Interaction::Pointer)
+        .into()
+}
+
+/// Change / Remove picture sheet for your profile or a group you own.
+fn photo_menu_overlay(app: &App, target: crate::PhotoTarget) -> Element<'_, Message> {
+    let d = app.density();
+    let hover = app.hover_ok();
+    let (has_image, pick, clear) = match target {
+        crate::PhotoTarget::Own => (
+            app.own_profile().fields.image.is_some(),
+            Message::PickOwnProfileImage,
+            Message::ClearOwnProfileImage,
+        ),
+        crate::PhotoTarget::Group => (
+            app.group_settings().is_some_and(|g| g.image.is_some()),
+            Message::PickGroupProfileImage,
+            Message::ClearGroupProfileImage,
+        ),
+    };
+    let item = |icon: Element<'static, Message>, label: &'static str, msg: Message, danger: bool| {
+        let fg = if danger { theme::t().danger } else { theme::t().text_primary };
+        button(row![icon, text(label).size(d.body).color(fg)].spacing(12).align_y(Alignment::Center))
+            .on_press(msg)
+            .padding(Padding::from([10, 12]))
+            .width(Length::Fill)
+            .style(theme::menu_item(hover))
+    };
+    let mut col = column![
+        text("Profile picture").size(d.body).font(BOLD).color(theme::t().text_primary),
+        item(icons::image_pen_icon(18.0, theme::t().accent), "Change picture", pick, false),
     ]
-    .spacing(6)
-    .align_y(Alignment::Center)
-    .into()
+    .spacing(4)
+    .max_width(360);
+    if has_image {
+        col = col.push(item(icons::trash_icon(18.0, theme::t().danger), "Remove picture", clear, true));
+    }
+    col = col.push(item(icons::cancel_icon(18.0, theme::t().text_secondary), "Cancel", Message::ClosePhotoMenu, false));
+    sheet_overlay(menu_card(col.into(), d), Message::ClosePhotoMenu)
 }
 
 fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
@@ -6446,7 +6530,13 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
         GroupSettingsPane::Overview => {
             let narrow = matches!(app.layout(), LayoutMode::Mobile)
                 || app.window_width() < 720.0;
-            group_overview_pane(g, d, hover, narrow)
+            let support_unread = app
+                .chats()
+                .iter()
+                .find(|c| c.id.chat_type == cursus_core::ChatType::Group && c.id.api_id == g.group_id)
+                .map(|c| app.support_badge_count(c))
+                .unwrap_or(0);
+            group_overview_pane(g, d, hover, narrow, support_unread)
         }
     };
 
@@ -6685,19 +6775,22 @@ fn member_dropdown_overlay(
     )
     .on_press(Message::CloseMemberDropdown);
 
-    let sheet = container(card)
+    // Opaque card: taps on its empty parts stay on the card (they neither
+    // close the sheet through the backdrop nor reach anything underneath).
+    let sheet = container(iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
         .padding(Padding::from([24, 20]));
 
-    Stack::new()
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .push(backdrop)
-        .push(sheet)
-        .into()
+    iced::widget::opaque(
+        Stack::new()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .push(backdrop)
+            .push(sheet),
+    )
 }
 
 fn group_overview_pane(
@@ -6705,6 +6798,7 @@ fn group_overview_pane(
     d: Density,
     hover: bool,
     narrow: bool,
+    support_unread: i64,
 ) -> Element<'_, Message> {
     let owner = can_edit_group_profile(&g.my_role);
     let admin = can_manage_members(&g.my_role);
@@ -6726,25 +6820,23 @@ fn group_overview_pane(
             d,
             hover,
         );
+        let avatar = profile_avatar_fallback(
+            g.image.as_deref(),
+            &g.name,
+            PROFILE_AVATAR,
+            if g.is_channel {
+                AvatarFallback::ChannelIcon
+            } else {
+                AvatarFallback::GroupIcon
+            },
+        );
         profile = profile.push(profile_identity(
-            profile_avatar_fallback(
-                g.image.as_deref(),
-                &g.name,
-                PROFILE_AVATAR,
-                if g.is_channel {
-                    AvatarFallback::ChannelIcon
-                } else {
-                    AvatarFallback::GroupIcon
-                },
-            ),
-            owner.then(|| {
-                profile_photo_actions(
-                    g.image.is_some(),
-                    Message::PickGroupProfileImage,
-                    Message::ClearGroupProfileImage,
-                    hover,
-                )
-            }),
+            if owner {
+                tappable_avatar(avatar, Message::OpenPhotoMenu(crate::PhotoTarget::Group))
+            } else {
+                avatar
+            },
+            None,
             vec![name, alias],
         ));
     }
@@ -6784,7 +6876,7 @@ fn group_overview_pane(
         // Same row as "Chats with members" / "Invite"; opens the editor.
         let preview = g.welcome_message.split_whitespace().collect::<Vec<_>>().join(" ");
         let sub = if preview.is_empty() {
-            "Greet the members who join".to_string()
+            String::new()
         } else {
             preview
         };
@@ -6800,16 +6892,16 @@ fn group_overview_pane(
     }
     if support_ok || moderate {
         let (label, sub, msg) = if moderate {
-            ("Chats with members", "Join requests and member support", Message::OpenSupportChatList)
+            ("Chats with members", "", Message::OpenSupportChatList)
         } else {
-            ("Chat with admins", "Private conversation with moderators", Message::OpenUserSupportChat)
+            ("Chat with admins", "", Message::OpenUserSupportChat)
         };
         people = people.push(card_row(
             icons::admin_icon(18.0, theme::t().accent),
             label,
-            Some(sub.to_string()),
+            None::<String>.filter(|_| !sub.is_empty()),
             msg,
-            None,
+            (support_unread > 0).then(|| attention_count(support_unread)),
             d,
             hover,
         ));
@@ -6818,7 +6910,7 @@ fn group_overview_pane(
         people = people.push(card_row(
             icons::user_plus_icon(18.0, theme::t().accent),
             "Invite",
-            Some("Group link and contacts".to_string()),
+            None,
             Message::OpenAddGroupMember,
             Some(icons::plus_icon(18.0, theme::t().accent)),
             d,
@@ -6832,7 +6924,7 @@ fn group_overview_pane(
         let (label, sub) = if owner_view {
             ("Subscribers", format!("{} people", g.members.len()))
         } else {
-            ("Owners", "Who runs this channel".to_string())
+            ("Owners", String::new())
         };
         people = people.push(card_row(
             icons::user_group_icon(18.0, theme::t().accent),
@@ -6926,7 +7018,7 @@ fn nav_row_styled<'a>(
         .spacing(1)
         .width(Length::Fill)
         .push(text(title).size(d.body).color(theme::t().text_primary));
-    if let Some(sub) = subtitle {
+    if let Some(sub) = subtitle.filter(|s| !s.is_empty()) {
         // Card rows keep one line each (the welcome preview can be long).
         labels = labels.push(if flush {
             crate::ellipsis::ellipsis_text(sub, d.meta, theme::t().text_secondary, 1)
@@ -7078,7 +7170,7 @@ fn group_members_list<'a>(
 }
 
 /// Profile size of the avatar in every profile header.
-const PROFILE_AVATAR: f32 = 72.0;
+const PROFILE_AVATAR: f32 = 84.0;
 
 /// Read-only name line, inset to line up with the text inside the fields.
 fn profile_name_text<'a>(name: String, d: Density) -> Element<'a, Message> {
@@ -7262,7 +7354,9 @@ fn field_editor_overlay(app: &App) -> Element<'_, Message> {
     .on_press(Message::FieldEditorCancel);
     // Phones: sit in the upper part so the on-screen keyboard doesn't hide it.
     let narrow = !matches!(app.layout(), LayoutMode::Desktop);
-    let sheet = container(card)
+    // Opaque card: taps on its empty parts stay on the card (they neither
+    // close the sheet through the backdrop nor reach anything underneath).
+    let sheet = container(iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
@@ -7708,17 +7802,13 @@ fn card_padded<'a>(body: impl Into<Element<'a, Message>>, padding: Padding) -> E
 fn card_title<'a>(
     icon: Element<'a, Message>,
     title: impl iced::widget::text::IntoFragment<'a>,
-    note: impl iced::widget::text::IntoFragment<'a>,
+    // Descriptions stay out of cards (titles only; explanations live in ⓘ sheets).
+    _note: impl iced::widget::text::IntoFragment<'a>,
     d: Density,
 ) -> Element<'a, Message> {
     row![
         icon_disc(icon, 36.0),
-        column![
-            text(title).size(d.body).font(BOLD).color(theme::t().text_primary),
-            text(note).size(d.meta).color(theme::t().text_secondary),
-        ]
-        .spacing(2)
-        .width(Length::Fill),
+        text(title).size(d.body).font(BOLD).color(theme::t().text_primary).width(Length::Fill),
     ]
     .spacing(12)
     .align_y(Alignment::Center)
@@ -7821,7 +7911,6 @@ fn group_add_member_pane<'a>(
             .padding(Padding::from([6, 8])),
         );
     } else {
-        link_col = link_col.push(pref_note("Only admins can manage the invite link.", d));
     }
     page = page.push(card(link_col));
 
@@ -8533,7 +8622,9 @@ fn create_chat_overlay(app: &App) -> Element<'_, Message> {
             }),
     )
     .on_press(Message::CloseCreateChat);
-    let sheet = container(card)
+    // Opaque card: taps on its empty parts stay on the card (they neither
+    // close the sheet through the backdrop nor reach anything underneath).
+    let sheet = container(iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
@@ -8884,21 +8975,19 @@ mod wave_layout_tests {
 /// Gold square beside "+" with the number of unused one-time links; opens
 /// their list.
 fn pending_links_button<'a>(count: usize, hover: bool) -> Element<'a, Message> {
-    let label = if count > 99 { "99+".to_string() } else { count.to_string() };
-    // Round for one digit, a pill for more; no border.
-    let badge = container(text(label).size(10.0).font(BOLD).color(theme::t().accent_on))
-        .height(16.0)
-        .width(if count < 10 { Length::Fixed(16.0) } else { Length::Shrink })
-        .padding(Padding::from([0, if count < 10 { 0 } else { 5 }]))
-        .center_x(if count < 10 { Length::Fixed(16.0) } else { Length::Shrink })
-        .center_y(16.0)
-        .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().accent)),
-            border: iced::Border { radius: 8.0.into(), ..iced::Border::default() },
-            ..container::Style::default()
-        });
-    let btn = button(icons::centered_hit(icons::link_icon(20.0, theme::on_attention()), 36.0))
-        .on_press(Message::OpenPendingLinks)
+    attention_button(icons::link_icon(20.0, theme::on_attention()), count as i64, Message::OpenPendingLinks, hover)
+}
+
+/// Yellow "needs attention" square (same box as "+") with a round count
+/// on its top-right corner: pending links, unread support chats.
+fn attention_button<'a>(
+    icon: Element<'a, Message>,
+    count: i64,
+    on_press: Message,
+    hover: bool,
+) -> Element<'a, Message> {
+    let btn = button(icons::centered_hit(icon, 36.0))
+        .on_press(on_press)
         .padding(0)
         .style(theme::attention_action(hover));
     // Same 36×36 box as "+" (header height unchanged); the count is centred
@@ -8908,7 +8997,7 @@ fn pending_links_button<'a>(count: usize, hover: bool) -> Element<'a, Message> {
         .height(36.0)
         .push(btn)
         .push(
-            container(float(badge).translate(|bounds, _| {
+            container(float(count_badge(count)).translate(|bounds, _| {
                 iced::Vector::new(bounds.width / 2.0, -bounds.height / 2.0)
             }))
             .width(Length::Fill)
@@ -8916,6 +9005,42 @@ fn pending_links_button<'a>(count: usize, hover: bool) -> Element<'a, Message> {
             .align_x(Alignment::End)
             .align_y(Alignment::Start),
         )
+        .into()
+}
+
+/// Round accent count (a pill past 9), no border.
+fn count_badge<'a>(count: i64) -> Element<'a, Message> {
+    let label = if count > 99 { "99+".to_string() } else { count.to_string() };
+    let one = count < 10;
+    container(text(label).size(10.0).font(BOLD).color(theme::t().accent_on))
+        .height(16.0)
+        .width(if one { Length::Fixed(16.0) } else { Length::Shrink })
+        .padding(Padding::from([0, if one { 0 } else { 5 }]))
+        .center_x(if one { Length::Fixed(16.0) } else { Length::Shrink })
+        .center_y(16.0)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().accent)),
+            border: iced::Border { radius: 8.0.into(), ..iced::Border::default() },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// Count in the yellow attention style, for list rows (support chats).
+fn attention_count<'a>(count: i64) -> Element<'a, Message> {
+    let label = if count > 99 { "99+".to_string() } else { count.to_string() };
+    let one = count < 10;
+    container(text(label).size(11.0).font(BOLD).color(theme::on_attention()))
+        .height(20.0)
+        .width(if one { Length::Fixed(20.0) } else { Length::Shrink })
+        .padding(Padding::from([0, if one { 0 } else { 6 }]))
+        .center_x(if one { Length::Fixed(20.0) } else { Length::Shrink })
+        .center_y(20.0)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().attention)),
+            border: iced::Border { radius: 10.0.into(), ..iced::Border::default() },
+            ..container::Style::default()
+        })
         .into()
 }
 
@@ -9079,6 +9204,12 @@ fn link_confirm_overlay(app: &App, confirm: crate::LinkConfirm) -> Element<'_, M
             "It will stop working. Anyone you sent it to won't be able to connect with it.",
             "Delete",
             Message::ConfirmDeletePendingLink,
+        ),
+        crate::LinkConfirm::DeleteAddress => (
+            "Delete address?",
+            "All your contacts will remain connected. Nobody new can use the address, and your profile is updated for your contacts.",
+            "Delete address",
+            Message::ConfirmDeleteAddress,
         ),
     };
     let card = column![

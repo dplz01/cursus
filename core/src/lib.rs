@@ -140,6 +140,7 @@ mod smoke {
         assert_eq!(Commands::create_invitation(1, true), "/_connect 1 incognito=on");
         assert_eq!(Commands::set_connection_incognito(7, true), "/_set incognito :7 on");
         assert_eq!(Commands::delete_pending_connection(7), "/_delete :7");
+        assert_eq!(Commands::delete_address(3), "/_delete_address 3");
         assert_eq!(Commands::set_connection_alias(7, " For Anna "), "/_set alias :7 For Anna");
         assert_eq!(Commands::set_connection_alias(7, ""), "/_set alias :7");
         assert_eq!(Commands::connect_link(1, "https://x/i#a", true), "/connect incognito https://x/i#a");

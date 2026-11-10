@@ -478,6 +478,29 @@ impl Session {
     }
 
     /// Ensure a reusable contact address exists and return its link.
+    /// The reusable address, or `None` when the user has none (`/_show_address`
+    /// fails then) — never creates one.
+    pub fn address_link(&self) -> Result<Option<ConnLink>> {
+        match self.send(&Commands::show_address(self.user_id()?)) {
+            Ok(value) => Ok(parse_conn_link(
+                &value,
+                "/contactLink/connLinkContact/connFullLink",
+                "/contactLink/connLinkContact/connShortLink",
+            )),
+            Err(Error::Command(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Delete the reusable address: nobody new can use it; contacts made
+    /// through it stay connected (the official apps' "Delete address").
+    pub fn delete_address(&self) -> Result<()> {
+        self.send(&Commands::delete_address(self.user_id()?)).map(|_| ())?;
+        // The profile no longer carries it.
+        let _ = self.refresh_user();
+        Ok(())
+    }
+
     pub fn ensure_address_link(&self) -> Result<ConnLink> {
         let user_id = self.user_id()?;
         match self.send(&Commands::show_address(user_id)) {

@@ -63,6 +63,12 @@ impl Commands {
         format!("/_address {user_id}")
     }
 
+    /// Delete the reusable address (`/_delete_address <userId>`); contacts
+    /// made through it stay connected.
+    pub fn delete_address(user_id: i64) -> String {
+        format!("/_delete_address {user_id}")
+    }
+
     /// Update active user profile (`/_profile {userId} {json}`).
     pub fn update_profile(user_id: i64, profile: &ProfileFields) -> String {
         let mut payload = serde_json::json!({

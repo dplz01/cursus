@@ -71,8 +71,17 @@ Privacy & security settings as on Linux (previews, blur, protect IP,
 auto-download, encrypted files, receipts, with ⓘ explanations and
 confirmations).
 
-Next: chat lists (tags), selecting several messages, revealing
-marked-deleted messages, saving media, text size, calls.
+Also done: chat lists ("Add to list"), selecting several messages
+(delete / forward together), revealing marked-deleted messages, saving
+files, text size, "Load earlier messages", the sender's inline preview for
+photos not downloaded yet, "Delete after (this device only)", closing a
+member's support chat, live transfer progress.
+
+Next: calls. `cursus-call` is shared, but it still has to be built for
+Android (its bundled libopus needs the NDK's CMake toolchain), given an
+`AudioDevice` (AAudio / AudioRecord with the voice-communication preset)
+and a call state machine in the bridge — today that lives in the Linux
+app (`linux/src/call_flow.rs`).
 
 UI rule: every screen follows the Linux app's structure, cards and
 wording (see `docs/DESIGN_SYSTEM.md` and `linux/src/ui.rs`).

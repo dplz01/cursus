@@ -7,12 +7,14 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import chat.cursus.core.AppInfo
 import chat.cursus.core.Chat
+import chat.cursus.core.ChatTag
 import chat.cursus.core.ConnLink
 import chat.cursus.core.Core
 import chat.cursus.core.CoreEvent
@@ -79,6 +81,16 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     var selection by mutableStateOf<String?>(null); private set
     val messages = mutableStateListOf<Message>()
     var messagesFor by mutableStateOf<String?>(null); private set
+    /** How many of the newest messages are loaded; "Load earlier messages" adds a page. */
+    private var historyCount by mutableStateOf(HISTORY_PAGE)
+    /** The history is full to its limit: there may be older messages. */
+    val hasEarlierMessages: Boolean get() = messages.size >= historyCount && historyCount < HISTORY_MAX
+
+    fun loadEarlierMessages() {
+        val ref = selection ?: return
+        historyCount = (historyCount + HISTORY_PAGE).coerceAtMost(HISTORY_MAX)
+        reloadMessages(ref)
+    }
 
     var draft by mutableStateOf("")
     var composeMode by mutableStateOf<ComposeMode>(ComposeMode.New)
@@ -103,6 +115,16 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     /** Opened from a notification / a link before the chats were ready. */
     var pendingChat by mutableStateOf<String?>(null)
     var pendingLink by mutableStateOf<String?>(null)
+
+    init {
+        // The bridge downloads small media by itself when it arrives: keep
+        // it in step with the two settings that decide whether it may.
+        viewModelScope.launch {
+            snapshotFlow { prefs.autoDownload to prefs.protectIp }.collect { (auto, protect) ->
+                runCatching { Core.run("setDownloadPolicy", mapOf("autoDownload" to auto, "protectIp" to protect)) }
+            }
+        }
+    }
 
     private var pumpStarted = false
     private var chatsReload: Job? = null
@@ -133,7 +155,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
                 phase = Phase.Unlock
-                passwords.load()?.let { unlock(it, remember = true, quiet = true) }
+                // Not unlocked by itself: the background service has nothing to keep alive.
+                passwords.load()?.let { unlock(it, remember = true, quiet = true) } ?: syncBackground()
             } catch (e: Exception) {
                 phase = Phase.Failed(e.message ?: e.toString())
             }
@@ -175,6 +198,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                     wrongKey -> error = "Wrong password.\n\n$text"
                     else -> error = text
                 }
+                syncBackground()
             } finally {
                 busy = false
             }
@@ -190,6 +214,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private var lastActive = android.os.SystemClock.elapsedRealtime()
     private var backgroundAt: Long? = null
     private var lockFailures = 0
+    /** No unlock attempt is checked before this (back-off after wrong passwords). */
+    private var lockRetryAt = 0L
     /** Blurred photos the user tapped to see (until the next lock). */
     val revealedMedia = mutableStateListOf<Long>()
 
@@ -214,21 +240,30 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         if ((android.os.SystemClock.elapsedRealtime() - lastActive) / 1000 >= prefs.lockAfter) lockApp()
     }
 
-    /** Lock the screen: decrypted media and drafts in progress go away. */
-    fun lockApp() {
-        if (phase != Phase.Ready || appLocked) return
+    /** What both locks drop: playback, recordings, decrypted media on screen. */
+    private fun dropPlaintext() {
         VoicePlayer.stop()
         discardRecording()
         discardVoiceDraft()
         plainFiles.clear()
         gallery = null
         revealedMedia.clear()
+        revealedDeleted.clear()
+        selected.clear()
+    }
+
+    /** Lock the screen: decrypted media and drafts in progress go away. */
+    fun lockApp() {
+        if (phase != Phase.Ready || appLocked) return
+        dropPlaintext()
         appLocked = true
         viewModelScope.launch { runCatching { Core.run("wipePlaintextCache") } }
     }
 
-    /** null when unlocked, else the message to show (wrong password, wait). */
+    /** null when unlocked, else the message to show and the seconds to wait. */
     suspend fun unlockApp(password: String): Pair<String, Long>? {
+        val waiting = lockRetryAt - android.os.SystemClock.elapsedRealtime()
+        if (waiting > 0) return "Too many attempts." to waiting / 1000 + 1
         val ok = runCatching { Core.call<Boolean>("verifyPassword", mapOf("password" to password)) }.getOrDefault(false)
         if (ok) {
             appLocked = false
@@ -238,7 +273,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             return null
         }
         lockFailures++
-        val wait = runCatching { Core.call<Long>("lockRetryDelay", mapOf("failures" to lockFailures)) }.getOrDefault(0)
+        // If the core can't say how long, wait as long as it ever asks for.
+        val wait = runCatching { Core.call<Long>("lockRetryDelay", mapOf("failures" to lockFailures)) }.getOrDefault(60)
+        lockRetryAt = android.os.SystemClock.elapsedRealtime() + wait * 1000
         return "Wrong password." to wait
     }
 
@@ -274,11 +311,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     // endregion
 
     fun lock() {
-        VoicePlayer.stop()
-        discardRecording()
-        discardVoiceDraft()
-        plainFiles.clear()
-        gallery = null
+        dropPlaintext()
         busy = true
         viewModelScope.launch {
             runCatching { Core.run("close") }
@@ -292,7 +325,6 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         drafts.clear()
         composeMode = ComposeMode.New
         appLocked = false
-        revealedMedia.clear()
         phase = Phase.Unlock
         syncBackground()
     }
@@ -345,6 +377,11 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         if (phase != Phase.Ready) return
         if (e.refreshChats) scheduleChatsReload()
         val open = selection
+        // Transfer progress arrives many times a second: move the bar of the
+        // message that shows the file instead of reloading the history.
+        if (e.progress != null) {
+            if (patchProgress(e.progress)) return
+        }
         if (e.refreshMessages && open != null && (e.chat == null || e.chat == open || e.chat.startsWith("$open("))) {
             scheduleMessagesReload()
         }
@@ -355,6 +392,15 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             if (foreground) continue // the open chat or the list badge shows it
             Notifier.show(getApplication(), msg, prefs.hideNotificationText || appLocked)
         }
+    }
+
+    /** Update the progress of the file's message in place; false if it isn't shown. */
+    private fun patchProgress(p: chat.cursus.core.FileProgress): Boolean {
+        val i = messages.indexOfFirst { it.file?.id == p.fileId }
+        val file = messages.getOrNull(i)?.file ?: return false
+        if (file.state != "inProgress" || p.total <= 0) return false
+        messages[i] = messages[i].copy(file = file.copy(progress = (p.transferred.toDouble() / p.total).coerceIn(0.0, 1.0)))
+        return true
     }
 
     // endregion
@@ -392,6 +438,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         discardRecording()
         discardVoiceDraft()
         VoicePlayer.stop()
+        selected.clear()
+        revealedDeleted.clear()
+        historyCount = HISTORY_PAGE
         messages.clear()
         messagesFor = null
         if (ref != null) {
@@ -404,7 +453,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     fun reloadMessages(ref: String) {
         viewModelScope.launch {
             try {
-                val list: List<Message> = Core.call("listMessages", mapOf("chat" to ref, "count" to 200))
+                val list: List<Message> = Core.call("listMessages", mapOf("chat" to ref, "count" to historyCount))
                 if (selection != ref) return@launch
                 messages.clear()
                 messages.addAll(list)
@@ -479,15 +528,12 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     fun createGroup(name: String, channel: Boolean, done: (String) -> Unit) = act {
         val ref = if (channel) {
-            Core.raw("createChannel", mapOf("name" to name)).let {
-                CoreJson.decodeFromJsonElement(kotlinx.serialization.json.JsonObject.serializer(), it)["ref"]
-                    ?.let { r -> (r as kotlinx.serialization.json.JsonPrimitive).content }
-            }
+            Core.call<chat.cursus.core.CreatedChannel>("createChannel", mapOf("name" to name)).ref
         } else {
             Core.call<String>("createGroup", mapOf("name" to name))
         }
         reloadChats()
-        if (ref != null) done(ref)
+        done(ref)
     }
 
     // endregion
@@ -532,9 +578,46 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         selection?.let { reloadMessages(it) }
     }
 
-    fun deleteMessage(message: Message, forEveryone: Boolean) = act {
-        Core.run("deleteItems", mapOf("chat" to selection, "itemIds" to listOf(message.id), "forEveryone" to forEveryone))
+    fun deleteMessage(message: Message, forEveryone: Boolean) = deleteMessages(listOf(message.id), forEveryone)
+
+    private fun deleteMessages(ids: List<Long>, forEveryone: Boolean) = act {
+        Core.run("deleteItems", mapOf("chat" to selection, "itemIds" to ids, "forEveryone" to forEveryone))
         selection?.let { reloadMessages(it) }
+    }
+
+    // Selecting several messages (message menu → Select), as on Linux:
+    // tap to add / remove, then delete or forward them together.
+
+    /** Ids of the selected messages; not empty = the conversation is in selection mode. */
+    val selected = mutableStateListOf<Long>()
+
+    fun toggleSelected(m: Message) {
+        if (!selected.remove(m.id)) selected.add(m.id)
+    }
+
+    private fun selectedMessages() = messages.filter { it.id in selected }
+
+    /** Own, not yet deleted messages can go for everyone; a mixed selection is deleted here only. */
+    val selectionIsOwn: Boolean get() = selectedMessages().all { it.outgoing && it.deleted == null }
+
+    fun deleteSelected() {
+        val ids = selectedMessages().map { it.id }
+        val forEveryone = selectionIsOwn
+        selected.clear()
+        if (ids.isNotEmpty()) deleteMessages(ids, forEveryone)
+    }
+
+    fun forwardSelected(to: Chat) {
+        val ids = selectedMessages().filter { it.deleted == null }.map { it.id }
+        selected.clear()
+        if (ids.isNotEmpty()) forward(ids, to)
+    }
+
+    /** Marked-deleted messages whose original text the user asked to see. */
+    val revealedDeleted = mutableStateListOf<Long>()
+
+    fun toggleRevealDeleted(m: Message) {
+        if (!revealedDeleted.remove(m.id)) revealedDeleted.add(m.id)
     }
 
     fun startEdit(message: Message) {
@@ -582,8 +665,10 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         Core.call<chat.cursus.core.MessageInfo>("messageInfo", mapOf("chat" to selection, "itemId" to m.id))
     }.onFailure { error = it.message }.getOrNull()
 
-    fun forward(m: Message, to: Chat) = act {
-        Core.run("forward", mapOf("chat" to selection, "itemIds" to listOf(m.id), "to" to to.ref))
+    fun forward(m: Message, to: Chat) = forward(listOf(m.id), to)
+
+    private fun forward(ids: List<Long>, to: Chat) = act {
+        Core.run("forward", mapOf("chat" to selection, "itemIds" to ids, "to" to to.ref))
         notice = "Forwarded to ${to.title}"
         reloadChats()
     }
@@ -685,14 +770,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     /** Download an offered file; unknown relays ask first (core rule). */
     fun receive(file: FileInfo, approved: Boolean = false) = act {
-        val reply = Core.raw("receiveFile", mapOf("fileId" to file.id, "approved" to (approved || !prefs.protectIp)))
-        val obj = reply as? kotlinx.serialization.json.JsonObject
-        val accepted = (obj?.get("accepted") as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
-        if (!accepted) {
-            val servers = (obj?.get("servers") as? kotlinx.serialization.json.JsonArray)
-                ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.orEmpty()
-            fileApproval = file to servers
-        }
+        val reply: chat.cursus.core.ReceiveReply =
+            Core.call("receiveFile", mapOf("fileId" to file.id, "approved" to (approved || !prefs.protectIp)))
+        if (!reply.accepted) fileApproval = file to reply.servers
         selection?.let { reloadMessages(it) }
     }
 
@@ -755,6 +835,38 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setAlias(chat: Chat, alias: String) = change(chat, "setAlias", mapOf("chat" to chat.ref, "alias" to alias.trim()))
+
+    /** Delete this chat's messages from this phone after [seconds] (null: never / the default). */
+    fun setChatTtl(chat: Chat, seconds: Long?) = change(chat, "setChatTtl", mapOf("chat" to chat.ref, "seconds" to seconds))
+
+    // Chat lists (chat menu → Add to list), as on Linux.
+
+    val chatTags = mutableStateListOf<ChatTag>()
+
+    private fun showTags(list: List<ChatTag>) {
+        chatTags.clear()
+        chatTags.addAll(list)
+    }
+
+    fun loadChatTags() = act { showTags(Core.call("chatTags")) }
+
+    /** A new list, with [chat] on it. */
+    fun createChatTag(chat: Chat, name: String) = act {
+        val before = chatTags.map { it.id }.toSet()
+        showTags(Core.call("createChatTag", mapOf("text" to name.trim())))
+        val created = chatTags.firstOrNull { it.id !in before } ?: return@act
+        Core.run("setChatTags", mapOf("chat" to chat.ref, "tagIds" to chat.tagIds + created.id))
+        reloadChats()
+    }
+
+    fun toggleChatTag(chat: Chat, tag: ChatTag) = change(
+        chat, "setChatTags",
+        mapOf("chat" to chat.ref, "tagIds" to if (tag.id in chat.tagIds) chat.tagIds - tag.id else chat.tagIds + tag.id),
+    )
+
+    /** Moderators: close a member's support thread. */
+    fun deleteSupportChat(chat: Chat, m: Member) =
+        change(chat, "deleteSupportChat", mapOf("groupId" to chat.apiId, "memberId" to m.id), members = true)
 
     fun setSendReceipts(chat: Chat, on: Boolean?) =
         change(chat, "setChatSettings", mapOf("chat" to chat.ref, "sendReceipts" to on))
@@ -957,6 +1069,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             .getOrDefault(PreparedLink())
 
     // endregion
+
+    private companion object {
+        /** Messages loaded when a chat opens and per "Load earlier messages" (as on Linux). */
+        const val HISTORY_PAGE = 100
+        /** The most the bridge returns for one chat. */
+        const val HISTORY_MAX = 5000
+    }
 
     private fun act(block: suspend () -> Unit) {
         viewModelScope.launch {

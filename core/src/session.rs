@@ -1,26 +1,28 @@
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+//! An open SimpleX chat session: every command the apps send goes through
+//! [`Session`]; replies are turned into models by [`crate::parse`].
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::invitations::{
-    parse_alias_updated, parse_created_invitation, parse_incognito_updated, pending_invitations, Invitation,
-};
-use crate::commands::Commands;
+use crate::commands::{Commands, OutgoingFile};
 use crate::error::{Error, Result};
 use crate::ffi::LibSimplex;
+use crate::invitations::{self, Invitation};
+use crate::json::JsonExt;
 use crate::models::{
-    CallRecord,
-    parse_conn_link, parse_event, ApiEnvelope, ChatId, ChatMessage, ChatPreview, ChatSettings,
-    ChatTag, ChatType, ConnLink, DeliveryStatus, Event, FileInfo, FileKind, FileTransferState,
-    CallMedia, ChatRelayInfo, GroupMemberInfo, NtfFilter, ProfileFields, ReactionCount,
-    MessageInfo, ReactionMember, UserProfile, KNOWN_REACTIONS,
+    parse_event, ApiEnvelope, CallMedia, CallRecord, ChatId, ChatMessage, ChatPreview, ChatRelayInfo,
+    ChatSettings, ChatTag, ChatType, ConnLink, Event, GroupMemberInfo, GroupProfileUpdate, MessageInfo,
+    ProfileFields, ReactionMember, UserProfile,
 };
+use crate::parse;
 use crate::paths::{
-    data_dir, db_prefix, default_libs_dir, files_dir, fits_in_ram_cache, free_bytes,
-    plaintext_cache_name, plaintext_cache_path, resolve_local_file, runtime_cache_dir,
-    temp_dir,
+    data_dir, db_prefix, default_libs_dir, ensure_private_dir, files_dir, fits_in_ram_cache, free_bytes,
+    plaintext_cache_name, plaintext_cache_path, runtime_cache_dir, temp_dir, wipe_dir_contents,
 };
 
 #[derive(Clone)]
@@ -33,8 +35,6 @@ pub struct SessionConfig {
     pub migration_confirm: String,
     /// Display name for a brand-new active user (welcome wizard).
     pub initial_display_name: String,
-    /// Enable `/_files_encrypt on` after start (CryptoFile at rest).
-    pub encrypt_local_files: bool,
 }
 
 /// Never print the database key (logs, panics, debuggers).
@@ -44,10 +44,7 @@ impl std::fmt::Debug for SessionConfig {
             .field("libs_dir", &self.libs_dir)
             .field("db_prefix", &self.db_prefix)
             .field("db_key", &"***")
-            .field("migration_confirm", &self.migration_confirm)
-            .field("initial_display_name", &self.initial_display_name)
-            .field("encrypt_local_files", &self.encrypt_local_files)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -59,7 +56,6 @@ impl Default for SessionConfig {
             db_key: zeroize::Zeroizing::new(String::new()),
             migration_confirm: "yesUp".into(),
             initial_display_name: "Cursus".into(),
-            encrypt_local_files: true,
         }
     }
 }
@@ -68,601 +64,232 @@ impl Default for SessionConfig {
 pub struct Session {
     lib: Arc<LibSimplex>,
     ctrl: *mut std::ffi::c_void,
-    /// Cached active user; mutex so profile updates work through `Arc<Session>`.
+    /// The active user, kept current by every call that changes it.
     user: Mutex<Option<UserProfile>>,
-    /// Mirror of `/_files_encrypt` — encrypt outgoing attachments before send.
-    encrypt_local_files: std::sync::atomic::AtomicBool,
+    /// Mirror of `/_files_encrypt`: attachments are stored as CryptoFiles.
+    encrypt_local_files: AtomicBool,
     /// Unused own one-time links, from the last chat-list load and kept up
     /// to date by create / rename / delete (see `crate::invitations`).
     pending: Mutex<Vec<Invitation>>,
 }
 
-// Session moves / shares between the UI runtime and blocking tasks after connect.
-// The chat controller is used concurrently from command and receive threads,
-// as in the official clients.
+// The chat controller is used concurrently from command and receive
+// threads, as in the official clients.
 unsafe impl Send for Session {}
 unsafe impl Sync for Session {}
 
-struct ReceiveWorker {
-    /// Owning the session keeps `Drop` (→ `chat_close_store`) from running
-    /// while this thread is still inside `chat_recv_msg_wait`: the store is
-    /// closed only after the loop has exited.
-    session: Arc<Session>,
-    tx: mpsc::UnboundedSender<Event>,
+/// A poisoned lock only means another thread panicked mid-update; the data
+/// (a cached profile, a list of links) is still the best we have.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-impl ReceiveWorker {
-    fn run(self) {
-        loop {
-            // Short wait so the worker notices a dropped subscriber (UI quit /
-            // session swap) within ~1s; a 5-minute wait kept tokio's blocking
-            // pool busy and froze runtime shutdown on Quit.
-            if self.tx.is_closed() {
-                break;
-            }
-            match self.session.lib.recv_msg_wait(self.session.ctrl, 1_000_000) {
-                Ok(None) => continue,
-                Ok(Some(raw)) => match serde_json::from_str::<ApiEnvelope>(&raw) {
-                    Ok(env) => match env.into_result() {
-                        Ok(value) => {
-                            if self.tx.send(parse_event(value)).is_err() {
-                                break;
-                            }
-                        }
-                        Err(err) => {
-                            let brief = truncate_chars(&err.to_string(), 160);
-                            tracing::warn!("event envelope error: {brief}");
-                        }
-                    },
-                    Err(err) => match serde_json::from_str::<Value>(&raw) {
-                        Ok(value) => {
-                            if let Some(result) = value.get("result").cloned() {
-                                let _ = self.tx.send(parse_event(result));
-                            } else {
-                                let _ = self.tx.send(Event::Raw(value));
-                            }
-                        }
-                        // Never log `raw`: events carry message text and profiles.
-                        Err(_) => tracing::warn!("bad event JSON: {err} ({} bytes)", raw.len()),
-                    },
-                },
-                Err(err) => {
-                    tracing::error!("chat_recv_msg_wait failed: {err}");
-                    break;
-                }
-            }
-        }
+fn command_error(message: impl Into<String>) -> Error {
+    Error::Command(message.into())
+}
+
+/// `role`, or `member` when none was chosen.
+fn role_or_member(role: &str) -> &str {
+    if role.is_empty() {
+        "member"
+    } else {
+        role
     }
 }
 
 impl Session {
     pub fn open(config: SessionConfig) -> Result<Self> {
-        tracing::info!("session open: prepare dirs");
         // Owner-only data dir: SQLCipher DBs, log and prefs live here.
         ensure_private_dir(&data_dir())?;
         ensure_private_dir(&files_dir())?;
-        let tmp = temp_dir();
-        // Drop everything left in tmp/: XFTP staging after crashes and, above
-        // all, the `plain/` decrypt cache. Decrypted attachments must not
-        // outlive the session that needed them (at-rest encryption).
-        wipe_dir_contents(&tmp);
+        // Nothing decrypted or half-transferred survives from the last run
+        // (crash, SIGKILL): attachments are only ever plaintext for a session.
+        wipe_dir_contents(&temp_dir());
         if let Some(ram) = runtime_cache_dir() {
             wipe_dir_contents(&ram);
         }
-        ensure_private_dir(&tmp)?;
-        ensure_private_dir(&tmp.join("plain"))?;
-        // TMPDIR was pinned to `tmp` by `init_process_env` at startup.
+        ensure_private_dir(&temp_dir().join("plain"))?;
         if let Some(parent) = config.db_prefix.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
         tracing::info!(libs = %config.libs_dir.display(), "session open: load libsimplex");
         let lib = LibSimplex::shared(Some(&config.libs_dir))?;
-        tracing::info!(
-            db = %config.db_prefix.display(),
-            "session open: migrate_init (SQLCipher)"
-        );
-        let ctrl = lib.migrate_init(
-            &config.db_prefix,
-            &config.db_key,
-            &config.migration_confirm,
-        )?;
-        tracing::info!("session open: migrate_init ok");
-
-        let mut session = Self {
+        tracing::info!(db = %config.db_prefix.display(), "session open: open database");
+        let ctrl = lib.migrate_init(&config.db_prefix, &config.db_key, &config.migration_confirm)?;
+        let session = Self {
             lib,
             ctrl,
             user: Mutex::new(None),
-            encrypt_local_files: std::sync::atomic::AtomicBool::new(config.encrypt_local_files),
+            encrypt_local_files: AtomicBool::new(true),
             pending: Mutex::new(Vec::new()),
         };
-        let name = if config.initial_display_name.trim().is_empty() {
-            "Cursus"
-        } else {
-            config.initial_display_name.trim()
+        // The active user; a new database gets one with the welcome name.
+        let name = Some(config.initial_display_name.trim()).filter(|n| !n.is_empty()).unwrap_or("Cursus");
+        let user = match session.send(Commands::show_active_user()) {
+            Ok(value) => value,
+            Err(_) => session.send(&Commands::create_active_user(name))?,
         };
-        tracing::info!("session open: ensure_user");
-        session.ensure_user(name)?;
+        session.set_user(parse::user(&user)?);
         tracing::info!("session open: ready");
         Ok(session)
     }
 
-    fn set_user(&self, user: UserProfile) {
-        if let Ok(mut guard) = self.user.lock() {
-            *guard = Some(user);
+    /// Start the chat core. `encrypt_local_files`: keep attachments encrypted
+    /// on disk (CryptoFile, keys in the database) — the official default.
+    ///
+    /// The network is not touched yet: call [`Self::activate_network`] once
+    /// events are being received (subscribing before has hung unlock).
+    pub fn start_chat(&self, encrypt_local_files: bool) -> Result<()> {
+        self.send(Commands::start_chat())?;
+        let _ = self.send(&Commands::set_temp_folder(&temp_dir().to_string_lossy()));
+        let _ = self.send(&Commands::set_files_folder(&files_dir().to_string_lossy()));
+        // Not worth failing the unlock over: files then stay encrypted.
+        if let Err(err) = self.set_encrypt_local_files(encrypt_local_files) {
+            tracing::warn!(%err, "could not set file encryption");
         }
-    }
-
-    fn with_user<R>(&self, f: impl FnOnce(&UserProfile) -> R) -> Option<R> {
-        self.user
-            .lock()
-            .ok()
-            .and_then(|g| g.as_ref().map(f))
-    }
-
-    pub fn start_chat(&mut self) -> Result<Value> {
-        self.start_chat_with_options(true)
-    }
-
-    pub fn start_chat_with_options(&mut self, encrypt_local_files: bool) -> Result<Value> {
-        tracing::info!("start_chat");
-        let started = self.send(Commands::start_chat())?;
-        let files = files_dir().to_string_lossy().to_string();
-        let tmp = temp_dir().to_string_lossy().to_string();
-        let _ = self.send(&Commands::set_temp_folder(&tmp));
-        let _ = self.send(&Commands::set_files_folder(&files));
-        // Official default: encrypt files at rest (CryptoFile). Keys live in SQLCipher.
-        self.encrypt_local_files
-            .store(encrypt_local_files, std::sync::atomic::Ordering::Relaxed);
-        let _ = self.send(&Commands::set_encrypt_local_files(encrypt_local_files));
-        // Activate / resubscribe run after the UI receive loop is up — doing them
-        // here has hung unlock when the agent blocked before any recv thread.
-        tracing::info!("start_chat ok (activate deferred)");
-        Ok(started)
+        Ok(())
     }
 
     /// Subscribe transports after the event receiver is running.
     pub fn activate_network(&self) -> Result<()> {
-        tracing::info!("activate_chat + resubscribeAll");
+        tracing::info!("activate chat, resubscribe");
         let _ = self.send(Commands::activate_chat());
         let _ = self.send(Commands::resubscribe_all());
         Ok(())
     }
 
-    /// Decrypt a CryptoFile for viewing (cached for the session). Returns the
-    /// plaintext path: in the RAM-backed runtime dir when it has room
-    /// ([`runtime_cache_dir`]), else under `tmp/plain/` on disk.
-    pub fn ensure_plaintext_file(
-        &self,
-        encrypted: &std::path::Path,
-        key: &str,
-        nonce: &str,
-    ) -> Result<PathBuf> {
-        let name = plaintext_cache_name(encrypted, key, nonce);
-        let ram = runtime_cache_dir().map(|d| d.join("plain").join(&name));
-        let disk = plaintext_cache_path(encrypted, key, nonce);
-        for cached in ram.iter().chain(std::iter::once(&disk)) {
-            if std::fs::metadata(cached).is_ok_and(|m| m.is_file() && m.len() > 0) {
-                return Ok(cached.clone());
-            }
-        }
-        let size = std::fs::metadata(encrypted).map(|m| m.len()).unwrap_or(u64::MAX);
-        if let Some(ram) = ram {
-            let room = ram
-                .parent()
-                .and_then(free_bytes)
-                .is_some_and(|free| fits_in_ram_cache(size, free));
-            if room {
-                if let Some(parent) = ram.parent() {
-                    ensure_private_dir(parent.parent().unwrap_or(parent))?;
-                    ensure_private_dir(parent)?;
+    /// Run one chat command and return its result.
+    pub fn send(&self, cmd: &str) -> Result<Value> {
+        tracing::debug!(cmd = %redact_command(cmd), "chat_send_cmd");
+        let raw = self.lib.send_cmd(self.ctrl, cmd)?;
+        serde_json::from_str::<ApiEnvelope>(&raw)?.into_result().inspect_err(|err| {
+            // Error payloads embed whole contacts / groups: log the start only.
+            let brief: String = err.to_string().chars().take(160).collect();
+            tracing::warn!(cmd = %redact_command(cmd), error = %brief, "chat command failed");
+        })
+    }
+
+    /// Forward core events to the returned channel from a background thread
+    /// (call inside a tokio runtime). The thread ends when the receiver is dropped.
+    pub fn spawn_receiver(self: &Arc<Self>) -> mpsc::UnboundedReceiver<Event> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        // Owning the session keeps `Drop` (→ `chat_close_store`) from running
+        // while this thread is inside `chat_recv_msg_wait`.
+        let session = Arc::clone(self);
+        tokio::task::spawn_blocking(move || session.receive_events(tx));
+        rx
+    }
+
+    fn receive_events(&self, tx: mpsc::UnboundedSender<Event>) {
+        let mut failures = 0;
+        // Wait a second at a time, so a dropped receiver (quit, session
+        // swap) is noticed quickly and never holds up runtime shutdown.
+        while !tx.is_closed() {
+            let raw = match self.lib.recv_msg_wait(self.ctrl, 1_000_000) {
+                Ok(None) => continue,
+                Ok(Some(raw)) => raw,
+                Err(err) => {
+                    // Don't go deaf on one bad read, don't spin on a dead core.
+                    failures += 1;
+                    tracing::error!("chat_recv_msg_wait failed ({failures}): {err}");
+                    if failures >= 10 {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                    continue;
                 }
-                match self.lib.decrypt_file(encrypted, key, nonce, &ram) {
-                    Ok(()) => return Ok(ram),
-                    // e.g. tmpfs filled up meanwhile: drop the partial file, use disk.
-                    Err(err) => {
-                        let _ = std::fs::remove_file(&ram);
-                        tracing::warn!(%err, "RAM decrypt failed; using disk cache");
+            };
+            failures = 0;
+            // Never log `raw`: events carry message text and profiles.
+            match serde_json::from_str::<ApiEnvelope>(&raw).map_err(Error::from).and_then(ApiEnvelope::into_result) {
+                Ok(value) => {
+                    if tx.send(parse_event(value)).is_err() {
+                        break;
                     }
                 }
+                Err(err) => {
+                    let brief: String = err.to_string().chars().take(160).collect();
+                    tracing::warn!("bad event ({} bytes): {brief}", raw.len());
+                }
             }
         }
-        if let Some(parent) = disk.parent() {
-            ensure_private_dir(parent)?;
-        }
-        if let Err(err) = self.lib.decrypt_file(encrypted, key, nonce, &disk) {
-            let _ = std::fs::remove_file(&disk);
-            return Err(err);
-        }
-        Ok(disk)
     }
+
+    // ── User ────────────────────────────────────────────────────────────
+
+    fn set_user(&self, user: UserProfile) {
+        *lock(&self.user) = Some(user);
+    }
+
+    /// The active user as last seen (no core round trip).
+    pub fn active_profile(&self) -> Option<UserProfile> {
+        lock(&self.user).clone()
+    }
+
+    fn user_id(&self) -> Result<i64> {
+        lock(&self.user).as_ref().map(|u| u.user_id).ok_or_else(|| command_error("no active user"))
+    }
+
+    /// Re-read the active user from the core.
+    pub fn refresh_user(&self) -> Result<UserProfile> {
+        let user = parse::user(&self.send(Commands::show_active_user())?)?;
+        self.set_user(user.clone());
+        Ok(user)
+    }
+
+    pub fn update_profile(&self, fields: ProfileFields) -> Result<UserProfile> {
+        let value = self.send(&Commands::update_profile(self.user_id()?, &fields))?;
+        // The reply carries the user, or (nothing changed) only the profile.
+        let user = match (parse::user(&value), value.get("toProfile"), self.active_profile()) {
+            (Ok(user), ..) => user,
+            (Err(_), Some(profile), Some(user)) => UserProfile { profile: parse::profile_fields(Some(profile)), ..user },
+            _ => return self.refresh_user(),
+        };
+        self.set_user(user.clone());
+        Ok(user)
+    }
+
+    /// Share / unshare the reusable address on the profile.
+    pub fn set_profile_address(&self, on: bool) -> Result<UserProfile> {
+        if on {
+            self.ensure_address_link()?;
+        }
+        self.send(&Commands::profile_address(self.user_id()?, on))?;
+        self.refresh_user()
+    }
+
+    /// Delivery receipts for all contacts (`groups` false) or small groups.
+    ///
+    /// The core writes the DB but keeps serving its in-memory user from `/u`
+    /// until restart, so the cached profile is updated here instead (as the
+    /// official app does).
+    pub fn set_delivery_receipts(&self, groups: bool, on: bool) -> Result<UserProfile> {
+        self.send(&Commands::set_delivery_receipts(self.user_id()?, groups, on))?;
+        let mut guard = lock(&self.user);
+        let user = guard.as_mut().ok_or_else(|| command_error("no active user"))?;
+        if groups {
+            user.send_rcpts_small_groups = on;
+        } else {
+            user.send_rcpts_contacts = on;
+        }
+        Ok(user.clone())
+    }
+
+    // ── Chat list ───────────────────────────────────────────────────────
 
     /// The chat list. Also refreshes [`Self::pending_invitations`] from the
     /// same reply (pending connections ride along with `pcc=on`).
     pub fn list_chats(&self) -> Result<Vec<ChatPreview>> {
         let value = self.send(&Commands::get_chats(self.user_id()?))?;
-        if let Ok(mut pending) = self.pending.lock() {
-            *pending = pending_invitations(&value);
-        }
-        Ok(parse_chat_previews(&value))
-    }
-
-    /// Unused one-time links the user created, newest first, as of the last
-    /// chat-list load and the invitation calls since (no core round trip).
-    pub fn pending_invitations(&self) -> Vec<Invitation> {
-        self.pending.lock().map(|p| p.clone()).unwrap_or_default()
-    }
-
-    fn update_pending(&self, f: impl FnOnce(&mut Vec<Invitation>)) {
-        if let Ok(mut pending) = self.pending.lock() {
-            f(&mut pending);
-        }
-    }
-
-    pub fn send_text(&self, chat: &ChatId, text: &str) -> Result<Value> {
-        self.send_text_quoted(chat, text, None)
-    }
-
-    pub fn send_text_quoted(
-        &self,
-        chat: &ChatId,
-        text: &str,
-        quoted_item_id: Option<i64>,
-    ) -> Result<Value> {
-        self.send(&Commands::send_text_quoted(chat, text, quoted_item_id))
-    }
-
-    pub fn update_text(&self, chat: &ChatId, item_id: i64, text: &str) -> Result<Value> {
-        self.send(&Commands::update_text(chat, item_id, text))
-    }
-
-    pub fn delete_items(&self, chat: &ChatId, item_ids: &[i64], broadcast: bool) -> Result<Value> {
-        if item_ids.is_empty() {
-            return Err(Error::Command("no items to delete".into()));
-        }
-        self.send(&Commands::delete_items(chat, item_ids, broadcast))
-    }
-
-    pub fn message_info(&self, chat: &ChatId, item_id: i64) -> Result<MessageInfo> {
-        Ok(MessageInfo::from_api(&self.send(&Commands::item_info(chat, item_id))?))
-    }
-
-    pub fn forward_items(
-        &self,
-        from: &ChatId,
-        to: &ChatId,
-        item_ids: &[i64],
-    ) -> Result<Value> {
-        if item_ids.is_empty() {
-            return Err(Error::Command("no items to forward".into()));
-        }
-        self.send(&Commands::forward_items(from, to, item_ids))
-    }
-
-    pub fn send_file(&self, chat: &ChatId, path: &str) -> Result<Value> {
-        let path = path.trim();
-        if path.is_empty() {
-            return Err(Error::Command("empty file path".into()));
-        }
-        let src = std::path::Path::new(path);
-        let file_name = src
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("file")
-            .to_string();
-        let as_image = is_image_name(&file_name);
-        // Bake EXIF rotation into camera JPEGs so every receiver sees them upright.
-        let upright = if as_image {
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            match crate::media::upright_copy_for_send(src, &temp_dir().join(format!("send-{stamp}"))) {
-                Ok(copy) => copy,
-                Err(err) => {
-                    tracing::warn!(%err, "upright copy failed; sending original");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        let src = upright.as_deref().unwrap_or(src);
-        let prepared = self.prepare_outgoing_file(src, &file_name)?;
-        self.send(&Commands::send_file(
-            chat,
-            &prepared.cmd_path,
-            &file_name,
-            as_image,
-            prepared.crypto.as_ref().map(|(k, n)| (k.as_str(), n.as_str())),
-        ))
-    }
-
-    pub fn send_voice(&self, chat: &ChatId, path: &str, duration_secs: u32) -> Result<Value> {
-        let path = path.trim();
-        if path.is_empty() {
-            return Err(Error::Command("empty voice path".into()));
-        }
-        if duration_secs == 0 {
-            return Err(Error::Command("voice message too short".into()));
-        }
-        let src = std::path::Path::new(path);
-        let file_name = src
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("voice.m4a")
-            .to_string();
-        let prepared = self.prepare_outgoing_file(src, &file_name)?;
-        self.send(&Commands::send_voice(
-            chat,
-            &prepared.cmd_path,
-            duration_secs,
-            prepared.crypto.as_ref().map(|(k, n)| (k.as_str(), n.as_str())),
-        ))
-    }
-
-    /// When local-file encryption is on: encrypt `src` into `files/` and return a
-    /// relative CryptoFile path + args (official client pattern). Otherwise pass
-    /// the absolute plaintext path through.
-    fn prepare_outgoing_file(
-        &self,
-        src: &std::path::Path,
-        preferred_name: &str,
-    ) -> Result<PreparedOutgoingFile> {
-        if !self.encrypt_local_files.load(std::sync::atomic::Ordering::Relaxed) {
-            return Ok(PreparedOutgoingFile {
-                cmd_path: src.to_string_lossy().into_owned(),
-                crypto: None,
-            });
-        }
-        if !src.is_file() {
-            return Err(Error::Command(format!(
-                "outgoing file missing: {}",
-                src.display()
-            )));
-        }
-        ensure_private_dir(&files_dir())?;
-        let dest_name = unique_files_name(preferred_name);
-        let dest = files_dir().join(&dest_name);
-        // Never encrypt in-place over the source — write ciphertext beside it.
-        if dest == src {
-            return Err(Error::Command(
-                "refusing to encrypt over the plaintext source path".into(),
-            ));
-        }
-        let (key, nonce) = self.lib.encrypt_file(self.ctrl, src, &dest)?;
-        // Drop the plaintext recording / picker copy when it lives under our data dir.
-        let data = data_dir();
-        if src.starts_with(&data) {
-            let _ = std::fs::remove_file(src);
-        }
-        Ok(PreparedOutgoingFile {
-            // Relative to filesFolder — matches official CryptoFile sends.
-            cmd_path: dest_name,
-            crypto: Some((key, nonce)),
-        })
-    }
-
-    /// Accept an incoming file. With `approved_relays` false the core refuses
-    /// file servers we don't use; that comes back as
-    /// [`ReceiveOutcome::NeedsApproval`] instead of an error.
-    pub fn receive_file(&self, file_id: i64, approved_relays: bool) -> Result<ReceiveOutcome> {
-        std::fs::create_dir_all(files_dir()).map_err(|e| Error::Command(e.to_string()))?;
-        let cmd = Commands::receive_file(file_id, approved_relays);
-        let raw = self.lib.send_cmd(self.ctrl, &cmd)?;
-        let env: ApiEnvelope = serde_json::from_str(&raw)?;
-        if let Some(servers) = env.error.as_ref().and_then(file_not_approved_servers) {
-            return Ok(ReceiveOutcome::NeedsApproval { servers });
-        }
-        env.into_result().map(|_| ReceiveOutcome::Accepted).map_err(|err| {
-            tracing::warn!(cmd = %redact_command(&cmd), error = %err, "receive failed");
-            err
-        })
-    }
-
-    /// Toggle a reaction on a chat item (`add` true → on, false → off).
-    pub fn set_reaction(
-        &self,
-        chat: &ChatId,
-        item_id: i64,
-        emoji: &str,
-        add: bool,
-    ) -> Result<Value> {
-        let emoji = normalize_reaction_emoji(emoji)
-            .ok_or_else(|| Error::Command(format!("unsupported reaction: {emoji}")))?;
-        self.send(&Commands::reaction(chat, item_id, emoji, add))
-    }
-
-    pub fn list_messages(&self, chat: &ChatId, count: u32) -> Result<Vec<ChatMessage>> {
-        let value = self.send(&Commands::get_chat(chat, count))?;
-        Ok(parse_chat_messages(&value))
-    }
-
-    /// Ensure a reusable contact address exists and return its link.
-    /// The reusable address, or `None` when the user has none (`/_show_address`
-    /// fails then) — never creates one.
-    pub fn address_link(&self) -> Result<Option<ConnLink>> {
-        match self.send(&Commands::show_address(self.user_id()?)) {
-            Ok(value) => Ok(parse_conn_link(
-                &value,
-                "/contactLink/connLinkContact/connFullLink",
-                "/contactLink/connLinkContact/connShortLink",
-            )),
-            Err(Error::Command(_)) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Delete the reusable address: nobody new can use it; contacts made
-    /// through it stay connected (the official apps' "Delete address").
-    pub fn delete_address(&self) -> Result<()> {
-        self.send(&Commands::delete_address(self.user_id()?)).map(|_| ())?;
-        // The profile no longer carries it.
-        let _ = self.refresh_user();
-        Ok(())
-    }
-
-    pub fn ensure_address_link(&self) -> Result<ConnLink> {
-        let user_id = self.user_id()?;
-        match self.send(&Commands::show_address(user_id)) {
-            Ok(value) => parse_conn_link(
-                &value,
-                "/contactLink/connLinkContact/connFullLink",
-                "/contactLink/connLinkContact/connShortLink",
-            )
-            .ok_or_else(|| Error::Command(format!("address missing link: {value}"))),
-            Err(_) => {
-                let value = self.send(&Commands::create_address(user_id))?;
-                parse_conn_link(
-                    &value,
-                    "/connLinkContact/connFullLink",
-                    "/connLinkContact/connShortLink",
-                )
-                .or_else(|| {
-                    parse_conn_link(
-                        &value,
-                        "/contactLink/connLinkContact/connFullLink",
-                        "/contactLink/connLinkContact/connShortLink",
-                    )
-                })
-                .ok_or_else(|| Error::Command(format!("created address missing link: {value}")))
-            }
-        }
-    }
-
-    /// Whether the reusable address auto-accepts inbound contact requests.
-    pub fn address_auto_accept(&self) -> Result<bool> {
-        let user_id = self.user_id()?;
-        let value = match self.send(&Commands::show_address(user_id)) {
-            Ok(v) => v,
-            Err(_) => {
-                // No address yet — create one (defaults: auto-accept off).
-                self.send(&Commands::create_address(user_id))?
-            }
-        };
-        Ok(parse_address_auto_accept(&value))
-    }
-
-    /// Enable/disable address auto-accept (`acceptIncognito=false` when on).
-    pub fn set_address_auto_accept(&self, enabled: bool) -> Result<bool> {
-        let user_id = self.user_id()?;
-        // Ensure address exists so settings apply to a real contact link.
-        let _ = self.ensure_address_link()?;
-        let current = self.send(&Commands::show_address(user_id)).ok();
-        let business = current
-            .as_ref()
-            .and_then(|v| {
-                v.pointer("/contactLink/addressSettings/businessAddress")
-                    .or_else(|| v.pointer("/addressSettings/businessAddress"))
-                    .and_then(|b| b.as_bool())
-            })
-            .unwrap_or(false);
-        let auto = if enabled { Some(false) } else { None };
-        let value = self.send(&Commands::address_settings(user_id, business, auto))?;
-        Ok(parse_address_auto_accept(&value))
-    }
-
-    /// Group members who reacted with `emoji` on `item_id`.
-    pub fn reaction_members(
-        &self,
-        chat: &ChatId,
-        item_id: i64,
-        emoji: &str,
-    ) -> Result<Vec<ReactionMember>> {
-        if !matches!(chat.chat_type, ChatType::Group) {
-            return Err(Error::Command(
-                "reaction members only available for groups".into(),
-            ));
-        }
-        let emoji = normalize_reaction_emoji(emoji)
-            .ok_or_else(|| Error::Command(format!("unsupported reaction: {emoji}")))?;
-        let value = self.send(&Commands::reaction_members(
-            self.user_id()?,
-            chat.api_id,
-            item_id,
-            emoji,
-        ))?;
-        Ok(parse_reaction_members(&value))
-    }
-
-    /// Create a one-time invitation link.
-    pub fn create_invitation_link(&self) -> Result<ConnLink> {
-        self.create_invitation(false).map(|inv| inv.link)
-    }
-
-    /// A new one-time link — what opening the New page ("+") does.
-    pub fn create_invitation(&self, incognito: bool) -> Result<Invitation> {
-        let value = self.send(&Commands::create_invitation(self.user_id()?, incognito))?;
-        let inv = parse_created_invitation(&value)
-            .ok_or_else(|| Error::Command(format!("invitation missing link: {value}")))?;
-        self.update_pending(|p| p.insert(0, inv.clone()));
-        Ok(inv)
-    }
-
-    /// "New link": delete `previous` (the user confirmed) and create a fresh one.
-    pub fn regenerate_invitation(&self, previous: Option<i64>, incognito: bool) -> Result<Invitation> {
-        if let Some(conn_id) = previous {
-            // Used meanwhile (now a contact) or already gone: nothing to delete.
-            let _ = self.delete_invitation(conn_id);
-        }
-        self.create_invitation(incognito)
-    }
-
-    /// Delete an unused one-time link; whoever has it can no longer connect.
-    pub fn delete_invitation(&self, conn_id: i64) -> Result<()> {
-        let result = self.send(&Commands::delete_pending_connection(conn_id));
-        // Gone from the list either way: deleted now, or already used / gone.
-        self.update_pending(|p| p.retain(|i| i.conn_id != conn_id));
-        result.map(|_| ())
-    }
-
-    /// Name a pending link so the user knows whom it was for (empty clears).
-    pub fn set_invitation_alias(&self, conn_id: i64, alias: &str) -> Result<String> {
-        let value = self.send(&Commands::set_connection_alias(conn_id, alias))?;
-        let alias = parse_alias_updated(&value)
-            .ok_or_else(|| Error::Command(format!("unexpected alias reply: {value}")))?;
-        self.update_pending(|p| {
-            if let Some(i) = p.iter_mut().find(|i| i.conn_id == conn_id) {
-                i.alias = alias.clone();
-            }
-        });
-        Ok(alias)
-    }
-
-    /// Switch an unused invitation to / from a random incognito profile; the
-    /// link stays the same. Returns the new state.
-    pub fn set_invitation_incognito(&self, conn_id: i64, incognito: bool) -> Result<bool> {
-        let value = self.send(&Commands::set_connection_incognito(conn_id, incognito))?;
-        let on = parse_incognito_updated(&value)
-            .ok_or_else(|| Error::Command(format!("unexpected incognito reply: {value}")))?;
-        self.update_pending(|p| {
-            if let Some(i) = p.iter_mut().find(|i| i.conn_id == conn_id) {
-                i.incognito = on;
-            }
-        });
-        Ok(on)
-    }
-
-    /// Accept an invitation / address / group link (short HTTPS or full `simplex:` URI).
-    pub fn connect_link(&self, link: &str) -> Result<Value> {
-        self.connect_link_as(link, false)
-    }
-
-    /// [`Self::connect_link`], optionally with a new random incognito profile.
-    pub fn connect_link_as(&self, link: &str, incognito: bool) -> Result<Value> {
-        let link = link.trim().trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == '“' || c == '”');
-        let link = link.trim();
-        if link.is_empty() {
-            return Err(Error::Command("empty invite link".into()));
-        }
-        // `/connect` resolves short links; `/_connect <userId> …` does not.
-        self.send(&Commands::connect_link(self.user_id()?, link, incognito))
+        *lock(&self.pending) = invitations::pending_invitations(&value);
+        Ok(parse::chat_previews(&value))
     }
 
     /// Clear unread state for a chat (badge goes to zero after list refresh).
     pub fn mark_chat_read(&self, chat: &ChatId) -> Result<Value> {
         let read = self.send(&Commands::read_chat(chat))?;
-        // `/_unread` rejects group support scopes (`not supported`); skip it there.
+        // `/_unread` rejects group support scopes (`not supported`).
         if chat.scope.is_none() {
             let _ = self.send(&Commands::unread_chat(chat, false));
         }
@@ -677,7 +304,8 @@ impl Session {
         self.send(&Commands::set_chat_settings(chat, settings))
     }
 
-    /// Per-chat local wipe TTL (`/_ttl …`). `None` = restore user default.
+    /// Delete this chat's messages from this device after `seconds`
+    /// (`None`: the user default).
     pub fn set_chat_ttl(&self, chat: &ChatId, seconds: Option<i64>) -> Result<Value> {
         self.send(&Commands::set_chat_ttl(self.user_id()?, chat, seconds))
     }
@@ -700,17 +328,12 @@ impl Session {
     }
 
     pub fn list_chat_tags(&self) -> Result<Vec<ChatTag>> {
-        let value = self.send(&Commands::get_chat_tags(self.user_id()?))?;
-        Ok(parse_chat_tags(&value))
+        Ok(parse::chat_tags(&self.send(&Commands::get_chat_tags(self.user_id()?))?))
     }
 
     pub fn create_chat_tag(&self, text: &str) -> Result<Vec<ChatTag>> {
-        let text = text.trim();
-        if text.is_empty() {
-            return Err(Error::Command("list name required".into()));
-        }
-        let value = self.send(&Commands::create_chat_tag(text))?;
-        Ok(parse_chat_tags(&value))
+        let text = Some(text.trim()).filter(|t| !t.is_empty()).ok_or_else(|| command_error("list name required"))?;
+        Ok(parse::chat_tags(&self.send(&Commands::create_chat_tag(text))?))
     }
 
     pub fn set_chat_tags(&self, chat: &ChatId, tag_ids: &[i64]) -> Result<Value> {
@@ -725,334 +348,417 @@ impl Session {
         self.send(&Commands::reject_contact_request(contact_req_id))
     }
 
-    /// Active user profile (clone of session cache).
-    pub fn active_profile(&self) -> Option<UserProfile> {
-        self.user.lock().ok().and_then(|g| g.clone())
+    pub fn set_contact_alias(&self, contact_id: i64, alias: &str) -> Result<Value> {
+        self.send(&Commands::set_contact_alias(contact_id, alias))
+    }
+
+    /// What you allow this contact (`cursus_core::preferences` builds `prefs`).
+    pub fn set_contact_prefs(&self, contact_id: i64, prefs: &Value) -> Result<Value> {
+        self.send(&Commands::set_contact_prefs(contact_id, prefs))
+    }
+
+    // ── Messages ────────────────────────────────────────────────────────
+
+    /// The newest `count` messages of a chat, oldest first.
+    pub fn list_messages(&self, chat: &ChatId, count: u32) -> Result<Vec<ChatMessage>> {
+        Ok(parse::chat_messages(&self.send(&Commands::get_chat(chat, count))?))
+    }
+
+    /// Send a text, optionally as a reply to `quoted_item_id`.
+    pub fn send_text(&self, chat: &ChatId, text: &str, quoted_item_id: Option<i64>) -> Result<Value> {
+        self.send(&Commands::send_message(chat, Commands::text(text), None, quoted_item_id))
+    }
+
+    pub fn update_text(&self, chat: &ChatId, item_id: i64, text: &str) -> Result<Value> {
+        self.send(&Commands::update_text(chat, item_id, text))
+    }
+
+    pub fn delete_items(&self, chat: &ChatId, item_ids: &[i64], broadcast: bool) -> Result<Value> {
+        if item_ids.is_empty() {
+            return Err(command_error("no items to delete"));
+        }
+        self.send(&Commands::delete_items(chat, item_ids, broadcast))
+    }
+
+    pub fn forward_items(&self, from: &ChatId, to: &ChatId, item_ids: &[i64]) -> Result<Value> {
+        if item_ids.is_empty() {
+            return Err(command_error("no items to forward"));
+        }
+        self.send(&Commands::forward_items(from, to, item_ids))
+    }
+
+    pub fn message_info(&self, chat: &ChatId, item_id: i64) -> Result<MessageInfo> {
+        Ok(MessageInfo::from_api(&self.send(&Commands::item_info(chat, item_id))?))
+    }
+
+    /// Add (`add`) or remove your reaction on a message.
+    pub fn set_reaction(&self, chat: &ChatId, item_id: i64, emoji: &str, add: bool) -> Result<Value> {
+        self.send(&Commands::reaction(chat, item_id, known_reaction(emoji)?, add))
+    }
+
+    /// Group members who reacted with `emoji` on `item_id`.
+    pub fn reaction_members(&self, chat: &ChatId, item_id: i64, emoji: &str) -> Result<Vec<ReactionMember>> {
+        if chat.chat_type != ChatType::Group {
+            return Err(command_error("reaction members only available for groups"));
+        }
+        let cmd = Commands::reaction_members(self.user_id()?, chat.api_id, item_id, known_reaction(emoji)?);
+        Ok(parse::reaction_members(&self.send(&cmd)?))
+    }
+
+    // ── Files ───────────────────────────────────────────────────────────
+
+    /// Send a file. Photos go as the official clients send them: re-encoded
+    /// without metadata, small enough to download by themselves, with an
+    /// inline preview (see [`crate::media::prepare_outgoing_image`]).
+    pub fn send_file(&self, chat: &ChatId, path: &str) -> Result<Value> {
+        let src = Path::new(path.trim());
+        let name = src.file_name().and_then(|s| s.to_str()).ok_or_else(|| command_error("no file to send"))?;
+        let staging = temp_dir().join(format!("send-{}", unique_stamp()));
+        let image = parse::is_image_name(name)
+            .then(|| crate::media::prepare_outgoing_image(src, &staging))
+            .and_then(|prepared| prepared.inspect_err(|err| tracing::warn!(%err, "not sent as a photo")).ok());
+        let sent = match &image {
+            Some(image) => {
+                let name = image.path.file_name().and_then(|s| s.to_str()).unwrap_or(name);
+                self.store_outgoing(&image.path, name)
+                    .and_then(|file| self.send(&Commands::send_message(chat, Commands::image(&image.preview), Some(&file), None)))
+            }
+            None => self
+                .store_outgoing(src, name)
+                .and_then(|file| self.send(&Commands::send_message(chat, Commands::file(), Some(&file), None))),
+        };
+        let _ = std::fs::remove_dir_all(&staging);
+        sent
+    }
+
+    /// Send a recorded voice message of `duration_secs`.
+    pub fn send_voice(&self, chat: &ChatId, path: &str, duration_secs: u32) -> Result<Value> {
+        if duration_secs == 0 {
+            return Err(command_error("voice message too short"));
+        }
+        let src = Path::new(path.trim());
+        let name = src.file_name().and_then(|s| s.to_str()).ok_or_else(|| command_error("no voice message to send"))?;
+        let file = self.store_outgoing(src, name)?;
+        self.send(&Commands::send_message(chat, Commands::voice(duration_secs), Some(&file), None))
+    }
+
+    /// Put `src` into the files folder for sending, as the official clients
+    /// do: encrypted as a CryptoFile when local files are encrypted, else
+    /// copied. The core is given the name inside the folder, so the message
+    /// never depends on where the user's original is.
+    fn store_outgoing(&self, src: &Path, preferred_name: &str) -> Result<OutgoingFile> {
+        if !src.is_file() {
+            return Err(command_error("the file to send is missing"));
+        }
+        ensure_private_dir(&files_dir())?;
+        let name = unique_files_name(preferred_name);
+        let dest = files_dir().join(&name);
+        let crypto = if self.encrypt_local_files.load(Ordering::Relaxed) {
+            Some(self.lib.encrypt_file(self.ctrl, src, &dest)?)
+        } else {
+            std::fs::copy(src, &dest)?;
+            None
+        };
+        // Our own plaintext (a recording, a re-encoded photo) is not kept.
+        if src.starts_with(data_dir()) {
+            let _ = std::fs::remove_file(src);
+        }
+        Ok(OutgoingFile { path: name, crypto })
+    }
+
+    /// Accept an incoming file. With `approved_relays` false the core refuses
+    /// file servers we don't use; that comes back as
+    /// [`ReceiveOutcome::NeedsApproval`] instead of an error.
+    pub fn receive_file(&self, file_id: i64, approved_relays: bool) -> Result<ReceiveOutcome> {
+        ensure_private_dir(&files_dir())?;
+        let encrypt = self.encrypt_local_files.load(Ordering::Relaxed);
+        let cmd = Commands::receive_file(file_id, approved_relays, encrypt);
+        let env: ApiEnvelope = serde_json::from_str(&self.lib.send_cmd(self.ctrl, &cmd)?)?;
+        if let Some(servers) = env.error.as_ref().and_then(file_not_approved_servers) {
+            return Ok(ReceiveOutcome::NeedsApproval { servers });
+        }
+        env.into_result().map(|_| ReceiveOutcome::Accepted)
     }
 
     /// Switch at-rest encryption for files received / sent from now on.
     pub fn set_encrypt_local_files(&self, on: bool) -> Result<()> {
         self.send(&Commands::set_encrypt_local_files(on))?;
-        self.encrypt_local_files
-            .store(on, std::sync::atomic::Ordering::Relaxed);
+        self.encrypt_local_files.store(on, Ordering::Relaxed);
         Ok(())
     }
 
-    /// Delivery receipts for all contacts (`groups` false) or small groups.
-    ///
-    /// The core writes the DB but keeps serving its in-memory user from `/u`
-    /// until restart, so re-reading would show the old value: update our
-    /// cached profile instead (the official app does the same).
-    pub fn set_delivery_receipts(&self, groups: bool, on: bool) -> Result<UserProfile> {
-        let user_id = self.user_id()?;
-        self.send(&Commands::set_delivery_receipts(user_id, groups, on))?;
-        let mut user = self
-            .active_profile()
-            .ok_or_else(|| Error::Command("no active user".into()))?;
-        if groups {
-            user.send_rcpts_small_groups = on;
-        } else {
-            user.send_rcpts_contacts = on;
+    /// Decrypt a CryptoFile for viewing (cached for the session). Returns the
+    /// plaintext path: in the RAM-backed runtime dir when it has room
+    /// ([`runtime_cache_dir`]), else under `tmp/plain/` on disk.
+    pub fn ensure_plaintext_file(&self, encrypted: &Path, key: &str, nonce: &str) -> Result<PathBuf> {
+        let ram = runtime_cache_dir().map(|d| d.join("plain").join(plaintext_cache_name(encrypted, key, nonce)));
+        let disk = plaintext_cache_path(encrypted, key, nonce);
+        if let Some(cached) = ram.iter().chain([&disk]).find(|p| p.is_file()) {
+            return Ok(cached.clone());
         }
-        self.set_user(user.clone());
-        Ok(user)
-    }
-
-    /// Refresh `/u` into the session cache.
-    pub fn refresh_user(&self) -> Result<UserProfile> {
-        let value = self.send(Commands::show_active_user())?;
-        let user = parse_user(&value)?;
-        self.set_user(user.clone());
-        Ok(user)
-    }
-
-    /// Update own profile and refresh local cache from the response when possible.
-    pub fn update_profile(&self, fields: ProfileFields) -> Result<UserProfile> {
-        let user_id = self.user_id()?;
-        let value = self.send(&Commands::update_profile(user_id, &fields))?;
-        let user = parse_user(&value)
-            .or_else(|_| {
-                if let Some(p) = value.get("toProfile") {
-                    let mut u = self.active_profile().unwrap_or(UserProfile {
-                        user_id,
-                        profile: ProfileFields::default(),
-                        send_rcpts_contacts: true,
-                        send_rcpts_small_groups: true,
-                    });
-                    u.profile = parse_profile_fields(Some(p));
-                    Ok(u)
-                } else {
-                    Err(Error::Command(format!("profile update missing user: {value}")))
-                }
-            })
-            .or_else(|_| {
-                let refreshed = self.send(Commands::show_active_user())?;
-                parse_user(&refreshed)
-            })?;
-        self.set_user(user.clone());
-        Ok(user)
-    }
-
-    /// Share / unshare the reusable address on the profile.
-    pub fn set_profile_address(&self, on: bool) -> Result<UserProfile> {
-        let user_id = self.user_id()?;
-        if on {
-            let _ = self.ensure_address_link()?;
-        }
-        let _ = self.send(&Commands::profile_address(user_id, on))?;
-        self.refresh_user()
-    }
-
-    /// Local alias for a direct contact (`/_set alias @{id}`).
-    pub fn set_contact_alias(&self, contact_id: i64, alias: &str) -> Result<Value> {
-        self.send(&Commands::set_contact_alias(contact_id, alias.trim()))
-    }
-
-    /// Contact feature prefs — Disappearing messages / Full deletion (`/_set prefs`).
-    pub fn set_contact_prefs(&self, contact_id: i64, prefs: &Value) -> Result<Value> {
-        self.send(&Commands::set_contact_prefs(contact_id, prefs))
-    }
-
-    /// Create a private group; returns the new group id when present in the response.
-    pub fn create_group(&self, display_name: &str) -> Result<ChatId> {
-        let name = display_name.trim();
-        if name.is_empty() {
-            return Err(Error::Command("group name required".into()));
-        }
-        let user_id = self.user_id()?;
-        let value = self.send(&Commands::new_group(user_id, name))?;
-        let group_id = value
-            .pointer("/groupInfo/groupId")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| Error::Command(format!("group create missing id: {value}")))?;
-        Ok(ChatId {
-            chat_type: ChatType::Group,
-            api_id: group_id,
-            scope: None,
-        })
-    }
-
-    /// Enabled chat-relay ids from `/_servers` (for channel creation).
-    pub fn list_chat_relays(&self) -> Result<Vec<ChatRelayInfo>> {
-        let user_id = self.user_id()?;
-        let value = self.send(&Commands::get_user_servers(user_id))?;
-        Ok(parse_chat_relays(&value))
-    }
-
-    /// Create a channel (public / relay group). Picks up to 3 enabled relays.
-    pub fn create_channel(&self, display_name: &str) -> Result<(ChatId, Option<String>)> {
-        let name = display_name.trim();
-        if name.is_empty() {
-            return Err(Error::Command("channel name required".into()));
-        }
-        let relays = self.list_chat_relays()?;
-        let relay_ids: Vec<i64> = relays.iter().map(|r| r.chat_relay_id).take(3).collect();
-        if relay_ids.is_empty() {
-            return Err(Error::Command(
-                "no chat relays available — enable relays in SimpleX network settings first".into(),
-            ));
-        }
-        let user_id = self.user_id()?;
-        let value = self.send(&Commands::new_public_group(user_id, &relay_ids, name))?;
-        if value.get("type").and_then(|v| v.as_str()) == Some("publicGroupCreationFailed") {
-            return Err(Error::Command(
-                "channel creation failed — check relay connectivity".into(),
-            ));
-        }
-        let group_id = value
-            .pointer("/groupInfo/groupId")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| Error::Command(format!("channel create missing id: {value}")))?;
-        // Prefer the profile short channel link (`/c#`) — same URI official apps share.
-        // Full `simplex:/contact#` links make joiners wait on the host forever
-        // (channels ignore direct host joins; relays are in short-link data).
-        let link = parse_profile_channel_link(&value)
-            .or_else(|| parse_group_link(&value))
-            .map(|l| shareable_conn_uri(&l));
-        if let Some(ref l) = link {
-            if !is_channel_short_link(l) {
-                return Err(Error::Command(format!(
-                    "channel created without a /c# short link (got {l}). Try again or check relays."
-                )));
+        let size = std::fs::metadata(encrypted).map(|m| m.len()).unwrap_or(u64::MAX);
+        if let Some(ram) = ram.filter(|ram| free_bytes(ram).is_some_and(|free| fits_in_ram_cache(size, free))) {
+            match self.decrypt_into(encrypted, key, nonce, &ram) {
+                Ok(()) => return Ok(ram),
+                // e.g. the tmpfs filled up meanwhile.
+                Err(err) => tracing::warn!(%err, "RAM decrypt failed; using disk cache"),
             }
         }
-        Ok((
-            ChatId {
-                chat_type: ChatType::Group,
-                api_id: group_id,
-            scope: None,
-        },
-            link,
-        ))
+        self.decrypt_into(encrypted, key, nonce, &disk)?;
+        Ok(disk)
     }
 
-    /// List members of a group / channel.
-    pub fn delete_member_support_chat(
-        &self,
-        group_id: i64,
-        group_member_id: i64,
-    ) -> Result<Value> {
-        self.send(&Commands::delete_member_support_chat(
-            group_id,
-            group_member_id,
-        ))
+    /// Decrypt next to `dest`, then move into place: a cached file is always
+    /// complete, also while another thread decrypts the same attachment.
+    fn decrypt_into(&self, encrypted: &Path, key: &str, nonce: &str, dest: &Path) -> Result<()> {
+        let dir = dest.parent().ok_or_else(|| command_error("no cache directory"))?;
+        if let Some(parent) = dir.parent() {
+            ensure_private_dir(parent)?;
+        }
+        ensure_private_dir(dir)?;
+        let partial = dir.join(format!(".part-{}", unique_stamp()));
+        let done = self
+            .lib
+            .decrypt_file(encrypted, key, nonce, &partial)
+            .and_then(|()| Ok(std::fs::rename(&partial, dest)?));
+        if done.is_err() {
+            let _ = std::fs::remove_file(&partial);
+        }
+        done
+    }
+
+    // ── Address and invitations ─────────────────────────────────────────
+
+    /// The reusable address, or `None` when the user has none — never
+    /// creates one (`/_show_address` fails without an address).
+    pub fn address_link(&self) -> Result<Option<ConnLink>> {
+        match self.send(&Commands::show_address(self.user_id()?)) {
+            Ok(value) => Ok(parse::address_link(&value)),
+            Err(Error::Command(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The reusable address, created when there is none yet.
+    pub fn ensure_address_link(&self) -> Result<ConnLink> {
+        if let Some(link) = self.address_link()? {
+            return Ok(link);
+        }
+        let created = self.send(&Commands::create_address(self.user_id()?))?;
+        parse::address_link(&created).ok_or_else(|| command_error("the new address has no link"))
+    }
+
+    /// Delete the reusable address: nobody new can use it; contacts made
+    /// through it stay connected (the official apps' "Delete address").
+    pub fn delete_address(&self) -> Result<()> {
+        self.send(&Commands::delete_address(self.user_id()?))?;
+        // The profile no longer carries it.
+        let _ = self.refresh_user();
+        Ok(())
+    }
+
+    /// Whether the address accepts contact requests by itself (false
+    /// without an address).
+    pub fn address_auto_accept(&self) -> Result<bool> {
+        Ok(self.send(&Commands::show_address(self.user_id()?)).is_ok_and(|v| parse::address_auto_accept(&v)))
+    }
+
+    /// Switch address auto-accept (never incognito); creates the address
+    /// when there is none.
+    pub fn set_address_auto_accept(&self, enabled: bool) -> Result<bool> {
+        let user_id = self.user_id()?;
+        self.ensure_address_link()?;
+        let business = self.send(&Commands::show_address(user_id)).is_ok_and(|v| parse::address_is_business(&v));
+        let value = self.send(&Commands::address_settings(user_id, business, enabled.then_some(false)))?;
+        Ok(parse::address_auto_accept(&value))
+    }
+
+    /// Unused one-time links the user created, newest first, as of the last
+    /// chat-list load and the invitation calls since (no core round trip).
+    pub fn pending_invitations(&self) -> Vec<Invitation> {
+        lock(&self.pending).clone()
+    }
+
+    fn update_pending_invitation(&self, conn_id: i64, update: impl FnOnce(&mut Invitation)) {
+        if let Some(invitation) = lock(&self.pending).iter_mut().find(|i| i.conn_id == conn_id) {
+            update(invitation);
+        }
+    }
+
+    /// A new one-time link — what opening the New page ("+") does.
+    pub fn create_invitation(&self, incognito: bool) -> Result<Invitation> {
+        let value = self.send(&Commands::create_invitation(self.user_id()?, incognito))?;
+        let inv = invitations::parse_created_invitation(&value).ok_or_else(|| command_error("the invitation has no link"))?;
+        lock(&self.pending).insert(0, inv.clone());
+        Ok(inv)
+    }
+
+    /// "New link": delete `previous` (the user confirmed) and create a fresh one.
+    pub fn regenerate_invitation(&self, previous: Option<i64>, incognito: bool) -> Result<Invitation> {
+        if let Some(conn_id) = previous {
+            // Used meanwhile (now a contact) or already gone: nothing to delete.
+            let _ = self.delete_invitation(conn_id);
+        }
+        self.create_invitation(incognito)
+    }
+
+    /// Delete an unused one-time link; whoever has it can no longer connect.
+    pub fn delete_invitation(&self, conn_id: i64) -> Result<()> {
+        let result = self.send(&Commands::delete_pending_connection(conn_id));
+        // Gone from the list either way: deleted now, or already used / gone.
+        lock(&self.pending).retain(|i| i.conn_id != conn_id);
+        result.map(|_| ())
+    }
+
+    /// Name a pending link so the user knows whom it was for (empty clears).
+    pub fn set_invitation_alias(&self, conn_id: i64, alias: &str) -> Result<String> {
+        let value = self.send(&Commands::set_connection_alias(conn_id, alias))?;
+        let alias = invitations::parse_alias_updated(&value).ok_or_else(|| command_error("unexpected alias reply"))?;
+        self.update_pending_invitation(conn_id, |i| i.alias = alias.clone());
+        Ok(alias)
+    }
+
+    /// Switch an unused invitation to / from a random incognito profile; the
+    /// link stays the same. Returns the new state.
+    pub fn set_invitation_incognito(&self, conn_id: i64, incognito: bool) -> Result<bool> {
+        let value = self.send(&Commands::set_connection_incognito(conn_id, incognito))?;
+        let on = invitations::parse_incognito_updated(&value).ok_or_else(|| command_error("unexpected incognito reply"))?;
+        self.update_pending_invitation(conn_id, |i| i.incognito = on);
+        Ok(on)
+    }
+
+    /// Accept an invitation / address / group link (short HTTPS or full
+    /// `simplex:` URI), with a new random profile when `incognito`.
+    pub fn connect_link(&self, link: &str, incognito: bool) -> Result<Value> {
+        let link = link.trim().trim_matches(['"', '\'', '`', '“', '”']).trim();
+        if link.is_empty() {
+            return Err(command_error("that is not a SimpleX link"));
+        }
+        // `/connect` resolves short links; `/_connect <userId> …` does not.
+        self.send(&Commands::connect_link(link, incognito))
+    }
+
+    // ── Groups and channels ─────────────────────────────────────────────
+
+    fn created_group_id(value: &Value) -> Result<ChatId> {
+        let id = value.i64_at("/groupInfo/groupId").ok_or_else(|| command_error("the new group has no id"))?;
+        Ok(ChatId::new(ChatType::Group, id))
+    }
+
+    pub fn create_group(&self, display_name: &str) -> Result<ChatId> {
+        let name = Some(display_name.trim()).filter(|n| !n.is_empty()).ok_or_else(|| command_error("group name required"))?;
+        Self::created_group_id(&self.send(&Commands::new_group(self.user_id()?, name))?)
+    }
+
+    /// Enabled chat relays (`/_servers`), which channels are created on.
+    pub fn list_chat_relays(&self) -> Result<Vec<ChatRelayInfo>> {
+        Ok(parse::chat_relays(&self.send(&Commands::get_user_servers(self.user_id()?))?))
+    }
+
+    /// Create a channel on up to 3 enabled relays; returns it with its
+    /// `/c#` link when the core already has one.
+    pub fn create_channel(&self, display_name: &str) -> Result<(ChatId, Option<String>)> {
+        let name = Some(display_name.trim()).filter(|n| !n.is_empty()).ok_or_else(|| command_error("channel name required"))?;
+        let relays: Vec<i64> = self.list_chat_relays()?.iter().map(|r| r.chat_relay_id).take(3).collect();
+        if relays.is_empty() {
+            return Err(command_error("no chat relays available — enable relays in SimpleX network settings first"));
+        }
+        let value = self.send(&Commands::new_public_group(self.user_id()?, &relays, name))?;
+        if value.tag() == "publicGroupCreationFailed" {
+            return Err(command_error("channel creation failed — check relay connectivity"));
+        }
+        Ok((Self::created_group_id(&value)?, parse::channel_link(&value).map(|l| l.display)))
     }
 
     pub fn list_group_members(&self, group_id: i64) -> Result<Vec<GroupMemberInfo>> {
-        let value = self.send(&Commands::list_members(group_id))?;
-        Ok(parse_group_members(&value))
+        Ok(parse::group_members(&self.send(&Commands::list_members(group_id))?))
     }
 
     /// Invite a direct contact into the group with the given role.
-    pub fn add_group_member(
-        &self,
-        group_id: i64,
-        contact_id: i64,
-        role: &str,
-    ) -> Result<Value> {
-        let role = if role.is_empty() { "member" } else { role };
-        self.send(&Commands::add_member(group_id, contact_id, role))
+    pub fn add_group_member(&self, group_id: i64, contact_id: i64, role: &str) -> Result<Value> {
+        self.send(&Commands::add_member(group_id, contact_id, role_or_member(role)))
     }
 
-    pub fn set_group_member_role(
-        &self,
-        group_id: i64,
-        member_id: i64,
-        role: &str,
-    ) -> Result<Value> {
+    pub fn set_group_member_role(&self, group_id: i64, member_id: i64, role: &str) -> Result<Value> {
         self.send(&Commands::set_member_role(group_id, &[member_id], role))
     }
 
-    pub fn remove_group_member(
-        &self,
-        group_id: i64,
-        member_id: i64,
-        with_messages: bool,
-    ) -> Result<Value> {
-        self.send(&Commands::remove_members(
-            group_id,
-            &[member_id],
-            with_messages,
-        ))
+    pub fn remove_group_member(&self, group_id: i64, member_id: i64, with_messages: bool) -> Result<Value> {
+        self.send(&Commands::remove_members(group_id, &[member_id], with_messages))
+    }
+
+    /// A moderator lets a pending member in (`/_accept member`).
+    pub fn accept_group_member(&self, group_id: i64, member_id: i64, role: &str) -> Result<Value> {
+        self.send(&Commands::accept_member(group_id, member_id, role_or_member(role)))
+    }
+
+    /// Block / unblock a member for everyone (moderators).
+    pub fn block_group_member(&self, group_id: i64, member_id: i64, blocked: bool) -> Result<Value> {
+        self.send(&Commands::block_members(group_id, &[member_id], blocked))
+    }
+
+    /// Show / hide a member's messages on this device only.
+    pub fn set_member_show_messages(&self, group_id: i64, member_id: i64, show_messages: bool) -> Result<Value> {
+        self.send(&Commands::set_member_settings(group_id, member_id, show_messages))
+    }
+
+    pub fn delete_member_support_chat(&self, group_id: i64, group_member_id: i64) -> Result<Value> {
+        self.send(&Commands::delete_member_support_chat(group_id, group_member_id))
+    }
+
+    /// Open (or create) a direct chat with a group member, as the official
+    /// "Send direct message" does. Returns the contact id.
+    pub fn create_member_contact(&self, group_id: i64, member_id: i64) -> Result<i64> {
+        let value = self.send(&Commands::create_member_contact(group_id, member_id))?;
+        let contact_id = value.i64_at("/contact/contactId").ok_or_else(|| command_error("the member contact has no id"))?;
+        self.send(&Commands::invite_member_contact(contact_id))?;
+        Ok(contact_id)
     }
 
     pub fn leave_group(&self, group_id: i64) -> Result<Value> {
         self.send(&Commands::leave_group(group_id))
     }
 
-    /// Accept a group invitation received in a direct chat (`/_join #id`).
+    /// Accept a group invitation received in a direct chat.
     pub fn join_group(&self, group_id: i64) -> Result<Value> {
         self.send(&Commands::join_group(group_id))
     }
 
-    pub fn set_member_show_messages(
-        &self,
-        group_id: i64,
-        member_id: i64,
-        show_messages: bool,
-    ) -> Result<Value> {
-        self.send(&Commands::set_member_settings(
-            group_id,
-            member_id,
-            show_messages,
-        ))
-    }
-
-    pub fn block_group_member(
-        &self,
-        group_id: i64,
-        member_id: i64,
-        blocked: bool,
-    ) -> Result<Value> {
-        self.send(&Commands::block_members(group_id, &[member_id], blocked))
-    }
-
-    /// Open (or create) a direct chat with a group member, as the official
-    /// “Send direct message” does: `/_create member contact` then
-    /// `/_invite member contact`. Returns the new contact id.
-    pub fn create_member_contact(&self, group_id: i64, member_id: i64) -> Result<i64> {
-        let value = self.send(&Commands::create_member_contact(group_id, member_id))?;
-        let contact_id = value
-            .pointer("/contact/contactId")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| Error::Command(format!("newMemberContact missing contact: {value}")))?;
-        self.send(&Commands::invite_member_contact(contact_id))?;
-        Ok(contact_id)
-    }
-
-    pub fn accept_group_member(
-        &self,
-        group_id: i64,
-        member_id: i64,
-        role: &str,
-    ) -> Result<Value> {
-        let role = if role.is_empty() { "member" } else { role };
-        self.send(&Commands::accept_member(group_id, member_id, role))
-    }
-
     pub fn set_group_alias(&self, group_id: i64, alias: &str) -> Result<Value> {
-        self.send(&Commands::set_group_alias(group_id, alias.trim()))
+        self.send(&Commands::set_group_alias(group_id, alias))
     }
 
-    /// Update group profile (name, welcome message, short descr, image, prefs).
-    pub fn update_group_profile(
-        &self,
-        group_id: i64,
-        profile: &crate::models::GroupProfileUpdate,
-    ) -> Result<Value> {
-        let name = profile.display_name.trim();
-        if name.is_empty() {
-            return Err(Error::Command("group name required".into()));
+    /// Update the whole group profile (name, welcome message, bio, picture,
+    /// preferences): fields left out of `profile` are cleared.
+    pub fn update_group_profile(&self, group_id: i64, profile: &GroupProfileUpdate) -> Result<Value> {
+        let profile = GroupProfileUpdate {
+            display_name: profile.display_name.trim().to_string(),
+            welcome_message: profile.welcome_message.trim().to_string(),
+            short_descr: profile.short_descr.trim().to_string(),
+            ..profile.clone()
+        };
+        if profile.display_name.is_empty() {
+            return Err(command_error("group name required"));
         }
-        let mut profile = profile.clone();
-        profile.display_name = name.to_string();
-        profile.welcome_message = profile.welcome_message.trim().to_string();
-        profile.short_descr = profile.short_descr.trim().to_string();
         self.send(&Commands::update_group_profile(group_id, &profile))
     }
 
-    /// Ensure a member join link exists and return a displayable URL.
-    ///
-    /// Channels must use the `/c#` short link created with `/_public group`.
-    /// Falling back to `/_create link` produces a private-group `/g#` URI that
-    /// official apps reject as `invalidConnReq` (entity id mismatch).
+    /// The link people join with, created for a private group that has none
+    /// (`member_role`: what joiners become). A channel only ever has the
+    /// `/c#` link it was created with: a `/_create link` one would be a
+    /// private-group link, which official apps reject for channels.
     pub fn group_invite_link(&self, group_id: i64, member_role: &str) -> Result<ConnLink> {
-        let role = if member_role.is_empty() {
-            "member"
-        } else {
-            member_role
-        };
-        let existing = self.send(&Commands::get_group_link(group_id));
-        if let Ok(value) = &existing {
-            let is_channel = value
-                .pointer("/groupInfo/useRelays")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if is_channel {
-                if let Some(link) = parse_profile_channel_link(value)
-                    .or_else(|| parse_group_link(value))
-                    .filter(|l| is_channel_short_link(l))
-                {
-                    let link = shareable_conn_uri(&link);
-                    return Ok(ConnLink {
-                        display: link.clone(),
-                        full: link.clone(),
-                        short: Some(link),
-                    });
-                }
-                return Err(Error::Command(
-                    "this channel has no usable short link (need simplex:/c#… or https://…/c#…). \
-Create a new channel — private-group style links won’t join."
-                        .into(),
-                ));
+        if let Ok(value) = self.send(&Commands::get_group_link(group_id)) {
+            if value.bool_at("/groupInfo/useRelays").unwrap_or(false) {
+                return parse::channel_link(&value)
+                    .ok_or_else(|| command_error("this channel has no usable link — create a new channel"));
             }
-            if let Some(links) = parse_group_conn_link(value) {
-                return Ok(links);
+            if let Some(link) = parse::group_link(&value) {
+                return Ok(link);
             }
         }
-        let created = self.send(&Commands::create_group_link(group_id, role))?;
-        parse_group_conn_link(&created)
-            .ok_or_else(|| Error::Command(format!("group link missing: {created}")))
+        let created = self.send(&Commands::create_group_link(group_id, role_or_member(member_role)))?;
+        parse::group_link(&created).ok_or_else(|| command_error("the new group link is missing"))
     }
 
     pub fn set_group_link_role(&self, group_id: i64, role: &str) -> Result<Value> {
@@ -1063,13 +769,14 @@ Create a new channel — private-group style links won’t join."
         self.send(&Commands::delete_group_link(group_id))
     }
 
+    /// Add the short form to a group link made before short links existed.
     pub fn short_group_link(&self, group_id: i64) -> Result<ConnLink> {
-        let value = self.send(&Commands::short_group_link(group_id))?;
-        parse_group_conn_link(&value)
-            .ok_or_else(|| Error::Command(format!("short group link missing: {value}")))
+        parse::group_link(&self.send(&Commands::short_group_link(group_id))?)
+            .ok_or_else(|| command_error("the short group link is missing"))
     }
 
-    /// Invite a contact to an audio/video call (signaling).
+    // ── Calls (signaling; media is `cursus-call`) ───────────────────────
+
     pub fn call_invite(&self, contact_id: i64, media: CallMedia) -> Result<Value> {
         self.send(&Commands::call_invite(contact_id, media))
     }
@@ -1090,13 +797,7 @@ Create a new channel — private-group style links won’t join."
         rtc_session: &str,
         rtc_ice_candidates: &str,
     ) -> Result<Value> {
-        self.send(&Commands::call_offer(
-            contact_id,
-            media,
-            encryption,
-            rtc_session,
-            rtc_ice_candidates,
-        ))
+        self.send(&Commands::call_offer(contact_id, media, encryption, rtc_session, rtc_ice_candidates))
     }
 
     pub fn call_answer(&self, contact_id: i64, rtc_session: &str, rtc_ice_candidates: &str) -> Result<Value> {
@@ -1117,1414 +818,37 @@ Create a new channel — private-group style links won’t join."
     /// until `limit` calls are found.
     pub fn call_history(&self, limit: usize, scan_items: u32) -> Result<Vec<CallRecord>> {
         const PAGE: u32 = 250;
-        let mut out = Vec::new();
+        let mut calls = Vec::new();
         let mut before = None;
         let mut scanned = 0;
-        while scanned < scan_items && out.len() < limit {
+        while scanned < scan_items && calls.len() < limit {
             let value = self.send(&Commands::get_items(PAGE, before))?;
-            let Some(items) = value.get("chatItems").and_then(Value::as_array) else { break };
-            if items.is_empty() {
-                break;
-            }
+            let items = value.array_at("/chatItems");
             scanned += items.len() as u32;
-            // Pages come oldest → newest.
-            for aci in items.iter().rev() {
-                if let Some(rec) = CallRecord::parse(aci) {
-                    out.push(rec);
-                }
-            }
-            let oldest = items
-                .iter()
-                .filter_map(|aci| aci.pointer("/chatItem/meta/itemId").and_then(Value::as_i64))
-                .min();
+            calls.extend(items.iter().filter_map(CallRecord::parse));
+            let oldest = items.iter().filter_map(|aci| aci.i64_at("/chatItem/meta/itemId")).min();
             if oldest.is_none() || oldest == before || (items.len() as u32) < PAGE {
                 break;
             }
             before = oldest;
         }
         // Item ids grow with time across chats: newest first.
-        out.sort_by_key(|r| std::cmp::Reverse(r.item_id));
-        out.truncate(limit);
-        Ok(out)
-    }
-
-    fn user_id(&self) -> Result<i64> {
-        self.with_user(|u| u.user_id)
-            .ok_or_else(|| Error::Command("no active user".into()))
-    }
-
-    pub fn send(&self, cmd: &str) -> Result<Value> {
-        tracing::debug!(cmd = %redact_command(cmd), "chat_send_cmd");
-        let raw = self.lib.send_cmd(self.ctrl, cmd)?;
-        let env: ApiEnvelope = serde_json::from_str(&raw)?;
-        env.into_result().map_err(|err| match err {
-            Error::Command(message) => {
-                // SimpleX error payloads embed full group/contact JSON — keep a
-                // short summary so opening chats/settings does not flood the log.
-                let brief = truncate_chars(message.as_str(), 160);
-                tracing::warn!(cmd = %redact_command(cmd), error = %brief, "chat command failed");
-                Error::Command(message)
-            }
-            other => other,
-        })
-    }
-
-    /// Spawn a background task that forwards SimpleX events.
-    pub fn spawn_receiver(self: &Arc<Self>) -> mpsc::UnboundedReceiver<Event> {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let worker = ReceiveWorker {
-            session: Arc::clone(self),
-            tx,
-        };
-        tokio::task::spawn_blocking(move || worker.run());
-        rx
-    }
-
-    fn ensure_user(&mut self, display_name: &str) -> Result<()> {
-        match self.send(Commands::show_active_user()) {
-            Ok(value) => {
-                self.set_user(parse_user(&value)?);
-                Ok(())
-            }
-            Err(_) => {
-                let value = self.send(&Commands::create_active_user(display_name))?;
-                self.set_user(parse_user(&value)?);
-                Ok(())
-            }
-        }
+        calls.sort_by_key(|r| std::cmp::Reverse(r.item_id));
+        calls.truncate(limit);
+        Ok(calls)
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
         if !self.ctrl.is_null() {
+            // Stop the chat (network, timers) before closing its database,
+            // as the official clients do.
+            let _ = self.send(Commands::stop_chat());
             let _ = self.lib.close_store(self.ctrl);
             self.ctrl = std::ptr::null_mut();
         }
     }
-}
-
-fn parse_user(value: &Value) -> Result<UserProfile> {
-    let user = value
-        .get("user")
-        .or_else(|| value.get("fromUser"))
-        .or_else(|| value.get("toUser"))
-        .ok_or_else(|| Error::Command(format!("activeUser missing user: {value}")))?;
-    let user_id = user
-        .get("userId")
-        .and_then(|v| v.as_i64())
-        .ok_or_else(|| Error::Command("user.userId missing".into()))?;
-    let profile = parse_profile_fields(user.get("profile"));
-    let flag = |k: &str| user.get(k).and_then(|v| v.as_bool()).unwrap_or(true);
-    Ok(UserProfile {
-        user_id,
-        profile,
-        send_rcpts_contacts: flag("sendRcptsContacts"),
-        send_rcpts_small_groups: flag("sendRcptsSmallGroups"),
-    })
-}
-
-fn parse_profile_fields(value: Option<&Value>) -> ProfileFields {
-    let Some(p) = value else {
-        return ProfileFields {
-            display_name: "Cursus".into(),
-            ..ProfileFields::default()
-        };
-    };
-    ProfileFields {
-        display_name: p
-            .get("displayName")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Cursus")
-            .to_string(),
-        full_name: p
-            .get("fullName")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        short_descr: p
-            .get("shortDescr")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        description: p
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        image: p
-            .get("image")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty() && s.starts_with("data:image/"))
-            .map(str::to_string),
-        contact_link: p
-            .get("contactLink")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string),
-        preferences: p.get("preferences").cloned(),
-    }
-}
-
-fn parse_chat_previews(value: &Value) -> Vec<ChatPreview> {
-    let Some(chats) = value.get("chats").and_then(|v| v.as_array()) else {
-        return Vec::new();
-    };
-    chats.iter().filter_map(parse_one_chat).collect()
-}
-
-/// Request id that still needs Accept/Reject, or `None` if already accepted.
-///
-/// Mirrors SimpleX clients' `nextAcceptContactRequest`: `contactRequestId` remains
-/// on the contact after `/_accept` until the request row is deleted, so presence
-/// alone must not keep the Accept bar up.
-fn pending_accept_request_id(contact: &Value) -> Option<i64> {
-    let req_id = contact
-        .get("contactRequestId")
-        .or_else(|| contact.pointer("/contactRequest/contactRequestId"))
-        .and_then(|v| v.as_i64())?;
-    // libsimplex encodes ConnStatus as a sum type: `{"type":"sndReady"}`
-    // (not a bare string). Older fixtures may still use a string.
-    let status = conn_status_tag(contact.pointer("/activeConn/connStatus").unwrap_or(&Value::Null));
-    match status.as_deref() {
-        // No connection yet, or still in the pre-accept handshake.
-        None | Some("new") | Some("prepared") => Some(req_id),
-        // Joined / accepted / snd-ready / ready / … — Accept bar must hide.
-        _ => None,
-    }
-}
-
-/// Extract ConnStatus tag from JSON (`"snd-ready"` or `{"type":"sndReady"}`).
-fn conn_status_tag(value: &Value) -> Option<String> {
-    if let Some(s) = value.as_str() {
-        return Some(s.to_string());
-    }
-    value
-        .get("type")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
-fn parse_one_chat(chat: &Value) -> Option<ChatPreview> {
-    let info = chat.get("chatInfo")?;
-    let type_name = info.get("type")?.as_str()?;
-    let mut pending_request_id = None;
-    let mut settings = ChatSettings::default();
-    let mut tag_ids = Vec::new();
-    let mut peer_profile = ProfileFields::default();
-    let mut local_alias = String::new();
-    let mut is_channel = false;
-    let mut membership_role = None;
-    let mut group_preferences = None;
-    let mut member_admission = None;
-    let mut public_group = None;
-    let mut contact_preferences = None;
-    let mut contact_merged_preferences = None;
-    let mut members_require_attention = 0;
-    let mut membership_support_unread = 0;
-    let mut membership_has_support_chat = false;
-    let (chat_type, api_id, title) = match type_name {
-        "direct" => {
-            let contact = info.get("contact")?;
-            let id = contact.get("contactId")?.as_i64()?;
-            peer_profile = parse_profile_fields(contact.get("profile"));
-            local_alias = contact
-                .get("localAlias")
-                .or_else(|| contact.pointer("/profile/localAlias"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let peer_name = contact
-                .pointer("/profile/displayName")
-                .or_else(|| contact.get("localDisplayName"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Contact")
-                .to_string();
-            // Prefer the local alias for the list title when set.
-            let name = if local_alias.is_empty() {
-                peer_name
-            } else {
-                local_alias.clone()
-            };
-            // Match official clients' `nextAcceptContactRequest`: contactRequestId
-            // stays set after Accept until the request row is deleted, so only
-            // treat as pending when there is no usable connection yet.
-            pending_request_id = pending_accept_request_id(contact);
-            settings = parse_chat_settings(contact.get("chatSettings"));
-            tag_ids = parse_tag_ids(contact.get("chatTags"));
-            contact_preferences = contact.get("userPreferences").cloned();
-            contact_merged_preferences = contact.get("mergedPreferences").cloned();
-            (ChatType::Direct, id, name)
-        }
-        "contactRequest" => {
-            // Standalone request row (some core versions).
-            let req = info.get("contactRequest")?;
-            let req_id = req.get("contactRequestId")?.as_i64()?;
-            peer_profile = parse_profile_fields(req.get("profile"));
-            let name = req
-                .get("localDisplayName")
-                .or_else(|| req.pointer("/profile/displayName"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Request")
-                .to_string();
-            pending_request_id = Some(req_id);
-            (ChatType::Direct, req_id, name)
-        }
-        "group" => {
-            let group = info.get("groupInfo")?;
-            let id = group.get("groupId")?.as_i64()?;
-            let gp = group
-                .get("groupProfile")
-                .or_else(|| group.get("profile"));
-            peer_profile = parse_profile_fields(gp);
-            local_alias = group
-                .get("localAlias")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            membership_role = group
-                .pointer("/membership/memberRole")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
-            group_preferences = gp.and_then(|p| p.get("groupPreferences").cloned());
-            member_admission = gp.and_then(|p| p.get("memberAdmission").cloned());
-            public_group = gp.and_then(|p| p.get("publicGroup").cloned());
-            let peer_name = group
-                .pointer("/groupProfile/displayName")
-                .or_else(|| group.get("localDisplayName"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Group")
-                .to_string();
-            let name = if local_alias.is_empty() {
-                peer_name
-            } else {
-                local_alias.clone()
-            };
-            settings = parse_chat_settings(group.get("chatSettings"));
-            tag_ids = parse_tag_ids(group.get("chatTags"));
-            is_channel = group
-                .get("useRelays")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-                || group
-                    .pointer("/groupProfile/publicGroup/groupType")
-                    .and_then(|v| v.as_str())
-                    == Some("channel");
-            members_require_attention = group
-                .get("membersRequireAttention")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            membership_has_support_chat = group.pointer("/membership/supportChat").is_some();
-            membership_support_unread = group
-                .pointer("/membership/supportChat/unread")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            (ChatType::Group, id, name)
-        }
-        "local" => {
-            let folder = info.get("noteFolder")?;
-            let id = folder.get("noteFolderId")?.as_i64()?;
-            peer_profile.display_name = "Notes".into();
-            (ChatType::Local, id, "Notes".into())
-        }
-        _ => return None,
-    };
-
-    let mut preview = chat_list_item_preview(chat.get("chatItems").and_then(|v| v.as_array()));
-    if pending_request_id.is_some() && preview.is_empty() {
-        preview = "Incoming contact request — accept to chat.".into();
-    }
-    let unread = chat
-        .pointer("/chatStats/unreadCount")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    let unread_chat = chat
-        .pointer("/chatStats/unreadChat")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let last_ts = chat
-        .get("chatItems")
-        .and_then(|v| v.as_array())
-        .and_then(|items| items.first())
-        .and_then(|item| item.pointer("/meta/itemTs"))
-        .or_else(|| info.pointer("/contact/chatTs"))
-        .or_else(|| info.pointer("/groupInfo/chatTs"))
-        .or_else(|| info.pointer("/contact/updatedAt"))
-        .or_else(|| info.pointer("/groupInfo/updatedAt"))
-        .or_else(|| info.pointer("/noteFolder/chatTs"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let chat_item_ttl = info
-        .pointer("/contact/chatItemTTL")
-        .or_else(|| info.pointer("/groupInfo/chatItemTTL"))
-        .or_else(|| info.get("chatItemTTL"))
-        .and_then(|v| v.as_i64());
-
-    Some(ChatPreview {
-        id: ChatId::new(chat_type, api_id),
-        title,
-        preview,
-        unread,
-        unread_chat,
-        settings,
-        tag_ids,
-        chat_item_ttl,
-        pending_request_id,
-        peer_profile,
-        local_alias,
-        is_channel,
-        membership_role,
-        group_preferences,
-        member_admission,
-        public_group,
-        contact_preferences,
-        contact_merged_preferences,
-        members_require_attention,
-        membership_support_unread,
-        membership_has_support_chat,
-        last_ts,
-    })
-}
-
-fn parse_support_chat(value: Option<&Value>) -> Option<crate::models::GroupSupportChat> {
-    let sc = value?;
-    Some(crate::models::GroupSupportChat {
-        unread: sc.get("unread").and_then(|v| v.as_i64()).unwrap_or(0),
-        member_attention: sc
-            .get("memberAttention")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0),
-        mentions: sc.get("mentions").and_then(|v| v.as_i64()).unwrap_or(0),
-    })
-}
-
-fn parse_one_group_member(m: &Value) -> Option<GroupMemberInfo> {
-    let id = m
-        .get("groupMemberId")
-        .or_else(|| m.pointer("/groupMemberId"))
-        .and_then(|v| v.as_i64())?;
-    let role = m
-        .get("memberRole")
-        .and_then(|v| v.as_str())
-        .unwrap_or("member")
-        .to_string();
-    // Skip relay service accounts in the UI list.
-    if role.eq_ignore_ascii_case("relay") {
-        return None;
-    }
-    let status = m
-        .get("memberStatus")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    // Match official CLI: hide rejected / removed / left.
-    if matches!(
-        status.as_str(),
-        "rejected" | "removed" | "left"
-    ) {
-        return None;
-    }
-    // Official GroupMember.chatViewName: memberProfile.localAlias, else displayName.
-    // Do not prefer localDisplayName — that is the unique contact name, not the alias.
-    let display_name = member_view_name(m);
-    let contact_id = m
-        .get("memberContactId")
-        .and_then(|v| v.as_i64())
-        .filter(|id| *id > 0);
-    let blocked_by_admin = m
-        .get("blockedByAdmin")
-        .or_else(|| m.get("memberBlockedByAdmin"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let show_messages = m
-        .pointer("/memberSettings/showMessages")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    let support_chat = parse_support_chat(m.get("supportChat"));
-    let image = nonempty_str(m.pointer("/memberProfile/image"))
-        .or_else(|| nonempty_str(m.pointer("/profile/image")));
-    let public_name = nonempty_str(m.pointer("/memberProfile/displayName"))
-        .or_else(|| nonempty_str(m.pointer("/profile/displayName")))
-        .unwrap_or_else(|| display_name.clone());
-    let short_descr = nonempty_str(m.pointer("/memberProfile/shortDescr"))
-        .or_else(|| nonempty_str(m.pointer("/profile/shortDescr")));
-    Some(GroupMemberInfo {
-        group_member_id: id,
-        contact_id,
-        display_name,
-        role,
-        status,
-        blocked_by_admin,
-        show_messages,
-        support_chat,
-        image,
-        public_name,
-        short_descr,
-        is_me: false,
-    })
-}
-
-fn parse_group_members(value: &Value) -> Vec<GroupMemberInfo> {
-    // Official view lists `membership : members` — the current user lives under
-    // groupInfo.membership and is not duplicated in the members array.
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let membership = value
-        .pointer("/group/groupInfo/membership")
-        .or_else(|| value.pointer("/groupInfo/membership"))
-        .or_else(|| value.pointer("/membership"));
-    if let Some(mut m) = membership.and_then(parse_one_group_member) {
-        m.is_me = true;
-        seen.insert(m.group_member_id);
-        out.push(m);
-    }
-    let members = value
-        .pointer("/group/members")
-        .or_else(|| value.get("members"))
-        .and_then(|v| v.as_array());
-    if let Some(members) = members {
-        for m in members {
-            let Some(info) = parse_one_group_member(m) else {
-                continue;
-            };
-            if seen.insert(info.group_member_id) {
-                out.push(info);
-            }
-        }
-    }
-    out
-}
-
-fn truncate_chars(s: &str, max: usize) -> String {
-    let mut out = String::new();
-    for (i, ch) in s.chars().enumerate() {
-        if i >= max {
-            out.push('…');
-            break;
-        }
-        out.push(ch);
-    }
-    out
-}
-
-/// Channel short links use contact-conn type `C` → `/c#` (not private-group `/g#`).
-pub fn is_channel_short_link(link: &str) -> bool {
-    let l = link.trim();
-    (l.starts_with("https://") || l.starts_with("simplex:/")) && l.contains("/c#")
-}
-
-/// Any SimpleX short invite / address / group / channel URI (`https://` or `simplex:/`).
-pub fn is_short_conn_link(link: &str) -> bool {
-    let l = link.trim();
-    let kind = l.contains("/g#")
-        || l.contains("/c#")
-        || l.contains("/i#")
-        || l.contains("/a#")
-        || l.contains("/r#");
-    kind && (l.starts_with("https://") || l.starts_with("simplex:/"))
-}
-
-/// Match official `simplexChatLink`: rewrite full `simplex:/…` URIs for sharing;
-/// leave short links untouched (converting `simplex:/c#` → `https://simplex.chat/c#` breaks hosts).
-pub fn shareable_conn_uri(link: &str) -> String {
-    let l = link.trim();
-    if is_short_conn_link(l) {
-        return l.to_string();
-    }
-    if let Some(rest) = l.strip_prefix("simplex:/") {
-        format!("https://simplex.chat/{rest}")
-    } else {
-        l.to_string()
-    }
-}
-
-fn parse_profile_channel_link(value: &Value) -> Option<String> {
-    // Official ChannelLinkQRCodeSection shares `groupProfile.publicGroup.groupLink`.
-    value
-        .pointer("/groupInfo/groupProfile/publicGroup/groupLink")
-        .or_else(|| value.pointer("/groupProfile/publicGroup/groupLink"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-}
-
-/// Private-group link in both forms (short when the core has one, full always).
-fn parse_group_conn_link(value: &Value) -> Option<ConnLink> {
-    let conn = value
-        .pointer("/groupLink/connLinkContact")
-        .or_else(|| value.pointer("/groupLink/connLinkInvitation"))
-        .or_else(|| value.get("connLinkContact"))?;
-    let full = conn
-        .get("connFullLink")
-        .and_then(|v| v.as_str())
-        .map(shareable_conn_uri);
-    let short = conn
-        .get("connShortLink")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(shareable_conn_uri);
-    let full = full.or_else(|| short.clone())?;
-    Some(ConnLink {
-        display: short.clone().unwrap_or_else(|| full.clone()),
-        full,
-        short,
-    })
-}
-
-fn parse_group_link(value: &Value) -> Option<String> {
-    // Prefer short links (channels need relay metadata embedded in `/c#` data).
-    value
-        .pointer("/groupLink/connLinkContact/connShortLink")
-        .or_else(|| value.pointer("/groupLink/connLinkInvitation/connShortLink"))
-        .or_else(|| value.pointer("/connLinkContact/connShortLink"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .or_else(|| parse_profile_channel_link(value))
-        .or_else(|| {
-            value
-                .pointer("/groupLink/connLinkContact/connFullLink")
-                .or_else(|| value.pointer("/groupLink/connLinkInvitation/connFullLink"))
-                .or_else(|| value.pointer("/connLinkContact/connFullLink"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-        })
-}
-
-fn parse_chat_relays(value: &Value) -> Vec<ChatRelayInfo> {
-    let mut out = Vec::new();
-    let Some(servers) = value.get("userServers").and_then(|v| v.as_array()) else {
-        return out;
-    };
-    for op in servers {
-        // Skip disabled operators when present.
-        if op
-            .pointer("/operator/enabled")
-            .and_then(|v| v.as_bool())
-            == Some(false)
-        {
-            continue;
-        }
-        let Some(relays) = op.get("chatRelays").and_then(|v| v.as_array()) else {
-            continue;
-        };
-        for relay in relays {
-            let enabled = relay
-                .get("enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            let deleted = relay
-                .get("deleted")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if !enabled || deleted {
-                continue;
-            }
-            let Some(id) = relay.get("chatRelayId").and_then(|v| v.as_i64()) else {
-                continue;
-            };
-            let display_name = relay
-                .get("displayName")
-                .or_else(|| relay.pointer("/relayProfile/displayName"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Relay")
-                .to_string();
-            out.push(ChatRelayInfo {
-                chat_relay_id: id,
-                display_name,
-            });
-        }
-    }
-    out
-}
-
-fn parse_chat_settings(value: Option<&Value>) -> ChatSettings {
-    let Some(value) = value else {
-        return ChatSettings::default();
-    };
-    let enable_ntfs = value
-        .get("enableNtfs")
-        .and_then(|v| v.as_str())
-        .map(NtfFilter::parse)
-        .unwrap_or(NtfFilter::All);
-    let favorite = value
-        .get("favorite")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let send_rcpts = value.get("sendRcpts").and_then(|v| {
-        if v.is_null() {
-            None
-        } else {
-            v.as_bool()
-        }
-    });
-    ChatSettings {
-        enable_ntfs,
-        favorite,
-        send_rcpts,
-    }
-}
-
-fn parse_tag_ids(value: Option<&Value>) -> Vec<i64> {
-    value
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
-        .unwrap_or_default()
-}
-
-fn parse_chat_tags(value: &Value) -> Vec<ChatTag> {
-    let Some(tags) = value
-        .get("userTags")
-        .or_else(|| value.get("chatTags"))
-        .and_then(|v| v.as_array())
-    else {
-        return Vec::new();
-    };
-    tags.iter()
-        .filter_map(|tag| {
-            let id = tag.get("chatTagId")?.as_i64()?;
-            let text = tag
-                .get("chatTagText")
-                .and_then(|v| v.as_str())
-                .unwrap_or("List")
-                .to_string();
-            let emoji = tag
-                .get("chatTagEmoji")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            Some(ChatTag { id, text, emoji })
-        })
-        .collect()
-}
-
-fn parse_chat_messages(value: &Value) -> Vec<ChatMessage> {
-    let Some(items) = value
-        .pointer("/chat/chatItems")
-        .and_then(|v| v.as_array())
-    else {
-        return Vec::new();
-    };
-    items.iter().filter_map(parse_one_message).collect()
-}
-
-fn parse_one_message(item: &Value) -> Option<ChatMessage> {
-    let item_id = item.pointer("/meta/itemId")?.as_i64()?;
-    let deleted = parse_deleted_state(item);
-    let mut text = item
-        .pointer("/meta/itemText")
-        .and_then(|v| v.as_str())
-        .or_else(|| item.pointer("/content/msgContent/text").and_then(|v| v.as_str()))
-        .or_else(|| item.pointer("/content/text").and_then(|v| v.as_str()))
-        .unwrap_or("")
-        .to_string();
-    let dir = item
-        .pointer("/chatDir/type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let outgoing = matches!(
-        dir,
-        "directSnd" | "groupSnd" | "localSnd" | "snd" | "groupSndRcv"
-    ) || dir.contains("Snd");
-    let created_at = item
-        .pointer("/meta/itemTs")
-        .or_else(|| item.pointer("/meta/createdAt"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let delivery = item
-        .pointer("/meta/itemStatus")
-        .map(DeliveryStatus::parse)
-        .unwrap_or(if outgoing {
-            DeliveryStatus::Pending
-        } else {
-            DeliveryStatus::Delivered
-        });
-    let file = parse_file_info(item);
-    let caption = if file.is_some() && deleted.is_none() {
-        let typed = item
-            .pointer("/content/msgContent/text")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
-        crate::rich_text::expand_emoji_shortcodes(typed)
-    } else {
-        String::new()
-    };
-    let group_invitation = parse_group_invitation(item);
-    // File-only items often have empty itemText — synthesize a label.
-    if text.is_empty() {
-        if deleted.is_some() {
-            // Keep the row so the UI can show “marked deleted” / “deleted”.
-        } else if let Some(inv) = group_invitation.as_ref() {
-            text = if outgoing {
-                format!("You invited them to join {}", inv.group_name)
-            } else {
-                format!("Invited to join {} as {}", inv.group_name, inv.member_role)
-            };
-        } else {
-            let f = file.as_ref()?;
-            text = f.file_name.clone();
-        }
-    } else if text.starts_with('📎') {
-        // Older rows / core itemText may still prefix a paperclip glyph.
-        text = text.trim_start_matches('📎').trim().to_string();
-    }
-    let segments = crate::rich_text::parse_formatted_text(item.get("formattedText"));
-    // Expand leftover `:shortcode:` in plain text (and plain segments).
-    let text = crate::rich_text::expand_emoji_shortcodes(&text);
-    let segments: Vec<_> = segments
-        .into_iter()
-        .map(|mut seg| {
-            if matches!(seg.style, crate::rich_text::TextStyle::Plain) {
-                seg.text = crate::rich_text::expand_emoji_shortcodes(&seg.text);
-            }
-            seg
-        })
-        .collect();
-    let reactions = if deleted.is_some() {
-        Vec::new()
-    } else {
-        parse_reactions(item.get("reactions"))
-    };
-    let quote = parse_quote(item.get("quotedItem"));
-    let is_announcement = is_announcement_content(item);
-    let sender = if outgoing || is_announcement {
-        None
-    } else {
-        parse_message_sender(item)
-    };
-    // Group events often need the member name in front (SimpleX CIEventView).
-    let text = if is_announcement {
-        format_announcement_text(item, &text)
-    } else {
-        text
-    };
-    let edited = item
-        .pointer("/meta/itemEdited")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let editable = item
-        .pointer("/meta/editable")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    Some(ChatMessage {
-        item_id,
-        text,
-        caption,
-        segments,
-        outgoing,
-        created_at,
-        delivery,
-        file,
-        reactions,
-        quote,
-        deleted,
-        sender,
-        is_announcement,
-        group_invitation,
-        edited,
-        editable,
-    })
-}
-
-fn parse_group_invitation(item: &Value) -> Option<crate::models::GroupInvitationInfo> {
-    let content = item.get("content")?;
-    let ty = content.get("type")?.as_str()?;
-    if ty != "rcvGroupInvitation" && ty != "sndGroupInvitation" {
-        return None;
-    }
-    let inv = content.get("groupInvitation")?;
-    let group_id = inv.get("groupId")?.as_i64()?;
-    let group_name = inv
-        .pointer("/groupProfile/displayName")
-        .or_else(|| inv.get("localDisplayName"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("Group")
-        .to_string();
-    let member_role = content
-        .get("memberRole")
-        .and_then(|v| v.as_str())
-        .unwrap_or("member")
-        .to_string();
-    let status = inv
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("pending")
-        .to_string();
-    Some(crate::models::GroupInvitationInfo {
-        group_id,
-        group_name,
-        member_role,
-        status,
-    })
-}
-
-/// Non-message protocol items → centered announcement rows in the UI.
-fn is_announcement_content(item: &Value) -> bool {
-    matches!(
-        item.pointer("/content/type").and_then(|v| v.as_str()),
-        Some(
-            "rcvGroupEvent"
-                | "sndGroupEvent"
-                | "rcvDirectEvent"
-                | "rcvConnEvent"
-                | "sndConnEvent"
-                | "rcvChatFeature"
-                | "sndChatFeature"
-                | "rcvChatPreference"
-                | "sndChatPreference"
-                | "rcvGroupFeature"
-                | "sndGroupFeature"
-                | "rcvChatFeatureRejected"
-                | "rcvGroupFeatureRejected"
-                | "rcvDirectE2EEInfo"
-                | "sndDirectE2EEInfo"
-                | "rcvGroupE2EEInfo"
-                | "sndGroupE2EEInfo"
-                | "chatBanner"
-                // Calls: a quiet label in the chat, like the official clients.
-                | "sndCall"
-                | "rcvCall"
-        )
-    )
-}
-
-fn format_announcement_text(item: &Value, item_text: &str) -> String {
-    if let Some(label) = call_item_label(item) {
-        return label;
-    }
-    let member_name = parse_message_sender(item).map(|s| s.display_name);
-    let Some(name) = member_name else {
-        return item_text.to_string();
-    };
-    if item_text.is_empty() {
-        return name;
-    }
-    if item_text
-        .get(..name.len())
-        .is_some_and(|p| p.eq_ignore_ascii_case(&name))
-    {
-        item_text.to_string()
-    } else {
-        format!("{name} {item_text}")
-    }
-}
-
-/// "Outgoing call · 0:42", "Missed call", … for a `sndCall` / `rcvCall` item.
-fn call_item_label(item: &Value) -> Option<String> {
-    let content = item.get("content")?;
-    let outgoing = match content.get("type")?.as_str()? {
-        "sndCall" => true,
-        "rcvCall" => false,
-        _ => return None,
-    };
-    let status = content.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    let secs = content.get("duration").and_then(|v| v.as_i64()).unwrap_or(0).max(0);
-    let direction = if outgoing { "Outgoing call" } else { "Incoming call" };
-    Some(match (outgoing, status) {
-        (_, "ended") if secs > 0 => {
-            let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
-            if h > 0 {
-                format!("{direction} · {h}:{m:02}:{s:02}")
-            } else {
-                format!("{direction} · {m}:{s:02}")
-            }
-        }
-        (true, "missed" | "pending" | "rejected") => "Call not answered".into(),
-        (false, "missed" | "pending") => "Missed call".into(),
-        (false, "rejected") => "Call declined".into(),
-        (_, "error") => "Call failed".into(),
-        (_, "accepted" | "negotiated" | "progress") => format!("{direction} in progress"),
-        _ => direction.into(),
-    })
-}
-
-fn parse_message_sender(item: &Value) -> Option<crate::models::MessageSender> {
-    let dir = item.get("chatDir")?;
-    let dir_type = dir.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    // groupRcv embeds the author; channelRcv is the channel itself (no member).
-    if !dir_type.eq_ignore_ascii_case("groupRcv") && !dir_type.contains("GroupRcv") {
-        return None;
-    }
-    let member = dir.get("groupMember")?;
-    let group_member_id = member.get("groupMemberId")?.as_i64()?;
-    let display_name = member_view_name(member);
-    let contact_id = member
-        .get("memberContactId")
-        .and_then(|v| v.as_i64())
-        .filter(|id| *id > 0);
-    let image = member
-        .pointer("/profile/image")
-        .or_else(|| member.pointer("/memberProfile/image"))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && s.starts_with("data:image/"))
-        .map(str::to_string);
-    let role = member
-        .get("memberRole")
-        .and_then(|v| v.as_str())
-        .unwrap_or("member")
-        .to_string();
-    Some(crate::models::MessageSender {
-        group_member_id,
-        contact_id,
-        display_name,
-        image,
-        role,
-    })
-}
-
-/// Official `chatViewName` for a group member JSON object.
-fn member_view_name(member: &Value) -> String {
-    nonempty_str(member.pointer("/memberProfile/localAlias"))
-        .or_else(|| nonempty_str(member.pointer("/profile/localAlias")))
-        .or_else(|| nonempty_str(member.get("localAlias")))
-        .or_else(|| nonempty_str(member.pointer("/memberProfile/displayName")))
-        .or_else(|| nonempty_str(member.pointer("/profile/displayName")))
-        .or_else(|| nonempty_str(member.get("localDisplayName")))
-        .unwrap_or_else(|| "Member".into())
-}
-
-fn nonempty_str(value: Option<&Value>) -> Option<String> {
-    value
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-fn parse_deleted_state(item: &Value) -> Option<crate::models::DeletedState> {
-    use crate::models::DeletedState;
-    if item.pointer("/meta/itemDeleted").is_some()
-        && !item
-            .pointer("/meta/itemDeleted")
-            .map(|v| v.is_null())
-            .unwrap_or(true)
-    {
-        return Some(DeletedState::Marked);
-    }
-    match item.pointer("/content/type").and_then(|v| v.as_str()) {
-        Some("sndDeleted" | "rcvDeleted") => Some(DeletedState::Content),
-        _ => None,
-    }
-}
-
-/// List-row preview for the latest chat item.
-///
-/// Deleted / marked-deleted items must not leak `itemText` (invite links etc.);
-/// match official clients with a short tombstone label instead.
-fn chat_list_item_preview(items: Option<&Vec<Value>>) -> String {
-    use crate::models::DeletedState;
-    let Some(items) = items else {
-        return String::new();
-    };
-    let Some(item) = items.first() else {
-        return String::new();
-    };
-    match parse_deleted_state(item) {
-        Some(DeletedState::Content) => return "deleted".into(),
-        Some(DeletedState::Marked) => return "marked deleted".into(),
-        None => {}
-    }
-    let preview = item
-        .pointer("/meta/itemText")
-        .or_else(|| item.pointer("/content/msgContent/text"))
-        .or_else(|| item.pointer("/content/text"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    crate::rich_text::expand_emoji_shortcodes(&preview)
-}
-
-fn parse_quote(value: Option<&Value>) -> Option<crate::models::MessageQuote> {
-    let value = value?;
-    if value.is_null() {
-        return None;
-    }
-    let text = value
-        .pointer("/content/text")
-        .and_then(|v| v.as_str())
-        .or_else(|| value.get("text").and_then(|v| v.as_str()))
-        .unwrap_or("")
-        .to_string();
-    let text = crate::rich_text::expand_emoji_shortcodes(&text);
-    if text.is_empty() {
-        // Image/file quotes still get a stub label when possible.
-        let stub = value
-            .pointer("/content/type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("message");
-        if stub == "text" {
-            return None;
-        }
-    }
-    let dir = value
-        .pointer("/chatDir/type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let outgoing = dir.contains("Snd");
-    let item_id = value.get("itemId").and_then(|v| v.as_i64());
-    let text = if text.is_empty() {
-        match value.pointer("/content/type").and_then(|v| v.as_str()) {
-            Some("image") => "Photo".into(),
-            Some("video") => "Video".into(),
-            Some("voice") => "Voice message".into(),
-            Some("file") => "File".into(),
-            _ => "Message".into(),
-        }
-    } else {
-        text
-    };
-    Some(crate::models::MessageQuote {
-        item_id,
-        text,
-        outgoing,
-    })
-}
-
-fn parse_reactions(value: Option<&Value>) -> Vec<ReactionCount> {
-    let Some(Value::Array(items)) = value else {
-        return Vec::new();
-    };
-    items
-        .iter()
-        .filter_map(|item| {
-            let emoji = item
-                .pointer("/reaction/emoji")
-                .and_then(|v| v.as_str())
-                .or_else(|| {
-                    // Some encodings nest differently; tolerate string reaction.
-                    item.pointer("/reaction")
-                        .and_then(|v| v.as_str())
-                })?;
-            let emoji = normalize_reaction_emoji(emoji)?.to_string();
-            let user_reacted = item
-                .get("userReacted")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let total = item
-                .get("totalReacted")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
-            if total == 0 {
-                return None;
-            }
-            Some(ReactionCount {
-                emoji,
-                user_reacted,
-                total,
-            })
-        })
-        .collect()
-}
-
-/// Map display forms (❤️) to the protocol char (❤); reject unknowns.
-fn normalize_reaction_emoji(emoji: &str) -> Option<&'static str> {
-    let trimmed = emoji.trim();
-    if trimmed == "❤" || trimmed == "❤️" || trimmed == "\u{2764}\u{FE0F}" {
-        return Some("❤");
-    }
-    KNOWN_REACTIONS.iter().copied().find(|e| *e == trimmed)
-}
-
-fn parse_address_auto_accept(value: &Value) -> bool {
-    value
-        .pointer("/contactLink/addressSettings/autoAccept")
-        .or_else(|| value.pointer("/addressSettings/autoAccept"))
-        .map(|v| !v.is_null())
-        .unwrap_or(false)
-}
-
-fn parse_reaction_members(value: &Value) -> Vec<ReactionMember> {
-    let Some(arr) = value
-        .get("memberReactions")
-        .or_else(|| value.pointer("/reactionMembers/memberReactions"))
-        .and_then(|v| v.as_array())
-    else {
-        return Vec::new();
-    };
-    arr.iter()
-        .filter_map(|row| {
-            let member = row.get("groupMember")?;
-            let name = member_view_name(member);
-            if name == "Member" && nonempty_str(member.get("localDisplayName")).is_none() {
-                return None;
-            }
-            Some(ReactionMember {
-                display_name: name,
-            })
-        })
-        .collect()
-}
-
-fn is_image_name(name: &str) -> bool {
-    matches!(
-        std::path::Path::new(name)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref(),
-        Some("jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp")
-    )
-}
-
-fn is_audio_name(name: &str) -> bool {
-    matches!(
-        std::path::Path::new(name)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref(),
-        Some("m4a" | "aac" | "mp3" | "ogg" | "opus" | "wav" | "flac")
-    )
-}
-
-fn is_video_name(name: &str) -> bool {
-    matches!(
-        std::path::Path::new(name)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref(),
-        Some("mp4" | "mov" | "mkv" | "webm" | "m4v" | "avi" | "3gp" | "3g2" | "mpeg" | "mpg" | "ts")
-    )
-}
-
-fn parse_file_info(item: &Value) -> Option<FileInfo> {
-    let file = item.get("file")?;
-    let file_id = file.get("fileId")?.as_i64()?;
-    let file_name = file
-        .get("fileName")
-        .and_then(|v| v.as_str())
-        .unwrap_or("file")
-        .to_string();
-    let file_size = file.get("fileSize").and_then(|v| v.as_i64()).unwrap_or(0);
-    let status_ty = file
-        .pointer("/fileStatus/type")
-        .and_then(|v| v.as_str())
-        .or_else(|| file.get("fileStatus").and_then(|v| v.as_str()))
-        .unwrap_or("");
-    let state = match status_ty {
-        "rcvInvitation" => FileTransferState::Offer,
-        "rcvAccepted" | "rcvTransfer" | "sndTransfer" | "sndStored" => FileTransferState::InProgress,
-        "rcvComplete" | "sndComplete" => FileTransferState::Complete,
-        "rcvCancelled" | "sndCancelled" | "rcvError" | "sndError" | "rcvAborted"
-        | "rcvWarning" | "sndWarning" => FileTransferState::Failed,
-        _ => FileTransferState::Other,
-    };
-    let (transferred, transfer_total) = match status_ty {
-        "rcvTransfer" => (
-            file.pointer("/fileStatus/rcvProgress")
-                .and_then(|v| v.as_i64()),
-            file.pointer("/fileStatus/rcvTotal")
-                .and_then(|v| v.as_i64()),
-        ),
-        "sndTransfer" => (
-            file.pointer("/fileStatus/sndProgress")
-                .and_then(|v| v.as_i64()),
-            file.pointer("/fileStatus/sndTotal")
-                .and_then(|v| v.as_i64()),
-        ),
-        _ => (None, None),
-    };
-    let error_detail = file
-        .pointer("/fileStatus/rcvFileError/fileError/type")
-        .or_else(|| file.pointer("/fileStatus/sndFileError/fileError/type"))
-        .or_else(|| file.pointer("/fileStatus/rcvFileError/type"))
-        .or_else(|| file.pointer("/fileStatus/sndFileError/type"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            if matches!(state, FileTransferState::Failed) {
-                Some(status_ty.to_string())
-            } else {
-                None
-            }
-        });
-    let kind = msg_content_kind(item).unwrap_or_else(|| {
-        if is_image_name(&file_name) {
-            FileKind::Image
-        } else if is_video_name(&file_name) {
-            FileKind::Video
-        } else if is_audio_name(&file_name) {
-            FileKind::Voice
-        } else {
-            FileKind::File
-        }
-    });
-    let duration_secs = item
-        .pointer("/content/msgContent/duration")
-        .or_else(|| item.pointer("/msgContent/duration"))
-        .and_then(|v| v.as_u64())
-        .map(|n| n as u32);
-    let crypto_args = file.pointer("/fileSource/cryptoArgs");
-    let crypto_key = crypto_args
-        .and_then(|v| v.get("fileKey").or_else(|| v.get("key")))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let crypto_nonce = crypto_args
-        .and_then(|v| v.get("fileNonce").or_else(|| v.get("nonce")))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let encrypted = crypto_key.is_some() && crypto_nonce.is_some();
-    let local_path = file
-        .pointer("/fileSource/filePath")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(resolve_local_file)
-        .or_else(|| {
-            // Incoming complete rows sometimes omit fileSource briefly; fall back
-            // to the configured files folder + display name when complete.
-            if matches!(state, FileTransferState::Complete) {
-                Some(files_dir().join(&file_name))
-            } else {
-                None
-            }
-        });
-    Some(FileInfo {
-        file_id,
-        file_name,
-        file_size,
-        state,
-        kind,
-        duration_secs,
-        local_path,
-        encrypted,
-        crypto_key,
-        crypto_nonce,
-        transferred,
-        transfer_total,
-        error_detail,
-    })
-}
-
-fn msg_content_kind(item: &Value) -> Option<FileKind> {
-    let ty = item
-        .pointer("/content/msgContent/type")
-        .or_else(|| item.pointer("/msgContent/type"))
-        .and_then(|v| v.as_str())?;
-    Some(FileKind::from_msg_content_type(ty))
-}
-
-/// Auto-receive candidates from a live core event (official: `newChatItems` only).
-pub fn auto_receive_candidates(event: &Event) -> Vec<(i64, String)> {
-    let Event::NewChatItems(value) = event else {
-        return Vec::new();
-    };
-    let Some(items) = value.get("chatItems").and_then(|v| v.as_array()) else {
-        return Vec::new();
-    };
-    items.iter().filter_map(auto_receive_from_chat_item).collect()
-}
-
-/// Incoming file offers the official client would auto-accept from a chat-item JSON blob.
-pub fn auto_receive_from_chat_item(aci: &Value) -> Option<(i64, String)> {
-    let item = aci.get("chatItem").unwrap_or(aci);
-    // Only inbound.
-    let dir = item
-        .pointer("/chatDir/type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let outgoing = matches!(
-        dir,
-        "directSnd" | "groupSnd" | "localSnd" | "snd" | "groupSndRcv"
-    ) || dir.contains("Snd");
-    if outgoing {
-        return None;
-    }
-    let file = parse_file_info(item)?;
-    if file.should_auto_receive() {
-        Some((file.file_id, file.file_name))
-    } else {
-        None
-    }
-}
-
-struct PreparedOutgoingFile {
-    /// Path embedded in the send command (relative name under `files/` when encrypted).
-    cmd_path: String,
-    crypto: Option<(String, String)>,
-}
-
-fn unique_files_name(preferred: &str) -> String {
-    let preferred = preferred.trim();
-    let preferred = if preferred.is_empty() {
-        "file.bin"
-    } else {
-        preferred
-    };
-    let candidate = files_dir().join(preferred);
-    if !candidate.exists() {
-        return preferred.to_string();
-    }
-    let path = std::path::Path::new(preferred);
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("file");
-    let ext = path
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|e| format!(".{e}"))
-        .unwrap_or_default();
-    for i in 1..10_000 {
-        let name = format!("{stem}-{i}{ext}");
-        if !files_dir().join(&name).exists() {
-            return name;
-        }
-    }
-    format!(
-        "{stem}-{}{ext}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0)
-    )
-}
-
-fn ensure_private_dir(path: &std::path::Path) -> Result<()> {
-    std::fs::create_dir_all(path).map_err(|e| Error::Command(e.to_string()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
-    }
-    Ok(())
-}
-
-/// Command for logs: the verb plus chat / item references (`@5`, `#3`,
-/// numbers, `key=value` flags), never free text, JSON, links or file paths.
-/// Commands carry message bodies, profiles, invite links and file names.
-pub(crate) fn redact_command(cmd: &str) -> String {
-    let mut out = String::new();
-    let mut hidden = 0usize;
-    for (i, tok) in cmd.split_whitespace().enumerate() {
-        let is_ref = |t: &str| {
-            let body = t.trim_start_matches(['@', '#', '*', ':']);
-            !body.is_empty() && body.chars().all(|c| c.is_ascii_digit() || c == ',' || c == '(' || c == ')')
-        };
-        let is_flag = |t: &str| {
-            t.split_once('=').is_some_and(|(k, v)| {
-                k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                    && v.len() <= 8
-                    && v.chars().all(|c| c.is_ascii_alphanumeric())
-            })
-        };
-        let keep = i == 0 || (hidden == 0 && (is_ref(tok) || is_flag(tok) || tok == "json" || tok == "chat"));
-        if keep {
-            if !out.is_empty() {
-                out.push(' ');
-            }
-            out.push_str(tok);
-        } else {
-            hidden += tok.len() + 1;
-        }
-    }
-    if hidden > 0 {
-        out.push_str(&format!(" …({hidden} bytes hidden)"));
-    }
-    out
 }
 
 /// Result of [`Session::receive_file`].
@@ -2538,91 +862,99 @@ pub enum ReceiveOutcome {
 
 /// Hostnames from a `fileNotApproved` chat error, if that's what this is.
 fn file_not_approved_servers(err: &Value) -> Option<Vec<String>> {
-    let et = err.get("errorType").unwrap_or(err);
-    if et.get("type").and_then(|v| v.as_str()) != Some("fileNotApproved") {
-        return None;
-    }
-    let servers = et
-        .get("unknownServers")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|s| s.as_str())
-                .map(|s| {
-                    // `xftp://fingerprint@host:port` → `host`
-                    let host = s.rsplit('@').next().unwrap_or(s);
-                    host.split([':', '/', ',']).next().unwrap_or(host).to_string()
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    Some(servers)
+    let err = err.get("errorType").unwrap_or(err);
+    (err.tag() == "fileNotApproved").then(|| {
+        err.array_at("/unknownServers")
+            .iter()
+            .filter_map(Value::as_str)
+            // `xftp://fingerprint@host:port` → `host`
+            .map(|s| s.rsplit('@').next().unwrap_or(s).split([':', '/', ',']).next().unwrap_or(s).to_string())
+            .collect()
+    })
 }
 
-/// Best-effort removal of everything inside `path` (the directory stays).
-fn wipe_dir_contents(path: &std::path::Path) {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return;
+/// The chat error for an action your group role doesn't allow.
+fn is_group_role_error(message: &str) -> bool {
+    message.starts_with("groupUserRole")
+}
+
+fn known_reaction(emoji: &str) -> Result<&'static str> {
+    parse::reaction_emoji(emoji).ok_or_else(|| command_error("unsupported reaction"))
+}
+
+/// Different on every call in this process (names of temporary files).
+fn unique_stamp() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!("{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
+/// `preferred` (its file name only), or `stem-N.ext` when that is taken in
+/// the files folder.
+fn unique_files_name(preferred: &str) -> String {
+    let path = Path::new(preferred.trim());
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("file.bin");
+    if !files_dir().join(name).exists() {
+        return name.to_string();
+    }
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+    let ext = path.extension().and_then(|s| s.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+    (1..)
+        .map(|i| format!("{stem}-{i}{ext}"))
+        .find(|candidate| !files_dir().join(candidate).exists())
+        .unwrap_or_else(|| format!("{stem}-{}{ext}", unique_stamp()))
+}
+
+/// Command for logs: the verb plus chat / item references (`@5`, `#3`,
+/// numbers, `key=value` flags), never free text, JSON, links or file paths.
+/// Commands carry message bodies, profiles, invite links and file names.
+fn redact_command(cmd: &str) -> String {
+    let is_ref = |t: &str| {
+        let body = t.trim_start_matches(['@', '#', '*', ':']);
+        !body.is_empty() && body.chars().all(|c| c.is_ascii_digit() || matches!(c, ',' | '(' | ')'))
     };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        // `symlink_metadata`: never follow a link out of our directory.
-        let is_dir = std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir());
-        if is_dir {
-            let _ = std::fs::remove_dir_all(&p);
+    let is_flag = |t: &str| {
+        t.split_once('=').is_some_and(|(k, v)| {
+            k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && v.len() <= 8
+                && v.chars().all(|c| c.is_ascii_alphanumeric())
+        })
+    };
+    let mut out = String::new();
+    let mut hidden = 0;
+    for (i, tok) in cmd.split_whitespace().enumerate() {
+        // Once something was hidden, everything after it is too.
+        if i == 0 || (hidden == 0 && (is_ref(tok) || is_flag(tok) || tok == "json" || tok == "chat")) {
+            if i > 0 {
+                out.push(' ');
+            }
+            out.push_str(tok);
         } else {
-            let _ = std::fs::remove_file(&p);
+            hidden += tok.len() + 1;
         }
     }
-}
-
-/// Delete decrypted attachments, playback transcodes and unsent voice
-/// recordings (`tmp/plain`, `tmp/play`, `tmp/rec`). Call when the session ends
-/// so plaintext media never stays on disk after the app quits. XFTP staging
-/// is left alone (may be mid-transfer); it is wiped on the next session open.
-pub fn wipe_plaintext_cache() {
-    let tmp = temp_dir();
-    for sub in ["plain", "play", "rec"] {
-        wipe_dir_contents(&tmp.join(sub));
+    if hidden > 0 {
+        out.push_str(&format!(" …({hidden} bytes hidden)"));
     }
-    if let Some(ram) = runtime_cache_dir() {
-        wipe_dir_contents(&ram);
-    }
+    out
 }
 
 #[cfg(test)]
-mod redact_tests {
-    use super::redact_command;
+mod tests {
+    use super::*;
+    use serde_json::json;
 
     #[test]
     fn file_not_approved_lists_server_hosts() {
-        let err = serde_json::json!({"type": "error", "errorType": {
+        let err = json!({"type": "error", "errorType": {
             "type": "fileNotApproved", "fileId": 9,
             "unknownServers": ["xftp://abc=@files.evil.example:443", "xftp://k@other.org"]
         }});
         assert_eq!(
-            super::file_not_approved_servers(&err),
+            file_not_approved_servers(&err),
             Some(vec!["files.evil.example".to_string(), "other.org".to_string()])
         );
-        let other = serde_json::json!({"type": "error", "errorType": {"type": "fileCancelled"}});
-        assert_eq!(super::file_not_approved_servers(&other), None);
-    }
-
-    #[test]
-    fn wipe_empties_dir_without_following_symlinks() {
-        let root = std::env::temp_dir().join(format!("cursus-wipe-{}", std::process::id()));
-        let inside = root.join("plain");
-        let outside = root.join("keep");
-        std::fs::create_dir_all(inside.join("sub")).unwrap();
-        std::fs::create_dir_all(&outside).unwrap();
-        std::fs::write(inside.join("photo.jpg"), b"x").unwrap();
-        std::fs::write(inside.join("sub/voice.wav"), b"x").unwrap();
-        std::fs::write(outside.join("precious.txt"), b"x").unwrap();
-        std::os::unix::fs::symlink(&outside, inside.join("link")).unwrap();
-        super::wipe_dir_contents(&inside);
-        assert_eq!(std::fs::read_dir(&inside).unwrap().count(), 0);
-        assert!(outside.join("precious.txt").is_file(), "followed a symlink");
-        let _ = std::fs::remove_dir_all(root);
+        let other = json!({"type": "error", "errorType": {"type": "fileCancelled"}});
+        assert_eq!(file_not_approved_servers(&other), None);
     }
 
     #[test]
@@ -2639,271 +971,97 @@ mod redact_tests {
         let profile = redact_command(r#"/_profile 1 {"displayName":"Davide"}"#);
         assert!(!profile.contains("Davide"), "{profile}");
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        chat_list_item_preview, parse_file_info, parse_one_message, pending_accept_request_id,
-    };
-    use crate::models::FileTransferState;
-    use serde_json::json;
-
-    #[test]
-    fn chat_list_preview_hides_marked_deleted_content() {
-        let items = vec![json!({
-            "meta": {
-                "itemId": 1,
-                "itemText": "https://smp12.simplex.im/i#secret",
-                "itemDeleted": { "type": "deleted", "deletedTs": "2026-11-05T10:00:00Z" }
-            },
-            "content": { "type": "sndMsgContent", "msgContent": { "type": "text", "text": "https://smp12.simplex.im/i#secret" } }
-        })];
-        assert_eq!(chat_list_item_preview(Some(&items)), "marked deleted");
-    }
-
-    #[test]
-    fn chat_list_preview_hides_full_deleted_content() {
-        let items = vec![json!({
-            "meta": { "itemId": 2, "itemText": "still here" },
-            "content": { "type": "sndDeleted", "deleted": { "type": "deleted" } }
-        })];
-        assert_eq!(chat_list_item_preview(Some(&items)), "deleted");
-    }
-
-    #[test]
-    fn chat_list_preview_keeps_live_text() {
-        let items = vec![json!({
-            "meta": { "itemId": 3, "itemText": "hello" },
-            "content": { "type": "sndMsgContent", "msgContent": { "type": "text", "text": "hello" } }
-        })];
-        assert_eq!(chat_list_item_preview(Some(&items)), "hello");
-    }
-
-    #[test]
-    fn pending_when_request_has_no_connection() {
-        let contact = json!({ "contactRequestId": 7 });
-        assert_eq!(pending_accept_request_id(&contact), Some(7));
-    }
-
-    #[test]
-    fn pending_when_connection_still_new() {
-        let contact = json!({
-            "contactRequestId": 7,
-            "activeConn": { "connStatus": { "type": "new" } }
-        });
-        assert_eq!(pending_accept_request_id(&contact), Some(7));
-    }
-
-    #[test]
-    fn not_pending_after_accept_snd_ready() {
-        // Core keeps contactRequestId after Accept; connStatus advances.
-        // JSON uses sum-type encoding: {"type":"sndReady"}.
-        let contact = json!({
-            "contactRequestId": 7,
-            "activeConn": { "connStatus": { "type": "sndReady" } }
-        });
-        assert_eq!(pending_accept_request_id(&contact), None);
-    }
-
-    #[test]
-    fn not_pending_after_ready_string_status() {
-        let contact = json!({
-            "contactRequestId": 7,
-            "activeConn": { "connStatus": "ready" }
-        });
-        assert_eq!(pending_accept_request_id(&contact), None);
-    }
-
-    #[test]
-    fn not_pending_without_request_id() {
-        let contact = json!({ "activeConn": { "connStatus": { "type": "new" } } });
-        assert_eq!(pending_accept_request_id(&contact), None);
-    }
-
-    #[test]
-    fn member_view_name_prefers_local_alias() {
-        let m = json!({
-            "groupMemberId": 9,
-            "memberRole": "member",
-            "memberStatus": "complete",
-            "localDisplayName": "alice",
-            "memberProfile": {
-                "displayName": "alice",
-                "localAlias": "Ali"
-            }
-        });
-        let parsed = super::parse_one_group_member(&m).expect("member");
-        assert_eq!(parsed.display_name, "Ali");
-    }
-
-    #[test]
-    fn call_item_is_quiet_label() {
-        let call = |dir: &str, ty: &str, status: &str, secs: i64| {
-            json!({
-                "chatDir": { "type": dir },
-                "meta": { "itemId": 7, "itemTs": "2026-11-07T00:09:45Z",
-                    "itemText": "outgoing call: ended (00:02)", "itemStatus": { "type": "sndSent" } },
-                "content": { "type": ty, "status": status, "duration": secs }
-            })
-        };
-        let msg = parse_one_message(&call("directSnd", "sndCall", "ended", 42)).expect("call");
-        assert!(msg.is_announcement);
-        assert_eq!(msg.text, "Outgoing call · 0:42");
-        let missed = parse_one_message(&call("directRcv", "rcvCall", "missed", 0)).expect("call");
-        assert!(missed.is_announcement);
-        assert_eq!(missed.text, "Missed call");
-        let long = parse_one_message(&call("directRcv", "rcvCall", "ended", 3725)).expect("call");
-        assert_eq!(long.text, "Incoming call · 1:02:05");
-    }
-
-    #[test]
-    fn group_event_is_announcement() {
-        let item = json!({
-            "chatDir": {
-                "type": "groupRcv",
-                "groupMember": {
-                    "groupMemberId": 3,
-                    "localDisplayName": "Ada",
-                    "memberRole": "member",
-                    "profile": { "displayName": "Ada" }
-                }
-            },
-            "meta": {
-                "itemId": 42,
-                "itemTs": "2026-11-03T16:37:00Z",
-                "itemText": "updated group profile",
-                "itemStatus": { "type": "rcvRead" }
-            },
-            "content": {
-                "type": "rcvGroupEvent",
-                "rcvGroupEvent": { "type": "groupUpdated", "groupProfile": {} }
-            }
-        });
-        let msg = parse_one_message(&item).expect("event");
-        assert!(msg.is_announcement);
-        assert!(msg.text.contains("Ada"));
-        assert!(msg.text.contains("updated group profile"));
-        assert!(msg.sender.is_none());
-    }
-
-    #[test]
-    fn file_info_resolves_relative_source_path() {
-        let item = json!({
-            "file": {
-                "fileId": 9,
-                "fileName": "shot.jpg",
-                "fileSize": 12,
-                "fileStatus": { "type": "rcvComplete" },
-                "fileSource": { "filePath": "shot.jpg", "cryptoArgs": null }
-            }
-        });
-        let info = parse_file_info(&item).expect("file");
-        assert_eq!(info.state, FileTransferState::Complete);
-        assert!(!info.encrypted);
-        let path = info.local_path.expect("path");
-        assert!(path.ends_with("files/shot.jpg") || path.ends_with("files\\shot.jpg"));
-    }
-
-    #[test]
-    fn file_info_parses_crypto_args() {
-        let item = json!({
-            "file": {
-                "fileId": 3,
-                "fileName": "secret.bin",
-                "fileSize": 99,
-                "fileStatus": { "type": "rcvComplete" },
-                "fileSource": {
-                    "filePath": "secret.bin",
-                    "cryptoArgs": { "fileKey": "abcKEY", "fileNonce": "xyzNONCE" }
-                }
-            }
-        });
-        let info = parse_file_info(&item).expect("file");
-        assert!(info.encrypted);
-        assert_eq!(info.crypto_key.as_deref(), Some("abcKEY"));
-        assert_eq!(info.crypto_nonce.as_deref(), Some("xyzNONCE"));
-    }
-
-    #[test]
-    fn auto_receive_small_image_offer() {
-        use super::auto_receive_from_chat_item;
-        use crate::models::MAX_IMAGE_SIZE_AUTO_RCV;
-        let aci = json!({
-            "chatItem": {
-                "chatDir": { "type": "directRcv" },
-                "content": { "msgContent": { "type": "image", "text": "", "image": "" } },
-                "file": {
-                    "fileId": 42,
-                    "fileName": "pic.jpg",
-                    "fileSize": MAX_IMAGE_SIZE_AUTO_RCV,
-                    "fileStatus": { "type": "rcvInvitation" }
-                }
-            }
-        });
-        assert_eq!(
-            auto_receive_from_chat_item(&aci),
-            Some((42, "pic.jpg".into()))
-        );
-    }
-
-    #[test]
-    fn no_auto_receive_generic_file() {
-        use super::auto_receive_from_chat_item;
-        let aci = json!({
-            "chatItem": {
-                "chatDir": { "type": "directRcv" },
-                "content": { "msgContent": { "type": "file", "text": "" } },
-                "file": {
-                    "fileId": 7,
-                    "fileName": "doc.pdf",
-                    "fileSize": 1024,
-                    "fileStatus": { "type": "rcvInvitation" }
-                }
-            }
-        });
-        assert_eq!(auto_receive_from_chat_item(&aci), None);
-    }
-}
-
-/// `chat command error` for an action your group role doesn't allow.
-fn is_group_role_error(message: &str) -> bool {
-    message.starts_with("groupUserRole")
-}
-
-#[cfg(test)]
-mod group_role_tests {
     /// The error a member gets for `/_delete #group` (from a real session).
     #[test]
     fn member_delete_error_is_recognised() {
         let msg = r#"groupUserRole: {"errorType":{"requiredRole":"owner","type":"groupUserRole"},"type":"error"}"#;
-        assert!(super::is_group_role_error(msg));
-        assert!(!super::is_group_role_error("noActiveUser: {}"));
+        assert!(is_group_role_error(msg));
+        assert!(!is_group_role_error("noActiveUser: {}"));
+    }
+
+    #[test]
+    fn stored_file_names_stay_inside_the_files_folder() {
+        assert_eq!(unique_files_name("../../etc/passwd"), "passwd");
+        assert_eq!(unique_files_name("  "), "file.bin");
+        assert_ne!(unique_stamp(), unique_stamp());
     }
 }
 
+/// Against the real libsimplex (`scripts/fetch-libs.sh`), without network.
 #[cfg(test)]
-mod caption_tests {
-    use serde_json::json;
+mod live_tests {
+    use super::*;
 
-    fn item(msg_content: serde_json::Value, item_text: &str) -> serde_json::Value {
-        json!({
-            "meta": { "itemId": 7, "itemText": item_text, "itemTs": "2026-11-08T11:39:00Z" },
-            "chatDir": { "type": "directRcv" },
-            "content": { "type": "rcvMsgContent", "msgContent": msg_content },
-            "file": { "fileId": 3, "fileName": "voice.m4a", "fileSize": 9000,
-                      "fileStatus": { "type": "rcvComplete" } }
-        })
+    fn open(dir: &Path) -> Session {
+        let config = SessionConfig {
+            db_prefix: dir.join("simplex_v1"),
+            db_key: zeroize::Zeroizing::new("smoke".to_string()),
+            initial_display_name: "Smoke".into(),
+            ..SessionConfig::default()
+        };
+        let session = Session::open(config).expect("open session");
+        session.start_chat(true).expect("start chat");
+        session
     }
 
-    /// The core's summary ("voice message (00:03)") is for previews; the
-    /// caption is only what the sender typed.
     #[test]
-    fn file_messages_split_summary_and_caption() {
-        let voice = super::parse_one_message(&item(json!({ "type": "voice", "text": "", "duration": 3 }), "voice message (00:03)")).unwrap();
-        assert_eq!(voice.text, "voice message (00:03)");
-        assert_eq!(voice.caption, "");
-        let photo = super::parse_one_message(&item(json!({ "type": "image", "text": "  sunset!  ", "image": "" }), "sunset!")).unwrap();
-        assert_eq!(photo.caption, "sunset!");
+    fn open_send_and_reopen() {
+        let _startup = crate::LIBSIMPLEX_STARTUP.lock().unwrap_or_else(PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("cursus-smoke-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let session = open(&dir);
+        assert_eq!(session.active_profile().expect("user").display_name(), "Smoke");
+        let chats = session.list_chats().expect("list chats");
+        // What every app does right after the password opened the DB: the
+        // lock-screen verifier, with the core running.
+        crate::app_lock::remember("smoke");
+        assert!(crate::app_lock::verify("smoke"));
+
+        // The notes folder takes messages without any network.
+        let notes = chats.iter().find(|c| c.id.chat_type == ChatType::Local).expect("notes").id.clone();
+        session.send_text(&notes, "hello :smile:", None).expect("send");
+        let messages = session.list_messages(&notes, 10).expect("messages");
+        assert_eq!(messages.last().map(|m| m.outgoing), Some(true));
+        assert!(messages.last().is_some_and(|m| m.text.starts_with("hello ")));
+        assert_eq!(session.address_link().expect("address"), None, "reading never creates an address");
+        assert!(!session.address_auto_accept().expect("auto accept"));
+
+        // A photo: stored encrypted, sent with a preview, readable again.
+        let photo = dir.join("photo.png");
+        image::RgbImage::from_pixel(800, 600, image::Rgb([200, 30, 30])).save(&photo).unwrap();
+        session.send_file(&notes, photo.to_str().unwrap()).expect("send photo");
+        let sent = session.list_messages(&notes, 10).expect("messages").pop().expect("photo message");
+        let file = sent.file.expect("file");
+        assert_eq!(file.kind, crate::models::FileKind::Image);
+        assert!(file.preview.as_deref().is_some_and(|p| p.starts_with("data:image/jpg;base64,")));
+        let stored = file.local_path.expect("stored path");
+        assert!(stored.starts_with(files_dir()) && stored.ends_with("photo.jpg"), "{}", stored.display());
+        assert!(file.encrypted && image::open(&stored).is_err(), "ciphertext on disk");
+        let (key, nonce) = (file.crypto_key.unwrap(), file.crypto_nonce.unwrap());
+        let plain = session.ensure_plaintext_file(&stored, &key, &nonce).expect("decrypt");
+        assert_eq!(image::image_dimensions(&plain).unwrap(), (800, 600));
+        assert_eq!(session.ensure_plaintext_file(&stored, &key, &nonce).unwrap(), plain, "cached");
+        assert!(photo.is_file(), "the user's original is left alone");
+
+        // With encryption off the file is copied in, readable.
+        session.set_encrypt_local_files(false).expect("encryption off");
+        let note = dir.join("note.txt");
+        std::fs::write(&note, b"plain words").unwrap();
+        session.send_file(&notes, note.to_str().unwrap()).expect("send file");
+        let file = session.list_messages(&notes, 10).unwrap().pop().and_then(|m| m.file).expect("file");
+        assert_eq!((file.kind, file.encrypted), (crate::models::FileKind::File, false));
+        assert_eq!(std::fs::read(file.local_path.expect("stored path")).unwrap(), b"plain words");
+
+        // Receipt switches are served from the cached user and persisted.
+        assert!(!session.set_delivery_receipts(false, false).expect("receipts").send_rcpts_contacts);
+        drop(session);
+        let session = open(&dir);
+        assert!(!session.refresh_user().expect("user").send_rcpts_contacts, "persisted");
+        drop(session);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(data_dir());
     }
 }

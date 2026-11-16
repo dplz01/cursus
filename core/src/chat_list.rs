@@ -41,33 +41,12 @@ pub fn prune_resolved_seeds(seeded_channel_ids: &mut HashSet<i64>, from_core: &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{ChatId, ChatSettings, ChatType, ProfileFields};
+    use crate::models::{ChatId, ChatType};
 
     fn channel(api_id: i64, title: &str) -> ChatPreview {
-        ChatPreview {
-            id: ChatId::new(ChatType::Group, api_id),
-            title: title.into(),
-            preview: String::new(),
-            unread: 0,
-            unread_chat: false,
-            settings: ChatSettings::default(),
-            tag_ids: Vec::new(),
-            chat_item_ttl: None,
-            pending_request_id: None,
-            peer_profile: ProfileFields::default(),
-            local_alias: String::new(),
-            is_channel: true,
-            membership_role: Some("owner".into()),
-            group_preferences: None,
-            member_admission: None,
-            public_group: None,
-            contact_preferences: None,
-            contact_merged_preferences: None,
-            members_require_attention: 0,
-            membership_support_unread: 0,
-            membership_has_support_chat: false,
-            last_ts: None,
-        }
+        let mut c = ChatPreview::new(ChatId::new(ChatType::Group, api_id), title.into());
+        c.is_channel = true;
+        c
     }
 
     fn group(api_id: i64, title: &str) -> ChatPreview {

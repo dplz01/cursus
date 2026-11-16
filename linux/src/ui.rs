@@ -1886,8 +1886,10 @@ fn history_key(app: &App, d: Density) -> u64 {
     picked.sort_unstable();
     picked.hash(&mut h);
 
+    // The messages themselves, hashed once per change (see `History`).
+    app.history_fingerprint().hash(&mut h);
+    app.history_has_earlier().hash(&mut h);
     for msg in app.messages() {
-        msg.hash(&mut h);
         app.is_deleted_revealed(msg.item_id).hash(&mut h);
         for i in 0..msg.segments.len() {
             app.is_secret_revealed(msg.item_id, i).hash(&mut h);
@@ -1939,6 +1941,19 @@ fn history_column(app: &App, d: Density) -> Element<'static, Message> {
     let mut prev_sender: Option<i64> = None;
     let mut prev_channel_block = false;
     let mut prev_day: Option<chrono::NaiveDate> = None;
+    if app.history_has_earlier() {
+        col = col.push(
+            container(
+                button(text("Load earlier messages").size(d.meta).color(theme::t().accent))
+                    .padding(Padding::from([6, 14]))
+                    .style(theme::secondary_action(app.hover_ok()))
+                    .on_press(Message::LoadEarlierMessages),
+            )
+            .width(Length::Fill)
+            .padding(Padding::from([6, 0]))
+            .center_x(Length::Fill),
+        );
+    }
     let msgs: Vec<&ChatMessage> = messages.iter().collect();
     for (i, msg) in msgs.iter().copied().enumerate() {
         // Day divider whenever the local date changes.
@@ -8075,7 +8090,6 @@ fn group_add_member_pane<'a>(
             )
             .padding(Padding::from([6, 8])),
         );
-    } else {
     }
     page = page.push(card(link_col));
 

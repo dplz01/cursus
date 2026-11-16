@@ -37,6 +37,7 @@ import chat.cursus.R
 import chat.cursus.core.Chat
 import chat.cursus.core.ConnLink
 import chat.cursus.core.Member
+import chat.cursus.ui.components.IconTool
 import chat.cursus.ui.components.ActionTile
 import chat.cursus.ui.components.Avatar
 import chat.cursus.ui.components.CardTitle
@@ -130,6 +131,12 @@ private fun receiptsLabel(v: Boolean?) = when (v) {
 /** Disappearing-message times offered in the pickers. */
 private val TTLS = listOf(
     3600L to "1 hour", 8 * 3600L to "8 hours", 86400L to "1 day", 7 * 86400L to "1 week", 30 * 86400L to "1 month",
+)
+
+/** "Delete after (this device only)": the Linux choices; null = never. */
+private val LOCAL_TTLS = listOf<Pair<Long?, String>>(
+    null to "Never", 30L to "30 seconds", 300L to "5 minutes", 3600L to "1 hour",
+    86400L to "1 day", 7 * 86400L to "1 week", 30 * 86400L to "1 month",
 )
 
 private fun ttlLabel(secs: Long) = TTLS.firstOrNull { it.first == secs }?.second ?: when {
@@ -233,8 +240,16 @@ private fun ContactPreferencesPage(model: AppModel, chat: Chat, onBack: () -> Un
                         },
                     )
                 }
-                if (key == "timedMessages" && f?.mine != null && f.mine != "no") {
+                // "on": the time both sides agreed on. "always": your own
+                // one-way timer, deleting from this phone only (as on Linux).
+                if (key == "timedMessages" && f?.mine == "yes") {
                     PrefRow("Delete after") { ChoiceChip(ttlLabel(prefs.timedTtl), { menu = "ttl" }) }
+                }
+                if (key == "timedMessages" && f?.mine == "always") {
+                    val local = chat.chatItemTtl?.takeIf { it > 0 }
+                    PrefRow("Delete after (this device only)") {
+                        ChoiceChip(local?.let { ttlLabel(it) } ?: "Never", { menu = "localTtl" })
+                    }
                 }
             }
         }
@@ -245,6 +260,9 @@ private fun ContactPreferencesPage(model: AppModel, chat: Chat, onBack: () -> Un
     when (val m = menu) {
         null -> Unit
         "ttl" -> ChoiceMenu("Delete after", TTLS, prefs?.timedTtl, { menu = null }) { model.setContactTimedTtl(chat, it); menu = null }
+        "localTtl" -> ChoiceMenu("Delete after (this device only)", LOCAL_TTLS, chat.chatItemTtl?.takeIf { it > 0 }, { menu = null }) {
+            model.setChatTtl(chat, it); menu = null
+        }
         "receipts" -> ChoiceMenu("Send receipts", listOf<Pair<Boolean?, String>>(null to "Default", true to "On", false to "Off"), chat.sendReceipts, { menu = null }) {
             model.setSendReceipts(chat, it); menu = null
         }
@@ -300,7 +318,17 @@ private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenCh
                 if (list.isEmpty()) {
                     Text("No join requests or member chats.", style = Cursus.type.body, color = Cursus.colors.textMuted, modifier = Modifier.padding(8.dp))
                 } else {
-                    MembersList(list) { id -> onOpenChat("${chat.ref}(_support:$id)") }
+                    var closing by remember { mutableStateOf<Member?>(null) }
+                    // Moderators can close a member's thread (not a join request).
+                    MembersList(list, trailing = { m ->
+                        if (chat.canModerate && m.support != null && !m.pending) {
+                            IconTool(R.drawable.ic_trash_delete, "Delete chat", { closing = m }, tint = Cursus.colors.danger)
+                        }
+                    }) { id -> onOpenChat("${chat.ref}(_support:$id)") }
+                    closing?.let { m ->
+                        ConfirmDialog("Delete the chat with ${m.name}?", "The messages you and the other admins exchanged with this member are deleted.", "Delete",
+                            { closing = null; model.deleteSupportChat(chat, m) }, { closing = null })
+                    }
                 }
             }
         }
@@ -394,7 +422,7 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
             CursusCard {
                 val n = model.members.size
                 CardTitle(R.drawable.ic_user_group, "Members", if (n == 1) "1 member" else "$n members")
-                MembersList(model.members, onMember)
+                MembersList(model.members, onMember = onMember)
             }
         }
         // Chat actions — a channel's only owner can delete it but not leave it.
@@ -450,7 +478,7 @@ private fun ChannelLinkCard(model: AppModel, chat: Chat) {
 
 /** Linux `group_members_list`: 40px avatar, name (you: YOU (name)), bio, pending clock, role. */
 @Composable
-private fun MembersList(members: List<Member>, onMember: (Long) -> Unit) {
+private fun MembersList(members: List<Member>, trailing: @Composable (Member) -> Unit = {}, onMember: (Long) -> Unit) {
     val c = Cursus.colors
     Column {
         for (m in members) {
@@ -476,6 +504,7 @@ private fun MembersList(members: List<Member>, onMember: (Long) -> Unit) {
                     }
                 }
                 Text(m.role, style = Cursus.type.meta, color = c.textMuted)
+                trailing(m)
             }
         }
     }

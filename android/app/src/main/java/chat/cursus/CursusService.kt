@@ -37,6 +37,12 @@ class CursusService : Service() {
             .build()
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING else 0
         ServiceCompat.startForeground(this, ID, n, type)
+        // Restarted by the system after the process was killed: unlock again
+        // with the remembered password, or stop — never claim to be
+        // receiving while the database is closed.
+        val model = (application as CursusApplication).model
+        model.bootstrap()
+        if (model.phase != Phase.Starting && model.phase != Phase.Ready) stopSelf()
         return START_STICKY
     }
 

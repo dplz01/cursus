@@ -14,7 +14,7 @@ object Files {
     fun copyIn(context: Context, uri: Uri, dir: File): File {
         val name = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
             if (it.moveToFirst()) it.getString(0) else null
-        }?.replace('/', '_')?.takeIf { it.isNotBlank() } ?: "file"
+        }?.replace('/', '_')?.takeIf { it.isNotBlank() && it != "." && it != ".." } ?: "file"
         val sub = File(dir, System.currentTimeMillis().toString()).apply { mkdirs() }
         val out = File(sub, name)
         context.contentResolver.openInputStream(uri)!!.use { input -> out.outputStream().use { input.copyTo(it) } }

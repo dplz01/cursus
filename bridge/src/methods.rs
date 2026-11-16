@@ -27,7 +27,7 @@ fn bool_param(p: &Value, key: &str) -> Result<bool, String> {
     p.get(key).and_then(Value::as_bool).ok_or_else(|| format!("missing bool `{key}`"))
 }
 
-fn chat_param(p: &Value) -> Result<cursus_core::ChatId, String> {
+fn chat_param(p: &Value) -> Result<ChatId, String> {
     parse_chat_ref(str_param(p, "chat")?)
 }
 
@@ -39,6 +39,21 @@ fn clean_links(p: &Value) -> bool {
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+/// An optional flag (false when left out).
+fn flag(p: &Value, key: &str) -> bool {
+    p.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// A list of ids (empty when left out).
+fn ids_param(p: &Value, key: &str) -> Vec<i64> {
+    p.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_i64).collect()).unwrap_or_default()
+}
+
+/// Reply of a method whose result the app doesn't need: `null`, or the error.
+fn done<T>(result: cursus_core::Result<T>) -> Result<Value, String> {
+    result.map(|_| Value::Null).map_err(err)
 }
 
 /// Current state of one chat (settings, preferences, group profile), so a
@@ -105,6 +120,14 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, String> {
         "wipeLocalData" => {
             crate::drop_session();
             cursus_core::wipe_local_data().map_err(err)?;
+            Ok(Value::Null)
+        }
+        // Privacy settings the bridge acts on by itself when files arrive:
+        // download small media without a tap, only from the user's servers.
+        "setDownloadPolicy" => {
+            use std::sync::atomic::Ordering;
+            crate::AUTO_DOWNLOAD.store(bool_param(p, "autoDownload")?, Ordering::Relaxed);
+            crate::PROTECT_IP.store(bool_param(p, "protectIp")?, Ordering::Relaxed);
             Ok(Value::Null)
         }
         "selfTest" => self_test(p),
@@ -182,23 +205,14 @@ fn open(p: &Value) -> Result<Value, String> {
     let password = str_param(p, "password")?;
     let display_name = opt_str(p, "displayName").unwrap_or("").trim().to_string();
     let encrypt = p.get("encryptLocalFiles").and_then(Value::as_bool).unwrap_or(true);
-    let save = p.get("saveAccount").and_then(Value::as_bool).unwrap_or(false);
+    let save = flag(p, "saveAccount");
 
     let mut cfg = config(p, password);
     if !display_name.is_empty() {
         cfg.initial_display_name = display_name.clone();
     }
-    cfg.encrypt_local_files = encrypt;
-    let mut session = Session::open(cfg).map_err(err)?;
-    session.start_chat_with_options(encrypt).map_err(err)?;
-    // The core may have created a default profile: use the welcome name.
-    if let Some(user) = session.active_profile() {
-        if !display_name.is_empty() && user.display_name() != display_name {
-            let mut fields = user.profile.clone();
-            fields.display_name = display_name.clone();
-            let _ = session.update_profile(fields);
-        }
-    }
+    let session = Session::open(cfg).map_err(err)?;
+    session.start_chat(encrypt).map_err(err)?;
     if save {
         let meta = AccountMeta { display_name: display_name.clone(), version: 1, encrypt_local_files: encrypt };
         cursus_core::save_account(&meta).map_err(err)?;
@@ -221,8 +235,8 @@ fn self_test(p: &Value) -> Result<Value, String> {
     cfg.initial_display_name = "Self test".into();
     let libs = cfg.libs_dir.to_string_lossy().to_string();
     let result = (|| {
-        let mut session = Session::open(cfg).map_err(err)?;
-        session.start_chat().map_err(err)?;
+        let session = Session::open(cfg).map_err(err)?;
+        session.start_chat(true).map_err(err)?;
         let chats = session.list_chats().map_err(err)?;
         let user = session.refresh_user().map_err(err)?;
         Ok::<_, String>(json!({ "libsDir": libs, "user": user.display_name(), "chats": chats.len() }))
@@ -261,7 +275,7 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
         "setProfileAddress" => Ok(dto::user(&s.set_profile_address(bool_param(p, "on")?).map_err(err)?)),
         "listChats" => Ok(Value::Array(s.list_chats().map_err(err)?.iter().map(dto::chat).collect())),
         "listMessages" => {
-            let count = p.get("count").and_then(Value::as_u64).unwrap_or(100).min(1000) as u32;
+            let count = p.get("count").and_then(Value::as_u64).unwrap_or(100).min(5000) as u32;
             let msgs = s.list_messages(&chat_param(p)?, count).map_err(err)?;
             // `joinedPrev` / `joinedNext`: the message continues the previous
             // run / the next one continues it (core rule, shapes the bubbles).
@@ -283,28 +297,17 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
         "sendText" => {
             let quote = p.get("quote").and_then(Value::as_i64);
             let text = cursus_core::outgoing_text(str_param(p, "text")?, clean_links(p));
-            s.send_text_quoted(&chat_param(p)?, &text, quote).map_err(err)?;
-            Ok(Value::Null)
+            done(s.send_text(&chat_param(p)?, &text, quote))
         }
         "updateText" => {
             let text = cursus_core::outgoing_text(str_param(p, "text")?, clean_links(p));
-            s.update_text(&chat_param(p)?, i64_param(p, "itemId")?, &text).map_err(err)?;
-            Ok(Value::Null)
+            done(s.update_text(&chat_param(p)?, i64_param(p, "itemId")?, &text))
         }
         "deleteItems" => {
-            let ids: Vec<i64> = p
-                .get("itemIds")
-                .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(Value::as_i64).collect())
-                .unwrap_or_default();
-            s.delete_items(&chat_param(p)?, &ids, bool_param(p, "forEveryone")?).map_err(err)?;
-            Ok(Value::Null)
+            let ids = ids_param(p, "itemIds");
+            done(s.delete_items(&chat_param(p)?, &ids, bool_param(p, "forEveryone")?))
         }
-        "react" => {
-            s.set_reaction(&chat_param(p)?, i64_param(p, "itemId")?, str_param(p, "emoji")?, bool_param(p, "add")?)
-                .map_err(err)?;
-            Ok(Value::Null)
-        }
+        "react" => done(s.set_reaction(&chat_param(p)?, i64_param(p, "itemId")?, str_param(p, "emoji")?, bool_param(p, "add")?)),
         // Sent / received time, delivery status and text of one message.
         "messageInfo" => {
             let info = s.message_info(&chat_param(p)?, i64_param(p, "itemId")?).map_err(err)?;
@@ -312,14 +315,9 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
         }
         // Forward messages of `chat` to `to`.
         "forward" => {
-            let ids: Vec<i64> = p
-                .get("itemIds")
-                .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(Value::as_i64).collect())
-                .unwrap_or_default();
-            let to = cursus_core::ChatId { scope: None, ..dto::parse_chat_ref(str_param(p, "to")?)? };
-            s.forward_items(&chat_param(p)?, &to, &ids).map_err(err)?;
-            Ok(Value::Null)
+            let ids = ids_param(p, "itemIds");
+            let to = ChatId { scope: None, ..dto::parse_chat_ref(str_param(p, "to")?)? };
+            done(s.forward_items(&chat_param(p)?, &to, &ids))
         }
         // Groups: who set one reaction.
         "reactionMembers" => {
@@ -331,15 +329,11 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
         // A recorded voice message (m4a) with its length in seconds.
         "sendVoice" => {
             let secs = p.get("duration").and_then(Value::as_u64).unwrap_or(0).min(u32::MAX as u64) as u32;
-            s.send_voice(&chat_param(p)?, str_param(p, "path")?, secs).map_err(err)?;
-            Ok(Value::Null)
+            done(s.send_voice(&chat_param(p)?, str_param(p, "path")?, secs))
         }
-        "sendFile" => {
-            s.send_file(&chat_param(p)?, str_param(p, "path")?).map_err(err)?;
-            Ok(Value::Null)
-        }
+        "sendFile" => done(s.send_file(&chat_param(p)?, str_param(p, "path")?)),
         "receiveFile" => {
-            let approved = p.get("approved").and_then(Value::as_bool).unwrap_or(false);
+            let approved = flag(p, "approved");
             match s.receive_file(i64_param(p, "fileId")?, approved).map_err(err)? {
                 ReceiveOutcome::Accepted => Ok(json!({ "accepted": true, "servers": [] })),
                 ReceiveOutcome::NeedsApproval { servers } => Ok(json!({ "accepted": false, "servers": servers })),
@@ -354,14 +348,8 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
                 _ => Ok(json!(path.to_string_lossy())),
             }
         }
-        "markRead" => {
-            s.mark_chat_read(&chat_param(p)?).map_err(err)?;
-            Ok(Value::Null)
-        }
-        "markUnread" => {
-            s.mark_chat_unread(&chat_param(p)?).map_err(err)?;
-            Ok(Value::Null)
-        }
+        "markRead" => done(s.mark_chat_read(&chat_param(p)?)),
+        "markUnread" => done(s.mark_chat_unread(&chat_param(p)?)),
         // Favourite / notifications / delivery receipts; fields left out keep
         // their current value. `sendReceipts`: true, false or null (default).
         "setChatSettings" => {
@@ -375,14 +363,12 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
                     Some(v) => v.as_bool(),
                 },
             };
-            s.set_chat_settings(&chat, &settings).map_err(err)?;
-            Ok(Value::Null)
+            done(s.set_chat_settings(&chat, &settings))
         }
         // Delete messages on this Mac after `seconds` (null: the app default).
         "setChatTtl" => {
             let seconds = p.get("seconds").and_then(Value::as_i64);
-            s.set_chat_ttl(&chat_param(p)?, seconds).map_err(err)?;
-            Ok(Value::Null)
+            done(s.set_chat_ttl(&chat_param(p)?, seconds))
         }
         // `changes`: { feature: "no"|"yes"|"always", timedTtl: secs }.
         "setContactPrefs" => {
@@ -411,49 +397,34 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
                 .or_else(|| preferences::contact_timed_ttl(prefs, merged))
                 .unwrap_or(preferences::DEFAULT_TIMED_TTL_SECS);
             let json = preferences::contact_preferences_json(prefs, &allows, ttl);
-            s.set_contact_prefs(chat.api_id, &json).map_err(err)?;
-            Ok(Value::Null)
+            done(s.set_contact_prefs(chat.api_id, &json))
         }
         "chatTags" => Ok(Value::Array(s.list_chat_tags().map_err(err)?.iter().map(dto::tag).collect())),
         "createChatTag" => Ok(Value::Array(
             s.create_chat_tag(str_param(p, "text")?).map_err(err)?.iter().map(dto::tag).collect(),
         )),
         "setChatTags" => {
-            let ids: Vec<i64> = p
-                .get("tagIds")
-                .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(Value::as_i64).collect())
-                .unwrap_or_default();
-            s.set_chat_tags(&chat_param(p)?, &ids).map_err(err)?;
-            Ok(Value::Null)
+            let ids = ids_param(p, "tagIds");
+            done(s.set_chat_tags(&chat_param(p)?, &ids))
         }
-        "clearChat" => {
-            s.clear_chat(&chat_param(p)?).map_err(err)?;
-            Ok(Value::Null)
-        }
-        "deleteChat" => {
-            s.delete_chat(&chat_param(p)?).map_err(err)?;
-            Ok(Value::Null)
-        }
-        "createInvitation" => Ok(dto::link(&s.create_invitation_link().map_err(err)?)),
+        "clearChat" => done(s.clear_chat(&chat_param(p)?)),
+        "deleteChat" => done(s.delete_chat(&chat_param(p)?)),
+        "createInvitation" => Ok(dto::link(&s.create_invitation(false).map_err(err)?.link)),
         // One-time links (cursus_core::invitations): "+" creates one, "New
         // link" replaces it, pending ones are listed / named / deleted.
         "newInvitation" => Ok(dto::invitation(
-            &s.create_invitation(p.get("incognito").and_then(Value::as_bool).unwrap_or(false)).map_err(err)?,
+            &s.create_invitation(flag(p, "incognito")).map_err(err)?,
         )),
         // As of the last chats load (no core round trip).
         "pendingInvitations" => Ok(Value::Array(s.pending_invitations().iter().map(dto::invitation).collect())),
-        "deleteInvitation" => {
-            s.delete_invitation(i64_param(p, "connId")?).map_err(err)?;
-            Ok(Value::Null)
-        }
+        "deleteInvitation" => done(s.delete_invitation(i64_param(p, "connId")?)),
         "setInvitationAlias" => Ok(json!(s
             .set_invitation_alias(i64_param(p, "connId")?, opt_str(p, "alias").unwrap_or(""))
             .map_err(err)?)),
         "regenerateInvitation" => Ok(dto::invitation(
             &s.regenerate_invitation(
                 p.get("previous").and_then(Value::as_i64),
-                p.get("incognito").and_then(Value::as_bool).unwrap_or(false),
+                flag(p, "incognito"),
             )
             .map_err(err)?,
         )),
@@ -471,29 +442,19 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
         "addressAutoAccept" => Ok(json!(s.address_auto_accept().map_err(err)?)),
         "setAddressAutoAccept" => Ok(json!(s.set_address_auto_accept(bool_param(p, "on")?).map_err(err)?)),
         "connect" => {
-            let incognito = p.get("incognito").and_then(Value::as_bool).unwrap_or(false);
-            s.connect_link_as(str_param(p, "link")?.trim(), incognito).map_err(err)?;
-            Ok(Value::Null)
+            let incognito = flag(p, "incognito");
+            done(s.connect_link(str_param(p, "link")?, incognito))
         }
-        "acceptRequest" => {
-            s.accept_contact_request(i64_param(p, "id")?).map_err(err)?;
-            Ok(Value::Null)
-        }
-        "rejectRequest" => {
-            s.reject_contact_request(i64_param(p, "id")?).map_err(err)?;
-            Ok(Value::Null)
-        }
-        "joinGroup" => {
-            s.join_group(i64_param(p, "groupId")?).map_err(err)?;
-            Ok(Value::Null)
-        }
+        "acceptRequest" => done(s.accept_contact_request(i64_param(p, "id")?)),
+        "rejectRequest" => done(s.reject_contact_request(i64_param(p, "id")?)),
+        "joinGroup" => done(s.join_group(i64_param(p, "groupId")?)),
         // Local name for a contact or group (empty clears it).
         "setAlias" => {
             let chat = chat_param(p)?;
             let alias = str_param(p, "alias")?;
             match chat.chat_type {
-                cursus_core::ChatType::Direct => s.set_contact_alias(chat.api_id, alias).map_err(err)?,
-                cursus_core::ChatType::Group => s.set_group_alias(chat.api_id, alias).map_err(err)?,
+                ChatType::Direct => s.set_contact_alias(chat.api_id, alias).map_err(err)?,
+                ChatType::Group => s.set_group_alias(chat.api_id, alias).map_err(err)?,
                 _ => return Err("only contacts and groups have a local name".into()),
             };
             Ok(Value::Null)
@@ -502,10 +463,7 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             let members = s.list_group_members(i64_param(p, "groupId")?).map_err(err)?;
             Ok(Value::Array(members.iter().map(dto::member).collect()))
         }
-        "leaveGroup" => {
-            s.leave_group(i64_param(p, "groupId")?).map_err(err)?;
-            Ok(Value::Null)
-        }
+        "leaveGroup" => done(s.leave_group(i64_param(p, "groupId")?)),
         "createGroup" => Ok(json!(s.create_group(str_param(p, "name")?.trim()).map_err(err)?.command_ref())),
         "createChannel" => {
             let (chat, link) = s.create_channel(str_param(p, "name")?.trim()).map_err(err)?;
@@ -530,8 +488,7 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             if let Some(v) = p.get("image") {
                 profile.image = v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
             }
-            s.update_group_profile(gid, &profile).map_err(err)?;
-            Ok(Value::Null)
+            done(s.update_group_profile(gid, &profile))
         }
         // Owners: one group feature on / off (`ttl` for disappearing messages).
         "setGroupPref" => {
@@ -547,16 +504,14 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
                 bool_param(p, "on")?,
                 p.get("ttl").and_then(Value::as_i64),
             );
-            s.update_group_profile(gid, &profile).map_err(err)?;
-            Ok(Value::Null)
+            done(s.update_group_profile(gid, &profile))
         }
         // Owners: admins review new members before they join.
         "setMemberReview" => {
             let gid = i64_param(p, "groupId")?;
             let mut profile = group_profile(&group_chat(&s, gid)?);
             profile.member_admission = bool_param(p, "on")?.then(|| json!({ "review": "all" }));
-            s.update_group_profile(gid, &profile).map_err(err)?;
-            Ok(Value::Null)
+            done(s.update_group_profile(gid, &profile))
         }
         // Group / channel link (created on first use). Joiners: member / observer.
         "groupLink" => {
@@ -565,50 +520,30 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
         }
         "setGroupLinkRole" => {
             let role = role_param(p, "role")?;
-            s.set_group_link_role(i64_param(p, "groupId")?, &role).map_err(err)?;
-            Ok(Value::Null)
+            done(s.set_group_link_role(i64_param(p, "groupId")?, &role))
         }
-        "deleteGroupLink" => {
-            s.delete_group_link(i64_param(p, "groupId")?).map_err(err)?;
-            Ok(Value::Null)
-        }
+        "deleteGroupLink" => done(s.delete_group_link(i64_param(p, "groupId")?)),
         "addMember" => {
             let role = role_param(p, "role")?;
-            s.add_group_member(i64_param(p, "groupId")?, i64_param(p, "contactId")?, &role).map_err(err)?;
-            Ok(Value::Null)
+            done(s.add_group_member(i64_param(p, "groupId")?, i64_param(p, "contactId")?, &role))
         }
         "setMemberRole" => {
             let role = role_param(p, "role")?;
-            s.set_group_member_role(i64_param(p, "groupId")?, i64_param(p, "memberId")?, &role).map_err(err)?;
-            Ok(Value::Null)
+            done(s.set_group_member_role(i64_param(p, "groupId")?, i64_param(p, "memberId")?, &role))
         }
         "removeMember" => {
-            let with_messages = p.get("withMessages").and_then(Value::as_bool).unwrap_or(false);
-            s.remove_group_member(i64_param(p, "groupId")?, i64_param(p, "memberId")?, with_messages)
-                .map_err(err)?;
-            Ok(Value::Null)
+            let with_messages = flag(p, "withMessages");
+            done(s.remove_group_member(i64_param(p, "groupId")?, i64_param(p, "memberId")?, with_messages))
         }
         // Moderators: block for everyone.
-        "blockMember" => {
-            s.block_group_member(i64_param(p, "groupId")?, i64_param(p, "memberId")?, bool_param(p, "blocked")?)
-                .map_err(err)?;
-            Ok(Value::Null)
-        }
+        "blockMember" => done(s.block_group_member(i64_param(p, "groupId")?, i64_param(p, "memberId")?, bool_param(p, "blocked")?)),
         // Anyone: hide a member's messages on this Mac only.
-        "setMemberShowMessages" => {
-            s.set_member_show_messages(i64_param(p, "groupId")?, i64_param(p, "memberId")?, bool_param(p, "show")?)
-                .map_err(err)?;
-            Ok(Value::Null)
-        }
+        "setMemberShowMessages" => done(s.set_member_show_messages(i64_param(p, "groupId")?, i64_param(p, "memberId")?, bool_param(p, "show")?)),
         // Moderators: close a member's support thread (not for pending joiners).
-        "deleteSupportChat" => {
-            s.delete_member_support_chat(i64_param(p, "groupId")?, i64_param(p, "memberId")?).map_err(err)?;
-            Ok(Value::Null)
-        }
+        "deleteSupportChat" => done(s.delete_member_support_chat(i64_param(p, "groupId")?, i64_param(p, "memberId")?)),
         "acceptMember" => {
             let role = opt_str(p, "role").unwrap_or("member");
-            s.accept_group_member(i64_param(p, "groupId")?, i64_param(p, "memberId")?, role).map_err(err)?;
-            Ok(Value::Null)
+            done(s.accept_group_member(i64_param(p, "groupId")?, i64_param(p, "memberId")?, role))
         }
         // Direct chat with a member (group allows direct messages): `@contactId`.
         "memberContact" => {

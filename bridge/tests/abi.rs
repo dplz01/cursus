@@ -147,6 +147,15 @@ fn abi_round_trip() {
     unsafe { cursus_free(raw) };
     assert!(text.contains("bad chat reference"), "{text}");
 
+    call("setDownloadPolicy", json!({ "autoDownload": false, "protectIp": true }), &mut dump);
+    call("close", json!({}), &mut dump);
+    // The database is closed when `close` returns: unlocking again at once
+    // works, and keeps the name the user gave their profile since (the
+    // welcome name is only for a new database).
+    let again = call("open", json!({ "password": "abi-test-password", "displayName": "Abi" }), &mut dump);
+    assert_eq!(again["displayName"], "Abi2");
+    assert!(call("verifyPassword", json!({ "password": "abi-test-password" }), &mut dump).as_bool().unwrap());
+    assert!(!call("verifyPassword", json!({ "password": "wrong" }), &mut dump).as_bool().unwrap());
     call("close", json!({}), &mut dump);
     if let Ok(path) = std::env::var("CURSUS_ABI_DUMP") {
         std::fs::write(path, serde_json::to_string_pretty(&dump).unwrap()).unwrap();

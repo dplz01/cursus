@@ -70,6 +70,10 @@ data class Chat(
     val role: String? = null,
     val lastTs: String? = null,
     val sendReceipts: Boolean? = null,
+    /** Seconds after which this chat's messages are deleted here (null: the default). */
+    val chatItemTtl: Long? = null,
+    /** Lists this chat is on (`ChatTag.id`). */
+    val tagIds: List<Long> = emptyList(),
     val contactPrefs: ContactPrefs? = null,
     val groupPrefs: GroupPrefs? = null,
     val memberReview: Boolean = false,
@@ -114,7 +118,17 @@ data class FileInfo(
     val progress: Double? = null,
     val error: String? = null,
     val autoReceive: Boolean = false,
+    /** Small inline picture the sender embedded (shown until downloaded). */
+    val preview: String? = null,
 )
+
+/** A chat list ("Add to list"). */
+@Serializable
+data class ChatTag(val id: Long, val text: String = "", val emoji: String? = null)
+
+/** Live transfer progress of one file. */
+@Serializable
+data class FileProgress(val fileId: Long, val transferred: Long = 0, val total: Long = 0)
 
 @Serializable
 data class Reaction(val emoji: String, val glyph: String, val mine: Boolean = false, val total: Long = 0)
@@ -173,8 +187,17 @@ data class CoreEvent(
     val refreshChats: Boolean = false,
     val refreshMessages: Boolean = false,
     val chat: String? = null,
+    val progress: FileProgress? = null,
     val incoming: List<Incoming> = emptyList(),
 )
+
+/** Reply of `createChannel`. */
+@Serializable
+data class CreatedChannel(val ref: String, val link: String? = null)
+
+/** Reply of `receiveFile`: not accepted = its [servers] need the user's OK. */
+@Serializable
+data class ReceiveReply(val accepted: Boolean = true, val servers: List<String> = emptyList())
 
 @Serializable
 data class PreparedLink(val url: String? = null, val simplex: String? = null)

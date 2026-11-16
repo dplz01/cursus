@@ -55,7 +55,9 @@ fn shim_candidates() -> Vec<PathBuf> {
             out.push(dir.join("libcursus_musl_glibc_compat.so"));
         }
     }
-    out.push(env::temp_dir().join("libcursus_musl_glibc_compat.so"));
+    // Never the shared /tmp: whoever can write there could plant a library
+    // that this process would then preload. The data dir is the user's own.
+    out.push(crate::paths::data_dir().join("libcursus_musl_glibc_compat.so"));
     out
 }
 
@@ -104,7 +106,7 @@ pub fn materialize_shim_so() -> Option<PathBuf> {
         }
         let destinations = [
             default_libs_dir().join("libcursus_musl_glibc_compat.so"),
-            env::temp_dir().join("libcursus_musl_glibc_compat.so"),
+            crate::paths::data_dir().join("libcursus_musl_glibc_compat.so"),
         ];
         for dest in destinations {
             if let Some(parent) = dest.parent() {

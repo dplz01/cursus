@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import chat.cursus.AppModel
 import chat.cursus.ComposeMode
 import chat.cursus.R
+import chat.cursus.core.Chat
 import chat.cursus.core.Message
 import chat.cursus.ui.components.CursusOverlay
 import chat.cursus.ui.components.DangerButton
@@ -47,6 +48,23 @@ private enum class MenuPane { Actions, ConfirmDelete, ForwardPick, Info }
 private enum class MsgAction(val icon: Int) {
     Reply(R.drawable.ic_reply), Copy(R.drawable.ic_copy), Edit(R.drawable.ic_edit_3), Forward(R.drawable.ic_forward),
     Info(R.drawable.ic_info_circle), Delete(R.drawable.ic_trash_delete), Download(R.drawable.ic_download),
+    Select(R.drawable.ic_select_multiple), Reveal(R.drawable.ic_eye_observer),
+}
+
+/** The chats a message can be forwarded to. */
+@Composable
+fun ForwardTargets(model: AppModel, onPick: (Chat) -> Unit) {
+    val c = Cursus.colors
+    Text("Forward to…", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+    Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+        for (target in model.chats.filter { it.ref != model.selection && !it.isRequest }) {
+            Text(
+                target.title, style = Cursus.type.body, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().clip(Radius.sm).clickable { onPick(target) }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            )
+        }
+    }
 }
 
 /** Linux `icon_menu_action`: glyph + label, full width, radius 8. */
@@ -100,16 +118,20 @@ fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
                         IconMenuAction(MsgAction.Download.icon, "Download") { save.launch(f.name) }
                     }
                     val actions: List<Pair<MsgAction, String>> = when {
-                        deleted -> listOf(MsgAction.Info to "Info", MsgAction.Delete to "Delete for me")
+                        deleted -> listOfNotNull(
+                            // Marked deleted: the text is still here, behind a tap.
+                            if (m.deleted == "marked") MsgAction.Reveal to (if (m.id in model.revealedDeleted) "Hide" else "Reveal") else null,
+                            MsgAction.Info to "Info", MsgAction.Delete to "Delete for me", MsgAction.Select to "Select",
+                        )
                         m.outgoing -> listOfNotNull(
                             MsgAction.Reply to "Reply", MsgAction.Copy to "Copy",
                             if (m.canEdit) MsgAction.Edit to "Edit" else null,
                             MsgAction.Forward to "Forward", MsgAction.Info to "Info",
-                            MsgAction.Delete to "Delete for everyone",
+                            MsgAction.Delete to "Delete for everyone", MsgAction.Select to "Select",
                         )
                         else -> listOf(
                             MsgAction.Reply to "Reply", MsgAction.Copy to "Copy", MsgAction.Forward to "Forward",
-                            MsgAction.Info to "Info", MsgAction.Delete to "Delete for me",
+                            MsgAction.Info to "Info", MsgAction.Delete to "Delete for me", MsgAction.Select to "Select",
                         )
                     }
                     for ((action, label) in actions) {
@@ -121,6 +143,8 @@ fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
                                 MsgAction.Forward -> pane = MenuPane.ForwardPick
                                 MsgAction.Info -> pane = MenuPane.Info
                                 MsgAction.Delete -> pane = MenuPane.ConfirmDelete
+                                MsgAction.Select -> { onDismiss(); model.toggleSelected(m) }
+                                MsgAction.Reveal -> { onDismiss(); model.toggleRevealDeleted(m) }
                                 MsgAction.Download -> Unit
                             }
                         }
@@ -149,16 +173,7 @@ fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
                 }
             }
             MenuPane.ForwardPick -> {
-                Text("Forward to…", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
-                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
-                    for (target in model.chats.filter { it.ref != model.selection && !it.isRequest }) {
-                        Text(
-                            target.title, style = Cursus.type.body, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth().clip(Radius.sm).clickable { onDismiss(); model.forward(m, target) }
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                        )
-                    }
-                }
+                ForwardTargets(model) { target -> onDismiss(); model.forward(m, target) }
                 SecondaryButton("Cancel", onDismiss)
             }
             MenuPane.Info -> {

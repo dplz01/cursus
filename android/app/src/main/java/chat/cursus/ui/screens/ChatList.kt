@@ -141,6 +141,7 @@ private fun ChatRow(model: AppModel, chat: Chat, selected: Boolean) {
     val c = Cursus.colors
     var menu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var lists by remember { mutableStateOf(false) }
     Box {
         Row(
             Modifier
@@ -206,9 +207,11 @@ private fun ChatRow(model: AppModel, chat: Chat, selected: Boolean) {
             MenuEntry(if (chat.muted) "Unmute" else "Mute") {
                 menu = false; model.setMuted(chat, !chat.muted)
             }
+            if (!chat.isNotes) MenuEntry("Add to list") { menu = false; model.loadChatTags(); lists = true }
             MenuEntry("Clear messages") { menu = false; model.clear(chat) }
             MenuEntry("Delete", danger = true) { menu = false; confirmDelete = true }
         }
+        if (lists) ChatListsOverlay(model, chat) { lists = false }
         if (confirmDelete) {
             ConfirmDialog(
                 title = "Delete ${chat.title}?",
@@ -243,6 +246,43 @@ fun ConfirmDialog(title: String, text: String, action: String, onConfirm: () -> 
     }
 }
 
+
+/** Linux chat menu "Add to list": tick the lists this chat is on, or start a new one. */
+@Composable
+private fun ChatListsOverlay(model: AppModel, chat: Chat, onDismiss: () -> Unit) {
+    val c = Cursus.colors
+    var name by remember { mutableStateOf("") }
+    CursusOverlay(onDismiss) {
+        Text("Lists for ${chat.title}", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+        if (model.chatTags.isEmpty()) Text("No lists yet.", style = Cursus.type.meta, color = c.textMuted)
+        Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
+            for (tag in model.chatTags) {
+                val on = tag.id in chat.tagIds
+                Row(
+                    Modifier.fillMaxWidth().clip(Radius.sm).clickable { model.toggleChatTag(chat, tag) }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        listOfNotNull(tag.emoji, tag.text).joinToString(" "), style = Cursus.type.body,
+                        color = if (on) c.accent else c.textPrimary, modifier = Modifier.weight(1f),
+                    )
+                    if (on) Icon(painterResource(R.drawable.ic_check), "On this list", Modifier.size(16.dp), tint = c.accent)
+                }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RoundedField(name, { name = it }, "New list", Modifier.weight(1f))
+            PrimaryButton("Create", {
+                if (name.isNotBlank()) {
+                    model.createChatTag(chat, name)
+                    name = ""
+                }
+            })
+        }
+        SecondaryButton("Close", onDismiss)
+    }
+}
 
 /** Linux `pending_links_button`: the yellow counter for unused one-time links. */
 @Composable

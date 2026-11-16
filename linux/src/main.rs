@@ -14,6 +14,7 @@ mod emoji_font;
 mod exit_wipe;
 mod ellipsis;
 mod float_open;
+mod history;
 mod hover;
 mod icons;
 mod kinetic;
@@ -1012,6 +1013,8 @@ pub enum Message {
     ClearFocusItem { generation: u64 },
     /// Snap chat history to the newest message.
     ScrollToLatest,
+    /// Top of the history: load another page of older messages.
+    LoadEarlierMessages,
     /// Fade the "New messages" divider (ignored if a newer one replaced it).
     ClearNewMessagesMarker(u64),
     /// User scrolled up in history — show jump-to-latest (edge-triggered).
@@ -1353,7 +1356,10 @@ struct App {
     selected: Option<usize>,
     /// Stable id so selection survives chat list refresh / resize.
     selected_id: Option<ChatId>,
-    messages: Vec<ChatMessage>,
+    messages: history::History,
+    /// How many of the newest messages are loaded ("Load earlier messages"
+    /// adds a page).
+    history_count: u32,
     /// Encrypted attachment path → decrypted cache under `tmp/plain/`.
     plaintext_files: HashMap<PathBuf, PathBuf>,
     /// Decrypts in flight (never run two jobs writing the same plaintext file).
@@ -1629,7 +1635,8 @@ impl App {
                 pending_delete_id: None,
                 selected: None,
                 selected_id: None,
-                messages: Vec::new(),
+                messages: history::History::default(),
+                history_count: HISTORY_PAGE,
                 plaintext_files: HashMap::new(),
                 decrypts_pending: HashSet::new(),
                 decrypts_failed: HashSet::new(),
@@ -1974,6 +1981,7 @@ impl App {
                     self.selected = None;
                     self.selected_id = None;
                     self.messages.clear();
+                    self.history_count = HISTORY_PAGE;
                 }
                 let history = if section == NavSection::Calls {
                     self.reload_call_history()
@@ -2031,6 +2039,7 @@ impl App {
                 self.selected = None;
                 self.selected_id = None;
                 self.messages.clear();
+                self.history_count = HISTORY_PAGE;
                 Task::none()
             }
             Message::WindowResized(size) => {
@@ -2135,6 +2144,7 @@ impl App {
                     chat.unread = 0;
                 }
                 self.messages.clear();
+                self.history_count = HISTORY_PAGE;
                 self.pin_history_end = true;
                 self.reply_to = None;
                 self.editing = None;
@@ -4801,6 +4811,7 @@ impl App {
                 self.selected = None;
                 self.selected_id = None;
                 self.messages.clear();
+                self.history_count = HISTORY_PAGE;
                 self.status = "Left group.".into();
                 self.reload_chats()
             }
@@ -4868,6 +4879,7 @@ impl App {
             }
             Message::GroupChatCleared(Ok(_)) => {
                 self.messages.clear();
+                self.history_count = HISTORY_PAGE;
                 self.status = "Chat cleared.".into();
                 self.reload_messages()
             }
@@ -5431,6 +5443,12 @@ impl App {
                 self.status = err;
                 Task::none()
             }
+            Message::LoadEarlierMessages => {
+                // The history is anchored at its end, so what is on screen
+                // stays put while older messages appear above it.
+                self.history_count = self.history_count.saturating_add(HISTORY_PAGE);
+                self.reload_messages()
+            }
             Message::MessagesLoaded { gen, result } => {
                 if gen != self.messages_load_gen {
                     return Task::none();
@@ -5451,7 +5469,7 @@ impl App {
                             self.new_messages_marker = None;
                             None
                         };
-                        self.messages = messages;
+                        self.messages = messages.into();
                         let follow = match arrived {
                             Some((sent, first_incoming)) => {
                                 // Your own message: jump to it. Incoming ones
@@ -5814,7 +5832,7 @@ impl App {
                     return Task::none();
                 };
                 Task::perform(
-                    blocking(move || session.address_link().map(|l| l)),
+                    blocking(move || session.address_link()),
                     Message::AddressLoaded,
                 )
             }
@@ -6225,6 +6243,7 @@ impl App {
                     self.selected = None;
                     self.selected_id = None;
                     self.messages.clear();
+                    self.history_count = HISTORY_PAGE;
                     self.reply_to = None;
                     Task::none()
                 } else {
@@ -6351,6 +6370,7 @@ impl App {
             self.selected = None;
             self.selected_id = None;
             self.messages.clear();
+            self.history_count = HISTORY_PAGE;
         }
         self.rebind_selection();
     }
@@ -6509,7 +6529,7 @@ impl App {
 
         if let Event::NewChatItems(_) = &event {
             self.maybe_notify_new_items(&event);
-            if let Some(hint) = event.chat_id_hint() {
+            if let Some(hint) = event.chat_hint() {
                 // An open support thread also reloads for any new message of
                 // its group: a pending member's items may not carry the
                 // thread's exact scope (moderators saw no new messages until
@@ -6548,21 +6568,19 @@ impl App {
             let mut touched_open = false;
             for (chat_id, item_id, status) in &status_updates {
                 if selected.as_ref() == Some(chat_id) {
-                    if let Some(msg) = self.messages.iter_mut().find(|m| m.item_id == *item_id) {
+                    let patched = self.messages.edit().iter_mut().find(|m| m.item_id == *item_id).map(|msg| {
                         msg.delivery = *status;
                         // Outgoing file rows often lag on XFTP status; receipt
                         // progress means the transfer finished from our POV.
-                        if msg.outgoing {
-                            if let Some(file) = msg.file.as_mut() {
-                                if matches!(
-                                    status,
-                                    cursus_core::DeliveryStatus::Sent
-                                        | cursus_core::DeliveryStatus::Delivered
-                                ) {
-                                    file.state = cursus_core::FileTransferState::Complete;
-                                }
-                            }
+                        let done = matches!(
+                            status,
+                            cursus_core::DeliveryStatus::Sent | cursus_core::DeliveryStatus::Delivered
+                        );
+                        if let Some(file) = msg.file.as_mut().filter(|_| msg.outgoing && done) {
+                            file.state = cursus_core::FileTransferState::Complete;
                         }
+                    });
+                    if patched.is_some() {
                         touched_open = true;
                     } else if !messages_reload_queued {
                         touched_open = false;
@@ -6577,7 +6595,7 @@ impl App {
         } else if let Some((file_id, transferred, total)) = event.file_progress_updates() {
             // Patch progress in place — avoids scroll jumps on every XFTP tick.
             let mut touched = false;
-            for msg in self.messages.iter_mut() {
+            for msg in self.messages.edit().iter_mut() {
                 if let Some(file) = msg.file.as_mut() {
                     if file.file_id == file_id {
                         file.state = cursus_core::FileTransferState::InProgress;
@@ -6768,9 +6786,10 @@ impl App {
         };
         self.messages_load_gen = self.messages_load_gen.wrapping_add(1);
         let gen = self.messages_load_gen;
+        let count = self.history_count;
         Task::perform(
             async move {
-                let result = load_messages(session, id).await;
+                let result = load_messages(session, id, count).await;
                 Message::MessagesLoaded { gen, result }
             },
             |m| m,
@@ -6794,6 +6813,7 @@ impl App {
                 self.selected_id = None;
                 self.support = None;
                 self.messages.clear();
+                self.history_count = HISTORY_PAGE;
             }
         }
     }
@@ -6838,6 +6858,13 @@ impl App {
     }
     pub(crate) fn messages(&self) -> &[ChatMessage] {
         &self.messages
+    }
+    pub(crate) fn history_fingerprint(&self) -> u64 {
+        self.messages.fingerprint()
+    }
+    /// The history is full to its page limit: there may be older messages.
+    pub(crate) fn history_has_earlier(&self) -> bool {
+        self.messages.len() as u32 >= self.history_count
     }
     pub(crate) fn selected(&self) -> Option<usize> {
         self.selected
@@ -7362,6 +7389,7 @@ impl App {
             self.selected = None;
             self.selected_id = None;
             self.messages.clear();
+            self.history_count = HISTORY_PAGE;
         }
         self.nav = NavSection::Chats;
         self.pref_menu = None;
@@ -7976,6 +8004,7 @@ impl App {
         });
         self.selected_id = Some(ChatId::with_support(group_id, member_id));
         self.messages.clear();
+        self.history_count = HISTORY_PAGE;
         self.pin_history_end = true;
         self.open_unread = 0;
         self.reply_to = None;
@@ -7999,6 +8028,7 @@ impl App {
         if let Some(gid) = group_id {
             self.selected_id = Some(ChatId::new(ChatType::Group, gid));
             self.messages.clear();
+            self.history_count = HISTORY_PAGE;
             self.pin_history_end = true;
             self.open_unread = 0;
             let reload = Task::batch([self.mark_selected_read(), self.reload_messages()]);
@@ -8788,26 +8818,14 @@ async fn connect_session(
         let cfg = SessionConfig {
             db_key: req.password.0.clone(),
             initial_display_name: req.display_name.clone(),
-            encrypt_local_files: req.encrypt_local_files,
             ..SessionConfig::default()
         };
-        let mut session = Session::open(cfg).map_err(|e| e.to_string())?;
+        let session = Session::open(cfg).map_err(|e| e.to_string())?;
         // The password just opened the DB: keep an in-memory verifier for the
         // lock screen (see app_lock.rs). Never written anywhere.
         app_lock::remember(req.password.as_str());
         tracing::info!("unlock: start_chat");
-        session
-            .start_chat_with_options(req.encrypt_local_files)
-            .map_err(|e| e.to_string())?;
-        // Align active profile display name with welcome name when core created a default.
-        if let Some(user) = session.active_profile() {
-            if user.display_name() != req.display_name.trim() && !req.display_name.trim().is_empty()
-            {
-                let mut fields = user.profile.clone();
-                fields.display_name = req.display_name.trim().to_string();
-                let _ = session.update_profile(fields);
-            }
-        }
+        session.start_chat(req.encrypt_local_files).map_err(|e| e.to_string())?;
         if req.save_account {
             let meta = AccountMeta {
                 display_name: req.display_name.trim().to_string(),
@@ -8902,13 +8920,17 @@ async fn load_chats(session: Arc<Session>) -> Result<Vec<ChatPreview>, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Messages loaded when a chat opens, and added by "Load earlier messages".
+const HISTORY_PAGE: u32 = 100;
+
 async fn load_messages(
     session: Arc<Session>,
     chat: ChatId,
+    count: u32,
 ) -> Result<Vec<ChatMessage>, String> {
     tokio::task::spawn_blocking(move || {
         session
-            .list_messages(&chat, 100)
+            .list_messages(&chat, count)
             .map_err(|e| e.to_string())
     })
     .await
@@ -8923,7 +8945,7 @@ async fn send_text(
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         session
-            .send_text_quoted(&chat.id, &text, quoted_item_id)
+            .send_text(&chat.id, &text, quoted_item_id)
             .map(|_| ())
             .map_err(|e| e.to_string())
     })
@@ -9120,24 +9142,17 @@ async fn open_local_file(path: PathBuf) -> Result<String, String> {
         // Prefer mpv for video — xdg-open often picks a sluggish default player.
         // Both paths float the viewer on tiling compositors (float_open.rs).
         let path_str = path.to_string_lossy().to_string();
-        if media::is_video_name(
-            path.file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default(),
-        ) && float_open::spawn_floating(
-            "mpv",
-            &[
-                "--force-window=immediate",
-                "--keep-open=no",
-                "--really-quiet",
-                "--",
-                &path_str,
-            ],
-            vec!["mpv".into()],
-        )
-        .is_ok()
-        {
-            return Ok(format!("Opened {}", path.display()));
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        if media::is_video_name(name) {
+            // Named like a video but not one (e.g. a playlist): a player
+            // would fetch whatever it lists and show the sender your IP.
+            if !cursus_core::safety::is_media_container(&path) {
+                return Err("This is not a video file, so Cursus won't open it. Use Save as… if you trust it.".into());
+            }
+            let mpv = ["--force-window=immediate", "--keep-open=no", "--really-quiet", "--", &path_str];
+            if float_open::spawn_floating("mpv", &mpv, vec!["mpv".into()]).is_ok() {
+                return Ok(format!("Opened {}", path.display()));
+            }
         }
         let handler = float_open::handler_ids(&path);
         float_open::spawn_floating("xdg-open", &[&path_str], handler)
@@ -10064,6 +10079,11 @@ fn spawn_audio_player(path: &PathBuf) -> Result<Child, String> {
     if !path.is_file() {
         return Err(format!("Voice file missing: {}", path.display()));
     }
+    // The sender names the file. A playlist named `voice.m4a` fails in
+    // ffmpeg and falls through to mpv, which fetches the URLs in it.
+    if !cursus_core::safety::is_media_container(path) {
+        return Err("This is not an audio file, so Cursus won't play it.".into());
+    }
     let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
     if meta.len() < 64 {
         return Err(format!(
@@ -10336,7 +10356,7 @@ async fn reject_contact_request(
 
 async fn accept_invite(session: Arc<Session>, link: String, incognito: bool) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let value = session.connect_link_as(&link, incognito).map_err(|e| e.to_string())?;
+        let value = session.connect_link(&link, incognito).map_err(|e| e.to_string())?;
         let ty = value
             .get("type")
             .and_then(|v| v.as_str())

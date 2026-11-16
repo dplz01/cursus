@@ -6,8 +6,6 @@
 
 Each platform implements these tokens and structures in its **native** UI toolkit. Native conventions win when they conflict with pixel-perfect matching. Do not ship a web shell inside four OS wrappers.
 
-Older lowercase `design-system.md` redirects here; prefer this file.
-
 ## Product identity
 
 | | |

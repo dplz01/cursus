@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // bar even when launched outside the bundle (`swift run`).
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        Prefs.watchDownloadPolicy()
     }
 
     /// Keep running with the window closed so messages keep arriving; the

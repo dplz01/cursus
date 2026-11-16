@@ -23,7 +23,7 @@ class MainActivity : ComponentActivity() {
         model.bootstrap()
         handle(intent)
         setContent {
-            CursusTheme(model.prefs.theme) {
+            CursusTheme(model.prefs.theme, model.prefs.textSize.scale) {
                 Root(model)
             }
             LaunchedEffect(model.prefs.secureScreen) {

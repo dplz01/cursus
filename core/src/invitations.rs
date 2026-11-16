@@ -16,7 +16,8 @@
 
 use serde_json::Value;
 
-use crate::models::{parse_conn_link, ConnLink};
+use crate::models::ConnLink;
+use crate::parse::conn_link;
 
 /// A one-time invitation the user created and nobody has used yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +39,7 @@ pub struct Invitation {
 /// sent to someone's address, group links, invitations being accepted).
 pub(crate) fn parse_pending_invitation(conn: &Value) -> Option<Invitation> {
     let conn_id = conn.get("pccConnId")?.as_i64()?;
-    let link = parse_conn_link(conn, "/connLinkInv/connFullLink", "/connLinkInv/connShortLink")?;
+    let link = conn_link(conn, "/connLinkInv")?;
     if conn.get("viaContactUri").and_then(Value::as_bool).unwrap_or(false)
         || conn.get("groupLinkId").is_some_and(|v| !v.is_null())
     {
@@ -83,11 +84,7 @@ pub(crate) fn pending_invitations(chats: &Value) -> Vec<Invitation> {
 
 /// The invitation in a `/_connect <userId> incognito=…` reply (`invitation`).
 pub(crate) fn parse_created_invitation(value: &Value) -> Option<Invitation> {
-    let link = parse_conn_link(
-        value,
-        "/connLinkInvitation/connFullLink",
-        "/connLinkInvitation/connShortLink",
-    )?;
+    let link = conn_link(value, "/connLinkInvitation")?;
     let conn = value.get("connection")?;
     Some(Invitation {
         link,

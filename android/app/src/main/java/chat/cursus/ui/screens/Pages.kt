@@ -334,6 +334,15 @@ fun SettingsPane(model: AppModel) {
                             )
                         }
                     }
+                    var sizes by remember { mutableStateOf(false) }
+                    chat.cursus.ui.components.PrefRow("Text size") {
+                        chat.cursus.ui.components.ChoiceChip(model.prefs.textSize.label, { sizes = true })
+                    }
+                    if (sizes) {
+                        chat.cursus.ui.components.ChoiceMenu(
+                            "Text size", chat.cursus.TextSize.entries.map { it to it.label }, model.prefs.textSize, { sizes = false },
+                        ) { model.prefs.textSize = it; sizes = false }
+                    }
                 }
                 PrivacyCard(model)
                 CursusCard {

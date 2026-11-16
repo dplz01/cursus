@@ -164,7 +164,7 @@ fn demo_app(dark: bool, width: f32, height: f32) -> App {
         msg(7, "Also bringing the rope", true, "09:03"),
         msg(4, "You're the best. Also: did you see the new Cursus build? The group invite page is really nice now.", true, "09:05"),
         msg(5, "See you at the station at 9 — bring the tickets!", false, "09:06"),
-    ];
+    ].into();
     app
 }
 
@@ -185,7 +185,7 @@ fn group_page(app: &mut App, pane: GroupSettingsPane) {
             role: "admin".into(),
         });
         m
-    }];
+    }].into();
     let _ = app.open_group_settings();
     let g = app.group_settings.as_mut().expect("group settings");
     g.members_loading = false;
@@ -424,6 +424,7 @@ fn shots() {
                         transferred: None,
                         transfer_total: None,
                         error_detail: None,
+                        preview: None,
                     });
                     (m, path)
                 };
@@ -628,7 +629,7 @@ fn frame_bench() {
     for (label, size) in [("desktop", DESKTOP), ("mobile", MOBILE)] {
         let mut app = demo_app(true, size.width, size.height);
         select(&mut app, 0);
-        let base = app.messages.clone();
+        let base = app.messages.to_vec();
         app.messages.clear();
         let n = std::env::var("CURSUS_BENCH_MSGS").ok().and_then(|v| v.parse().ok()).unwrap_or(300usize);
         for i in 0..n {
@@ -727,13 +728,13 @@ fn history_cache_never_goes_stale() {
     };
     type Mutation = (&'static str, fn(&mut App));
     let mutations: &[Mutation] = &[
-        ("delivery tick", |a| a.messages[1].delivery = DeliveryStatus::Sent),
+        ("delivery tick", |a| a.messages.edit()[1].delivery = DeliveryStatus::Sent),
         ("edited text", |a| {
-            a.messages[2].text = "Edited: make it two coffees".into();
-            a.messages[2].edited = true;
+            a.messages.edit()[2].text = "Edited: make it two coffees".into();
+            a.messages.edit()[2].edited = true;
         }),
         ("new reaction", |a| {
-            a.messages[4].reactions.push(ReactionCount { emoji: "👍".into(), user_reacted: false, total: 2 })
+            a.messages.edit()[4].reactions.push(ReactionCount { emoji: "👍".into(), user_reacted: false, total: 2 })
         }),
         ("new message", |a| a.messages.push(msg(50, "Just arrived 🚆", false, "09:30"))),
         ("selection mode", |a| {
@@ -742,8 +743,8 @@ fn history_cache_never_goes_stale() {
         }),
         ("focus", |a| a.focus_item = Some(4)),
         ("reveal deleted", |a| {
-            a.messages[0].deleted = Some(cursus_core::DeletedState::Marked);
-            a.revealed_deleted.insert(a.messages[0].item_id);
+            a.messages.edit()[0].deleted = Some(cursus_core::DeletedState::Marked);
+            a.revealed_deleted.insert(a.messages.edit()[0].item_id);
         }),
         ("theme switch", |a| {
             a.desktop_prefs.theme = ThemePreference::Light;
@@ -754,7 +755,9 @@ fn history_cache_never_goes_stale() {
         ("epoch timestamp", |a| {
             let mut m = msg(51, "Group event without a real date", false, "00:00");
             m.created_at = Some("1970-01-01T00:00:00Z".into());
-            a.messages.insert(0, m);
+            let mut messages = a.messages.to_vec();
+            messages.insert(0, m);
+            a.messages = messages.into();
         }),
     ];
     for (label, mutate) in mutations {
@@ -988,7 +991,7 @@ fn shots_ui_fixes() {
                 m.edited = true;
                 m
             },
-        ];
+        ].into();
         render(&app, MOBILE, &format!("fix-group-chat-{t}"));
 
         // Settings → Profile: plain texts with pencils.
@@ -1030,7 +1033,7 @@ fn new_messages_follow_and_label() {
     let mut app = demo_app(true, MOBILE.width, MOBILE.height);
     select(&mut app, 0);
     app.pin_history_end = false;
-    let mut away = app.messages.clone();
+    let mut away = app.messages.to_vec();
     app.history_away_from_end = true;
     let load = |app: &mut App, messages: Vec<ChatMessage>| {
         let gen = app.messages_load_gen;
@@ -1104,7 +1107,7 @@ fn opening_a_chat_labels_unread_messages() {
     load_fonts();
     let mut app = demo_app(true, MOBILE.width, MOBILE.height);
     select(&mut app, 0);
-    let history = app.messages.clone(); // incoming: 1, 3, 5 (5 is newest)
+    let history = app.messages.to_vec(); // incoming: 1, 3, 5 (5 is newest)
     let open = |app: &mut App, unread: i64| {
         app.messages.clear();
         app.pin_history_end = true;

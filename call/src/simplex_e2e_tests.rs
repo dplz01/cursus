@@ -23,11 +23,10 @@ fn open(root: &std::path::Path, name: &str) -> Arc<Session> {
         db_key: zeroize::Zeroizing::new(format!("{name}-key")),
         migration_confirm: "yesUp".into(),
         initial_display_name: name.into(),
-        encrypt_local_files: true,
     };
     std::fs::create_dir_all(root.join(name)).unwrap();
-    let mut s = Session::open(cfg).expect("open");
-    s.start_chat().expect("start");
+    let s = Session::open(cfg).expect("open");
+    s.start_chat(true).expect("start");
     Arc::new(s)
 }
 
@@ -90,8 +89,8 @@ async fn setup(tag: &str) -> Peers {
     blocking({ let b = bob.clone(); move || b.activate_network() }).await.unwrap();
 
     // Become contacts.
-    let link = blocking({ let a = alice.clone(); move || a.create_invitation_link() }).await.unwrap();
-    blocking({ let b = bob.clone(); move || b.connect_link(&link.full) }).await.unwrap();
+    let link = blocking({ let a = alice.clone(); move || a.create_invitation(false) }).await.unwrap().link;
+    blocking({ let b = bob.clone(); move || b.connect_link(&link.full, false) }).await.unwrap();
     let contact_id = |ev: &Event| match ev {
         Event::ContactConnected(v) => v.pointer("/contact/contactId").and_then(|i| i.as_i64()),
         _ => None,

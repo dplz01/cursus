@@ -183,21 +183,24 @@ private fun scheme(t: CursusColors): ColorScheme {
 }
 
 @Composable
-fun CursusTheme(mode: ThemeMode, content: @Composable () -> Unit) {
+fun CursusTheme(mode: ThemeMode, textScale: Float = 1f, content: @Composable () -> Unit) {
     val dark = when (mode) {
         ThemeMode.System -> isSystemInDarkTheme()
         ThemeMode.Light -> false
         ThemeMode.Dark -> true
     }
     val tokens = if (dark) DarkTokens else LightTokens
-    CompositionLocalProvider(LocalColors provides tokens, LocalType provides MobileType) {
+    // Settings → Text size scales the whole type table.
+    val scaled = { style: TextStyle -> style.copy(fontSize = style.fontSize * textScale) }
+    val type = CursusType(scaled(MobileType.title), scaled(MobileType.body), scaled(MobileType.meta))
+    CompositionLocalProvider(LocalColors provides tokens, LocalType provides type) {
         MaterialTheme(
             colorScheme = scheme(tokens),
             typography = Typography(
-                bodyLarge = MobileType.body,
-                bodyMedium = MobileType.body,
-                labelLarge = MobileType.meta,
-                titleLarge = MobileType.title,
+                bodyLarge = type.body,
+                bodyMedium = type.body,
+                labelLarge = type.meta,
+                titleLarge = type.title,
             ),
             content = content,
         )

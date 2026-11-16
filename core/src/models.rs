@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::json::JsonExt;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChatType {
     Direct,
@@ -217,6 +219,36 @@ pub struct ChatPreview {
     pub last_ts: Option<String>,
 }
 
+impl ChatPreview {
+    /// A chat with nothing known but its id and title.
+    pub fn new(id: ChatId, title: String) -> Self {
+        Self {
+            id,
+            title,
+            preview: String::new(),
+            unread: 0,
+            unread_chat: false,
+            settings: ChatSettings::default(),
+            tag_ids: Vec::new(),
+            chat_item_ttl: None,
+            pending_request_id: None,
+            peer_profile: ProfileFields::default(),
+            local_alias: String::new(),
+            is_channel: false,
+            membership_role: None,
+            group_preferences: None,
+            member_admission: None,
+            public_group: None,
+            contact_preferences: None,
+            contact_merged_preferences: None,
+            members_require_attention: 0,
+            membership_support_unread: 0,
+            membership_has_support_chat: false,
+            last_ts: None,
+        }
+    }
+}
+
 /// Editable group profile payload for `/_group_profile` (full round-trip).
 #[derive(Debug, Clone, Default)]
 pub struct GroupProfileUpdate {
@@ -287,15 +319,6 @@ pub fn group_role_rank(role: &str) -> u8 {
     }
 }
 
-/// Active / pending WebRTC call (signaling only until media bridge is attached).
-#[derive(Debug, Clone)]
-pub struct CallInfo {
-    pub contact_id: i64,
-    pub peer_name: String,
-    pub outgoing: bool,
-    pub media: CallMedia,
-}
-
 /// One entry of the call history: a `sndCall` / `rcvCall` chat item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallRecord {
@@ -315,31 +338,24 @@ pub struct CallRecord {
 impl CallRecord {
     /// Parse one `{chatInfo, chatItem}` pair; `None` unless it is a call.
     pub fn parse(aci: &Value) -> Option<Self> {
-        let info = aci.get("chatInfo")?;
         let item = aci.get("chatItem")?;
         let content = item.get("content")?;
-        let outgoing = match content.get("type")?.as_str()? {
+        let outgoing = match content.tag() {
             "sndCall" => true,
             "rcvCall" => false,
             _ => return None,
         };
-        let contact = info.get("contact")?;
-        let peer_name = contact
-            .get("localAlias")
-            .and_then(Value::as_str)
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| contact.pointer("/profile/displayName").and_then(Value::as_str))
-            .or_else(|| contact.get("localDisplayName").and_then(Value::as_str))
-            .unwrap_or("Contact")
-            .to_string();
+        let contact = aci.pointer("/chatInfo/contact")?;
         Some(Self {
-            item_id: item.pointer("/meta/itemId")?.as_i64()?,
-            contact_id: contact.get("contactId")?.as_i64()?,
-            peer_name,
+            item_id: item.i64_at("/meta/itemId")?,
+            contact_id: contact.i64_at("/contactId")?,
+            peer_name: contact
+                .first_nonempty(&["/localAlias", "/profile/displayName", "/localDisplayName"])
+                .unwrap_or_else(|| "Contact".into()),
             outgoing,
-            status: content.get("status").and_then(Value::as_str).unwrap_or("").to_string(),
-            duration_secs: content.get("duration").and_then(Value::as_i64).unwrap_or(0),
-            ts: item.pointer("/meta/itemTs").and_then(Value::as_str).map(str::to_string),
+            status: content.text("/status"),
+            duration_secs: content.i64_at("/duration").unwrap_or(0),
+            ts: item.str_at("/meta/itemTs").map(str::to_string),
         })
     }
 
@@ -351,17 +367,11 @@ impl CallRecord {
     /// Whether this chat-item payload contains a call item (history changed).
     pub fn touches_calls(body: &Value) -> bool {
         let is_call = |item: Option<&Value>| {
-            item.and_then(|i| i.pointer("/content/type"))
-                .and_then(Value::as_str)
-                .is_some_and(|t| t == "sndCall" || t == "rcvCall")
+            matches!(item.and_then(|i| i.str_at("/content/type")), Some("sndCall" | "rcvCall"))
         };
-        let items = body.get("chatItems").and_then(Value::as_array);
-        items.is_some_and(|a| a.iter().any(|aci| is_call(aci.get("chatItem"))))
+        body.array_at("/chatItems").iter().any(|aci| is_call(aci.get("chatItem")))
             || is_call(body.pointer("/chatItem/chatItem"))
-            || body
-                .get("chatItemDeletions")
-                .and_then(Value::as_array)
-                .is_some_and(|a| a.iter().any(|d| is_call(d.pointer("/deletedChatItem/chatItem"))))
+            || body.array_at("/chatItemDeletions").iter().any(|d| is_call(d.pointer("/deletedChatItem/chatItem")))
     }
 }
 
@@ -378,12 +388,6 @@ impl CallMedia {
             Self::Video => "video",
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum MessageContent {
-    Text(String),
-    Other { type_name: String, text: String },
 }
 
 /// Outgoing delivery / receipt state from `meta.itemStatus`.
@@ -403,28 +407,13 @@ pub enum DeliveryStatus {
 
 impl DeliveryStatus {
     pub fn parse(status: &Value) -> Self {
-        let ty = status
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        match ty {
+        match status.tag() {
             "sndSent" => Self::Sent,
             "sndRcvd" => Self::Delivered,
             "sndError" | "sndErrorAuth" => Self::Error,
             "sndWarning" => Self::Warning,
             // sndNew and anything unexpected while sending.
             _ => Self::Pending,
-        }
-    }
-
-    /// Compact receipt mark for the bubble footer.
-    pub fn receipt_mark(self) -> &'static str {
-        match self {
-            Self::Pending => "···",
-            Self::Sent => "✓",
-            Self::Delivered => "✓✓",
-            Self::Error => "!",
-            Self::Warning => "!",
         }
     }
 }
@@ -504,6 +493,9 @@ pub struct FileInfo {
     pub transfer_total: Option<i64>,
     /// Human-readable error/warning from `fileStatus` when failed.
     pub error_detail: Option<String>,
+    /// Small inline picture (data-URL) the sender embedded in an image or
+    /// video message: shown until the file itself is downloaded.
+    pub preview: Option<String>,
 }
 
 impl FileInfo {
@@ -549,21 +541,14 @@ pub struct MessageInfo {
 }
 
 impl MessageInfo {
-    pub fn from_api(value: &serde_json::Value) -> Self {
-        let at = |paths: &[&str]| {
-            paths.iter().find_map(|p| value.pointer(p)).and_then(|v| v.as_str()).map(str::to_string)
-        };
-        let text = at(&[
-            "/chatItem/chatItem/content/msgContent/text",
-            "/chatItem/content/msgContent/text",
-            "/chatItem/chatItem/meta/itemText",
-            "/chatItem/meta/itemText",
-        ])
-        .unwrap_or_default();
+    pub fn from_api(value: &Value) -> Self {
+        // The item is nested once or twice, depending on the core version.
+        let item = value.first(&["/chatItem/chatItem", "/chatItem"]).unwrap_or(&Value::Null);
+        let text = item.first(&["/content/msgContent/text", "/meta/itemText"]).and_then(Value::as_str);
         Self {
-            time: at(&["/chatItem/chatItem/meta/itemTs", "/chatItem/meta/itemTs"]),
-            status: at(&["/chatItem/chatItem/meta/itemStatus/type", "/chatItem/meta/itemStatus/type"]),
-            text: crate::expand_emoji_shortcodes(&text),
+            time: item.str_at("/meta/itemTs").map(str::to_string),
+            status: item.str_at("/meta/itemStatus/type").map(str::to_string),
+            text: crate::expand_emoji_shortcodes(text.unwrap_or_default()),
         }
     }
 }
@@ -698,8 +683,6 @@ pub struct ConnLink {
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// Raw JSON event from `chat_recv_msg_wait` until typed decoding expands.
-    Raw(Value),
     NewChatItems(Value),
     ChatItemsStatusesUpdated(Value),
     ChatStarted,
@@ -786,32 +769,20 @@ impl Event {
         }
     }
 
-    /// Chat id hinted by a `newChatItems` payload, if present.
-    pub fn chat_id_hint(&self) -> Option<ChatId> {
-        let Event::NewChatItems(value) = self else {
-            return None;
-        };
-        let info = value
-            .pointer("/chatItems/0/chatInfo")
-            .or_else(|| value.get("chatInfo"))?;
-        parse_chat_info_id(info)
-    }
-
     /// Chat an event is about, when its payload says so (`newChatItems`,
     /// file transfer events, reactions, updates, deletions). `None` means
     /// unknown — callers should treat it as "could be any chat".
     pub fn chat_hint(&self) -> Option<ChatId> {
-        let body = match self {
-            Event::NewChatItems(_) => return self.chat_id_hint(),
-            Event::Other { body, .. } => body,
-            _ => return None,
+        let (Event::NewChatItems(body) | Event::Other { body, .. }) = self else {
+            return None;
         };
-        let info = body
-            .pointer("/chatItem/chatInfo")
-            .or_else(|| body.pointer("/reaction/chatInfo"))
-            .or_else(|| body.pointer("/chatItems/0/chatInfo"))
-            .or_else(|| body.pointer("/chatItemDeletions/0/deletedChatItem/chatInfo"))
-            .or_else(|| body.get("chatInfo"))?;
+        let info = body.first(&[
+            "/chatItems/0/chatInfo",
+            "/chatItem/chatInfo",
+            "/reaction/chatInfo",
+            "/chatItemDeletions/0/deletedChatItem/chatInfo",
+            "/chatInfo",
+        ])?;
         parse_chat_info_id(info)
     }
 
@@ -820,32 +791,13 @@ impl Event {
         let Event::Other { type_name, body } = self else {
             return None;
         };
-        match type_name.as_str() {
-            "rcvFileProgressXFTP" => {
-                let file_id = body
-                    .pointer("/rcvFileTransfer/fileId")
-                    .or_else(|| body.pointer("/chatItem/chatItem/file/fileId"))
-                    .or_else(|| body.pointer("/chatItem/file/fileId"))
-                    .and_then(|v| v.as_i64())?;
-                let transferred = body.get("receivedSize").and_then(|v| v.as_i64())?;
-                let total = body.get("totalSize").and_then(|v| v.as_i64())?;
-                Some((file_id, transferred, total))
-            }
-            "sndFileProgressXFTP" => {
-                let file_id = body
-                    .pointer("/sndFileTransfer/fileId")
-                    .or_else(|| body.pointer("/chatItem/chatItem/file/fileId"))
-                    .or_else(|| body.pointer("/chatItem/file/fileId"))
-                    .and_then(|v| v.as_i64())?;
-                let transferred = body
-                    .get("sentSize")
-                    .or_else(|| body.get("receivedSize"))
-                    .and_then(|v| v.as_i64())?;
-                let total = body.get("totalSize").and_then(|v| v.as_i64())?;
-                Some((file_id, transferred, total))
-            }
-            _ => None,
-        }
+        let (transfer, done) = match type_name.as_str() {
+            "rcvFileProgressXFTP" => ("/rcvFileTransfer/fileId", ["/receivedSize", "/receivedSize"]),
+            "sndFileProgressXFTP" => ("/sndFileTransfer/fileId", ["/sentSize", "/receivedSize"]),
+            _ => return None,
+        };
+        let file_id = body.first(&[transfer, "/chatItem/chatItem/file/fileId", "/chatItem/file/fileId"])?.as_i64()?;
+        Some((file_id, body.first(&done)?.as_i64()?, body.i64_at("/totalSize")?))
     }
 
     /// Status patches from `chatItemsStatusesUpdated` (item id → delivery).
@@ -853,21 +805,13 @@ impl Event {
         let Event::ChatItemsStatusesUpdated(value) = self else {
             return Vec::new();
         };
-        let Some(items) = value.get("chatItems").and_then(|v| v.as_array()) else {
-            return Vec::new();
-        };
-        items
+        value
+            .array_at("/chatItems")
             .iter()
             .filter_map(|aci| {
-                let info = aci.get("chatInfo")?;
-                let chat_id = parse_chat_info_id(info)?;
                 let item = aci.get("chatItem")?;
-                let item_id = item.pointer("/meta/itemId")?.as_i64()?;
-                let status = item
-                    .pointer("/meta/itemStatus")
-                    .map(DeliveryStatus::parse)
-                    .unwrap_or(DeliveryStatus::Pending);
-                Some((chat_id, item_id, status))
+                let status = item.pointer("/meta/itemStatus").map_or(DeliveryStatus::Pending, DeliveryStatus::parse);
+                Some((parse_chat_info_id(aci.get("chatInfo")?)?, item.i64_at("/meta/itemId")?, status))
             })
             .collect()
     }
@@ -876,47 +820,17 @@ impl Event {
 /// The chat a `chatInfo` object (events, API results) is about, with its
 /// support scope. Shared by every app — never re-implement it.
 pub fn parse_chat_info_id(info: &Value) -> Option<ChatId> {
-    let type_name = info.get("type")?.as_str()?;
-    match type_name {
-        "direct" => Some(ChatId {
-            chat_type: ChatType::Direct,
-            api_id: info.pointer("/contact/contactId")?.as_i64()?,
-            scope: None,
-        }),
+    match info.tag() {
+        "direct" => Some(ChatId::new(ChatType::Direct, info.i64_at("/contact/contactId")?)),
+        "local" => Some(ChatId::new(ChatType::Local, info.i64_at("/noteFolder/noteFolderId")?)),
         "group" => {
-            let api_id = info.pointer("/groupInfo/groupId")?.as_i64()?;
-            let scope = parse_group_chat_scope(info.get("groupChatScope"));
-            Some(ChatId {
-                chat_type: ChatType::Group,
-                api_id,
-                scope,
-            })
-        }
-        "local" => Some(ChatId {
-            chat_type: ChatType::Local,
-            api_id: info.pointer("/noteFolder/noteFolderId")?.as_i64()?,
-            scope: None,
-        }),
-        _ => None,
-    }
-}
-
-/// `groupChatScope` from SimpleX `ChatInfo` JSON (`type: memberSupport`).
-fn parse_group_chat_scope(value: Option<&Value>) -> Option<GroupChatScope> {
-    let scope = value?;
-    if scope.is_null() {
-        return None;
-    }
-    match scope.get("type").and_then(|v| v.as_str())? {
-        "memberSupport" => {
-            // SimpleX names the field `groupMember_` (Maybe GroupMember); a
-            // miss made a member's thread look like your own (no member), so
-            // a moderator's open thread never refreshed on new messages.
-            let group_member_id = scope
-                .pointer("/groupMember_/groupMemberId")
-                .or_else(|| scope.pointer("/groupMember/groupMemberId"))
-                .and_then(|v| v.as_i64());
-            Some(GroupChatScope::MemberSupport { group_member_id })
+            let scope = info.get("groupChatScope").filter(|s| s.tag() == "memberSupport").map(|scope| {
+                // SimpleX names the field `groupMember_` (Maybe GroupMember);
+                // without it the thread is your own one with the admins.
+                let member = scope.first(&["/groupMember_/groupMemberId", "/groupMember/groupMemberId"]);
+                GroupChatScope::MemberSupport { group_member_id: member.and_then(Value::as_i64) }
+            });
+            Some(ChatId { chat_type: ChatType::Group, api_id: info.i64_at("/groupInfo/groupId")?, scope })
         }
         _ => None,
     }
@@ -946,69 +860,26 @@ impl ApiEnvelope {
 
 /// Turn SimpleX error JSON into a short, human-readable line.
 fn format_chat_error(err: &Value) -> String {
-    let ty = err
-        .pointer("/errorType/type")
-        .or_else(|| err.get("type"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("error");
-    match ty {
-        "commandError" => err
-            .pointer("/errorType/message")
-            .or_else(|| err.get("message"))
-            .and_then(|v| v.as_str())
-            .map(|m| format!("chat command error: {m}"))
-            .unwrap_or_else(|| err.to_string()),
-        "userExists" => {
-            let name = err
-                .pointer("/errorType/contactName")
-                .and_then(|v| v.as_str())
-                .unwrap_or("user");
-            format!("user already exists: {name}")
-        }
-        _ => {
-            if let Some(msg) = err.pointer("/errorType/message").and_then(|v| v.as_str()) {
-                format!("{ty}: {msg}")
-            } else {
-                format!("{ty}: {err}")
-            }
-        }
+    let ty = err.first(&["/errorType/type", "/type"]).and_then(Value::as_str).unwrap_or("error");
+    let message = err.first(&["/errorType/message", "/message"]).and_then(Value::as_str);
+    match (ty, message) {
+        ("commandError", Some(m)) => format!("chat command error: {m}"),
+        ("userExists", _) => format!("user already exists: {}", err.str_at("/errorType/contactName").unwrap_or("user")),
+        (_, Some(m)) => format!("{ty}: {m}"),
+        _ => format!("{ty}: {err}"),
     }
 }
 
 pub(crate) fn parse_event(value: Value) -> Event {
-    let type_name = value
-        .get("type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let type_name = value.tag().to_string();
     match type_name.as_str() {
         "newChatItems" => Event::NewChatItems(value),
         "chatItemsStatusesUpdated" => Event::ChatItemsStatusesUpdated(value),
         "chatStarted" => Event::ChatStarted,
         "contactConnected" => Event::ContactConnected(value),
         "receivedContactRequest" => Event::ReceivedContactRequest(value),
-        _ => Event::Other {
-            type_name,
-            body: value,
-        },
+        _ => Event::Other { type_name, body: value },
     }
-}
-
-pub(crate) fn parse_conn_link(value: &Value, full_path: &str, short_path: &str) -> Option<ConnLink> {
-    let full = value
-        .pointer(full_path)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())?;
-    let short = value
-        .pointer(short_path)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let display = short.clone().unwrap_or_else(|| full.clone());
-    Some(ConnLink {
-        display,
-        full,
-        short,
-    })
 }
 
 #[cfg(test)]

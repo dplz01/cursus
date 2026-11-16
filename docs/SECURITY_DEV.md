@@ -9,7 +9,8 @@ Update this file when security-relevant behavior changes.
 |---|---|---|
 | Message E2E (SMP / ratchet) | **Active** | Owned by official `libsimplex`; Cursus does not reimplement |
 | Chat + agent DB at rest | **Active (user password)** | SQLCipher key = password from welcome / unlock; never stored on disk by Cursus |
-| Local attachments at rest | **Active** | Receive: `/freceive … encrypt=on`. Send: `chat_encrypt_file` → CryptoFile under `files/` + `fileSource.cryptoArgs`. Keys in SQLCipher |
+| Local attachments at rest | **Active (setting)** | Receive: `/freceive … encrypt=on\|off` following "Encrypt stored files". Send: every file goes into `files/` first — `chat_encrypt_file` → CryptoFile + `fileSource.cryptoArgs` when on, a plain copy when off — so a message never points at the user's original. Keys in SQLCipher |
+| Photos you send | **Re-encoded** | `media::prepare_outgoing_image`: no EXIF (location, time, camera), upright, ≤ 1920 px and ≤ 255 KiB like the official clients, real inline preview. GIFs keep their file |
 | Plaintext decrypt cache | **Ephemeral, RAM-first** | Decrypts go to `$XDG_RUNTIME_DIR/cursus/plain` (per-user tmpfs, emptied at logout/reboot) when it has room (`fits_in_ram_cache`), else `tmp/plain/`; playback WAVs in `…/cursus/play`. Wiped on quit, on SIGTERM/SIGHUP/SIGINT and panic (`exit_wipe`), and on session open (crash / SIGKILL) |
 | Data dir permissions | **Active** | `~/.local/share/cursus` forced to `0700`, files `0600` at startup (DBs, log, prefs were world-readable) |
 | Logs | **Redacted** | Commands logged as verb + chat refs only (`redact_command`); raw events never logged; log rotates at 2 MB |
@@ -19,7 +20,10 @@ Update this file when security-relevant behavior changes.
 | Password in memory | **Zeroized** | `Secret` (zeroize-on-drop, `Debug` = `***`) for form fields / messages / connect; `SessionConfig.db_key` `Zeroizing`; FFI key `CString` wiped after `chat_migrate_init`. iced's own text-input copies and libsimplex's SQLCipher key are outside our control |
 | Image decoding | **Bounded** | Photos: 128 MiB / 12000 px per decode; avatars: 16 MiB / 2048 px (decompression bombs refused) |
 | Close to tray | **Off by default** | Warning before enabling: app stays unlocked, cache kept until quit |
-| Opening attachments | **Guarded** | Executable / installer types (`.exe`, `.jar`, `.desktop`, scripts…) are never opened by tap (`is_risky_to_open`); Save as… only |
+| Opening attachments | **Guarded** | Executable / installer types (`.exe`, `.jar`, `.desktop`, scripts…) are never opened by tap (`is_risky_to_open`); Save as… only. Since 2026-11-16 also `.m3u` / `.m3u8` / `.pls` playlists and `.html` / `.htm` / `.xhtml` pages: tested here, the default apps (mpv, Firefox) fetched the URLs inside them |
+| Playing received media | **Real media only (Linux, mpv)** | Before a received voice message or video reaches mpv its first bytes must be an audio / video container (`safety::is_media_container`). Tested: the old play script, given a playlist named `voice-1.m4a`, fell through to mpv, which requested the URL in it; so did opening a playlist named `clip.mp4`. ffmpeg / ffprobe refuse such files by themselves, so waveforms were never affected. Side effect: audio in containers the check doesn't know (AIFF, AMR, WMA) is not played. Android's MediaPlayer: not tested, not guarded |
+| Profile pictures | **Inline only** | Only `data:image/…` URLs are accepted from profiles, members and message previews. No app ever fetched picture URLs, so this was tidying, not a fix |
+| Names from the sender | **Confined** | A received file's name is reduced to its last path component before it is joined to `files/`. The old parser did produce `files/../../etc/passwd` for such a name, but only as a path to open on your own machine; no way to exploit it was found |
 | Password / key in prefs | **Not stored** | Only `account.json` (display name + flags). Unlock re-enters password each launch |
 | App lock | **Opt-in** | Re-asks the DB password after 30 s–15 min idle, on focus loss ("Immediately"), when hidden to tray, or Ctrl+L. Verified against an in-memory Argon2id hash made when the password opened the DB (`app_lock.rs`; core `/db test key` rejects spaces/non-ASCII). Locking wipes decrypted media + previews, closes overlays; notifications show only "Cursus — New message". Back-off after 3 misses (2 s → 60 s) |
 | OS keyring unlock | **Opt-in** | "Unlock automatically at start": DB password in the Secret Service via `oo7` (GNOME Keyring / KWallet / KeePassXC), verified before storing, deleted when turned off; falls back to the password prompt |
@@ -59,8 +63,8 @@ Still out of scope until then: auto-unlock without any user gesture; syncing the
 ```bash
 # Quit Cursus first, then:
 rm -rf ~/.local/share/cursus
-# Optional: also clear desktop prefs
-rm -f ~/.local/share/cursus/desktop.json   # already removed by rm -rf above
+# Optional: only clear desktop prefs
+rm -f ~/.local/share/cursus/desktop.json
 cargo run -p cursus-linux
 ```
 
@@ -105,6 +109,7 @@ ls -la ~/.local/share/cursus/tmp/plain/   # decrypted cache for UI
 
 | Date | Change |
 |---|---|
+| 2026-11-16 | Audit, each item tried with a concrete attack against the previous code. **Reproduced and fixed:** sent photos kept their EXIF (a marker written into a JPEG's EXIF was still in the file that went out); a playlist named like a voice message or video made mpv request its URL (IP leak on tap); `.m3u8` / `.pls` / `.html` attachments opened by tap made mpv / Firefox do the same; a second reader got a decrypted file while it was 64 KiB of 120 MiB written; reading the address auto-accept setting created an address; with file encryption off the message pointed at the user's original and broke when it was removed. **By reading the code only (needs two users to run):** the bridge downloaded small media on Android / macOS whatever "Download automatically" said. **Tried and not exploitable — changes removed again:** extra words after a pasted link (the core rejects them); `account.json` created `0644` (its directory is `0700`); ffmpeg / ffprobe following playlists (they refuse them). **Tried on the phone, not reproduced — change removed again:** an intent from another app (`am start … --es chat.cursus.CHAT "@1"`) starts Cursus but neither opens the chat nor clears its unread counter. **Not testable here — changes removed again:** Android lock-screen notification text, FileProvider scope, early `FLAG_SECURE`, MediaPlayer playlist check. **Not testable here — kept, costs nothing:** the musl shim is no longer looked for in shared `/tmp` (would need another local user and a missing build-time shim). |
 | 2026-11-06 | App lock (touch + keyboard lock screen, in-memory Argon2id verifier), opt-in keyring unlock, chat-list previews / blur media / auto-download / encrypt files / clean links / delivery receipts settings; settings regrouped (Privacy & security, Notifications & tray); warnings on every privacy-lowering switch |
 | 2026-11-06 | Privacy settings: hidden notification text + Protect IP (both default on, warnings when turning off); close-to-tray off by default (+ warning); password zeroized; RAM-first decrypt cache + wipe on signals / panic; lower image decode limits; link tracking params stripped |
 | 2026-11-06 | Security audit: decrypt cache no longer persisted across sessions (was kept forever); 0700/0600 data dir; command/event log redaction + rotation; decrypt retry loop fixed; link scheme allowlist; executable attachments not opened |

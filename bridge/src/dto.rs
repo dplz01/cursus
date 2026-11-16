@@ -245,6 +245,7 @@ fn file(f: &FileInfo) -> Value {
         "nonce": f.crypto_nonce,
         "progress": f.progress_fraction(),
         "error": f.error_detail,
+        "preview": f.preview,
         // The official client downloads this by itself (core rule).
         "autoReceive": f.should_auto_receive(),
     })
@@ -294,7 +295,6 @@ pub fn message(m: &ChatMessage) -> Value {
 
 fn event_name(e: &Event) -> String {
     match e {
-        Event::Raw(_) => "raw".into(),
         Event::NewChatItems(_) => "newChatItems".into(),
         Event::ChatItemsStatusesUpdated(_) => "chatItemsStatusesUpdated".into(),
         Event::ChatStarted => "chatStarted".into(),

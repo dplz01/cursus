@@ -131,9 +131,46 @@ fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () 
         }
 
         when {
+            model.selected.isNotEmpty() -> SelectionBar(model)
             chat.isRequest -> RequestBar(model, chat)
             chat.isChannel && chat.role != "owner" -> Unit // only owners post in channels
             else -> Composer(model)
+        }
+    }
+    androidx.activity.compose.BackHandler(model.selected.isNotEmpty()) { model.selected.clear() }
+}
+
+/** Selection mode (message menu → Select): count, forward, delete, cancel. */
+@Composable
+private fun SelectionBar(model: AppModel) {
+    val c = Cursus.colors
+    var confirm by remember { mutableStateOf(false) }
+    var forward by remember { mutableStateOf(false) }
+    val count = model.selected.size
+    Row(
+        Modifier.fillMaxWidth().background(c.bgSidebar).padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        IconTool(R.drawable.ic_cancel, "Cancel selection", { model.selected.clear() })
+        Text("$count selected", style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.weight(1f))
+        IconTool(R.drawable.ic_forward, "Forward", { forward = true })
+        IconTool(R.drawable.ic_trash_delete, "Delete", { confirm = true }, tint = c.danger)
+    }
+    if (confirm) {
+        ConfirmDialog(
+            title = if (count == 1) "Delete this message?" else "Delete $count messages?",
+            text = if (model.selectionIsOwn) "They are deleted for everyone in this chat (only marked deleted where Full deletion is off)."
+            else "They are removed only on this device.",
+            action = "Delete",
+            onConfirm = { confirm = false; model.deleteSelected() },
+            onDismiss = { confirm = false },
+        )
+    }
+    if (forward) {
+        chat.cursus.ui.components.CursusOverlay({ forward = false }) {
+            ForwardTargets(model) { to -> forward = false; model.forwardSelected(to) }
+            SecondaryButton("Cancel", { forward = false })
         }
     }
 }
@@ -197,6 +234,14 @@ private fun MessageList(model: AppModel, chat: Chat) {
                 is Row_.Msg -> MessageRow(model, chat, r.message, r.firstOfRun, r.lastOfRun)
             }
         }
+        // Reversed list: the last item is the top of the history.
+        if (model.hasEarlierMessages) {
+            item(key = "earlier") {
+                Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+                    SecondaryButton("Load earlier messages", { model.loadEarlierMessages() })
+                }
+            }
+        }
     }
 }
 
@@ -230,8 +275,13 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
     var whoReacted by remember { mutableStateOf<String?>(null) }
     whoReacted?.let { emoji -> ReactionMembers(model, m, emoji) { whoReacted = null } }
     val groupIncoming = chat.isGroup && !m.outgoing
+    // Selection mode: a tap anywhere on the row adds / removes the message.
+    val selecting = model.selected.isNotEmpty()
     Row(
-        Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = if (firstOfRun) 6.dp else 2.dp),
+        Modifier.fillMaxWidth()
+            .background(if (m.id in model.selected) c.accentSoft else Color.Transparent)
+            .then(if (selecting) Modifier.clickable { model.toggleSelected(m) } else Modifier)
+            .padding(start = 8.dp, end = 8.dp, top = if (firstOfRun) 6.dp else 2.dp),
         horizontalArrangement = if (m.outgoing) Arrangement.End else Arrangement.Start,
     ) {
         if (groupIncoming) {
@@ -247,7 +297,10 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
                         .then(if (c.isDark) Modifier else Modifier.shadow(1.dp, bubbleShape(m.outgoing, lastOfRun)))
                         .clip(bubbleShape(m.outgoing, lastOfRun))
                         .background(if (m.outgoing) c.bubbleOut else c.bubbleIn)
-                        .combinedClickable(onClick = {}, onLongClick = { menu = true })
+                        .combinedClickable(
+                            onClick = { if (selecting) model.toggleSelected(m) },
+                            onLongClick = { if (selecting) model.toggleSelected(m) else menu = true },
+                        )
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
                     if (groupIncoming && firstOfRun) {
@@ -345,8 +398,10 @@ private fun DeliveryGlyph(delivery: String, c: CursusColors) {
 private fun MessageBody(model: AppModel, m: Message) {
     val c = Cursus.colors
     if (m.deleted != null) {
-        Text("message deleted", style = Cursus.type.body, color = c.textMuted, fontStyle = FontStyle.Italic)
-        return
+        // Linux wording; a marked-deleted message keeps its text behind "Reveal".
+        val revealed = m.deleted == "marked" && m.id in model.revealedDeleted
+        Text(if (m.deleted == "marked") "marked deleted" else "deleted", style = Cursus.type.body, color = c.textMuted, fontStyle = FontStyle.Italic)
+        if (!revealed) return
     }
     m.groupInvitation?.let { g ->
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {

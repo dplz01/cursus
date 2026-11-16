@@ -22,6 +22,7 @@ mod methods;
 
 use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -47,6 +48,11 @@ static SESSION: Mutex<Option<Arc<Session>>> = Mutex::new(None);
 /// Core events, drained by Swift's event thread. Separate lock: waiting for
 /// an event must never hold up a command.
 static EVENTS: Mutex<Option<UnboundedReceiver<Event>>> = Mutex::new(None);
+
+/// The app's "Auto-download media" and "Protect IP address" settings
+/// (`setDownloadPolicy`); both on until the app says otherwise.
+pub(crate) static AUTO_DOWNLOAD: AtomicBool = AtomicBool::new(true);
+pub(crate) static PROTECT_IP: AtomicBool = AtomicBool::new(true);
 
 pub(crate) fn session() -> Result<Arc<Session>, String> {
     SESSION
@@ -75,12 +81,23 @@ pub(crate) fn install_session(session: Session) -> Result<Arc<Session>, String> 
     Ok(session)
 }
 
+/// Close the session, and its database with it before returning when
+/// possible, so the app can unlock again right away. The receive thread
+/// holds a reference until its one-second wait notices the events channel
+/// is gone; once ours is the last one, dropping it here stops the chat and
+/// closes the store on this thread.
 pub(crate) fn drop_session() {
+    let session = SESSION.lock().ok().and_then(|mut s| s.take());
     if let Ok(mut events) = EVENTS.lock() {
         *events = None;
     }
-    if let Ok(mut s) = SESSION.lock() {
-        *s = None;
+    if let Some(session) = session {
+        for _ in 0..40 {
+            if Arc::strong_count(&session) == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 
@@ -142,16 +159,20 @@ pub extern "C" fn cursus_next_event(timeout_ms: i32) -> *mut c_char {
     }));
     match got {
         Ok(Some(event)) => {
-            // Mirror the official clients: small images / voice / video
-            // download without a tap.
-            if let Ok(session) = session() {
-                for (file_id, _) in cursus_core::auto_receive_candidates(&event) {
-                    let s = Arc::clone(&session);
-                    runtime().spawn_blocking(move || {
-                        if let Err(e) = s.receive_file(file_id, false) {
-                            tracing::warn!(%e, file_id, "auto-receive");
-                        }
-                    });
+            // As the official clients: small images / voice / video download
+            // without a tap — when the user's settings allow it. Files on
+            // unknown servers are left for the user to approve.
+            if AUTO_DOWNLOAD.load(Ordering::Relaxed) {
+                if let Ok(session) = session() {
+                    let approved = !PROTECT_IP.load(Ordering::Relaxed);
+                    for (file_id, _) in cursus_core::auto_receive_candidates(&event) {
+                        let s = Arc::clone(&session);
+                        runtime().spawn_blocking(move || {
+                            if let Err(e) = s.receive_file(file_id, approved) {
+                                tracing::warn!(%e, file_id, "auto-receive");
+                            }
+                        });
+                    }
                 }
             }
             to_c(dto::event(&event))

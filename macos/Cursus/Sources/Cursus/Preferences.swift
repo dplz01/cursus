@@ -31,6 +31,29 @@ enum Prefs {
     static var protectIPOn: Bool { bool(protectIP, default: true) }
     static var cleanLinksOn: Bool { bool(cleanLinks, default: true) }
 
+    /// The core downloads small media by itself as it arrives: tell it the
+    /// two settings that decide whether it may ("Download media
+    /// automatically", "Protect IP address"). Call after unlocking and
+    /// whenever a setting changes.
+    static func syncDownloadPolicy() {
+        let auto = autoDownloadOn
+        let protect = protectIPOn
+        Task {
+            try? await Core.run("setDownloadPolicy", ["autoDownload": auto, "protectIp": protect])
+        }
+    }
+
+    /// Keep the core's download policy in step with the settings for as long
+    /// as the app runs (the toggles write UserDefaults directly).
+    static func watchDownloadPolicy() {
+        syncDownloadPolicy()
+        NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+        ) { _ in
+            syncDownloadPolicy()
+        }
+    }
+
     static var currentTheme: AppTheme {
         AppTheme(rawValue: defaults.string(forKey: theme) ?? "") ?? .system
     }

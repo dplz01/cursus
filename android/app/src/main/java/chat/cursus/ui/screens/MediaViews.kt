@@ -90,8 +90,24 @@ fun FileBody(model: AppModel, m: Message, f: FileInfo) {
     when {
         f.kind == "voice" -> VoiceRow(model, m, f)
         f.kind == "image" && f.state == "complete" -> ImageThumb(model, f)
-        else -> FileRow(model, m, f)
+        else -> {
+            InlinePreview(f)
+            FileRow(model, m, f)
+        }
     }
+}
+
+/** The small picture the sender embedded in a photo / video message: what
+ *  the bubble shows until the file is downloaded (as the official apps). */
+@Composable
+private fun InlinePreview(f: FileInfo) {
+    val url = f.preview ?: return
+    val bitmap = remember(url) { chat.cursus.ui.components.decodeDataUrl(url) } ?: return
+    Image(
+        bitmap, null,
+        Modifier.padding(bottom = 6.dp).widthIn(max = 296.dp).heightIn(max = 240.dp).clip(Radius.lg),
+        contentScale = ContentScale.Fit,
+    )
 }
 
 @Composable

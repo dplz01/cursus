@@ -191,14 +191,8 @@ fun AppLockScreen(model: AppModel) {
     var password by remember { mutableStateOf("") }
     var checking by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var retryAt by remember { mutableStateOf(0L) }
     val submit = submit@{
         if (checking || password.isEmpty()) return@submit
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (now < retryAt) {
-            error = "Too many attempts. Try again in ${(retryAt - now) / 1000 + 1} s."
-            return@submit
-        }
         checking = true
         scope.launch {
             val result = model.unlockApp(password)
@@ -206,7 +200,6 @@ fun AppLockScreen(model: AppModel) {
             if (result != null) {
                 val (message, wait) = result
                 password = ""
-                retryAt = android.os.SystemClock.elapsedRealtime() + wait * 1000
                 error = if (wait > 0) "$message Try again in $wait s." else message
             }
         }

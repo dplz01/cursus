@@ -245,6 +245,7 @@ final class AppModel: ObservableObject {
             }
             info = try? await Core.call("appInfo", as: AppInfo.self)
             phase = .ready
+            Prefs.syncDownloadPolicy()
             idleLock.start()
             Notifier.requestAuthorization()
             await reloadChats()

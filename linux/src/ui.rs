@@ -1,13 +1,13 @@
 use iced::font::{self, Font};
-use iced::widget::canvas::{self, Canvas, Fill, Frame, Geometry};
-use iced::widget::scrollable::{Anchor, Direction, Scrollbar};
-use iced::widget::text::{Shaping, Wrapping};
 use iced::keyboard;
 use iced::keyboard::key;
-use iced::widget::text_editor::Binding as EditorBinding;
+use iced::widget::canvas::{self, Canvas, Fill, Frame, Geometry};
+use iced::widget::scrollable::{Anchor, Direction, Scrollbar};
 use iced::widget::space::{horizontal, vertical};
-use iced::widget::{float, 
-    button, column, container, image, mouse_area, progress_bar, rich_text, row, scrollable, span,
+use iced::widget::text::{Shaping, Wrapping};
+use iced::widget::text_editor::Binding as EditorBinding;
+use iced::widget::{
+    button, column, container, float, image, mouse_area, progress_bar, rich_text, row, scrollable, span,
     text, text_editor, text_input, Column, Row, Space, Stack,
 };
 use iced::{
@@ -58,7 +58,7 @@ fn mobile_back_btn(on_press: Message, hover: bool) -> Element<'static, Message> 
     button(icons::back_tool(32.0, hover))
         .on_press(on_press)
         .padding(0)
-        .style(theme::ghost_tile(hover))
+        .style(theme::icon_action(hover))
         .into()
 }
 
@@ -252,7 +252,23 @@ pub fn shell(app: &App) -> Element<'_, Message> {
         LayoutMode::Desktop => desktop_shell(app),
         LayoutMode::Mobile => stacked_shell(app),
     };
-    let mut stack = Stack::new().width(Length::Fill).height(Length::Fill).push(base);
+    let modal = app.chat_menu().is_some()
+        || app.pending_url().is_some()
+        || app.privacy_confirm().is_some()
+        || app.pending_links_open()
+        || app.photo_menu().is_some()
+        || app.link_confirm().is_some()
+        || app.setting_info().is_some()
+        || app.message_menu().is_some()
+        || app.reaction_members().is_some()
+        || app.create_chat().is_some()
+        || app.pref_menu().is_some()
+        || app.field_editor().is_some()
+        || app.image_viewer.is_some();
+    let mut stack = Stack::new().width(Length::Fill).height(Length::Fill).push(crate::input_gate::freeze(base, modal));
+    if app.image_viewer.is_some() {
+        stack = stack.push(image_gallery(app));
+    }
     if app.chat_menu().is_some() {
         stack = stack.push(chat_menu_overlay(app));
     }
@@ -477,7 +493,9 @@ fn auth_gate(app: &App) -> Element<'_, Message> {
         && ["error", "fail", "wrong", "could not", "timed out", "keyring", "do not match", "at least", "enter a display name"]
             .iter()
             .any(|k| lower.contains(k)))
-    .then(|| text(status.to_string()).size(d.meta).color(theme::t().danger));
+    .then(|| {
+        text(status.to_string()).size(d.meta).color(theme::t().danger)
+    });
 
     // Keyring auto-unlock: a calm splash instead of a form that flashes away.
     if app.auto_unlocking() {
@@ -864,7 +882,7 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
         ))
         .on_press(Message::OpenCompose)
         .padding(0)
-        .style(theme::secondary_action(app.hover_ok()));
+        .style(theme::icon_action(app.hover_ok()));
         let pending = app.pending_links().len();
         if pending > 0 {
             row![pending_links_button(pending, app.hover_ok()), plus]
@@ -1278,6 +1296,8 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
     };
 
     let header = container(title_row)
+        .height(56)
+        .align_y(Alignment::Center)
         .width(Length::Fill)
         .style(|_| container::Style {
             background: Some(iced::Background::Color(theme::t().bg_sidebar)),
@@ -1387,6 +1407,13 @@ fn composer_key_binding(
     enter_sends: bool,
 ) -> impl Fn(iced::widget::text_editor::KeyPress) -> Option<EditorBinding<Message>> {
     move |key_press| {
+        if (key_press.modifiers.control()
+            && key_press.key.as_ref() == keyboard::Key::Character("v"))
+            || (key_press.modifiers.shift()
+                && key_press.key == keyboard::Key::Named(key::Named::Insert))
+        {
+            return Some(EditorBinding::Custom(Message::PasteComposer));
+        }
         // `:shortcode` list: Tab / Shift+Tab cycle, Enter accepts.
         if has_suggestions {
             if matches!(
@@ -1513,7 +1540,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         )
     };
 
-    let can_send = !app.composer().trim().is_empty();
+    let can_send = app.pasted_image.is_some() || !app.composer().trim().is_empty();
     let send = composer_send_hit(
         icons::send_tool(send_size, can_send, hover_ok),
         send_size,
@@ -1694,6 +1721,28 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     };
 
     // Editing wins over replying; both share one context bar.
+    let pasted_slot: Element<'_, Message> = if let Some(bytes) = &app.pasted_image {
+        row![
+            iced::widget::image(iced::widget::image::Handle::from_bytes(bytes.clone()))
+                .width(72)
+                .height(72)
+                .content_fit(ContentFit::Contain),
+            text("Image ready to send")
+                .size(d.meta)
+                .color(theme::t().text_secondary)
+                .width(Length::Fill),
+            button(icons::cancel_icon(20.0, theme::t().text_secondary))
+                .padding(8)
+                .style(theme::icon_action(app.hover_ok()))
+                .on_press(Message::DiscardComposerImage)
+        ]
+        .spacing(12)
+        .padding(12)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        Column::new().into()
+    };
     let reply_slot: Element<'_, Message> = if let Some(edit) = app.editing() {
         composer_context_bar(
             icons::edit_icon(16.0, theme::t().accent),
@@ -1735,7 +1784,8 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         None => Column::new().width(Length::Fill).into(),
     };
 
-    let body = column![voice_error_slot, suggest_slot, reply_slot, input_row]
+    let body = column![voice_error_slot, suggest_slot, reply_slot,
+        pasted_slot, input_row]
         .spacing(0)
         .width(Length::Fill);
 
@@ -2102,7 +2152,7 @@ fn message_history_shell<'a>(
             .width(hit)
             .height(hit)
             .padding(0)
-            .style(theme::secondary_action(app.hover_ok())),
+            .style(theme::icon_action(app.hover_ok())),
         )
         .width(Length::Fill)
         .height(Length::Fill)
@@ -2504,7 +2554,7 @@ fn message_bubble<'a>(
         .align_x(align)
         .push(bubble_with_sender);
 
-    // Touch: double-tap opens the menu. Mouse: right-click.
+    // Touch: long-press opens the menu. Mouse: right-click.
     let bubble_area = hover::track_msg(
         stack,
         msg.item_id,
@@ -2820,9 +2870,7 @@ fn styled_span(
     secret_revealed: bool,
 ) -> iced::widget::text::Span<'static, Message> {
     let display = match seg.style {
-        TextStyle::Secret if !secret_revealed => {
-            "•".repeat(seg.text.chars().count().max(1))
-        }
+        TextStyle::Secret if !secret_revealed => "•".repeat(seg.text.chars().count().max(1)),
         _ => seg.text.clone(),
     };
     let mut s = span(display).color(theme::t().text_primary);
@@ -3142,7 +3190,7 @@ fn format_day_label(at: &chrono::DateTime<chrono::Local>) -> String {
 }
 
 /// Format SimpleX `itemTs` (`2026-11-03T03:23:21Z`) as a local wall-clock like Telegram.
-fn format_bubble_time(iso: Option<&str>) -> Option<String> {
+pub(crate) fn format_bubble_time(iso: Option<&str>) -> Option<String> {
     let raw = iso?.trim();
     if raw.is_empty() {
         return None;
@@ -3153,11 +3201,11 @@ fn format_bubble_time(iso: Option<&str>) -> Option<String> {
         .or_else(|| {
             chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%SZ")
                 .ok()
-                .or_else(|| chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.fZ").ok())
-                .map(|ndt| {
-                    ndt.and_utc()
-                        .with_timezone(&chrono::Local)
+                .or_else(|| {
+                    chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.fZ").ok()
                 })
+                .map(|ndt| ndt.and_utc()
+                        .with_timezone(&chrono::Local))
         })?;
     // Prefer 12h like Telegram; strip a leading zero manually for portability.
     let stamped = parsed.format("%I:%M %p").to_string();
@@ -3363,7 +3411,11 @@ fn file_title_row(
         if matches!(state, FileTransferState::Complete) {
             if let Some(path) = open_path.filter(|p| p.is_file()) {
                 mouse_area(name)
-                    .on_release(Message::OpenLocalFile(path))
+                    .on_release(if is_image_file(&file.file_name) {
+                    Message::OpenImage(path)
+                } else {
+                    Message::OpenLocalFile(path)
+                })
                     .interaction(mouse::Interaction::Pointer)
                     .into()
             } else {
@@ -3403,11 +3455,9 @@ fn voice_waveform_row(
     let peaks = plain
         .as_ref()
         .and_then(|p| app.waveform_for(p))
-        .or_else(|| {
-            file.local_path
+        .or_else(|| file.local_path
                 .as_ref()
-                .and_then(|p| app.waveform_for(p))
-        })
+                .and_then(|p| app.waveform_for(p)))
         .map(|p| p.to_vec())
         .unwrap_or_else(|| vec![0.35; media::WAVEFORM_BARS]);
 
@@ -3640,12 +3690,15 @@ fn visual_media_preview(
         .width(Length::Fixed(w))
         .height(Length::Fixed(h))
         .clip(true);
-    // Single tap opens the file (or, while blurred, reveals it). Double-tap
-    // is handled by the bubble HoverArea (menu) — do not swallow it here.
+    // Images stay in the app; the outer bubble owns long-press menus.
     let tap = if blur && !is_video {
         Message::RevealMedia(msg.item_id)
     } else {
-        Message::OpenLocalFile(path)
+        if is_video {
+            Message::OpenLocalFile(path)
+        } else {
+            Message::OpenImage(path)
+        }
     };
     Some(
         mouse_area(framed)
@@ -3803,7 +3856,7 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
             button(icons::centered_hit(icons::info_icon(18.0, theme::t().text_muted), 32.0))
                 .on_press(Message::ShowSettingInfo(crate::SettingInfo::Connect))
                 .padding(0)
-                .style(theme::ghost_tile(hover)),
+                .style(theme::icon_action(hover)),
         ]
         .spacing(12)
         .align_y(Alignment::Center)
@@ -4340,10 +4393,26 @@ fn preference_row_content<'a>(
     trail: PrefTrail<'a>,
     d: Density,
 ) -> Element<'a, Message> {
-    let mut row = Row::new().spacing(14).align_y(Alignment::Center);
-    if let Some(icon) = icon {
-        row = row.push(
-            container(icons::centered_hit(icon, 18.0))
+    let support = note.map(|note| {
+        text(note)
+            .size(d.meta)
+            .color(theme::t().text_secondary)
+            .width(Length::Fill)
+            .into()
+    });
+    preference_row_with_support(icon, label, support, control, trail, d)
+}
+
+fn preference_row_with_support<'a>(
+    icon: Option<Element<'a, Message>>,
+    label: &'a str,
+    support: Option<Element<'a, Message>>,
+    control: Element<'a, Message>,
+    trail: PrefTrail<'a>,
+    d: Density,
+) -> Element<'a, Message> {
+    let icon = icon.map(|icon| {
+        container(icons::centered_hit(icon, 18.0))
                 .width(32)
                 .height(32)
                 .center_x(32)
@@ -4355,22 +4424,40 @@ fn preference_row_content<'a>(
                         ..Default::default()
                     },
                     ..Default::default()
-                }),
-        );
-    }
-    let mut label = column![text(label).size(d.body).color(theme::t().text_primary)].spacing(4);
-    if let Some(note) = note {
-        label = label.push(text(note).size(d.meta).color(theme::t().text_secondary));
-    }
-    row = row.push(label.width(Length::Fill)).push(control);
-    match trail {
-        PrefTrail::None => {}
-        PrefTrail::Reserve => row = row.push(Space::new().width(PREF_TRAIL_BOX)),
-        PrefTrail::Icon(icon) => row = row.push(icons::centered_hit(icon, PREF_TRAIL_BOX)),
-    }
-    container(row)
-        .padding(Padding::from([14, 16]))
+                })
+            .into()
+    });
+    let trail = match trail {
+        PrefTrail::None => Space::new().width(0).height(0).into(),
+        PrefTrail::Reserve => Space::new().width(PREF_TRAIL_BOX).into(),
+        PrefTrail::Icon(icon) => icons::centered_hit(icon, PREF_TRAIL_BOX),
+    };
+    crate::preference_row::PreferenceRow::row(
+        icon,
+        text(label).size(d.body).color(theme::t().text_primary)
+            .width(Length::Fill)
+            .into(),
+        support,
+        control,
+        trail,
+        d.body,
+    )
+}
+
+fn setting_support(info: crate::SettingInfo, hover: bool, d: Density) -> Element<'static, Message> {
+    button(
+        row![
+            text(setting_summary(info)).size(d.meta).color(theme::t().text_secondary)
+                .width(Length::Fill),
+            icons::info_icon(16.0, theme::t().text_muted)
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .on_press(Message::ShowSettingInfo(info))
+    .padding(0)
         .width(Length::Fill)
+    .style(theme::ghost_tile(hover))
         .into()
 }
 
@@ -4476,32 +4563,14 @@ fn info_row<'a>(
     d: Density,
     hover: bool,
 ) -> Element<'a, Message> {
-    preference_row_content(
+    preference_row_with_support(
         None,
         label,
-        Some(setting_summary(info)),
-        row![setting_info_button(info, hover, d), control]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .into(),
+        Some(setting_support(info, hover, d)),
+        control,
         PrefTrail::None,
         d,
     )
-}
-
-fn setting_info_button(
-    info: crate::SettingInfo,
-    hover: bool,
-    d: Density,
-) -> Element<'static, Message> {
-    button(icons::centered_hit(
-        icons::info_icon(16.0, theme::t().text_muted),
-        if d.list_width == 0.0 { 40.0 } else { 28.0 },
-    ))
-    .on_press(Message::ShowSettingInfo(info))
-    .padding(0)
-    .style(theme::ghost_tile(hover))
-    .into()
 }
 
 fn info_toggle<'a>(
@@ -4521,14 +4590,11 @@ fn info_toggle<'a>(
         crate::SettingInfo::KeyringUnlock => "Automatic unlock",
         _ => label,
     };
-    let content = preference_row_content(
+    let content = preference_row_with_support(
         None,
         label,
-        Some(setting_summary(info)),
-        row![setting_info_button(info, hover, d), pref_toggle(on, true)]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .into(),
+        Some(setting_support(info, hover, d)),
+        pref_toggle(on, true),
         PrefTrail::None,
         d,
     );
@@ -4981,7 +5047,10 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
                 "Theme",
                 crate::desktop::ThemePreference::ALL
                     .into_iter()
-                    .map(|t| (t.label().to_string(), t == cur, Message::SetThemePreference(t)))
+                    .map(|t| {
+                        (t.label().to_string(), t == cur, Message::SetThemePreference(t),
+                        )
+                    })
                     .collect(),
             )
         }
@@ -5028,9 +5097,7 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
                 PrefMenu::ContactChatItemTtl => app
                     .contact_profile()
                     .map(|p| TtlChoice::from_secs(p.chat_item_ttl)),
-                PrefMenu::ContactTtl => app.contact_profile().map(|p| {
-                    TtlChoice::from_secs(Some(p.timed_ttl_secs).filter(|s| *s > 0))
-                }),
+                PrefMenu::ContactTtl => app.contact_profile().map(|p| TtlChoice::from_secs(Some(p.timed_ttl_secs).filter(|s| *s > 0))),
                 _ => app.group_settings().map(|g| {
                     let secs = g
                         .group_preferences
@@ -5051,7 +5118,9 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
                     .into_iter()
                     .map(|c| {
                         let msg = match kind {
-                            PrefMenu::ContactChatItemTtl => Message::SetContactChatItemTtl(c.secs()),
+                            PrefMenu::ContactChatItemTtl => {
+                                Message::SetContactChatItemTtl(c.secs())
+                            }
                             PrefMenu::ContactTtl => Message::SetContactTimedTtl(c.secs()),
                             _ => Message::SetGroupTimedTtl(c.secs()),
                         };
@@ -5086,7 +5155,10 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
                 "Send receipts",
                 RcptChoice::OPTIONS
                     .into_iter()
-                    .map(|c| (c.label(default_on), c == cur, Message::SetGroupSendRcpts(c.to_opt())))
+                    .map(|c| {
+                        (c.label(default_on), c == cur, Message::SetGroupSendRcpts(c.to_opt()),
+                        )
+                    })
                     .collect(),
             )
         }
@@ -5751,7 +5823,7 @@ fn quick_actions(actions: Vec<(Element<'static, Message>, &'static str, Message)
             .on_press(on_press)
             .padding(Padding::from([6, 0]))
             .width(Length::Fill)
-            .style(theme::ghost_tile_r(hover, 12.0)),
+            .style(theme::icon_action(hover)),
         );
     }
     container(container(row).max_width(82.0 * count)).padding(Padding::from([0, 8])).center_x(Length::Fill).into()
@@ -5801,7 +5873,12 @@ fn profile_header_bar<'a>(
     ]
     .spacing(10)
     .align_y(Alignment::Center)
-    .padding(pad)
+    .height(56)
+    .padding(Padding {
+        top: 0.0,
+        bottom: 0.0,
+        ..pad
+    })
     .into()
 }
 
@@ -6202,7 +6279,10 @@ fn privacy_confirm_overlay(app: &App) -> Element<'_, Message> {
         ),
     };
     let mut content = column![
-        text(title).size(d.body).font(BOLD).color(theme::t().text_primary),
+        text(title)
+            .size(d.body)
+            .font(BOLD)
+            .color(theme::t().text_primary),
         text(body)
             .size(d.meta)
             .color(theme::t().text_secondary)
@@ -6211,7 +6291,12 @@ fn privacy_confirm_overlay(app: &App) -> Element<'_, Message> {
     .spacing(12)
     .max_width(420);
     let mut busy = false;
-    if let crate::PrivacyConfirm::EnableKeyringUnlock { password, checking, error } = confirm {
+    if let crate::PrivacyConfirm::EnableKeyringUnlock {
+        password,
+        checking,
+        error,
+    } = confirm
+    {
         busy = *checking;
         content = content.push(
             text_input("Database password", password.as_str())
@@ -6251,7 +6336,9 @@ fn privacy_confirm_overlay(app: &App) -> Element<'_, Message> {
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_| container::Style {
-                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.45))),
+                background: Some(iced::Background::Color(Color::from_rgba(
+                    0.0, 0.0, 0.0, 0.45,
+                ))),
                 ..container::Style::default()
             }),
     )
@@ -6342,22 +6429,38 @@ fn empty_detail<'a>(
 ) -> Element<'a, Message> {
     let mut content = column![
         icon,
-        text(title).size(d.title + 2.0).font(BOLD).color(theme::t().text_primary),
-        text(body).size(d.body).color(theme::t().text_secondary).align_x(Alignment::Center),
-    ].spacing(14).align_x(Alignment::Center);
+        text(title)
+            .size(d.title + 2.0)
+            .font(BOLD)
+            .color(theme::t().text_primary),
+        text(body)
+            .size(d.body)
+            .color(theme::t().text_secondary)
+            .align_x(Alignment::Center),
+    ]
+    .spacing(14)
+    .align_x(Alignment::Center);
     if let Some((label, message)) = action {
-        content = content.push(button(text(label).size(d.body))
-            .on_press(message).padding(Padding::from([12, 20]))
-            .style(theme::primary_action(hover)));
+        content = content.push(
+            button(text(label).size(d.body))
+                .on_press(message)
+                .padding(Padding::from([12, 20]))
+                .style(theme::primary_action(hover)),
+        );
     }
     container(container(content).max_width(360).padding(d.pad))
-        .center_x(Length::Fill).center_y(Length::Fill).into()
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
 }
 
 fn placeholder<'a>(title: &'a str, body: &'a str, d: Density) -> Element<'a, Message> {
     container(
         column![
-            text(title).size(d.title).font(BOLD).color(theme::t().text_primary),
+            text(title)
+                .size(d.title)
+                .font(BOLD)
+                .color(theme::t().text_primary),
             text(body).size(d.meta).color(theme::t().text_secondary),
         ]
         .spacing(8)
@@ -6505,7 +6608,9 @@ fn call_history_row<'a>(
         .chats()
         .iter()
         .find(|c| matches!(c.id.chat_type, ChatType::Direct) && c.id.api_id == rec.contact_id);
-    let name = chat.map(|c| c.title.clone()).unwrap_or_else(|| rec.peer_name.clone());
+    let name = chat
+        .map(|c| c.title.clone())
+        .unwrap_or_else(|| rec.peer_name.clone());
     let image = chat.and_then(|c| c.peer_profile.image.as_deref());
     let missed = rec.is_missed();
     let tint = if missed { t.danger } else { t.text_muted };
@@ -6519,7 +6624,10 @@ fn call_history_row<'a>(
                 .color(if missed { t.danger } else { t.text_primary }),
             row![
                 icons::phone_icon(12.0, tint),
-                text(call_record_label(rec)).size(d.meta).wrapping(Wrapping::None).color(tint),
+                text(call_record_label(rec))
+                    .size(d.meta)
+                    .wrapping(Wrapping::None)
+                    .color(tint),
             ]
             .spacing(5)
             .align_y(Alignment::Center),
@@ -6530,9 +6638,15 @@ fn call_history_row<'a>(
     ]
     .spacing(10)
     .align_y(Alignment::Center);
-    let open = mouse_area(container(info).width(Length::Fill).padding(Padding::from([6, 4])))
-        .on_release(Message::Call(crate::call_flow::CallMsg::OpenChat(rec.contact_id)))
-        .interaction(mouse::Interaction::Pointer);
+    let open = mouse_area(
+        container(info)
+            .width(Length::Fill)
+            .padding(Padding::from([6, 4])),
+    )
+    .on_release(Message::Call(crate::call_flow::CallMsg::OpenChat(
+        rec.contact_id,
+    )))
+    .interaction(mouse::Interaction::Pointer);
     row![
         container(open).width(Length::Fill).clip(true),
         round_header_icon_btn(
@@ -6558,8 +6672,12 @@ fn calls_detail(app: &App) -> Element<'_, Message> {
             .into();
     }
     empty_detail(
-        icons::nav_icon(NavIcon::Calls, false, 36.0), "Stay in touch",
-        "Choose a contact to start an encrypted audio call.", None, d, app.hover_ok(),
+        icons::nav_icon(NavIcon::Calls, false, 36.0),
+        "Stay in touch",
+        "Choose a contact to start an encrypted audio call.",
+        None,
+        d,
+        app.hover_ok(),
     )
 }
 
@@ -6579,32 +6697,64 @@ fn call_card(app: &App, large: bool) -> Option<Element<'_, Message>> {
                 cursus_core::CallMedia::Video => "Incoming video call (audio only)",
             };
             let actions = row![
-                call_button("Decline", icons::phone_icon(18.0, t.text_primary), Message::RejectIncomingCall, theme::danger_action(hover)),
-                call_button("Accept", icons::phone_icon(18.0, t.accent_on), Message::AcceptIncomingCall, theme::primary_action(hover)),
+                call_button(
+                    "Decline",
+                    icons::phone_icon(18.0, t.text_primary),
+                    Message::RejectIncomingCall,
+                    theme::danger_action(hover)
+                ),
+                call_button(
+                    "Accept",
+                    icons::phone_icon(18.0, t.accent_on),
+                    Message::AcceptIncomingCall,
+                    theme::primary_action(hover)
+                ),
             ]
             .spacing(12)
             .into();
-            (inv.contact_id, inv.peer_name.clone(), kind.to_string(), actions)
+            (
+                inv.contact_id,
+                inv.peer_name.clone(),
+                kind.to_string(),
+                actions,
+            )
         } else {
             let call = app.active_call()?;
             let state = match call.phase {
                 CallPhase::Ringing => "Calling…".to_string(),
                 CallPhase::Connecting => "Connecting…".to_string(),
                 CallPhase::Connected => {
-                    let secs = call.connected_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                    let secs = call
+                        .connected_at
+                        .map(|t| t.elapsed().as_secs())
+                        .unwrap_or(0);
                     let clock = if secs >= 3600 {
                         format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
                     } else {
                         format!("{:02}:{:02}", secs / 60, secs % 60)
                     };
-                    if call.muted { format!("{clock} · muted") } else { clock }
+                    if call.muted {
+                        format!("{clock} · muted")
+                    } else {
+                        clock
+                    }
                 }
             };
             let mute_label = if call.muted { "Unmute" } else { "Mute" };
             let mute_tint = if call.muted { t.danger } else { t.text_primary };
             let actions = row![
-                call_button(mute_label, icons::mic_icon(18.0, mute_tint), Message::Call(crate::call_flow::CallMsg::ToggleMute), theme::secondary_action(hover)),
-                call_button("End", icons::phone_icon(18.0, t.text_primary), Message::EndActiveCall, theme::danger_action(hover)),
+                call_button(
+                    mute_label,
+                    icons::mic_icon(18.0, mute_tint),
+                    Message::Call(crate::call_flow::CallMsg::ToggleMute),
+                    theme::secondary_action(hover)
+                ),
+                call_button(
+                    "End",
+                    icons::phone_icon(18.0, t.text_primary),
+                    Message::EndActiveCall,
+                    theme::danger_action(hover)
+                ),
             ]
             .spacing(12)
             .into();
@@ -6614,12 +6764,19 @@ fn call_card(app: &App, large: bool) -> Option<Element<'_, Message>> {
     let image = app
         .chats()
         .iter()
-        .find(|c| matches!(c.id.chat_type, cursus_core::ChatType::Direct) && c.id.api_id == contact_id)
+        .find(|c| {
+            matches!(c.id.chat_type, cursus_core::ChatType::Direct) && c.id.api_id == contact_id
+        })
         .and_then(|c| c.peer_profile.image.clone());
     let avatar_size = if large { 112.0 } else { 44.0 };
     let avatar = profile_avatar(image.as_deref(), &name, avatar_size);
-    let name_text = text(name).size(if large { d.title } else { d.body }).font(BOLD).color(t.text_primary);
-    let state_text = text(state).size(if large { d.body } else { d.meta }).color(t.text_secondary);
+    let name_text = text(name)
+        .size(if large { d.title } else { d.body })
+        .font(BOLD)
+        .color(t.text_primary);
+    let state_text = text(state)
+        .size(if large { d.body } else { d.meta })
+        .color(t.text_secondary);
 
     if large {
         return Some(
@@ -6666,11 +6823,15 @@ fn call_button<'a>(
     on_press: Message,
     style: impl Fn(&iced::Theme, button::Status) -> button::Style + 'a,
 ) -> Element<'a, Message> {
-    button(row![icon, text(label).size(14)].spacing(8).align_y(Alignment::Center))
-        .on_press(on_press)
-        .padding(Padding::from([10, 16]))
-        .style(style)
-        .into()
+    button(
+        row![icon, text(label).size(14)]
+            .spacing(8)
+            .align_y(Alignment::Center),
+    )
+    .on_press(on_press)
+    .padding(Padding::from([10, 16]))
+    .style(style)
+    .into()
 }
 
 /// Image-pen (set) + cancel/X (clear) for own / group / channel profile photos.
@@ -6698,24 +6859,51 @@ fn photo_menu_overlay(app: &App, target: crate::PhotoTarget) -> Element<'_, Mess
             Message::ClearGroupProfileImage,
         ),
     };
-    let item = |icon: Element<'static, Message>, label: &'static str, msg: Message, danger: bool| {
-        let fg = if danger { theme::t().danger } else { theme::t().text_primary };
-        button(row![icon, text(label).size(d.body).color(fg)].spacing(12).align_y(Alignment::Center))
+    let item =
+        |icon: Element<'static, Message>, label: &'static str, msg: Message, danger: bool| {
+            let fg = if danger {
+                theme::t().danger
+            } else {
+                theme::t().text_primary
+            };
+            button(
+                row![icon, text(label).size(d.body).color(fg)]
+                    .spacing(12)
+                    .align_y(Alignment::Center),
+            )
             .on_press(msg)
             .padding(Padding::from([10, 12]))
             .width(Length::Fill)
             .style(theme::menu_item(hover))
-    };
+        };
     let mut col = column![
-        text("Profile picture").size(d.body).font(BOLD).color(theme::t().text_primary),
-        item(icons::image_pen_icon(18.0, theme::t().accent), "Change picture", pick, false),
+        text("Profile picture")
+            .size(d.body)
+            .font(BOLD)
+            .color(theme::t().text_primary),
+        item(
+            icons::image_pen_icon(18.0, theme::t().accent),
+            "Change picture",
+            pick,
+            false
+        ),
     ]
     .spacing(4)
     .max_width(360);
     if has_image {
-        col = col.push(item(icons::trash_icon(18.0, theme::t().danger), "Remove picture", clear, true));
+        col = col.push(item(
+            icons::trash_icon(18.0, theme::t().danger),
+            "Remove picture",
+            clear,
+            true,
+        ));
     }
-    col = col.push(item(icons::cancel_icon(18.0, theme::t().text_secondary), "Cancel", Message::ClosePhotoMenu, false));
+    col = col.push(item(
+        icons::cancel_icon(18.0, theme::t().text_secondary),
+        "Cancel",
+        Message::ClosePhotoMenu,
+        false,
+    ));
     sheet_overlay(menu_card(col.into(), d), Message::ClosePhotoMenu)
 }
 
@@ -6765,10 +6953,7 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
         } else {
             Padding::from([d.pad_tight, 0.0])
         };
-        row![leading]
-            .align_y(Alignment::Center)
-            .padding(pad)
-            .into()
+        row![leading].align_y(Alignment::Center).padding(pad).into()
     } else {
         profile_header_bar(leading, horizontal().width(0).into(), d, with_back)
     };
@@ -6781,10 +6966,7 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
             group_members_list(g, d, hover, !can_edit_group_profile(&g.my_role))
         }
         GroupSettingsPane::ConfirmLeave => column![
-            icons::centered_hit(
-                icons::leave_icon(28.0, theme::t().text_secondary),
-                48.0,
-            ),
+            icons::centered_hit(icons::leave_icon(28.0, theme::t().text_secondary), 48.0,),
             text(if g.is_channel {
                 "Leave this channel? You will need a new invite to rejoin."
             } else {
@@ -6817,10 +6999,7 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
         .align_x(Alignment::Center)
         .into(),
         GroupSettingsPane::ConfirmDelete => column![
-            icons::centered_hit(
-                icons::trash_icon(28.0, theme::t().danger),
-                48.0,
-            ),
+            icons::centered_hit(icons::trash_icon(28.0, theme::t().danger), 48.0,),
             text(if g.is_channel {
                 "Delete this channel for yourself? This cannot be undone."
             } else {
@@ -6853,36 +7032,31 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
         .align_x(Alignment::Center)
         .into(),
         GroupSettingsPane::Overview => {
-            let narrow = matches!(app.layout(), LayoutMode::Mobile)
-                || app.window_width() < 720.0;
+            let narrow = matches!(app.layout(), LayoutMode::Mobile) || app.window_width() < 720.0;
             let support_unread = app
                 .chats()
                 .iter()
-                .find(|c| c.id.chat_type == cursus_core::ChatType::Group && c.id.api_id == g.group_id)
+                .find(|c| {
+                    c.id.chat_type == cursus_core::ChatType::Group && c.id.api_id == g.group_id
+                })
                 .map(|c| app.support_badge_count(c))
                 .unwrap_or(0);
             group_overview_pane(g, d, hover, narrow, support_unread)
         }
     };
 
-    let page: Element<'_, Message> = column![
-        header,
-        page_scroll(body, d),
-    ]
-    .height(Length::Fill)
-    .into();
+    let page: Element<'_, Message> = column![header, page_scroll(body, d),]
+        .height(Length::Fill)
+        .into();
 
+    let mut layers = Stack::new()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .push(crate::input_gate::freeze(page, g.member_dropdown.is_some()));
     if g.member_dropdown.is_some() && g.selected_member_id.is_some() {
-        iced::widget::opaque(
-            Stack::new()
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .push(page)
-                .push(member_dropdown_overlay(g, d, hover)),
-        )
-    } else {
-        page
+        layers = layers.push(member_dropdown_overlay(g, d, hover));
     }
+    iced::widget::opaque(layers)
 }
 
 fn member_dropdown_overlay(
@@ -7133,7 +7307,14 @@ fn group_overview_pane(
     let mut profile = Column::new().spacing(6).width(Length::Fill);
     {
         let name: Element<'_, Message> = if owner {
-            editable_line(&g.name, "Name", LineStyle::Name, crate::EditField::GroupName, d, hover)
+            editable_line(
+                &g.name,
+                "Name",
+                LineStyle::Name,
+                crate::EditField::GroupName,
+                d,
+                hover,
+            )
         } else {
             profile_name_text(g.name.clone(), d)
         };
@@ -7191,7 +7372,11 @@ fn group_overview_pane(
                     if g.muted { "Muted" } else { "Mute" },
                     Message::GroupSettingsMute,
                 ),
-                (icons::settings_tool(PROFILE_HEADER_ICON, hover), "Settings", Message::OpenGroupPreferences),
+                (
+                    icons::settings_tool(PROFILE_HEADER_ICON, hover),
+                    "Settings",
+                    Message::OpenGroupPreferences,
+                ),
             ],
             d,
             hover,
@@ -7214,7 +7399,11 @@ fn group_overview_pane(
     let mut people = Column::new().spacing(0).width(Length::Fill);
     if owner {
         // Same row as "Chats with members" / "Invite"; opens the editor.
-        let preview = g.welcome_message.split_whitespace().collect::<Vec<_>>().join(" ");
+        let preview = g
+            .welcome_message
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         let sub = if preview.is_empty() {
             String::new()
         } else {
@@ -7287,7 +7476,11 @@ fn group_overview_pane(
         members = members.push(card_title(
             icons::user_group_icon(18.0, theme::t().accent),
             "Members",
-            if count == 1 { "1 member".to_string() } else { format!("{count} members") },
+            if count == 1 {
+                "1 member".to_string()
+            } else {
+                format!("{count} members")
+            },
             d,
         ));
         members = members.push(group_members_list(g, d, hover, false));
@@ -7363,7 +7556,10 @@ fn nav_row_styled<'a>(
         labels = labels.push(if flush {
             crate::ellipsis::ellipsis_text(sub, d.meta, theme::t().text_secondary, 1)
         } else {
-            text(sub).size(d.meta).color(theme::t().text_secondary).into()
+            text(sub)
+                .size(d.meta)
+                .color(theme::t().text_secondary)
+                .into()
         });
     }
     let _ = flush;
@@ -7385,7 +7581,12 @@ fn nav_row_styled<'a>(
 
 /// Every row of a page — navigation, preference, action — has the same
 /// inset, icon box and gap, so labels line up down the whole page.
-const ROW_PAD: Padding = Padding { top: 10.0, right: 12.0, bottom: 10.0, left: 12.0 };
+const ROW_PAD: Padding = Padding {
+    top: 10.0,
+    right: 12.0,
+    bottom: 10.0,
+    left: 12.0,
+};
 const ROW_ICON_BOX: f32 = 24.0;
 const ROW_GAP: f32 = 14.0;
 const ROW_RADIUS: f32 = 12.0;
@@ -7418,11 +7619,7 @@ fn group_members_list<'a>(
     let admin = can_manage_members(&g.my_role);
     let mut col = Column::new().spacing(0).width(Length::Fill);
     if g.members_loading {
-        col = col.push(
-            text("Loading…")
-                .size(d.meta)
-                .color(theme::t().text_muted),
-        );
+        col = col.push(text("Loading…").size(d.meta).color(theme::t().text_muted));
     } else if g.members.is_empty() {
         col = col.push(
             text("No members listed.")
@@ -7456,13 +7653,22 @@ fn group_members_list<'a>(
             };
             let mut names = Column::new().spacing(1).width(Length::Fill).push(name_line);
             if let Some(bio) = m.short_descr.as_ref() {
-                names = names.push(ellipsis_text(bio.clone(), d.meta, theme::t().text_secondary, 1));
+                names = names.push(ellipsis_text(
+                    bio.clone(),
+                    d.meta,
+                    theme::t().text_secondary,
+                    1,
+                ));
             }
             let leading = Row::new()
                 .spacing(10)
                 .align_y(Alignment::Center)
                 .width(Length::Fill)
-                .push(profile_avatar(m.image.as_deref(), &m.public_name, MEMBER_AVATAR))
+                .push(profile_avatar(
+                    m.image.as_deref(),
+                    &m.public_name,
+                    MEMBER_AVATAR,
+                ))
                 .push(names);
             let mut actions = Row::new().spacing(4).align_y(Alignment::Center);
             if m.is_me {
@@ -7502,7 +7708,6 @@ fn group_members_list<'a>(
         col = col.push(list);
     }
     col.into()
-
 }
 
 /// Profile size of the avatar in every profile header.
@@ -7512,7 +7717,8 @@ const PROFILE_AVATAR: f32 = 96.0;
 fn profile_name_text<'a>(name: String, d: Density) -> Element<'a, Message> {
     container(
         txt(name)
-            .size(d.title + 4.0).font(BOLD)
+            .size(d.title + 4.0)
+            .font(BOLD)
             .color(theme::t().text_primary)
             .align_x(Alignment::Center)
             .wrapping(Wrapping::WordOrGlyph),
@@ -7544,7 +7750,11 @@ fn editable_line<'a>(
     hover: bool,
 ) -> Element<'a, Message> {
     let empty = value.trim().is_empty();
-    let shown = if empty { placeholder.to_string() } else { value.to_string() };
+    let shown = if empty {
+        placeholder.to_string()
+    } else {
+        value.to_string()
+    };
     let (size, color) = match style {
         LineStyle::Name => (d.title + 4.0, theme::t().text_primary),
         LineStyle::Sub => (d.body, theme::t().text_secondary),
@@ -7560,14 +7770,25 @@ fn editable_line<'a>(
     let pencil = button(icons::edit_icon(16.0, theme::t().text_muted))
         .on_press(Message::OpenFieldEditor(field))
         .padding(6)
-        .style(theme::ghost_tile(hover));
+        .style(theme::icon_action(hover));
     let line = crate::trail_row::trail_row(label, pencil, 4.0);
     match style {
         // Paragraphs start at the row inset, under their section label.
-        LineStyle::Body => container(line).padding(Padding::from([0, 12])).width(Length::Fill).into(),
+        LineStyle::Body => container(line)
+            .padding(Padding::from([0, 12]))
+            .width(Length::Fill)
+            .into(),
         // Header lines are centred under the picture. The pencil sits to the
         // right of the text, so the same space is left free on the left.
-        _ => container(line).padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 28.0 }).center_x(Length::Fill).into(),
+        _ => container(line)
+            .padding(Padding {
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: 28.0,
+            })
+            .center_x(Length::Fill)
+            .into(),
     }
 }
 
@@ -7576,10 +7797,18 @@ fn field_editor_meta(field: crate::EditField) -> (&'static str, &'static str, &'
     match field {
         F::OwnName => ("Display name", "How your contacts see you.", "Your name"),
         F::OwnBio => ("Bio", "A short line under your name.", "Bio"),
-        F::OwnDescription => ("Description", "Shown on your profile.", "Tell people about yourself"),
+        F::OwnDescription => (
+            "Description",
+            "Shown on your profile.",
+            "Tell people about yourself",
+        ),
         F::GroupName => ("Name", "Every member sees this name.", "Name"),
         F::GroupAlias | F::ContactAlias => ("Local name", "Only you see this name.", "Local name"),
-        F::GroupShortDescr => ("Short description", "Shown under the name.", "Short description"),
+        F::GroupShortDescr => (
+            "Short description",
+            "Shown under the name.",
+            "Short description",
+        ),
         F::GroupWelcome => (
             "Welcome message",
             "Sent to every new member when they join.",
@@ -7601,14 +7830,17 @@ fn field_editor_overlay(app: &App) -> Element<'_, Message> {
     let cancel = button(icons::cancel_icon(16.0, theme::t().text_secondary))
         .on_press(Message::FieldEditorCancel)
         .padding(10)
-        .style(theme::ghost_tile(hover));
+        .style(theme::icon_action(hover));
     let save = button(icons::check_icon(18.0, theme::t().accent_on))
         .on_press(Message::FieldEditorSave)
         .padding(9)
         .style(theme::primary_action(hover));
     let header = row![
         column![
-            text(title).size(d.body + 1.0).font(BOLD).color(theme::t().text_primary),
+            text(title)
+                .size(d.body + 1.0)
+                .font(BOLD)
+                .color(theme::t().text_primary),
             text(hint).size(d.meta).color(theme::t().text_secondary),
         ]
         .spacing(2)
@@ -7676,7 +7908,9 @@ fn field_editor_overlay(app: &App) -> Element<'_, Message> {
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_| container::Style {
-                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.45))),
+                background: Some(iced::Background::Color(Color::from_rgba(
+                    0.0, 0.0, 0.0, 0.45,
+                ))),
                 ..container::Style::default()
             }),
     )
@@ -7690,7 +7924,11 @@ fn field_editor_overlay(app: &App) -> Element<'_, Message> {
         .height(Length::Fill)
         .center_x(Length::Fill)
         .padding(Padding::from([if narrow { 48 } else { 24 }, 16]));
-    let sheet = if narrow { sheet.align_y(Alignment::Start) } else { sheet.center_y(Length::Fill) };
+    let sheet = if narrow {
+        sheet.align_y(Alignment::Start)
+    } else {
+        sheet.center_y(Length::Fill)
+    };
     iced::widget::opaque(
         Stack::new()
             .width(Length::Fill)
@@ -7709,7 +7947,11 @@ fn profile_identity<'a>(
     lines: Vec<Element<'a, Message>>,
 ) -> Element<'a, Message> {
     // Centred hero: picture, then name and the lines under it.
-    let mut hero = Column::new().spacing(6).align_x(Alignment::Center).width(Length::Fill).push(avatar);
+    let mut hero = Column::new()
+        .spacing(6)
+        .align_x(Alignment::Center)
+        .width(Length::Fill)
+        .push(avatar);
     if let Some(photo) = photo {
         hero = hero.push(photo);
     }
@@ -7717,7 +7959,10 @@ fn profile_identity<'a>(
     for line in lines {
         hero = hero.push(line);
     }
-    container(hero).width(Length::Fill).padding(Padding::from([8, 12])).into()
+    container(hero)
+        .width(Length::Fill)
+        .padding(Padding::from([8, 12]))
+        .into()
 }
 
 fn action_tile_row(
@@ -7750,7 +7995,13 @@ fn contact_feature_pick_row<'a>(
     peer: FeatureAllow,
     d: Density,
 ) -> Element<'a, Message> {
-    pref_row(Some(icon), label, picker, PrefTrail::Icon(peer_allow_icon(peer)), d)
+    pref_row(
+        Some(icon),
+        label,
+        picker,
+        PrefTrail::Icon(peer_allow_icon(peer)),
+        d,
+    )
 }
 
 fn contact_feature_prefs(
@@ -7852,11 +8103,7 @@ fn contact_feature_prefs(
     col.into()
 }
 
-fn contact_danger_actions(
-    d: Density,
-    hover: bool,
-    narrow: bool,
-) -> Element<'static, Message> {
+fn contact_danger_actions(d: Density, hover: bool, narrow: bool) -> Element<'static, Message> {
     action_tile_row(
         vec![
             group_action_tile(
@@ -7929,10 +8176,7 @@ fn group_danger_actions(
         narrow,
         true,
     ));
-    action_tile_row(
-        tiles,
-        narrow,
-    )
+    action_tile_row(tiles, narrow)
 }
 
 fn group_action_tile<'a>(
@@ -7946,11 +8190,18 @@ fn group_action_tile<'a>(
 ) -> iced::widget::Button<'a, Message> {
     // The same row as navigation rows; destructive ones in red.
     let _ = narrow;
-    let label_color = if danger { theme::t().danger } else { theme::t().text_primary };
+    let label_color = if danger {
+        theme::t().danger
+    } else {
+        theme::t().text_primary
+    };
     button(
         row![
             icon_disc(icon, ROW_ICON_BOX),
-            text(label).size(d.body).color(label_color).width(Length::Fill),
+            text(label)
+                .size(d.body)
+                .color(label_color)
+                .width(Length::Fill),
         ]
         .spacing(ROW_GAP)
         .align_y(Alignment::Center),
@@ -7990,7 +8241,9 @@ fn link_copy_box<'a>(
 fn role_chip<'a>(role: &str, d: Density) -> Element<'a, Message> {
     row![
         icons::role_icon(&role.to_ascii_lowercase(), 16.0, theme::t().text_secondary),
-        text(role_label(role)).size(d.meta).color(theme::t().text_primary),
+        text(role_label(role))
+            .size(d.meta)
+            .color(theme::t().text_primary),
     ]
     .spacing(6)
     .align_y(Alignment::Center)
@@ -8012,7 +8265,10 @@ fn channel_link_section<'a>(
         d,
     ));
     if let Some(link) = g.link.as_ref() {
-        col = col.push(container(link_copy_box(link, Message::CopyGroupLink, d, hover)).padding(Padding::from([4, 8])));
+        col = col.push(
+            container(link_copy_box(link, Message::CopyGroupLink, d, hover))
+                .padding(Padding::from([4, 8])),
+        );
     } else {
         col = col.push(pref_note(
             if admin {
@@ -8042,7 +8298,10 @@ fn button_card<'a>(body: impl Into<Element<'a, Message>>) -> Element<'a, Message
     card_padded(body, Padding::ZERO)
 }
 
-fn card_padded<'a>(body: impl Into<Element<'a, Message>>, padding: Padding) -> Element<'a, Message> {
+fn card_padded<'a>(
+    body: impl Into<Element<'a, Message>>,
+    padding: Padding,
+) -> Element<'a, Message> {
     let _ = padding;
     container(body).width(Length::Fill).into()
 }
@@ -8055,7 +8314,12 @@ fn card_title<'a>(
     d: Density,
 ) -> Element<'a, Message> {
     container(text(title).size(d.meta).font(BOLD).color(theme::t().accent))
-        .padding(Padding { top: 0.0, right: 12.0, bottom: 4.0, left: 12.0 })
+        .padding(Padding {
+            top: 0.0,
+            right: 12.0,
+            bottom: 4.0,
+            left: 12.0,
+        })
         .width(Length::Fill)
         .into()
 }
@@ -8220,7 +8484,11 @@ fn group_add_member_pane<'a>(
             }
             list = list.push(
                 row![
-                    profile_avatar(chat.peer_profile.image.as_deref(), &chat.title, MEMBER_AVATAR),
+                    profile_avatar(
+                        chat.peer_profile.image.as_deref(),
+                        &chat.title,
+                        MEMBER_AVATAR
+                    ),
                     names,
                     composer_hit(
                         icons::user_plus_tool(PROFILE_HEADER_ICON, hover),
@@ -8277,11 +8545,7 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
             .color(theme::t().text_secondary),
     );
     if s.members_loading {
-        body = body.push(
-            text("Loading…")
-                .size(d.meta)
-                .color(theme::t().text_muted),
-        );
+        body = body.push(text("Loading…").size(d.meta).color(theme::t().text_muted));
     } else if s.members.is_empty() {
         body = body.push(
             text("No pending members or support chats.")
@@ -8299,7 +8563,11 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
             let title = m.display_name.clone();
             let pending = member_status_is_pending(&m.status);
             let mut name = Row::new().spacing(6).align_y(Alignment::Center);
-            name = name.push(profile_avatar(m.image.as_deref(), &m.public_name, MEMBER_AVATAR));
+            name = name.push(profile_avatar(
+                m.image.as_deref(),
+                &m.public_name,
+                MEMBER_AVATAR,
+            ));
             let label = ellipsis_text(m.display_name.clone(), d.body, theme::t().text_primary, 1);
             name = name.push(
                 container(if pending {
@@ -8379,12 +8647,9 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
         }
     }
 
-    column![
-        header,
-        page_scroll(body, d),
-    ]
-    .height(Length::Fill)
-    .into()
+    column![header, page_scroll(body, d),]
+        .height(Length::Fill)
+        .into()
 }
 
 fn group_preferences_pane<'a>(
@@ -8660,7 +8925,8 @@ fn group_member_info_pane(
     let mut col = Column::new().spacing(10).width(Length::Fill);
     col = col.push(
         text(m.display_name.clone())
-            .size(d.title).font(BOLD)
+            .size(d.title)
+            .font(BOLD)
             .color(theme::t().text_primary),
     );
     col = col.push(
@@ -8828,21 +9094,17 @@ fn create_chat_overlay(app: &App) -> Element<'_, Message> {
     };
     let card = menu_card(
         column![
-            text(title)
-                .size(d.body)
-                .color(theme::t().text_primary),
-            text(hint)
-                .size(d.meta)
-                .color(theme::t().text_secondary),
+            text(title).size(d.body).color(theme::t().text_primary),
+            text(hint).size(d.meta).color(theme::t().text_secondary),
             crate::edit_menu::edit_field(
                 text_input(placeholder_name, &draft.name)
-                .id("edit-field-CreateChatNameChanged")
-                .on_input(Message::CreateChatNameChanged)
-                .on_submit(Message::ConfirmCreateChat)
-                .padding(d.composer)
-                .size(d.body)
-                .width(Length::Fill)
-                .style(theme::composer_input()),
+                    .id("edit-field-CreateChatNameChanged")
+                    .on_input(Message::CreateChatNameChanged)
+                    .on_submit(Message::ConfirmCreateChat)
+                    .padding(d.composer)
+                    .size(d.body)
+                    .width(Length::Fill)
+                    .style(theme::composer_input()),
                 iced::widget::Id::new("edit-field-CreateChatNameChanged"),
                 &draft.name,
                 Message::CreateChatNameChanged,
@@ -8892,7 +9154,6 @@ fn create_chat_overlay(app: &App) -> Element<'_, Message> {
             .push(sheet),
     )
 }
-
 
 #[cfg(test)]
 mod stamp_tests {
@@ -8946,8 +9207,11 @@ mod stamp_tests {
 
     fn layout(r: &iced::Renderer, mut el: Element<'static, Message>, max_w: f32) -> Node {
         let mut tree = Tree::new(&el);
-        el.as_widget_mut()
-            .layout(&mut tree, r, &Limits::new(Size::ZERO, Size::new(max_w, 10_000.0)))
+        el.as_widget_mut().layout(
+            &mut tree,
+            r,
+            &Limits::new(Size::ZERO, Size::new(max_w, 10_000.0)),
+        )
     }
 
     fn body(msg: &ChatMessage, d: Density) -> Element<'static, Message> {
@@ -8972,7 +9236,11 @@ mod stamp_tests {
         "precipitevolissimevolmente😂😂😂",
         "a",
     ];
-    const TIMES: &[&str] = &["2026-11-07T12:44:00Z", "2026-11-07T01:23:00Z", "2026-11-07T23:59:00Z"];
+    const TIMES: &[&str] = &[
+        "2026-11-07T12:44:00Z",
+        "2026-11-07T01:23:00Z",
+        "2026-11-07T23:59:00Z",
+    ];
 
     fn densities() -> Vec<Density> {
         vec![
@@ -8989,7 +9257,9 @@ mod stamp_tests {
         let r = renderer();
         for d in densities() {
             for &at in TIMES {
-                for (outgoing, edited) in [(false, false), (true, false), (false, true), (true, true)] {
+                for (outgoing, edited) in
+                    [(false, false), (true, false), (false, true), (true, true)]
+                {
                     let msg = message("x", outgoing, edited, at);
                     // Without the leading breakable space (that's the gap).
                     let reserved = stamp_reserve(&msg).trim_start_matches(' ').to_string();
@@ -9023,7 +9293,8 @@ mod stamp_tests {
                         let msg = message(text, outgoing, outgoing, at);
                         let mut w = 90.0;
                         while w <= 460.0 {
-                            let node = layout(&r, bubble_content_with_time(body(&msg, d), &msg, d), w);
+                            let node =
+                                layout(&r, bubble_content_with_time(body(&msg, d), &msg, d), w);
                             let outer = node.bounds();
                             assert!(
                                 outer.width <= w + 0.5,
@@ -9041,7 +9312,10 @@ mod stamp_tests {
                                     && stamp.y >= outer.y - 0.5,
                                 "{text:?} at {w}: stamp {stamp:?} outside {outer:?}"
                             );
-                            assert_eq!(text_box.height, outer.height, "{text:?}: stamp must not grow the body");
+                            assert_eq!(
+                                text_box.height, outer.height,
+                                "{text:?}: stamp must not grow the body"
+                            );
                             w += 9.0;
                         }
                     }
@@ -9073,8 +9347,19 @@ mod stamp_tests {
             let mut kids = l.children();
             let quote_box = kids.next().unwrap().bounds();
             let stamped = kids.next().unwrap();
-            let stamp = stamped.children().nth(1).unwrap().children().next().unwrap().bounds();
-            assert_eq!(node.bounds().width, quote_box.width, "{text:?}: the quote sets the width");
+            let stamp = stamped
+                .children()
+                .nth(1)
+                .unwrap()
+                .children()
+                .next()
+                .unwrap()
+                .bounds();
+            assert_eq!(
+                node.bounds().width,
+                quote_box.width,
+                "{text:?}: the quote sets the width"
+            );
             assert!(
                 (stamp.x + stamp.width - quote_box.width).abs() < 0.5,
                 "{text:?}: stamp ends at {} but the bubble at {}",
@@ -9082,14 +9367,23 @@ mod stamp_tests {
                 quote_box.width
             );
         }
-        let long = message("A much longer answer than the quoted line above, so it wraps", true, false, TIMES[1]);
+        let long = message(
+            "A much longer answer than the quoted line above, so it wraps",
+            true,
+            false,
+            TIMES[1],
+        );
         let bubble = crate::bubble_body::BubbleBody::new(4.0)
             .push(quote_preview(&quote, d))
             .stretch_last(true)
             .push(bubble_content_with_time(body(&long, d), &long, d));
         let node = layout(&r, bubble.into(), 360.0);
         let stamped = Layout::new(&node).children().nth(1).unwrap().bounds();
-        assert_eq!(stamped.width, node.bounds().width, "the long reply sets the width");
+        assert_eq!(
+            stamped.width,
+            node.bounds().width,
+            "the long reply sets the width"
+        );
         assert!(node.bounds().width <= 360.0);
     }
 
@@ -9101,12 +9395,16 @@ mod stamp_tests {
         for text in ["Nono 🥰", "Nono", "Dopo ci sentiamo 🥰"] {
             let msg = message(text, false, false, TIMES[0]);
             let with = layout(&r, body(&msg, d), 300.0).size().height;
-            let without = layout(&r, plain_text_body(&msg.text, d, None), 300.0).size().height;
+            let without = layout(&r, plain_text_body(&msg.text, d, None), 300.0)
+                .size()
+                .height;
             assert_eq!(with, without, "{text:?}");
         }
         let big = message("😝😝😝", false, false, TIMES[0]);
         let with = layout(&r, body(&big, d), 300.0).size().height;
-        let without = layout(&r, emoji_message_text(&big.text, None), 300.0).size().height;
+        let without = layout(&r, emoji_message_text(&big.text, None), 300.0)
+            .size()
+            .height;
         assert_eq!(with, without, "big emoji line keeps its height");
     }
 }
@@ -9225,11 +9523,15 @@ mod wave_layout_tests {
     }
 }
 
-
 /// Gold square beside "+" with the number of unused one-time links; opens
 /// their list.
 fn pending_links_button<'a>(count: usize, hover: bool) -> Element<'a, Message> {
-    attention_button(icons::link_icon(20.0, theme::on_attention()), count as i64, Message::OpenPendingLinks, hover)
+    attention_button(
+        icons::link_icon(20.0, theme::on_attention()),
+        count as i64,
+        Message::OpenPendingLinks,
+        hover,
+    )
 }
 
 /// Yellow "needs attention" square (same box as "+") with a round count
@@ -9264,38 +9566,78 @@ fn attention_button<'a>(
 
 /// Round accent count (a pill past 9), no border.
 fn count_badge<'a>(count: i64) -> Element<'a, Message> {
-    let label = if count > 99 { "99+".to_string() } else { count.to_string() };
+    let label = if count > 99 {
+        "99+".to_string()
+    } else {
+        count.to_string()
+    };
     let one = count < 10;
-    container(text(label).size(10.0).font(BOLD).color(theme::t().accent_on))
-        .height(16.0)
-        .width(if one { Length::Fixed(16.0) } else { Length::Shrink })
-        .padding(Padding::from([0, if one { 0 } else { 5 }]))
-        .center_x(if one { Length::Fixed(16.0) } else { Length::Shrink })
-        .center_y(16.0)
-        .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().accent)),
-            border: iced::Border { radius: 8.0.into(), ..iced::Border::default() },
-            ..container::Style::default()
-        })
-        .into()
+    container(
+        text(label)
+            .size(10.0)
+            .font(BOLD)
+            .color(theme::t().accent_on),
+    )
+    .height(16.0)
+    .width(if one {
+        Length::Fixed(16.0)
+    } else {
+        Length::Shrink
+    })
+    .padding(Padding::from([0, if one { 0 } else { 5 }]))
+    .center_x(if one {
+        Length::Fixed(16.0)
+    } else {
+        Length::Shrink
+    })
+    .center_y(16.0)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(theme::t().accent)),
+        border: iced::Border {
+            radius: 8.0.into(),
+            ..iced::Border::default()
+        },
+        ..container::Style::default()
+    })
+    .into()
 }
 
 /// Count in the yellow attention style, for list rows (support chats).
 fn attention_count<'a>(count: i64) -> Element<'a, Message> {
-    let label = if count > 99 { "99+".to_string() } else { count.to_string() };
+    let label = if count > 99 {
+        "99+".to_string()
+    } else {
+        count.to_string()
+    };
     let one = count < 10;
-    container(text(label).size(11.0).font(BOLD).color(theme::on_attention()))
-        .height(20.0)
-        .width(if one { Length::Fixed(20.0) } else { Length::Shrink })
-        .padding(Padding::from([0, if one { 0 } else { 6 }]))
-        .center_x(if one { Length::Fixed(20.0) } else { Length::Shrink })
-        .center_y(20.0)
-        .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().attention)),
-            border: iced::Border { radius: 10.0.into(), ..iced::Border::default() },
-            ..container::Style::default()
-        })
-        .into()
+    container(
+        text(label)
+            .size(11.0)
+            .font(BOLD)
+            .color(theme::on_attention()),
+    )
+    .height(20.0)
+    .width(if one {
+        Length::Fixed(20.0)
+    } else {
+        Length::Shrink
+    })
+    .padding(Padding::from([0, if one { 0 } else { 6 }]))
+    .center_x(if one {
+        Length::Fixed(20.0)
+    } else {
+        Length::Shrink
+    })
+    .center_y(20.0)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(theme::t().attention)),
+        border: iced::Border {
+            radius: 10.0.into(),
+            ..iced::Border::default()
+        },
+        ..container::Style::default()
+    })
+    .into()
 }
 
 /// Dimmed backdrop (tap closes) with `card` centred — like the other sheets.
@@ -9305,7 +9647,9 @@ fn sheet_overlay<'a>(card: Element<'a, Message>, dismiss: Message) -> Element<'a
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_| container::Style {
-                background: Some(iced::Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.45))),
+                background: Some(iced::Background::Color(Color::from_rgba(
+                    0.0, 0.0, 0.0, 0.45,
+                ))),
                 ..container::Style::default()
             }),
     )
@@ -9341,10 +9685,13 @@ fn pending_links_overlay(app: &App) -> Element<'_, Message> {
                 .font(BOLD)
                 .color(theme::t().text_primary)
                 .width(Length::Fill),
-            button(icons::centered_hit(icons::cancel_icon(18.0, theme::t().text_secondary), 32.0))
-                .on_press(Message::ClosePendingLinks)
-                .padding(0)
-                .style(theme::ghost_tile(hover)),
+            button(icons::centered_hit(
+                icons::cancel_icon(18.0, theme::t().text_secondary),
+                32.0
+            ))
+            .on_press(Message::ClosePendingLinks)
+            .padding(0)
+            .style(theme::icon_action(hover)),
         ]
         .spacing(12)
         .align_y(Alignment::Center),
@@ -9357,22 +9704,43 @@ fn pending_links_overlay(app: &App) -> Element<'_, Message> {
     );
     let links = app.pending_links();
     if links.is_empty() {
-        col = col.push(text("No pending links.").size(d.meta).color(theme::t().text_muted));
+        col = col.push(
+            text("No pending links.")
+                .size(d.meta)
+                .color(theme::t().text_muted),
+        );
     }
-    let small = |label: &'static str, icon: Element<'static, Message>, msg: Message| -> Element<'static, Message> {
-        button(row![icon, text(label).size(d.meta)].spacing(6).align_y(Alignment::Center))
-            .on_press(msg)
-            .padding(Padding::from([6, 10]))
-            .style(theme::secondary_action(hover))
-            .into()
+    let small = |label: &'static str,
+                 icon: Element<'static, Message>,
+                 msg: Message|
+     -> Element<'static, Message> {
+        button(
+            row![icon, text(label).size(d.meta)]
+                .spacing(6)
+                .align_y(Alignment::Center),
+        )
+        .on_press(msg)
+        .padding(Padding::from([6, 10]))
+        .style(theme::secondary_action(hover))
+        .into()
     };
     let mut list = Column::new().spacing(10);
     for inv in links {
         let id = inv.conn_id;
-        let name = if inv.alias.trim().is_empty() { "Unnamed link".to_string() } else { inv.alias.clone() };
-        let mut when = format_list_time(Some(&inv.created_at)).map(|t| format!("Created {t}")).unwrap_or_default();
+        let name = if inv.alias.trim().is_empty() {
+            "Unnamed link".to_string()
+        } else {
+            inv.alias.clone()
+        };
+        let mut when = format_list_time(Some(&inv.created_at))
+            .map(|t| format!("Created {t}"))
+            .unwrap_or_default();
         if inv.incognito {
-            when = if when.is_empty() { "Incognito".into() } else { format!("{when} \u{b7} incognito") };
+            when = if when.is_empty() {
+                "Incognito".into()
+            } else {
+                format!("{when} \u{b7} incognito")
+            };
         }
         let mut item = Column::new().spacing(8);
         match app.renaming_link().filter(|(rid, _)| *rid == id) {
@@ -9399,19 +9767,24 @@ fn pending_links_overlay(app: &App) -> Element<'_, Message> {
                 item = item.push(
                     row![
                         column![
-                            text(name).size(d.body).color(if inv.alias.trim().is_empty() {
-                                theme::t().text_secondary
-                            } else {
-                                theme::t().text_primary
-                            }),
+                            text(name)
+                                .size(d.body)
+                                .color(if inv.alias.trim().is_empty() {
+                                    theme::t().text_secondary
+                                } else {
+                                    theme::t().text_primary
+                                }),
                             text(when).size(d.meta).color(theme::t().text_muted),
                         ]
                         .spacing(2)
                         .width(Length::Fill),
-                        button(icons::centered_hit(icons::trash_icon(16.0, theme::t().danger), 32.0))
-                            .on_press(Message::AskDeletePendingLink(id))
-                            .padding(0)
-                            .style(theme::ghost_tile(hover)),
+                        button(icons::centered_hit(
+                            icons::trash_icon(16.0, theme::t().danger),
+                            32.0
+                        ))
+                        .on_press(Message::AskDeletePendingLink(id))
+                        .padding(0)
+                        .style(theme::icon_action(hover)),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),
@@ -9420,12 +9793,37 @@ fn pending_links_overlay(app: &App) -> Element<'_, Message> {
         }
         let mut actions = Row::new().spacing(6).align_y(Alignment::Center);
         if inv.link.short.is_some() {
-            actions = actions.push(small("Copy", icons::copy_icon(14.0, theme::t().text_primary), Message::CopyPendingLink { conn_id: id, full: false }));
-            actions = actions.push(small("Copy full", icons::copy_icon(14.0, theme::t().text_primary), Message::CopyPendingLink { conn_id: id, full: true }));
+            actions = actions.push(small(
+                "Copy",
+                icons::copy_icon(14.0, theme::t().text_primary),
+                Message::CopyPendingLink {
+                    conn_id: id,
+                    full: false,
+                },
+            ));
+            actions = actions.push(small(
+                "Copy full",
+                icons::copy_icon(14.0, theme::t().text_primary),
+                Message::CopyPendingLink {
+                    conn_id: id,
+                    full: true,
+                },
+            ));
         } else {
-            actions = actions.push(small("Copy", icons::copy_icon(14.0, theme::t().text_primary), Message::CopyPendingLink { conn_id: id, full: true }));
+            actions = actions.push(small(
+                "Copy",
+                icons::copy_icon(14.0, theme::t().text_primary),
+                Message::CopyPendingLink {
+                    conn_id: id,
+                    full: true,
+                },
+            ));
         }
-        actions = actions.push(small("Name", icons::edit_icon(14.0, theme::t().text_primary), Message::RenamePendingLink(id)));
+        actions = actions.push(small(
+            "Name",
+            icons::edit_icon(14.0, theme::t().text_primary),
+            Message::RenamePendingLink(id),
+        ));
         item = item.push(actions);
         list = list.push(
             container(item)
@@ -9433,7 +9831,11 @@ fn pending_links_overlay(app: &App) -> Element<'_, Message> {
                 .width(Length::Fill)
                 .style(|_| container::Style {
                     background: Some(iced::Background::Color(theme::t().bg_field)),
-                    border: iced::Border { color: theme::t().border, width: 1.0, radius: 12.0.into() },
+                    border: iced::Border {
+                        color: theme::t().border,
+                        width: 1.0,
+                        radius: 12.0.into(),
+                    },
                     ..container::Style::default()
                 }),
         );
@@ -9467,8 +9869,14 @@ fn link_confirm_overlay(app: &App, confirm: crate::LinkConfirm) -> Element<'_, M
         ),
     };
     let card = column![
-        text(title).size(d.body).font(BOLD).color(theme::t().text_primary),
-        text(body).size(d.meta).color(theme::t().text_secondary).wrapping(Wrapping::WordOrGlyph),
+        text(title)
+            .size(d.body)
+            .font(BOLD)
+            .color(theme::t().text_primary),
+        text(body)
+            .size(d.meta)
+            .color(theme::t().text_secondary)
+            .wrapping(Wrapping::WordOrGlyph),
         row![
             horizontal().width(Length::Fill),
             button(text("Cancel").size(d.meta))
@@ -9485,4 +9893,78 @@ fn link_confirm_overlay(app: &App, confirm: crate::LinkConfirm) -> Element<'_, M
     .spacing(12)
     .max_width(420);
     sheet_overlay(menu_card(card.into(), d), Message::CancelLinkConfirm)
+}
+
+/// A modal viewer shares the chat's downloaded images and never launches an OS app.
+fn image_gallery(app: &App) -> Element<'_, Message> {
+    let Some((path, zoom)) = &app.image_viewer else {
+        return Space::new().into();
+    };
+    let paths = app.gallery_paths();
+    let index = paths.iter().position(|p| p == path).unwrap_or(0);
+    let tool = |icon, message| {
+        button(icons::centered_hit(icon, 36.0))
+            .padding(0)
+            .on_press(message)
+            .style(theme::icon_action(app.hover_ok()))
+    };
+    let title = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let header = row![
+        tool(icons::cancel_icon(20.0, iced::Color::WHITE), Message::CloseImage),
+        text(title)
+            .color(iced::Color::WHITE)
+            .width(Length::Fill),
+        tool(
+            icons::minus_icon(20.0, iced::Color::WHITE),
+            Message::ImageZoom(0.8)
+        ),
+        tool(
+            icons::plus_icon(20.0, iced::Color::WHITE),
+            Message::ImageZoom(1.25)
+        ),
+    ]
+    .spacing(8)
+    .padding(8)
+    .align_y(Alignment::Center)
+    .height(56);
+    let picture = iced::widget::image(iced::widget::image::Handle::from_path(path))
+        .width((app.width - 32.0).max(1.0) * zoom)
+        .height((app.height - 120.0).max(1.0) * zoom)
+        .content_fit(ContentFit::Contain);
+    let body = scrollable(
+        container(picture)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .direction(iced::widget::scrollable::Direction::Both {
+        vertical: Default::default(),
+        horizontal: Default::default(),
+    })
+    .width(Length::Fill)
+    .height(Length::Fill);
+    let footer = row![
+        tool(
+            icons::back_icon(20.0, iced::Color::WHITE),
+            Message::ImageStep(-1)
+        ),
+        text(format!("{} / {}", index + 1, paths.len().max(1))).color(iced::Color::WHITE),
+        button(text("Next").color(iced::Color::WHITE))
+                .on_press(Message::ImageStep(1))
+                .style(theme::ghost_tile(app.hover_ok())),
+    ]
+    .spacing(16)
+    .align_y(Alignment::Center);
+    container(column![
+        header,
+        crate::image_gestures::view(body, *zoom),
+        container(footer).center_x(Length::Fill).padding(8)
+    ])
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(|_| container::Style { background: Some(iced::Color::BLACK.into()), ..Default::default() })
+    .into()
 }

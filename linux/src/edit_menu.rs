@@ -54,7 +54,6 @@ pub enum ComposerMenuAction {
     SelectAll,
     Cut,
     Copy,
-    Paste(String),
 }
 
 /// What a context-menu entry asks the app to do.
@@ -141,19 +140,16 @@ pub fn composer_menu<'a>(
     hover_ok: bool,
 ) -> Element<'a, Message> {
     let menu = move || {
-        let snap = SNAPSHOTS.with(|m| m.borrow().get(COMPOSER_KEY).cloned().unwrap_or_default());
         let act = |a: ComposerMenuAction| Some(Message::ComposerMenu(a));
         menu_items(
             [
-                ("Select all", if is_empty { None } else { act(ComposerMenuAction::SelectAll) }),
-                ("Cut", if has_selection { act(ComposerMenuAction::Cut) } else { None }),
-                ("Copy", if has_selection { act(ComposerMenuAction::Copy) } else { None }),
-                (
-                    "Paste",
-                    snap.clipboard
-                        .filter(|c| !c.is_empty())
-                        .and_then(|c| act(ComposerMenuAction::Paste(c))),
+                ("Select all", if is_empty { None } else { act(ComposerMenuAction::SelectAll) },
                 ),
+                ("Cut", if has_selection { act(ComposerMenuAction::Cut) } else { None },
+                ),
+                ("Copy", if has_selection { act(ComposerMenuAction::Copy) } else { None },
+                ),
+                ("Paste", Some(Message::PasteComposer)),
             ],
             hover_ok,
         )

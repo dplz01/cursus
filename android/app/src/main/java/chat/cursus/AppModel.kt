@@ -92,6 +92,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         reloadMessages(ref)
     }
 
+    var pastedImage by mutableStateOf<java.io.File?>(null); private set
     var draft by mutableStateOf("")
     var composeMode by mutableStateOf<ComposeMode>(ComposeMode.New)
     private val drafts = mutableStateMapOf<String, String>()
@@ -242,6 +243,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     /** What both locks drop: playback, recordings, decrypted media on screen. */
     private fun dropPlaintext() {
+        discardPastedImage()
         VoicePlayer.stop()
         discardRecording()
         discardVoiceDraft()
@@ -323,6 +325,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         user = null
         draft = ""
         drafts.clear()
+        discardPastedImage()
         composeMode = ComposeMode.New
         appLocked = false
         phase = Phase.Unlock
@@ -432,6 +435,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         val old = selection
         if (old == ref) return
         if (old != null) drafts[old] = draft
+        discardPastedImage()
         selection = ref
         draft = ref?.let { drafts[it] } ?: ""
         composeMode = ComposeMode.New
@@ -542,6 +546,21 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     fun send() {
         val ref = selection ?: return
+        pastedImage?.let { file ->
+            pastedImage = null
+            act {
+                try {
+                    Core.run("sendFile", mapOf("chat" to ref, "path" to file.absolutePath))
+                    reloadMessages(ref)
+                    withContext(Dispatchers.IO) { file.parentFile?.deleteRecursively() }
+                } catch (e: Exception) {
+                    if (selection == ref && !appLocked && pastedImage == null) pastedImage = file
+                    else withContext(Dispatchers.IO) { file.parentFile?.deleteRecursively() }
+                    throw e
+                }
+            }
+            return
+        }
         val text = draft.trim()
         if (text.isEmpty()) return
         val mode = composeMode
@@ -695,6 +714,28 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private fun tmp(sub: String): File = File(info?.dataDir ?: getApplication<Application>().filesDir.path, "tmp/$sub")
 
     /** A picked document: copied in, then sent (images go as images — core rule on the name). */
+    fun discardPastedImage() {
+        pastedImage?.parentFile?.deleteRecursively()
+        pastedImage = null
+    }
+
+    fun pasteImage(uri: Uri) {
+        val ref = selection ?: return
+        act {
+            val file = withContext(Dispatchers.IO) {
+                val copied = Files.copyIn(getApplication(), uri, tmp("paste"))
+                val mime = getApplication<Application>().contentResolver.getType(uri)
+                val extension = android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mime ?: "") ?: "png"
+                if (copied.extension.lowercase() in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")) copied
+                else File(copied.parentFile, "image.$extension").also { check(copied.renameTo(it)) }
+            }
+            if (selection == ref && !appLocked) {
+                discardPastedImage()
+                pastedImage = file
+            } else withContext(Dispatchers.IO) { file.parentFile?.deleteRecursively() }
+        }
+    }
+
     fun sendFile(uri: Uri) {
         val ref = selection ?: return
         act {

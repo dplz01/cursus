@@ -67,14 +67,30 @@ fun DialogEscape(onBack: () -> Unit) {
         val window = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
         val previous = window?.callback
         if (window == null || previous == null) return@DisposableEffect onDispose {}
+        val dispatcher = (previous as? androidx.activity.OnBackPressedDispatcherOwner)?.onBackPressedDispatcher
+        val back = object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = currentBack()
+        }
+        dispatcher?.addCallback(back)
         val callback = object : android.view.Window.Callback by previous {
             override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
                 if (event.keyCode != android.view.KeyEvent.KEYCODE_ESCAPE) return previous.dispatchKeyEvent(event)
-                if (event.action == android.view.KeyEvent.ACTION_UP) currentBack()
+                if (event.action == android.view.KeyEvent.ACTION_UP) {
+                    if (dispatcher != null) dispatcher.onBackPressed()
+                    else previous.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_BACK))
+                }
                 return true
             }
         }
         window.callback = callback
-        onDispose { if (window.callback === callback) window.callback = previous }
+        onDispose { back.remove(); if (window.callback === callback) window.callback = previous }
     }
+}
+
+/** Header buttons and keyboard Escape enter Android's normal back dispatcher. */
+@Composable
+fun systemBack(onBack: () -> Unit): () -> Unit {
+    BackHandler(onBack = onBack)
+    val dispatcher = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+    return { dispatcher?.onBackPressed() }
 }

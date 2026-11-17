@@ -97,7 +97,7 @@ impl Tokens {
             danger_hover: Color::from_rgb(0.85, 0.28, 0.28),
             danger_press: Color::from_rgb(0.70, 0.20, 0.20),
             disabled_fill: Color::from_rgb(0.25, 0.30, 0.40),
-            bg_hover: rgb(0x20242D),
+            bg_hover: rgb(0x303746),
             bg_field: rgb(0x111318),
             bubble_in: rgb(0x1C2028),
             bubble_out: rgb(0x243A63),
@@ -355,9 +355,7 @@ pub fn nav_active(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
         let c = t();
         let background = match status {
             button::Status::Pressed => Some(Background::Color(c.accent_soft_press)),
-            button::Status::Hovered if hover_ok => {
-                Some(Background::Color(c.accent_soft_hover))
-            }
+            button::Status::Hovered if hover_ok => Some(Background::Color(c.accent_soft_hover)),
             _ => Some(Background::Color(c.accent_soft)),
         };
         button::Style {
@@ -378,9 +376,11 @@ pub fn nav_idle(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> butt
         let c = t();
         let background = match status {
             button::Status::Pressed => Some(Background::Color(c.accent_soft)),
-            button::Status::Hovered if hover_ok => {
-                Some(Background::Color(c.bg_hover))
-            }
+            button::Status::Hovered if hover_ok => Some(Background::Color(if is_light_active() {
+                c.bg_hover
+            } else {
+                rgb(0x20242D)
+            })),
             _ => Some(Background::Color(Color::TRANSPARENT)),
         };
         button::Style {
@@ -527,9 +527,7 @@ pub fn reaction_chip(
             }))
         } else {
             match status {
-                button::Status::Hovered if hover_ok => {
-                    Some(Background::Color(c.accent_soft))
-                }
+                button::Status::Hovered if hover_ok => Some(Background::Color(c.accent_soft)),
                 button::Status::Pressed => Some(Background::Color(c.accent_soft_press)),
                 _ => Some(Background::Color(c.bg_elevated)),
             }
@@ -564,9 +562,7 @@ pub fn emoji_suggest_row(
             }))
         } else {
             match status {
-                button::Status::Hovered if hover_ok => {
-                    Some(Background::Color(c.accent_soft))
-                }
+                button::Status::Hovered if hover_ok => Some(Background::Color(c.accent_soft)),
                 button::Status::Pressed => Some(Background::Color(c.accent_soft_press)),
                 _ => Some(Background::Color(Color::TRANSPARENT)),
             }
@@ -809,6 +805,24 @@ pub fn composer_editor() -> impl Fn(&iced::Theme, text_editor::Status) -> text_e
             placeholder: c.text_muted,
             value: c.text_primary,
             selection: c.accent_soft,
+        }
+    }
+}
+
+/// Icon hits have a transparent face; the glyph supplies the hover glow.
+pub fn icon_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let c = t();
+        button::Style {
+            background: None,
+            text_color: if hover_ok
+                && matches!(status, button::Status::Hovered | button::Status::Pressed)
+            {
+                c.accent_hover
+            } else {
+                c.text_secondary
+            },
+            ..Default::default()
         }
     }
 }

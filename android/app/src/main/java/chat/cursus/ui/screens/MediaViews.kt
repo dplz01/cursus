@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package chat.cursus.ui.screens
 
 import androidx.compose.ui.draw.blur
@@ -6,6 +8,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -86,13 +89,13 @@ private fun statusLine(f: FileInfo, outgoing: Boolean): String {
 }
 
 @Composable
-fun FileBody(model: AppModel, m: Message, f: FileInfo) {
+fun FileBody(model: AppModel, m: Message, f: FileInfo, onLongPress: () -> Unit) {
     when {
-        f.kind == "voice" -> VoiceRow(model, m, f)
-        f.kind == "image" && f.state == "complete" -> ImageThumb(model, f)
+        f.kind == "voice" -> VoiceRow(model, m, f, onLongPress)
+        f.kind == "image" && f.state == "complete" -> ImageThumb(model, f, onLongPress)
         else -> {
             InlinePreview(f)
-            FileRow(model, m, f)
+            FileRow(model, m, f, onLongPress)
         }
     }
 }
@@ -111,7 +114,7 @@ private fun InlinePreview(f: FileInfo) {
 }
 
 @Composable
-private fun ImageThumb(model: AppModel, f: FileInfo) {
+private fun ImageThumb(model: AppModel, f: FileInfo, onLongPress: () -> Unit) {
     val path = model.plainFiles[f.id] ?: return FileRowPlaceholder(f)
     // "Blur photos and videos": blurred until tapped. A tiny decode scaled
     // up blurs on every Android version; Modifier.blur adds to it on 12+.
@@ -124,7 +127,7 @@ private fun ImageThumb(model: AppModel, f: FileInfo) {
             it, f.name,
             Modifier.padding(bottom = 4.dp).widthIn(max = 296.dp).heightIn(max = 360.dp).clip(Radius.lg)
                 .then(if (blurred) Modifier.blur(16.dp) else Modifier)
-                .clickable { if (blurred) model.revealedMedia.add(f.id) else model.gallery = f.id },
+                .combinedClickable(onClick = { if (blurred) model.revealedMedia.add(f.id) else model.gallery = f.id }, onLongClick = onLongPress),
             contentScale = ContentScale.Fit,
         )
     } ?: FileRowPlaceholder(f)
@@ -140,7 +143,7 @@ private fun FileRowPlaceholder(f: FileInfo) {
 
 /** Download button of an offered file (Linux `offer_action`: accent, radius 8). */
 @Composable
-private fun OfferAction(model: AppModel, m: Message, f: FileInfo) {
+private fun OfferAction(model: AppModel, m: Message, f: FileInfo, onLongPress: () -> Unit) {
     val c = Cursus.colors
     if (m.outgoing || f.state != "offer") return
     if (f.autoReceive) {
@@ -148,7 +151,7 @@ private fun OfferAction(model: AppModel, m: Message, f: FileInfo) {
         return
     }
     Box(
-        Modifier.size(32.dp).clip(Radius.sm).background(c.accent).clickable { model.receive(f) },
+        Modifier.size(32.dp).clip(Radius.sm).background(c.accent).combinedClickable(onClick = { model.receive(f) }, onLongClick = onLongPress),
         contentAlignment = Alignment.Center,
     ) {
         Icon(painterResource(R.drawable.ic_download), "Download", Modifier.size(16.dp), tint = c.accentOn)
@@ -156,7 +159,7 @@ private fun OfferAction(model: AppModel, m: Message, f: FileInfo) {
 }
 
 @Composable
-private fun FileRow(model: AppModel, m: Message, f: FileInfo) {
+private fun FileRow(model: AppModel, m: Message, f: FileInfo, onLongPress: () -> Unit) {
     val c = Cursus.colors
     Column(Modifier.widthIn(min = 180.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -173,9 +176,9 @@ private fun FileRow(model: AppModel, m: Message, f: FileInfo) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false)
-                    .then(if (f.state == "complete") Modifier.clickable { model.openFile(f) } else Modifier),
+                    .then(if (f.state == "complete") Modifier.combinedClickable(onClick = { model.openFile(f) }, onLongClick = onLongPress) else Modifier),
             )
-            OfferAction(model, m, f)
+            OfferAction(model, m, f, onLongPress)
         }
         Text(
             statusLine(f, m.outgoing),
@@ -198,7 +201,7 @@ fun formatDuration(secs: Long): String = "%d:%02d".format(secs / 60, secs % 60)
 
 /** Linux `voice_waveform_row`: 40px play square (radius 12), waveform, duration. */
 @Composable
-private fun VoiceRow(model: AppModel, m: Message, f: FileInfo) {
+private fun VoiceRow(model: AppModel, m: Message, f: FileInfo, onLongPress: () -> Unit) {
     val c = Cursus.colors
     val path = model.plainFiles[f.id]
     val playing = VoicePlayer.playing == f.id
@@ -218,7 +221,7 @@ private fun VoiceRow(model: AppModel, m: Message, f: FileInfo) {
         val ready = f.state == "complete"
         Box(
             Modifier.size(40.dp).clip(Radius.lg).background(if (ready) c.accent else c.disabledFill)
-                .clickable(enabled = ready) { model.playVoice(f) },
+                .combinedClickable(enabled = ready, onClick = { model.playVoice(f) }, onLongClick = onLongPress),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -235,7 +238,7 @@ private fun VoiceRow(model: AppModel, m: Message, f: FileInfo) {
             rest = if (m.outgoing) c.voiceRestOut else c.voiceRest,
         )
         Text(f.duration?.let { formatDuration(it) } ?: "voice", style = Cursus.type.meta, color = c.textSecondary)
-        OfferAction(model, m, f)
+        OfferAction(model, m, f, onLongPress)
     }
 }
 

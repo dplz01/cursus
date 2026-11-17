@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package chat.cursus.ui.screens
 
 import android.Manifest
@@ -19,12 +21,23 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.content.contentReceiver
+import androidx.compose.foundation.content.consume
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.ImageBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
@@ -59,6 +72,13 @@ private fun SendHit(active: Boolean, description: String, onClick: () -> Unit) {
 fun Composer(model: AppModel) {
     val c = Cursus.colors
     val context = LocalContext.current
+    val field = rememberTextFieldState(model.draft)
+    LaunchedEffect(model.draft) {
+        if (field.text.toString() != model.draft) field.edit { replace(0, length, model.draft) }
+    }
+    LaunchedEffect(field) {
+        snapshotFlow { field.text.toString() }.collectLatest { if (it != model.draft) model.draftChanged(it) }
+    }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { model.sendFile(it) }
     }
@@ -82,6 +102,16 @@ fun Composer(model: AppModel) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
         EmojiSuggestions(model)
         ContextBar(model)
+        model.pastedImage?.let { file ->
+            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                val bitmap by produceState<ImageBitmap?>(null, file) {
+                    value = withContext(Dispatchers.IO) { decodeScaled(file.absolutePath, 256) }
+                }
+                bitmap?.let { androidx.compose.foundation.Image(it, "Image to send", Modifier.size(72.dp).clip(Radius.md)) }
+                Text("Image ready to send", Modifier.weight(1f).padding(12.dp), color = c.textSecondary)
+                IconTool(R.drawable.ic_cancel, "Discard image", model::discardPastedImage)
+            }
+        }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.Bottom,
@@ -105,12 +135,19 @@ fun Composer(model: AppModel) {
                 } else {
                     if (model.draft.isEmpty()) Text("Message", style = Cursus.type.body, color = c.textSecondary)
                     BasicTextField(
-                        value = model.draft,
-                        onValueChange = { model.draftChanged(it) },
+                        state = field,
                         textStyle = Cursus.type.body.copy(color = c.textPrimary),
                         cursorBrush = SolidColor(c.accent),
-                        maxLines = 6,
-                        modifier = Modifier.fillMaxWidth(),
+                        lineLimits = androidx.compose.foundation.text.input.TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
+                        modifier = Modifier.fillMaxWidth().contentReceiver { content ->
+                            content.consume { item ->
+                                val uri = item.uri
+                                if (uri != null && context.contentResolver.getType(uri)?.startsWith("image/") == true) {
+                                    model.pasteImage(uri)
+                                    true
+                                } else false
+                            }
+                        },
                     )
                 }
             }
@@ -124,9 +161,9 @@ fun Composer(model: AppModel) {
                     ) { Icon(painterResource(R.drawable.ic_stop), "Stop", Modifier.size(20.dp), tint = c.danger) }
                     SendHit(true, "Send voice message") { model.sendVoiceNow() }
                 }
-                model.draft.isBlank() && model.composeMode !is ComposeMode.Edit ->
+                model.pastedImage == null && model.draft.isBlank() && model.composeMode !is ComposeMode.Edit ->
                     IconTool(R.drawable.ic_mic, "Record voice message", startMic)
-                else -> SendHit(model.draft.isNotBlank(), "Send") { model.send() }
+                else -> SendHit(model.pastedImage != null || model.draft.isNotBlank(), "Send") { model.send() }
             }
         }
     }

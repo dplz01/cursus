@@ -33,7 +33,7 @@ pub fn nav_icon<'a>(kind: NavIcon, active: bool, size: f32) -> Element<'a, Messa
     } else {
         theme::t().text_secondary
     };
-    tinted(handle_for(kind), color, size)
+    tinted_static(handle_for(kind), color, size)
 }
 
 /// Admin / “Chat with admins” — Instructure UI Line Icons (MIT via SVG Repo).
@@ -57,12 +57,13 @@ pub fn plus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 
 /// Center an icon inside a square hit target (iced buttons lay out content top-left).
 pub fn centered_hit<'a>(icon: Element<'a, Message>, hit: f32) -> Element<'a, Message> {
-    container(icon)
+    crate::hover::icon_glow(
+        container(icon)
         .width(hit)
         .height(hit)
         .center_x(hit)
-        .center_y(hit)
-        .into()
+        .center_y(hit),
+    )
 }
 
 /// Expand control (Zest Interface Icons / MIT).
@@ -499,12 +500,38 @@ fn handle_for(kind: NavIcon) -> svg::Handle {
     }
 }
 
+fn glow_color(idle: Color) -> Color {
+    if idle == theme::t().danger {
+        theme::t().danger_hover
+    } else {
+        theme::t().accent_hover
+    }
+}
+
+fn tinted_static<'a>(handle: svg::Handle, color: Color, size: f32) -> Element<'a, Message> {
+    svg(handle)
+        .width(size)
+        .height(size)
+        .style(move |_, _| svg::Style { color: Some(color) })
+        .into()
+}
+
 fn tinted<'a>(handle: svg::Handle, color: Color, size: f32) -> Element<'a, Message> {
     let icon: Svg<'a, iced::Theme> = svg(handle)
         .width(Length::Fixed(size))
         .height(Length::Fixed(size))
-        .style(move |_, _| svg::Style {
-            color: Some(color),
+        .style(move |_, status| svg::Style {
+            color: Some(
+                if crate::POINTER_GATE
+                    .hover_ok
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    && matches!(status, svg::Status::Hovered)
+                {
+                    glow_color(color)
+                } else {
+                    color
+                },
+            ),
         });
 
     container(icon)
@@ -523,7 +550,7 @@ pub fn composer_tool_icon<'a>(
     handle: svg::Handle,
     hit: f32,
     idle: Color,
-    hot: Color,
+    _hot: Color,
     hover_ok: bool,
 ) -> Element<'a, Message> {
     let icon: Svg<'a, iced::Theme> = svg(handle)
@@ -532,7 +559,7 @@ pub fn composer_tool_icon<'a>(
         .content_fit(ContentFit::ScaleDown)
         .style(move |_, status| svg::Style {
             color: Some(match status {
-                svg::Status::Hovered if hover_ok => hot,
+                svg::Status::Hovered if hover_ok => glow_color(idle),
                 _ => idle,
             }),
         });
@@ -546,7 +573,7 @@ pub fn profile_tool_icon<'a>(
     handle: svg::Handle,
     hit: f32,
     idle: Color,
-    hot: Color,
+    _hot: Color,
     hover_ok: bool,
 ) -> Element<'a, Message> {
     const GLYPH: f32 = 20.0;
@@ -556,16 +583,17 @@ pub fn profile_tool_icon<'a>(
         .content_fit(ContentFit::Contain)
         .style(move |_, status| svg::Style {
             color: Some(match status {
-                svg::Status::Hovered if hover_ok => hot,
+                svg::Status::Hovered if hover_ok => glow_color(idle),
                 _ => idle,
             }),
         });
-    container(icon)
+    crate::hover::icon_glow(
+        container(icon)
         .width(hit)
         .height(hit)
         .center_x(hit)
-        .center_y(hit)
-        .into()
+        .center_y(hit),
+    )
 }
 
 pub fn plus_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
@@ -589,6 +617,10 @@ pub fn mic_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
 }
 
 /// Header chrome tools — same optical size / stroke as the main-page settings gear.
+pub fn back_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(svg_handle!("../assets/icons/back.svg"), color, size)
+}
+
 pub fn back_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     profile_tool_icon(
         svg_handle!("../assets/icons/back.svg"),
@@ -898,4 +930,8 @@ pub fn repeat_once_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
         color,
         size,
     )
+}
+
+pub fn minus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(svg::Handle::from_memory(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 12h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>"#.as_slice()), color, size)
 }

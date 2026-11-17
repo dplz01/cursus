@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.KeyboardOptions
@@ -306,7 +307,7 @@ fun CursusField(
 fun Avatar(name: String, image: String?, size: Dp, modifier: Modifier = Modifier, group: Boolean = false) {
     val c = Cursus.colors
     val bitmap = remember(image) { image?.let(::decodeDataUrl) }
-    Box(modifier.size(size).clip(Radius.pill).background(c.accentSoft), contentAlignment = Alignment.Center) {
+    Box(modifier.then(Modifier.requiredSize(size)).clip(Radius.pill).background(c.accentSoft), contentAlignment = Alignment.Center) {
         if (bitmap != null) {
             Image(bitmap, name, Modifier.size(size), contentScale = ContentScale.Crop)
         } else if (group) {
@@ -396,11 +397,8 @@ fun InfoSwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, 
         "Hide message text in notifications" -> "Private notifications"
         else -> title
     }
-    PreferenceRow(label, settingSummary(title), checked = checked, onToggle = onChange) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconTool(R.drawable.ic_info_circle, "About $title", { open = true }, tint = Cursus.colors.textMuted)
-            CursusSwitch(checked, null)
-        }
+    PreferenceRow(label, settingSummary(title), checked = checked, onToggle = onChange, onInfo = { open = true }) {
+        CursusSwitch(checked, null)
     }
     if (open) InfoSheet(info.first, info.second) { open = false }
 }

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
@@ -77,6 +78,7 @@ import chat.cursus.core.Segment
 import chat.cursus.core.Stamps
 import chat.cursus.ui.components.AccentSquare
 import chat.cursus.ui.components.Avatar
+import chat.cursus.ui.components.systemBack
 import chat.cursus.ui.components.IconTool
 import chat.cursus.ui.components.PrimaryButton
 import chat.cursus.ui.components.SecondaryButton
@@ -95,10 +97,10 @@ fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () 
     Column(Modifier.fillMaxSize().background(c.bgPanel).windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         // Header and composer are bars (sidebar tone); the history sits on the panel.
         Row(
-            Modifier.fillMaxWidth().background(c.bgSidebar).padding(horizontal = 4.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().background(c.bgSidebar).height(56.dp).padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (showBack) IconTool(R.drawable.ic_back, "Back", { model.select(null) })
+            if (showBack) IconTool(R.drawable.ic_back, "Back", systemBack { model.select(null) })
             Row(
                 Modifier.weight(1f).clip(Radius.lg).clickable(onClick = onInfo).padding(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -277,6 +279,7 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
     val groupIncoming = chat.isGroup && !m.outgoing
     // Selection mode: a tap anywhere on the row adds / removes the message.
     val selecting = model.selected.isNotEmpty()
+    val onLongPress = { if (selecting) model.toggleSelected(m) else menu = true }
     Row(
         Modifier.fillMaxWidth()
             .background(if (m.id in model.selected) c.accentSoft else Color.Transparent)
@@ -299,7 +302,7 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
                         .background(if (m.outgoing) c.bubbleOut else c.bubbleIn)
                         .combinedClickable(
                             onClick = { if (selecting) model.toggleSelected(m) },
-                            onLongClick = { if (selecting) model.toggleSelected(m) else menu = true },
+                            onLongClick = onLongPress,
                         )
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
@@ -327,7 +330,7 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
                             )
                         }
                     }
-                    MessageBody(model, m)
+                    MessageBody(model, m, onLongPress)
                     Row(
                         Modifier.align(Alignment.End).padding(top = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -395,7 +398,7 @@ private fun DeliveryGlyph(delivery: String, c: CursusColors) {
 }
 
 @Composable
-private fun MessageBody(model: AppModel, m: Message) {
+private fun MessageBody(model: AppModel, m: Message, onLongPress: () -> Unit) {
     val c = Cursus.colors
     if (m.deleted != null) {
         // Linux wording; a marked-deleted message keeps its text behind "Reveal".
@@ -411,7 +414,7 @@ private fun MessageBody(model: AppModel, m: Message) {
         return
     }
     m.file?.let { f ->
-        FileBody(model, m, f)
+        FileBody(model, m, f, onLongPress)
         if (m.caption.isNotBlank()) RichText(model, m.segments.ifEmpty { listOf(Segment(m.caption)) }, m.emojiOnly)
         return
     }

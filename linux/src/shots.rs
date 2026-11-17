@@ -253,7 +253,9 @@ const MOBILE: Size = Size::new(400.0, 820.0);
 #[ignore]
 fn shots() {
     let only = std::env::var("CURSUS_SHOTS").ok();
-    let want = |n: &str| only.as_deref().is_none_or(|o| o.split(',').any(|x| n.starts_with(x)));
+    let want = |n: &str| {
+        only.as_deref().is_none_or(|o| o.split(',').any(|x| n.starts_with(x)))
+    };
     for dark in [true, false] {
         let t = if dark { "dark" } else { "light" };
 
@@ -750,7 +752,9 @@ fn history_cache_never_goes_stale() {
     };
     type Mutation = (&'static str, fn(&mut App));
     let mutations: &[Mutation] = &[
-        ("delivery tick", |a| a.messages.edit()[1].delivery = DeliveryStatus::Sent),
+        ("delivery tick", |a| {
+            a.messages.edit()[1].delivery = DeliveryStatus::Sent
+        }),
         ("edited text", |a| {
             a.messages.edit()[2].text = "Edited: make it two coffees".into();
             a.messages.edit()[2].edited = true;
@@ -758,7 +762,9 @@ fn history_cache_never_goes_stale() {
         ("new reaction", |a| {
             a.messages.edit()[4].reactions.push(ReactionCount { emoji: "👍".into(), user_reacted: false, total: 2 })
         }),
-        ("new message", |a| a.messages.push(msg(50, "Just arrived 🚆", false, "09:30"))),
+        ("new message", |a| {
+            a.messages.push(msg(50, "Just arrived 🚆", false, "09:30"))
+        }),
         ("selection mode", |a| {
             a.selection_mode = true;
             a.selected_items.insert(3);
@@ -773,7 +779,9 @@ fn history_cache_never_goes_stale() {
         }),
         ("narrower window", |a| a.width = 900.0),
         ("blur media on", |a| a.desktop_prefs.blur_media = true),
-        ("chat previews off", |a| a.desktop_prefs.chat_previews = false),
+        ("chat previews off", |a| {
+            a.desktop_prefs.chat_previews = false
+        }),
         ("epoch timestamp", |a| {
             let mut m = msg(51, "Group event without a real date", false, "00:00");
             m.created_at = Some("1970-01-01T00:00:00Z".into());
@@ -1335,10 +1343,46 @@ fn preference_help_does_not_toggle_the_setting() {
     ));
     assert!(app.desktop_prefs.chat_previews);
     let mut cache = Cache::default();
-    for (point, help) in [
-        (Point::new(1024.0, 132.0), true),
-        (Point::new(600.0, 132.0), false),
+    for (target, help) in [
+        ("Show the latest message below each name.", true),
+        ("Message previews", false),
     ] {
+        use iced::advanced::widget::Operation;
+        struct Locate {
+            text: &'static str,
+            at: std::sync::Arc<std::sync::Mutex<Option<Point>>>,
+        }
+        impl Operation for Locate {
+            fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+                operate(self);
+            }
+            fn text(
+                &mut self,
+                _id: Option<&iced::widget::Id>,
+                bounds: iced::Rectangle,
+                text: &str,
+            ) {
+                if text == self.text {
+                    *self.at.lock().unwrap() = Some(bounds.center());
+                }
+            }
+        }
+        let at = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut ui = UserInterface::build(
+            app.view(iced::window::Id::unique()),
+            DESKTOP,
+            cache,
+            &mut renderer,
+        );
+        ui.operate(
+            &renderer,
+            &mut Locate {
+                text: target,
+                at: at.clone(),
+            },
+        );
+        cache = ui.into_cache();
+        let point = at.lock().unwrap().expect("the setting text is present");
         for event in [
             mouse::Event::CursorMoved { position: point },
             mouse::Event::ButtonPressed(mouse::Button::Left),
@@ -1406,4 +1450,339 @@ fn shots_preferences_redesign() {
             render(&app, size, &format!("preferences-{name}-readonly-{tone}"));
         }
     }
+}
+
+#[test]
+fn member_popups_preserve_scroll_and_block_the_background() {
+    use iced::advanced::widget::{operation::Scrollable, Operation};
+    use iced::{mouse, Event, Point, Rectangle, Vector};
+    struct Probe {
+        offset: std::sync::Arc<std::sync::Mutex<f32>>,
+        set: Option<f32>,
+    }
+    impl Operation for Probe {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+            operate(self);
+        }
+        fn scrollable(
+            &mut self,
+            id: Option<&iced::widget::Id>,
+            bounds: Rectangle,
+            _content: Rectangle,
+            translation: Vector,
+            state: &mut dyn Scrollable,
+        ) {
+            if id == Some(&iced::widget::Id::new("page-scroll")) && bounds.x > 200.0 {
+                *self.offset.lock().unwrap() = translation.y;
+                if let Some(y) = self.set {
+                    state.scroll_to(iced::widget::scrollable::AbsoluteOffset {
+                        x: None,
+                        y: Some(y),
+                    });
+                }
+            }
+        }
+    }
+    load_fonts();
+    let size = Size::new(800.0, 440.0);
+    let mut app = demo_app(true, size.width, size.height);
+    group_page(&mut app, GroupSettingsPane::Overview);
+    // Enough members to exercise scrolling on any font installation.
+    let g = app.group_settings.as_mut().unwrap();
+    for id in 20..50 {
+        g.members.push(member(
+            id,
+            "Another member",
+            "member",
+            "connected",
+            None,
+            false,
+        ));
+    }
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+        iced::Font::with_name("Noto Sans"),
+        iced::Pixels(16.0),
+        Some("tiny-skia"),
+    ))
+    .unwrap();
+    let mut cache = Cache::default();
+    let offset = std::sync::Arc::new(std::sync::Mutex::new(0.0));
+    let mut frame = |app: &App, cache: Cache, set: Option<f32>, wheel: bool| {
+        let mut ui = UserInterface::build(
+            app.view(iced::window::Id::unique()),
+            size,
+            cache,
+            &mut renderer,
+        );
+        let event = if wheel {
+            Event::Mouse(mouse::Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Lines { x: 0.0, y: -8.0 },
+            })
+        } else {
+            Event::Window(iced::window::Event::RedrawRequested(
+                iced::time::Instant::now(),
+            ))
+        };
+        let _ = ui.update(
+            &[event],
+            mouse::Cursor::Available(Point::new(300.0, 150.0)),
+            &mut renderer,
+            &mut iced::advanced::clipboard::Null,
+            &mut Vec::new(),
+        );
+        ui.operate(
+            &renderer,
+            &mut Probe {
+                offset: offset.clone(),
+                set,
+            },
+        );
+        ui.into_cache()
+    };
+    cache = frame(&app, cache, Some(320.0), false);
+    cache = frame(&app, cache, None, false);
+    let before = *offset.lock().unwrap();
+    assert!(
+        before.abs() > 10.0,
+        "the profile must be scrolled before opening a menu"
+    );
+    for open in [
+        Message::OpenMemberRoleMenu(2),
+        Message::OpenMemberActionMenu(2),
+    ] {
+        let _ = app.update(open);
+        cache = frame(&app, cache, None, false);
+        assert_eq!(
+            *offset.lock().unwrap(),
+            before,
+            "opening the popup keeps the page in place"
+        );
+        cache = frame(&app, cache, None, true);
+        assert_eq!(
+            *offset.lock().unwrap(),
+            before,
+            "scrolling over the backdrop must not move the page"
+        );
+        let _ = app.update(Message::CloseMemberDropdown);
+        cache = frame(&app, cache, None, false);
+        assert_eq!(
+            *offset.lock().unwrap(),
+            before,
+            "closing the popup also preserves the page"
+        );
+    }
+}
+
+#[test]
+fn narrow_preferences_keep_supporting_text_wider_than_the_title() {
+    use iced::advanced::widget::Operation;
+    use iced::Rectangle;
+    struct Measure(std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Rectangle>>>);
+    impl Operation for Measure {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+            operate(self);
+        }
+        fn text(&mut self, _id: Option<&iced::widget::Id>, bounds: Rectangle, text: &str) {
+            self.0.lock().unwrap().insert(text.into(), bounds);
+        }
+    }
+    load_fonts();
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+        iced::Font::with_name("Noto Sans"),
+        iced::Pixels(16.0),
+        Some("tiny-skia"),
+    ))
+    .unwrap();
+    for width in [280.0, 340.0, 400.0, 800.0, 1200.0] {
+        let mut app = demo_app(true, width, 900.0);
+        group_page(&mut app, GroupSettingsPane::Preferences);
+        let mut ui = UserInterface::build(
+            app.view(iced::window::Id::unique()),
+            Size::new(width, 900.0),
+            Cache::default(),
+            &mut renderer,
+        );
+        let found = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        ui.operate(&renderer, &mut Measure(found.clone()));
+        let theme = app.iced_theme();
+        ui.draw(
+            &mut renderer,
+            &theme,
+            &iced::advanced::renderer::Style {
+                text_color: crate::theme::t().text_primary,
+            },
+            iced::mouse::Cursor::Unavailable,
+        );
+        let bounds = found.lock().unwrap();
+        let title = bounds.get("Disappearing messages").unwrap();
+        let support = bounds
+            .get("Automatically remove messages after a set time.")
+            .unwrap();
+        assert!(
+            support.width >= title.width + 40.0,
+            "{width}: supporting text must use the width below the switch"
+        );
+        assert!(title.x + title.width <= width && support.x + support.width <= width);
+    }
+}
+
+#[test]
+fn holds_open_menus_in_the_complete_linux_shell() {
+    use iced::advanced::widget::Operation;
+    use iced::{mouse, touch, Event, Point};
+    struct Locate {
+        needle: String,
+        point: Option<Point>,
+    }
+    impl Operation for Locate {
+        fn traverse(&mut self, op: &mut dyn FnMut(&mut dyn Operation)) {
+            op(self);
+        }
+        fn text(&mut self, _: Option<&iced::widget::Id>, bounds: iced::Rectangle, text: &str) {
+            if text == self.needle {
+                self.point = Some(bounds.center());
+            }
+        }
+    }
+    load_fonts();
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+        iced::Font::with_name("Noto Sans"),
+        iced::Pixels(16.0),
+        Some("tiny-skia"),
+    ))
+    .unwrap();
+    for native_touch in [true, false] {
+        for bubble in [false, true] {
+            let size = Size::new(800.0, 760.0);
+            let mut app = demo_app(true, size.width, size.height);
+            if bubble {
+                select(&mut app, 0);
+                app.messages = vec![msg(31, "Hold this message", false, "09:06")].into();
+            }
+            let mut locate = Locate {
+                needle: if bubble {
+                    super::ui::format_bubble_time(app.messages[0].created_at.as_deref()).unwrap()
+                } else {
+                    "Alice Marchetti".into()
+                },
+                point: None,
+            };
+            let mut ui = UserInterface::build(
+                app.view(iced::window::Id::unique()),
+                size,
+                Cache::default(),
+                &mut renderer,
+            );
+            ui.operate(&renderer, &mut locate);
+            let mut cache = ui.into_cache();
+            let point = locate.point.unwrap_or_else(|| {
+                panic!("hold target visible: bubble={bubble}, touch={native_touch}")
+            });
+            let finger = touch::Finger(81);
+            let cursor = if native_touch {
+                mouse::Cursor::Unavailable
+            } else {
+                mouse::Cursor::Available(point)
+            };
+            let press = if native_touch {
+                Event::Touch(touch::Event::FingerPressed {
+                    id: finger,
+                    position: point,
+                })
+            } else {
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+            };
+            let release = if native_touch {
+                Event::Touch(touch::Event::FingerLifted {
+                    id: finger,
+                    position: point,
+                })
+            } else {
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+            };
+            for event in [
+                press,
+                Event::Window(iced::window::Event::RedrawRequested(
+                    std::time::Instant::now()
+                        + std::time::Duration::from_millis(crate::LONG_PRESS_MS + 1),
+                )),
+                release,
+            ] {
+                let mut ui = UserInterface::build(
+                    app.view(iced::window::Id::unique()),
+                    size,
+                    cache,
+                    &mut renderer,
+                );
+                let mut messages = vec![];
+                let _ = ui.update(
+                    &[event],
+                    cursor,
+                    &mut renderer,
+                    &mut iced::advanced::clipboard::Null,
+                    &mut messages,
+                );
+                cache = ui.into_cache();
+                for message in messages {
+                    let _ = app.update(message);
+                }
+            }
+            assert!(
+                if bubble {
+                    app.message_menu.is_some()
+                } else {
+                    app.chat_menu.is_some()
+                },
+                "menu for bubble={bubble}, native touch={native_touch}"
+            );
+        }
+    }
+}
+
+#[test]
+fn image_viewer_dismisses_before_the_chat_and_paste_stays_in_its_chat() {
+    let mut app = demo_app(true, 800.0, 760.0);
+    select(&mut app, 0);
+    app.image_viewer = Some((PathBuf::from("test.png"), 2.0));
+    let _ = app.update(Message::Escape);
+    assert!(app.image_viewer.is_none());
+    assert!(app.selected.is_some());
+    let old = app.selected_id.clone();
+    select(&mut app, 1);
+    let _ = app.update(Message::ComposerImagePasted {
+        chat: old.clone(),
+        image: Ok(Some(vec![1])),
+    });
+    assert!(app.pasted_image.is_none());
+    let _ = app.update(Message::ComposerTextPasted {
+        chat: old,
+        text: Some("wrong chat".into()),
+    });
+    assert!(app.composer().trim().is_empty());
+    let _ = app.update(Message::ComposerImagePasted {
+        chat: app.selected_id.clone(),
+        image: Ok(Some(vec![1, 2])),
+    });
+    assert_eq!(app.pasted_image, Some(vec![1, 2]));
+    let _ = app.update(Message::DiscardComposerImage);
+    assert!(app.pasted_image.is_none());
+}
+
+#[test]
+#[ignore = "writes design-review screenshots"]
+fn shots_image_viewer_and_paste() {
+    load_fonts();
+    let path = std::env::temp_dir().join(format!("cursus-viewer-shot-{}.png", std::process::id()));
+    image::RgbaImage::from_fn(640, 480, |x, y| image::Rgba([(x * 255 / 640) as u8, (y * 255 / 480) as u8, 160, 255])).save(&path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    for dark in [false, true] {
+        let mut app = demo_app(dark, 800.0, 760.0);
+        select(&mut app, 0);
+        app.image_viewer = Some((path.clone(), 1.0));
+        render(&app, Size::new(800.0, 760.0), if dark { "viewer-dark" } else { "viewer-light" });
+        app.image_viewer = None;
+        app.pasted_image = Some(bytes.clone());
+        render(&app, Size::new(800.0, 760.0), if dark { "pasted-image-dark" } else { "pasted-image-light" });
+    }
+    std::fs::remove_file(path).unwrap();
 }

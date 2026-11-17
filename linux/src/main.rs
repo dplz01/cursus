@@ -10,28 +10,29 @@ mod call_flow;
 mod desktop;
 mod desktop_entry;
 mod edit_menu;
+mod ellipsis;
 mod emoji_font;
 mod exit_wipe;
-mod ellipsis;
 mod float_open;
 mod history;
 mod hover;
 mod icons;
+mod image_gestures;
+mod input_gate;
 mod kinetic;
 mod layout;
 mod media;
 mod navigation;
+mod preference_row;
 mod preference_ui;
-mod theme;
-mod touch_mouse;
-mod trail_row;
 #[cfg(test)]
 mod shots;
 mod single_instance;
 mod tap;
+mod theme;
+mod touch_mouse;
+mod trail_row;
 mod ui;
-
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -39,8 +40,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use iced::futures::{sink::SinkExt, stream};
 use iced::font::Font;
+use iced::futures::{sink::SinkExt, stream};
 use iced::widget::container;
 use iced::widget::scrollable::RelativeOffset;
 use iced::widget::text_editor;
@@ -76,8 +77,6 @@ struct PointerGate {
     touch_down: AtomicBool,
     /// Last gesture involved a finger (so release handlers honor `moved`).
     touch_gesture: AtomicBool,
-    /// Subscription published `PointerPressed` (long-press timer may be live).
-    long_press_msg: AtomicBool,
 }
 
 impl PointerGate {
@@ -89,7 +88,6 @@ impl PointerGate {
             hover_ok: AtomicBool::new(true),
             touch_down: AtomicBool::new(false),
             touch_gesture: AtomicBool::new(false),
-            long_press_msg: AtomicBool::new(false),
         }
     }
 
@@ -138,7 +136,6 @@ impl PointerGate {
         self.moved.store(false, Ordering::Relaxed);
         self.touch_gesture.store(false, Ordering::Relaxed);
         self.touch_down.store(false, Ordering::Relaxed);
-        self.long_press_msg.store(false, Ordering::Relaxed);
         if let Ok(mut a) = self.anchor.lock() {
             *a = None;
         }
@@ -166,11 +163,6 @@ impl PointerGate {
                 let dy = y - ay;
                 if dx * dx + dy * dy > PRESS_MOVE_SLOP * PRESS_MOVE_SLOP {
                     self.moved.store(true, Ordering::Relaxed);
-                    // Wake App only when a long-press timer was armed — otherwise
-                    // every scroll past slop rebuilt the whole shell (ARM stall).
-                    if self.long_press_msg.load(Ordering::Relaxed) {
-                        publish = true;
-                    }
                 }
             }
         }
@@ -183,24 +175,6 @@ impl PointerGate {
 }
 
 static POINTER_GATE: PointerGate = PointerGate::new();
-
-// Hover targets for the event subscription (long-press only when a row/bubble
-// is hot — otherwise FingerPressed must not rebuild the whole UI, or every
-// scroll gesture starts with a one-frame stall on ARM).
-// iced delivers window events on the UI thread; HoverSlots uses Rc/Cell (not Sync).
-thread_local! {
-    static HOVER_FOR_GATE: RefCell<Option<hover::HoverSlots>> = const { RefCell::new(None) };
-}
-
-fn hover_target_hot() -> bool {
-    // Message bubbles intentionally omitted: menus are double-tap via HoverArea,
-    // and treating every bubble press as hot rebuilt the UI on each scroll start.
-    HOVER_FOR_GATE.with(|g| {
-        g.borrow().as_ref().is_some_and(|slots| {
-            slots.chat.get().is_some() || slots.reaction.borrow().is_some()
-        })
-    })
-}
 
 /// Jump-to-latest FAB gate — only publishes when “away” flips, so scroll does not
 /// rebuild the chat on every wheel tick (that was the original lag).
@@ -343,9 +317,9 @@ pub struct OwnProfileDraft {
     pub dirty: bool,
 }
 
+use cursus_core::safety::{is_risky_to_open, safe_external_url, strip_tracking_params};
 /// Contact feature level — the shared rules live in `cursus_core::preferences`.
 pub use cursus_core::FeatureAllow;
-use cursus_core::safety::{is_risky_to_open, safe_external_url, strip_tracking_params};
 
 /// How this app labels a contact feature level (presentation only).
 pub trait FeatureAllowLabel {
@@ -736,7 +710,8 @@ fn harden_data_dir() {
             let Ok(meta) = entry.path().symlink_metadata() else {
                 continue;
             };
-            let mode = if meta.is_dir() { 0o700 } else if meta.is_file() { 0o600 } else { continue };
+            let mode = if meta.is_dir() { 0o700 } else if meta.is_file() { 0o600 } else { continue;
+            };
             if meta.permissions().mode() & 0o077 != 0 {
                 let _ = std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(mode));
             }
@@ -928,7 +903,10 @@ pub enum Message {
     Edited(Result<(), String>),
     AttachFile,
     FileAttached(Result<(), String>),
-    ReceiveFile { file_id: i64, file_name: String },
+    ReceiveFile {
+        file_id: i64,
+        file_name: String,
+    },
     FileReceived(Result<String, String>),
     /// Open a saved attachment with the OS default handler.
     OpenLocalFile(PathBuf),
@@ -966,7 +944,10 @@ pub enum Message {
     SetChatPreviews(bool),
     SetBlurMedia(bool),
     RevealMedia(i64),
-    BlurReady { path: PathBuf, blurred: Option<PathBuf> },
+    BlurReady {
+        path: PathBuf,
+        blurred: Option<PathBuf>,
+    },
     SetAutoDownload(bool),
     SetCleanLinks(bool),
     /// Enter sends (on) or adds a new line (off).
@@ -977,7 +958,10 @@ pub enum Message {
     SendComposerBody,
     SetEncryptFiles(bool),
     EncryptFilesSet(Result<bool, String>),
-    SetReceipts { groups: bool, on: bool },
+    SetReceipts {
+        groups: bool,
+        on: bool,
+    },
     ReceiptsSet(Result<(bool, bool), String>),
     SetKeyringUnlock(bool),
     KeyringPasswordChanged(Secret),
@@ -994,28 +978,28 @@ pub enum Message {
     ConfirmPrivacy,
     CancelPrivacy,
     /// Add or remove a reaction (`emoji` is a protocol char / display form).
-    ToggleReaction { item_id: i64, emoji: String },
+    ToggleReaction {
+        item_id: i64,
+        emoji: String,
+    },
     ReactionDone(Result<(), String>),
     /// Group only: show who reacted with this emoji.
-    ShowReactionMembers { item_id: i64, emoji: String },
+    ShowReactionMembers {
+        item_id: i64,
+        emoji: String,
+    },
     ReactionMembersLoaded {
         item_id: i64,
         emoji: String,
         result: Result<Vec<String>, String>,
     },
     CloseReactionMembers,
-    ReactionChipLongPress {
-        item_id: i64,
-        emoji: String,
-        generation: u64,
-    },
     OpenMessageMenu(i64),
     CloseMessageMenu,
     MsgMenuAction(MsgMenuAction),
     MsgMenuConfirmDelete,
     MsgMenuCancelConfirm,
     MsgBubbleReleased(i64),
-    MsgBubbleLongPress { item_id: i64, generation: u64 },
     CancelReply,
     CancelEdit,
     /// ArrowUp (empty composer) — edit the latest editable outgoing message.
@@ -1023,7 +1007,9 @@ pub enum Message {
     /// Jump the history viewport to a quoted parent item.
     JumpToQuoted(i64),
     /// Clear the temporary focus ring around a jumped-to message.
-    ClearFocusItem { generation: u64 },
+    ClearFocusItem {
+        generation: u64,
+    },
     /// Snap chat history to the newest message.
     ScrollToLatest,
     /// Top of the history: load another page of older messages.
@@ -1035,7 +1021,10 @@ pub enum Message {
     /// Reveal / hide original content of a marked-deleted item.
     ToggleRevealDeleted(i64),
     /// Reveal / hide a `#secret#` rich-text span.
-    ToggleSecretReveal { item_id: i64, index: usize },
+    ToggleSecretReveal {
+        item_id: i64,
+        index: usize,
+    },
     /// First-run / unlock gate.
     WelcomeNameChanged(String),
     WelcomeNameNext,
@@ -1116,7 +1105,10 @@ pub enum Message {
     /// Member support (“Chat with admins”).
     OpenSupportChatList,
     OpenUserSupportChat,
-    OpenMemberSupportChat { member_id: i64, title: String },
+    OpenMemberSupportChat {
+        member_id: i64,
+        title: String,
+    },
     CloseSupportOverlay,
     SupportMembersLoaded(Result<Vec<GroupMemberInfo>, String>),
     DeleteMemberSupportChat(i64),
@@ -1169,7 +1161,10 @@ pub enum Message {
     GroupMemberToggleBlockAll,
     GroupMemberBlockAllDone(Result<(), String>),
     /// Accept a pending member (`pending_approval` / `pending_review`) as this role.
-    GroupMemberAccept { member_id: i64, role: String },
+    GroupMemberAccept {
+        member_id: i64,
+        role: String,
+    },
     GroupMemberAccepted(Result<(), String>),
     OpenGroupPreferences,
     CloseGroupPreferences,
@@ -1234,14 +1229,26 @@ pub enum Message {
     SendVoiceDraft,
     CancelVoiceDraft,
     VoiceSent(Result<(), String>),
-    PlayVoice { file_id: i64, path: PathBuf, duration_secs: u32 },
+    PlayVoice {
+        file_id: i64,
+        path: PathBuf,
+        duration_secs: u32,
+    },
     StopVoicePlayback,
     VoiceTick,
     /// GTK-style inertial fling after a touch scroll.
-    ScrollFlingStart { id: String, velocity_y: f32 },
-    ScrollFlingCancel { id: String },
+    ScrollFlingStart {
+        id: String,
+        velocity_y: f32,
+    },
+    ScrollFlingCancel {
+        id: String,
+    },
     ScrollFlingTick,
-    WaveformReady { path: PathBuf, peaks: Result<Vec<f32>, String> },
+    WaveformReady {
+        path: PathBuf,
+        peaks: Result<Vec<f32>, String>,
+    },
     /// Deferred media warm-up after the chat view has painted once.
     WarmChatMedia,
     ImagePreviewReady {
@@ -1275,7 +1282,10 @@ pub enum Message {
     /// Pending one-time links (header button + list overlay).
     OpenPendingLinks,
     ClosePendingLinks,
-    CopyPendingLink { conn_id: i64, full: bool },
+    CopyPendingLink {
+        conn_id: i64,
+        full: bool,
+    },
     RenamePendingLink(i64),
     PendingLinkNameChanged(String),
     SavePendingLinkName,
@@ -1312,16 +1322,14 @@ pub enum Message {
     OpenCompose,
     CloseCompose,
     CoreEvent(Event),
-    /// Pointer moved (mouse or touch) — cancels long-press when dragged.
-    PointerMoved { x: f32, y: f32 },
-    /// Touch / left-button down — may start long-press on hovered row/bubble.
-    PointerPressed { x: f32, y: f32 },
-    /// Touch finger up — suppress sticky hover (iced keeps cursor on last touch).
-    PointerTouchEnded,
+    /// Pointer moved far enough to update hover or history affordances.
+    PointerMoved {
+        x: f32,
+        y: f32,
+    },
     /// Short tap on a chat row (only if the press did not become a scroll).
     ChatRowReleased(usize),
     /// Fired after LONG_PRESS_MS if the finger/button is still down.
-    ChatRowLongPress { index: usize, generation: u64 },
     OpenChatMenu(usize),
     CloseChatMenu,
     ChatMenuAction(ChatMenuAction),
@@ -1341,6 +1349,25 @@ pub enum Message {
     FieldMenu(edit_menu::FieldMenuAction),
     /// Chat composer context menu (Select all / Cut / Copy / Paste).
     ComposerMenu(edit_menu::ComposerMenuAction),
+    PasteComposer,
+    ComposerImagePasted {
+        chat: Option<cursus_core::ChatId>,
+        image: Result<Option<Vec<u8>>, String>,
+    },
+    ComposerTextPasted {
+        chat: Option<ChatId>,
+        text: Option<String>,
+    },
+    ComposerImageSent {
+        chat: ChatId,
+        bytes: Vec<u8>,
+        result: Result<(), String>,
+    },
+    DiscardComposerImage,
+    OpenImage(PathBuf),
+    CloseImage,
+    ImageStep(i32),
+    ImageZoom(f32),
 }
 
 struct App {
@@ -1382,6 +1409,8 @@ struct App {
     /// conversation reloads, e.g. after a download completes.
     decrypts_failed: HashSet<PathBuf>,
     composer: text_editor::Content,
+    pasted_image: Option<Vec<u8>>,
+    image_viewer: Option<(PathBuf, f32)>,
     connecting: bool,
     invite_input: String,
     /// One-time link on the New page's Connect card (core keeps it until
@@ -1415,13 +1444,8 @@ struct App {
     /// otherwise resurrect the Accept bar on the next chat-list refresh.
     handled_contact_requests: HashSet<i64>,
     chat_menu: Option<ChatContextMenu>,
-    /// Bumped to cancel an in-flight long-press timer.
-    long_press_generation: u64,
-    long_press_index: Option<usize>,
-    /// Hover targets for long-press (updated by widgets without App Messages).
+    /// Widget-local hover feedback without rebuilding the App.
     hover: hover::HoverSlots,
-    /// Screen position where the active press began.
-    press_anchor: Option<(f32, f32)>,
     /// True once the press moved past [`PRESS_MOVE_SLOP`] (scroll / drag).
     press_moved: bool,
     /// Last known pointer position (for mouse ButtonPressed without coordinates).
@@ -1495,9 +1519,6 @@ struct App {
     emoji_suggest_index: usize,
     /// Per-message context menu (reactions + actions).
     message_menu: Option<MessageMenu>,
-    /// Long-press tracking for message bubbles.
-    msg_long_press_generation: u64,
-    msg_long_press_item: Option<i64>,
     /// Composer reply target.
     reply_to: Option<ReplyTarget>,
     editing: Option<EditTarget>,
@@ -1510,9 +1531,6 @@ struct App {
     revealed_secrets: HashMap<i64, HashSet<usize>>,
     /// Group reaction member list overlay.
     reaction_members: Option<ReactionMembersOverlay>,
-    /// Long-press tracking for reaction chips (groups → members list).
-    reaction_chip_press_generation: u64,
-    reaction_chip_press: Option<(i64, String)>,
     /// Temporary highlight after JumpToQuoted.
     focus_item: Option<i64>,
     focus_item_generation: u64,
@@ -1655,6 +1673,8 @@ impl App {
                 decrypts_pending: HashSet::new(),
                 decrypts_failed: HashSet::new(),
                 composer: text_editor::Content::new(),
+                pasted_image: None,
+                image_viewer: None,
                 connecting: false,
                 invite_input: String::new(),
                 invitation: None,
@@ -1672,16 +1692,7 @@ impl App {
                 contact_request_busy: false,
                 handled_contact_requests: HashSet::new(),
                 chat_menu: None,
-                long_press_generation: 0,
-                long_press_index: None,
-                hover: {
-                    let slots = hover::HoverSlots::default();
-                    HOVER_FOR_GATE.with(|g| {
-                        *g.borrow_mut() = Some(slots.clone());
-                    });
-                    slots
-                },
-                press_anchor: None,
+                hover: hover::HoverSlots::default(),
                 press_moved: false,
                 last_pointer: (0.0, 0.0),
                 receiving_files: HashSet::new(),
@@ -1711,7 +1722,9 @@ impl App {
                 field_editor: None,
                 locked: None,
                 receipts: (true, true),
-                encrypt_files: load_account().map(|a| a.encrypt_local_files).unwrap_or(true),
+                encrypt_files: load_account()
+                    .map(|a| a.encrypt_local_files)
+                    .unwrap_or(true),
                 blurred_previews: HashMap::new(),
                 blur_pending: HashSet::new(),
                 revealed_media: HashSet::new(),
@@ -1721,8 +1734,6 @@ impl App {
                 auth_reveal: false,
                 emoji_suggest_index: 0,
                 message_menu: None,
-                msg_long_press_generation: 0,
-                msg_long_press_item: None,
                 reply_to: None,
                 editing: None,
                 selection_mode: false,
@@ -1730,8 +1741,6 @@ impl App {
                 revealed_deleted: HashSet::new(),
                 revealed_secrets: HashMap::new(),
                 reaction_members: None,
-                reaction_chip_press_generation: 0,
-                reaction_chip_press: None,
                 focus_item: None,
                 focus_item_generation: 0,
                 history_away_from_end: false,
@@ -1782,7 +1791,11 @@ impl App {
                 ..
             }) if status == iced::event::Status::Ignored => {
                 app_lock::touch();
-                Some(if modifiers.shift() { Message::FocusPrevious } else { Message::FocusNext })
+                Some(if modifiers.shift() {
+                    Message::FocusPrevious
+                } else {
+                    Message::FocusNext
+                })
             }
             iced::Event::Window(iced::window::Event::Resized(size)) => {
                 Some(Message::WindowResized(size))
@@ -1790,9 +1803,7 @@ impl App {
             iced::Event::Window(iced::window::Event::Opened { size, .. }) => {
                 Some(Message::WindowResized(size))
             }
-            iced::Event::Window(iced::window::Event::Focused) => {
-                Some(Message::WindowFocused(true))
-            }
+            iced::Event::Window(iced::window::Event::Focused) => Some(Message::WindowFocused(true)),
             iced::Event::Window(iced::window::Event::Unfocused) => {
                 Some(Message::WindowFocused(false))
             }
@@ -1808,28 +1819,12 @@ impl App {
                 POINTER_GATE.mouse_click_reset();
                 None
             }
-            // Long-press is touch-only; mouse uses right-click for menus so
-            // left-clicks on buttons/composer are never mistaken for holds.
-            // Critical: only publish PointerPressed when a hover target is hot.
-            // Publishing on every finger-down rebuilds the whole view and is
-            // the “tap vs swipe” stall on ARM scrollables.
+            // Gestures are timed by their widgets; routine touch presses never
+            // rebuild the App or depend on an already-hot hover slot.
             iced::Event::Touch(iced::touch::Event::FingerPressed { position, .. }) => {
                 app_lock::touch();
                 POINTER_GATE.begin_press(position.x, position.y);
-                if hover_target_hot() {
-                    POINTER_GATE
-                        .long_press_msg
-                        .store(true, Ordering::Relaxed);
-                    Some(Message::PointerPressed {
-                        x: position.x,
-                        y: position.y,
-                    })
-                } else {
-                    POINTER_GATE
-                        .long_press_msg
-                        .store(false, Ordering::Relaxed);
-                    None
-                }
+                None
             }
             iced::Event::Touch(iced::touch::Event::FingerMoved { position, .. }) => {
                 let prev = POINTER_GATE.last_xy();
@@ -1854,20 +1849,15 @@ impl App {
             }
             iced::Event::Touch(iced::touch::Event::FingerLifted { .. })
             | iced::Event::Touch(iced::touch::Event::FingerLost { .. }) => {
-                let armed = POINTER_GATE.long_press_msg.swap(false, Ordering::Relaxed);
                 POINTER_GATE.touch_ended();
-                // Only wake App when a long-press press was published — otherwise
-                // every finger-up rebuilt the shell after a plain scroll.
-                if armed {
-                    Some(Message::PointerTouchEnded)
-                } else {
-                    None
-                }
+                None
             }
             iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
                 use iced::keyboard::key::Named;
                 app_lock::touch();
-                if modifiers.control() && matches!(key.as_ref(), iced::keyboard::Key::Character("l")) {
+                if modifiers.control()
+                    && matches!(key.as_ref(), iced::keyboard::Key::Character("l"))
+                {
                     return Some(Message::LockNow);
                 }
                 match key {
@@ -1875,6 +1865,16 @@ impl App {
                     // Emoji suggest Tab/Shift+Tab/Enter are handled in the
                     // composer key_binding so they don't fight the editor.
                     iced::keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
+                    iced::keyboard::Key::Named(Named::ArrowLeft)
+                        if status == iced::event::Status::Ignored =>
+                    {
+                        Some(Message::ImageStep(-1))
+                    }
+                    iced::keyboard::Key::Named(Named::ArrowRight)
+                        if status == iced::event::Status::Ignored =>
+                    {
+                        Some(Message::ImageStep(1))
+                    }
                     _ => None,
                 }
             }
@@ -1912,7 +1912,8 @@ impl App {
         };
 
         let fling_tick = if self.scroll_fling.is_some() {
-            iced::time::every(std::time::Duration::from_millis(16)).map(|_| Message::ScrollFlingTick)
+            iced::time::every(std::time::Duration::from_millis(16))
+                .map(|_| Message::ScrollFlingTick)
         } else {
             Subscription::none()
         };
@@ -1921,10 +1922,7 @@ impl App {
             let show = tray.show_id.clone();
             let hide = tray.hide_id.clone();
             let quit = tray.quit_id.clone();
-            Subscription::run_with(
-                (show, hide, quit),
-                tray_action_stream,
-            )
+            Subscription::run_with((show, hide, quit), tray_action_stream)
         } else {
             Subscription::none()
         };
@@ -1991,13 +1989,14 @@ impl App {
                 self.pref_menu = None;
                 // Keep an open conversation when moving Chats ↔ Channels if it
                 // still belongs in the destination; otherwise clear.
-                let keep = self.selected.and_then(|i| self.chats.get(i)).is_some_and(|c| {
-                    match section {
+                let keep = self
+                    .selected
+                    .and_then(|i| self.chats.get(i))
+                    .is_some_and(|c| match section {
                         NavSection::Chats => !c.is_channel,
                         NavSection::Channels => c.is_channel,
                         _ => false,
-                    }
-                });
+                    });
                 if !keep {
                     self.selected = None;
                     self.selected_id = None;
@@ -2029,7 +2028,10 @@ impl App {
                 // the client-side title bar. Only during the first seconds, so
                 // a desktop window resized narrow later keeps its decorations.
                 let mut tasks = vec![refresh_scale_factor()];
-                if self.decorations_checked.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(5)) {
+                if self
+                    .decorations_checked
+                    .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(5))
+                {
                     if let Some(id) = self.main_window {
                         if decorations_override().is_none()
                             && !mobile_shell()
@@ -2072,10 +2074,7 @@ impl App {
                         };
                     }
                     Task::batch([
-                        Task::perform(
-                            activate_network(session.clone()),
-                            Message::NetworkActivated,
-                        ),
+                        Task::perform(activate_network(session.clone()), Message::NetworkActivated),
                         Task::perform(load_chats(session.clone()), Message::ChatsLoaded),
                         Task::perform(
                             sync_address_auto_accept(session),
@@ -2108,6 +2107,8 @@ impl App {
                     return Task::none();
                 }
                 self.clear_pointer_gesture();
+                self.pasted_image = None;
+                self.image_viewer = None;
                 self.selected = Some(index);
                 self.selected_id = self.chats.get(index).map(|c| c.id.without_scope());
                 self.support = None;
@@ -2115,7 +2116,7 @@ impl App {
                 self.contact_profile = None;
                 // List/message hover must not stick into the conversation.
                 self.hover.clear_all();
-                self.cancel_press_timers();
+
                 // Optimistic: clear badge immediately while core marks items read.
                 self.open_unread = 0;
                 if let Some(chat) = self.chats.get_mut(index) {
@@ -2153,8 +2154,8 @@ impl App {
                     text_editor::Action::Drag(_) | text_editor::Action::Scroll { .. } => {}
                     _ => self.composer_pre_click = None,
                 }
-                let before = cursus_core::pending_shortcode_query(&self.composer_text())
-                    .map(str::to_owned);
+                let before =
+                    cursus_core::pending_shortcode_query(&self.composer_text()).map(str::to_owned);
                 self.composer.perform(action);
                 let raw = self.composer_text();
                 let expanded = cursus_core::expand_emoji_shortcodes(&raw);
@@ -2170,8 +2171,8 @@ impl App {
                 // Paste full Unicode strings from OSK / composed accents.
                 // `Binding::Insert` only takes one char and ignores Key::Character
                 // when the event has no `text` payload (common on mobile VK).
-                let before = cursus_core::pending_shortcode_query(&self.composer_text())
-                    .map(str::to_owned);
+                let before =
+                    cursus_core::pending_shortcode_query(&self.composer_text()).map(str::to_owned);
                 self.composer
                     .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
                         std::sync::Arc::new(text),
@@ -2241,13 +2242,29 @@ impl App {
                     return Task::none();
                 };
                 if chat.pending_request_id.is_some() {
-                    self.status =
-                        "Accept the contact request before sending messages.".into();
+                    self.status = "Accept the contact request before sending messages.".into();
                     return Task::none();
+                }
+                if let Some(bytes) = self.pasted_image.take() {
+                    return Task::perform(
+                        async move {
+                            let result =
+                                send_clipboard_image(session, chat.clone(), bytes.clone()).await;
+                            Message::ComposerImageSent {
+                                chat: chat.id,
+                                bytes,
+                                result,
+                            }
+                        },
+                        |message| message,
+                    );
                 }
                 // "Remove tracking from links" also cleans what you send:
                 // otherwise the codes reach your contact.
-                let text = cursus_core::outgoing_text(&self.composer_text(), self.desktop_prefs.clean_links);
+                let text = cursus_core::outgoing_text(
+                    &self.composer_text(),
+                    self.desktop_prefs.clean_links,
+                );
                 if text.is_empty() {
                     return Task::none();
                 }
@@ -2321,7 +2338,12 @@ impl App {
                 }
                 self.enqueue_receive(file_id, file_name, ReceiveMode::Manual)
             }
-            Message::FileNeedsRelayApproval { file_id, file_name, servers, ask } => {
+            Message::FileNeedsRelayApproval {
+                file_id,
+                file_name,
+                servers,
+                ask,
+            } => {
                 self.receiving_files.remove(&file_id);
                 self.relay_unapproved.insert(file_id);
                 if ask {
@@ -2346,6 +2368,95 @@ impl App {
                     }
                 }
                 self.status = err;
+                Task::none()
+            }
+            Message::OpenImage(path) => {
+                if self.tap_allowed() && !self.selection_mode {
+                    self.image_viewer = Some((path, 1.0));
+                }
+                Task::none()
+            }
+            Message::CloseImage => {
+                self.image_viewer = None;
+                Task::none()
+            }
+            Message::ImageZoom(factor) => {
+                if let Some((_, zoom)) = &mut self.image_viewer {
+                    *zoom = (*zoom * factor).clamp(1.0, 5.0);
+                }
+                Task::none()
+            }
+            Message::ImageStep(step) => {
+                let paths = self.gallery_paths();
+                if let Some((path, zoom)) = &mut self.image_viewer {
+                    if let Some(index) = paths.iter().position(|p| p == path) {
+                        let next = (index as i32 + step).rem_euclid(paths.len() as i32) as usize;
+                        *path = paths[next].clone();
+                        *zoom = 1.0;
+                    }
+                }
+                Task::none()
+            }
+            Message::PasteComposer => {
+                if self.selected_chat_for_api().is_none() || self.locked.is_some() {
+                    return Task::none();
+                }
+                let chat = self.selected_chat_for_api().map(|c| c.id);
+                Task::perform(
+                    async {
+                        tokio::task::spawn_blocking(read_clipboard_image)
+                            .await
+                            .unwrap_or_else(|e| Err(e.to_string()))
+                    },
+                    move |image| Message::ComposerImagePasted {
+                        chat: chat.clone(),
+                        image,
+                    },
+                )
+            }
+            Message::ComposerImagePasted { chat, image } => {
+                if self.locked.is_some() || chat != self.selected_chat_for_api().map(|c| c.id) {
+                    return Task::none();
+                }
+                match image {
+                    Ok(Some(bytes)) => {
+                        self.pasted_image = Some(bytes);
+                        Task::none()
+                    }
+                    Ok(None) => {
+                        iced::clipboard::read().map(move |text| Message::ComposerTextPasted {
+                            chat: chat.clone(),
+                            text,
+                        })
+                    }
+                    Err(err) => {
+                        self.status = err;
+                        Task::none()
+                    }
+                }
+            }
+            Message::ComposerTextPasted { chat, text } => {
+                if self.locked.is_some() || chat != self.selected_chat_for_api().map(|c| c.id) {
+                    return Task::none();
+                }
+                self.update(Message::ComposerInsert(text.unwrap_or_default()))
+            }
+            Message::ComposerImageSent {
+                chat,
+                bytes,
+                result,
+            } => {
+                if result.is_err()
+                    && self.locked.is_none()
+                    && self.selected_chat_for_api().is_some_and(|c| c.id == chat)
+                    && self.pasted_image.is_none()
+                {
+                    self.pasted_image = Some(bytes);
+                }
+                self.update(Message::FileAttached(result))
+            }
+            Message::DiscardComposerImage => {
+                self.pasted_image = None;
                 Task::none()
             }
             Message::OpenLocalFile(path) => {
@@ -2517,7 +2628,10 @@ impl App {
                 }
                 if let Some(at) = lock.retry_at {
                     if std::time::Instant::now() < at {
-                        let left = at.saturating_duration_since(std::time::Instant::now()).as_secs() + 1;
+                        let left = at
+                            .saturating_duration_since(std::time::Instant::now())
+                            .as_secs()
+                            + 1;
                         lock.error = Some(format!("Too many attempts. Try again in {left} s."));
                         return Task::none();
                     }
@@ -2660,15 +2774,18 @@ impl App {
                         checking: false,
                         error: None,
                     });
-                    return iced::widget::operation::focus(iced::widget::Id::new("keyring-password"));
+                    return iced::widget::operation::focus(iced::widget::Id::new(
+                        "keyring-password",
+                    ));
                 }
                 self.desktop_prefs.keyring_unlock = false;
                 desktop::save_prefs(&self.desktop_prefs);
                 Task::perform(app_lock::keyring_delete(), Message::KeyringDeleted)
             }
             Message::KeyringPasswordChanged(pw) => {
-                if let Some(PrivacyConfirm::EnableKeyringUnlock { password, error, .. }) =
-                    self.privacy_confirm.as_mut()
+                if let Some(PrivacyConfirm::EnableKeyringUnlock {
+                    password, error, ..
+                }) = self.privacy_confirm.as_mut()
                 {
                     *password = pw;
                     *error = None;
@@ -2684,8 +2801,9 @@ impl App {
                         self.status = "Cursus will unlock with your system keyring.".into();
                     }
                     Err(err) => {
-                        if let Some(PrivacyConfirm::EnableKeyringUnlock { checking, error, .. }) =
-                            self.privacy_confirm.as_mut()
+                        if let Some(PrivacyConfirm::EnableKeyringUnlock {
+                            checking, error, ..
+                        }) = self.privacy_confirm.as_mut()
                         {
                             *checking = false;
                             *error = Some(err);
@@ -2710,7 +2828,9 @@ impl App {
                 match result {
                     Ok(Some(password)) => {
                         self.status = "Unlocking with the system keyring…".into();
-                        let encrypt = load_account().map(|a| a.encrypt_local_files).unwrap_or(true);
+                        let encrypt = load_account()
+                            .map(|a| a.encrypt_local_files)
+                            .unwrap_or(true);
                         self.begin_connect(ConnectRequest {
                             password,
                             display_name,
@@ -2720,7 +2840,8 @@ impl App {
                     }
                     Ok(None) => {
                         self.auto_unlocking = false;
-                        self.status = "No password in the system keyring — enter it to unlock.".into();
+                        self.status =
+                            "No password in the system keyring — enter it to unlock.".into();
                         iced::widget::operation::focus(iced::widget::Id::new("unlock-password"))
                     }
                     Err(err) => {
@@ -2766,7 +2887,9 @@ impl App {
                     PrivacyConfirm::AutoDownload => self.desktop_prefs.auto_download = true,
                     PrivacyConfirm::KeepTrackingLinks => self.desktop_prefs.clean_links = false,
                     PrivacyConfirm::StopEncryptingFiles => return self.apply_encrypt_files(false),
-                    PrivacyConfirm::SendReceipts { groups } => return self.apply_receipts(groups, true),
+                    PrivacyConfirm::SendReceipts { groups } => {
+                        return self.apply_receipts(groups, true)
+                    }
                     PrivacyConfirm::EnableKeyringUnlock { password, .. } => {
                         // Keep the sheet up while we check + store.
                         self.privacy_confirm = Some(PrivacyConfirm::EnableKeyringUnlock {
@@ -2777,9 +2900,11 @@ impl App {
                         return Task::perform(
                             async move {
                                 let pw = password.clone();
-                                let ok = tokio::task::spawn_blocking(move || app_lock::verify(pw.as_str()))
-                                    .await
-                                    .unwrap_or(false);
+                                let ok = tokio::task::spawn_blocking(move || {
+                                    app_lock::verify(pw.as_str())
+                                })
+                                .await
+                                .unwrap_or(false);
                                 if !ok {
                                     return Err("Wrong password.".to_string());
                                 }
@@ -2811,7 +2936,9 @@ impl App {
                     .iter()
                     .find(|m| m.item_id == item_id)
                     .and_then(|m| {
-                        m.reactions.iter().find(|r| reaction_emoji_eq(&r.emoji, &emoji))
+                        m.reactions
+                            .iter()
+                            .find(|r| reaction_emoji_eq(&r.emoji, &emoji))
                     })
                     .map(|r| !r.user_reacted)
                     .unwrap_or(true);
@@ -2823,25 +2950,6 @@ impl App {
             }
             Message::ShowReactionMembers { item_id, emoji } => {
                 self.fetch_reaction_members(item_id, emoji)
-            }
-            Message::ReactionChipLongPress {
-                item_id,
-                emoji,
-                generation,
-            } => {
-                let matched = self.reaction_chip_press_generation == generation
-                    && self
-                        .reaction_chip_press
-                        .as_ref()
-                        .is_some_and(|(id, e)| *id == item_id && e == &emoji)
-                    && !self.press_moved;
-                if matched {
-                    self.reaction_chip_press = None;
-                    self.press_moved = true; // ignore the following lift as a toggle tap
-                    self.hover_ok = false;
-                    return self.fetch_reaction_members(item_id, emoji);
-                }
-                Task::none()
             }
             Message::ReactionMembersLoaded {
                 item_id,
@@ -2883,7 +2991,7 @@ impl App {
                 Task::none()
             }
             Message::OpenMessageMenu(item_id) => {
-                // Touch double-tap / desktop right-click — don't require
+                // Touch long-press / desktop right-click — don't require
                 // tap_allowed (press_moved may still be set).
                 self.open_message_menu(item_id);
                 Task::none()
@@ -2956,20 +3064,6 @@ impl App {
                     if self.selected_items.is_empty() {
                         self.selection_mode = false;
                     }
-                }
-                self.msg_long_press_item = None;
-                self.msg_long_press_generation = self.msg_long_press_generation.wrapping_add(1);
-                Task::none()
-            }
-            Message::MsgBubbleLongPress { item_id, generation } => {
-                if self.msg_long_press_generation == generation
-                    && self.msg_long_press_item == Some(item_id)
-                    && !self.press_moved
-                {
-                    self.msg_long_press_item = None;
-                    self.press_moved = true; // ignore lift as a media/quote tap
-                    self.hover_ok = false;
-                    self.open_message_menu(item_id);
                 }
                 Task::none()
             }
@@ -3053,8 +3147,7 @@ impl App {
                     desktop::save_prefs(&self.desktop_prefs);
                     self.status = "System tray enabled.".into();
                 } else {
-                    self.status =
-                        "System tray unavailable (StatusNotifier / AppIndicator).".into();
+                    self.status = "System tray unavailable (StatusNotifier / AppIndicator).".into();
                 }
                 Task::none()
             }
@@ -3469,7 +3562,10 @@ impl App {
                 Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
-                            session.set_chat_settings(&chat, &settings).map(|_| ()).map_err(|e| e.to_string())
+                            session
+                                .set_chat_settings(&chat, &settings)
+                                .map(|_| ())
+                                .map_err(|e| e.to_string())
                         })
                         .await
                         .map_err(|e| e.to_string())?
@@ -3600,7 +3696,10 @@ impl App {
                     CreateKind::Group => "Creating group…".into(),
                     CreateKind::Channel => "Creating channel…".into(),
                 };
-                Task::perform(create_chat_entity(session, draft.kind, name), Message::CreateChatDone)
+                Task::perform(
+                    create_chat_entity(session, draft.kind, name),
+                    Message::CreateChatDone,
+                )
             }
             Message::CreateChatDone(Ok((kind, chat_id, link, title))) => {
                 self.create_chat = None;
@@ -3657,10 +3756,7 @@ impl App {
                         self.rebind_selection();
                         if let Some(link) = link {
                             self.status = "Channel created — invite link copied.".into();
-                            Task::batch([
-                                iced::clipboard::write(link),
-                                self.reload_chats(),
-                            ])
+                            Task::batch([iced::clipboard::write(link), self.reload_chats()])
                         } else {
                             self.status = "Channel created.".into();
                             self.reload_chats()
@@ -3767,7 +3863,8 @@ impl App {
                     .find(|m| m.group_member_id == member_id)
                     .is_some_and(|m| member_status_is_pending(&m.status))
                 {
-                    self.status = "Accept or reject this member before deleting support chat.".into();
+                    self.status =
+                        "Accept or reject this member before deleting support chat.".into();
                     return Task::none();
                 }
                 let Some(session) = self.session.clone() else {
@@ -3903,9 +4000,11 @@ impl App {
                     let gid = g.group_id;
                     let alias = g.alias.clone();
                     let peer = g.name.clone();
-                    if let Some(chat) = self.chats.iter_mut().find(|c| {
-                        matches!(c.id.chat_type, ChatType::Group) && c.id.api_id == gid
-                    }) {
+                    if let Some(chat) = self
+                        .chats
+                        .iter_mut()
+                        .find(|c| matches!(c.id.chat_type, ChatType::Group) && c.id.api_id == gid)
+                    {
                         chat.local_alias = alias.clone();
                         chat.title = if alias.is_empty() {
                             if peer.is_empty() {
@@ -3940,12 +4039,7 @@ impl App {
                     api_id: g.group_id,
                     scope: None,
                 };
-                let Some(chat) = self
-                    .chats
-                    .iter()
-                    .find(|c| c.id == chat_id)
-                    .cloned()
-                else {
+                let Some(chat) = self.chats.iter().find(|c| c.id == chat_id).cloned() else {
                     return Task::none();
                 };
                 let mut settings = chat.settings.clone();
@@ -3982,12 +4076,7 @@ impl App {
                     api_id: g.group_id,
                     scope: None,
                 };
-                let Some(chat) = self
-                    .chats
-                    .iter()
-                    .find(|c| c.id == chat_id)
-                    .cloned()
-                else {
+                let Some(chat) = self.chats.iter().find(|c| c.id == chat_id).cloned() else {
                     return Task::none();
                 };
                 let mut settings = chat.settings.clone();
@@ -4069,9 +4158,11 @@ impl App {
                     let image = g.image.clone();
                     let short_descr = g.short_descr.clone();
                     let welcome = g.welcome_message.clone();
-                    if let Some(chat) = self.chats.iter_mut().find(|c| {
-                        matches!(c.id.chat_type, ChatType::Group) && c.id.api_id == gid
-                    }) {
+                    if let Some(chat) = self
+                        .chats
+                        .iter_mut()
+                        .find(|c| matches!(c.id.chat_type, ChatType::Group) && c.id.api_id == gid)
+                    {
                         chat.title = title;
                         chat.peer_profile.image = image;
                         chat.peer_profile.short_descr = short_descr;
@@ -4200,6 +4291,7 @@ impl App {
                 Task::none()
             }
             Message::OpenMemberRoleMenu(member_id) => {
+                self.scroll_fling = None;
                 if let Some(g) = self.group_settings.as_mut() {
                     if g.member_dropdown == Some(MemberDropdown::Role)
                         && g.selected_member_id == Some(member_id)
@@ -4213,6 +4305,7 @@ impl App {
                 Task::none()
             }
             Message::OpenMemberActionMenu(member_id) => {
+                self.scroll_fling = None;
                 if let Some(g) = self.group_settings.as_mut() {
                     if g.member_dropdown == Some(MemberDropdown::Actions)
                         && g.selected_member_id == Some(member_id)
@@ -4290,8 +4383,11 @@ impl App {
                 self.status = "Member removed.".into();
                 // Rejected from inside their support thread → back to the list.
                 if let Some(support) = self.support.as_ref() {
-                    if let SupportPane::Thread { member_id: Some(_), from_list: true, .. } =
-                        &support.pane
+                    if let SupportPane::Thread {
+                        member_id: Some(_),
+                        from_list: true,
+                        ..
+                    } = &support.pane
                     {
                         if self.pending_support_member().is_some() {
                             let group_id = support.group_id;
@@ -4469,10 +4565,7 @@ impl App {
                 )
             }
             Message::GroupLinkReady(Ok(link)) => {
-                let channel = self
-                    .group_settings
-                    .as_ref()
-                    .is_some_and(|g| g.is_channel);
+                let channel = self.group_settings.as_ref().is_some_and(|g| g.is_channel);
                 if let Some(g) = self.group_settings.as_mut() {
                     g.apply_links(link);
                 }
@@ -4483,10 +4576,7 @@ impl App {
                 Task::none()
             }
             Message::GroupLinkReady(Err(err)) => {
-                let channel = self
-                    .group_settings
-                    .as_ref()
-                    .is_some_and(|g| g.is_channel);
+                let channel = self.group_settings.as_ref().is_some_and(|g| g.is_channel);
                 if let Some(g) = self.group_settings.as_mut() {
                     g.clear_links();
                 }
@@ -4500,18 +4590,10 @@ impl App {
                 Task::none()
             }
             Message::CopyGroupLink => {
-                let channel = self
-                    .group_settings
-                    .as_ref()
-                    .is_some_and(|g| g.is_channel);
-                if let Some(link) = self
-                    .group_settings
-                    .as_ref()
-                    .and_then(|g| g.link.clone())
-                {
+                let channel = self.group_settings.as_ref().is_some_and(|g| g.is_channel);
+                if let Some(link) = self.group_settings.as_ref().and_then(|g| g.link.clone()) {
                     self.status = if channel && is_channel_short_link(&link) {
-                        "Channel link copied — share it with people to invite."
-                            .into()
+                        "Channel link copied — share it with people to invite.".into()
                     } else if channel {
                         "This isn’t a /c# channel link — create a new channel to invite people."
                             .into()
@@ -4521,8 +4603,7 @@ impl App {
                     iced::clipboard::write(link)
                 } else if channel {
                     self.status =
-                        "No channel link to copy — create a new channel for a fresh invite."
-                            .into();
+                        "No channel link to copy — create a new channel for a fresh invite.".into();
                     Task::none()
                 } else {
                     self.update(Message::EnsureGroupLink)
@@ -4563,8 +4644,7 @@ impl App {
                 // Official: channel links cannot be deleted / rotated.
                 if g.is_channel {
                     self.status =
-                        "Channel links can’t be deleted — share the existing /c# link."
-                            .into();
+                        "Channel links can’t be deleted — share the existing /c# link.".into();
                     return Task::none();
                 }
                 let Some(session) = self.session.clone() else {
@@ -4592,9 +4672,7 @@ impl App {
                 };
                 // Official: `/_short link` is private-group only (PROHIBITED on channels).
                 if g.is_channel {
-                    self.status =
-                        "Channel links already include the short form — use Copy."
-                            .into();
+                    self.status = "Channel links already include the short form — use Copy.".into();
                     return Task::none();
                 }
                 let Some(session) = self.session.clone() else {
@@ -4673,8 +4751,7 @@ impl App {
                     return Task::none();
                 };
                 let group_id = g.group_id;
-                let Some(member) = g.members.iter().find(|m| m.group_member_id == member_id)
-                else {
+                let Some(member) = g.members.iter().find(|m| m.group_member_id == member_id) else {
                     return Task::none();
                 };
                 let Some(contact_id) = member.contact_id else {
@@ -4831,14 +4908,18 @@ impl App {
                 self.status = err;
                 Task::none()
             }
-            Message::StartAudioCall(contact_id) => self.update_call(call_flow::CallMsg::Start(contact_id)),
+            Message::StartAudioCall(contact_id) => {
+                self.update_call(call_flow::CallMsg::Start(contact_id))
+            }
             Message::AcceptIncomingCall => self.update_call(call_flow::CallMsg::Accept),
             Message::RejectIncomingCall => self.update_call(call_flow::CallMsg::Reject),
             Message::EndActiveCall => self.update_call(call_flow::CallMsg::End),
             Message::Call(msg) => self.update_call(msg),
             Message::WindowFocused(focused) => {
                 self.window_focused = focused;
-                if !focused && self.desktop_prefs.lock_after == crate::desktop::LockAfter::Immediately {
+                if !focused
+                    && self.desktop_prefs.lock_after == crate::desktop::LockAfter::Immediately
+                {
                     return self.lock_app();
                 }
                 Task::none()
@@ -4868,13 +4949,20 @@ impl App {
                 {
                     self.keyring_tried = true;
                     self.status = "Opening the system keyring…".into();
-                    tasks.push(Task::perform(app_lock::keyring_load(), Message::KeyringLoaded));
+                    tasks.push(Task::perform(
+                        app_lock::keyring_load(),
+                        Message::KeyringLoaded,
+                    ));
                 }
                 if self.locked.is_some() {
-                    tasks.push(iced::widget::operation::focus(iced::widget::Id::new("lock-password")));
+                    tasks.push(iced::widget::operation::focus(iced::widget::Id::new(
+                        "lock-password",
+                    )));
                 }
                 if matches!(self.auth, Some(AuthScreen::Unlock { .. })) && !self.auto_unlocking {
-                    tasks.push(iced::widget::operation::focus(iced::widget::Id::new("unlock-password")));
+                    tasks.push(iced::widget::operation::focus(iced::widget::Id::new(
+                        "unlock-password",
+                    )));
                 }
                 Task::batch(tasks)
             }
@@ -4988,10 +5076,8 @@ impl App {
                     Ok(plain) => {
                         if plain.is_file() && !self.waveforms.contains_key(&plain) {
                             // Voice / audio may need peaks from the plaintext cache.
-                            let looks_audio = plain
-                                .extension()
-                                .and_then(|e| e.to_str())
-                                .is_some_and(|e| {
+                            let looks_audio =
+                                plain.extension().and_then(|e| e.to_str()).is_some_and(|e| {
                                     matches!(
                                         e.to_ascii_lowercase().as_str(),
                                         "m4a" | "aac" | "mp3" | "ogg" | "opus" | "wav" | "caf"
@@ -5305,9 +5391,10 @@ impl App {
                         self.stop_voice_playback();
                     } else if let Ok(Some(status)) = play.child.try_wait() {
                         if !status.success() {
-                            self.status = "Couldn't play voice message — install pipewire (pw-play), \
+                            self.status =
+                                "Couldn't play voice message — install pipewire (pw-play), \
                                  pulseaudio-utils (paplay) or alsa-utils (aplay), plus ffmpeg."
-                                .into();
+                                    .into();
                         }
                         self.stop_voice_playback();
                     }
@@ -5357,8 +5444,7 @@ impl App {
                 // until `groupLinkDataUpdated` — but only ids still in `seeded_channel_ids`
                 // (deleted channels are removed from that set so they cannot ghost).
                 prune_resolved_seeds(&mut self.seeded_channel_ids, &chats);
-                self.chats =
-                    merge_seeded_channels(chats, &self.chats, &self.seeded_channel_ids);
+                self.chats = merge_seeded_channels(chats, &self.chats, &self.seeded_channel_ids);
                 self.rebind_selection();
                 if let Some(want) = self.open_after_reload.take() {
                     if let Some(index) = self.chats.iter().position(|c| c.id == want) {
@@ -5450,7 +5536,8 @@ impl App {
                             let mut timer = Task::none();
                             if let Some(index) = first {
                                 let gen = self.new_messages_marker.map_or(0, |(_, g)| g + 1);
-                                self.new_messages_marker = Some((self.messages[index].item_id, gen));
+                                self.new_messages_marker =
+                                    Some((self.messages[index].item_id, gen));
                                 y = unread_scroll_offset(self.messages.len(), index);
                                 timer = Task::perform(
                                     async move {
@@ -5517,7 +5604,10 @@ impl App {
                 }
                 if let Some(preview) = preview {
                     self.image_previews.insert(path, preview);
-                    return Task::batch([self.enqueue_missing_blurs(), self.enqueue_missing_image_previews()]);
+                    return Task::batch([
+                        self.enqueue_missing_blurs(),
+                        self.enqueue_missing_image_previews(),
+                    ]);
                 } else {
                     // Don't re-decode a broken file on every enqueue.
                     self.image_previews_failed.insert(path);
@@ -5546,10 +5636,9 @@ impl App {
                 self.set_pending_request_visible(req_id, false);
                 self.contact_request_busy = true;
                 self.status = "Accepting contact request…".into();
-                Task::perform(
-                    accept_contact_request(session, req_id),
-                    move |result| Message::ContactRequestHandled { req_id, result },
-                )
+                Task::perform(accept_contact_request(session, req_id), move |result| {
+                    Message::ContactRequestHandled { req_id, result }
+                })
             }
             Message::RejectContactRequest(req_id) => {
                 let Some(session) = self.session.clone() else {
@@ -5561,23 +5650,27 @@ impl App {
                 self.set_pending_request_visible(req_id, false);
                 self.contact_request_busy = true;
                 self.status = "Rejecting contact request…".into();
-                Task::perform(
-                    reject_contact_request(session, req_id),
-                    move |result| Message::ContactRequestHandled { req_id, result },
-                )
+                Task::perform(reject_contact_request(session, req_id), move |result| {
+                    Message::ContactRequestHandled { req_id, result }
+                })
             }
-            Message::ContactRequestHandled { req_id, result: Ok(summary) } => {
+            Message::ContactRequestHandled {
+                req_id,
+                result: Ok(summary),
+            } => {
                 self.contact_request_busy = false;
                 self.handled_contact_requests.insert(req_id);
                 self.status = summary;
                 Task::batch([self.reload_chats(), self.reload_messages()])
             }
-            Message::ContactRequestHandled { req_id, result: Err(err) } => {
+            Message::ContactRequestHandled {
+                req_id,
+                result: Err(err),
+            } => {
                 self.contact_request_busy = false;
                 // First accept may have consumed the invitation while the
                 // command still errored — don't leave the bar stuck.
-                if err.contains("SEInvitationNotFound") || err.contains("contactRequestNotFound")
-                {
+                if err.contains("SEInvitationNotFound") || err.contains("contactRequestNotFound") {
                     self.handled_contact_requests.insert(req_id);
                     self.status = "Contact request already handled — refreshing…".into();
                     Task::batch([self.reload_chats(), self.reload_messages()])
@@ -5642,8 +5735,16 @@ impl App {
                 let Some(inv) = self.pending_links.iter().find(|i| i.conn_id == conn_id) else {
                     return Task::none();
                 };
-                let link = if full { inv.link.full.clone() } else { inv.link.display.clone() };
-                if self.invitation.as_ref().is_some_and(|i| i.conn_id == conn_id) {
+                let link = if full {
+                    inv.link.full.clone()
+                } else {
+                    inv.link.display.clone()
+                };
+                if self
+                    .invitation
+                    .as_ref()
+                    .is_some_and(|i| i.conn_id == conn_id)
+                {
                     self.invitation_copied = true;
                 }
                 self.status = "Link copied.".into();
@@ -5666,18 +5767,25 @@ impl App {
                 Task::none()
             }
             Message::SavePendingLinkName => {
-                let (Some(session), Some((conn_id, name))) = (self.session.clone(), self.renaming_link.take()) else {
+                let (Some(session), Some((conn_id, name))) =
+                    (self.session.clone(), self.renaming_link.take())
+                else {
                     return Task::none();
                 };
                 Task::perform(
-                    blocking(move || session.set_invitation_alias(conn_id, &name).map(|a| (conn_id, a))),
+                    blocking(move || {
+                        session
+                            .set_invitation_alias(conn_id, &name)
+                            .map(|a| (conn_id, a))
+                    }),
                     Message::PendingLinkRenamed,
                 )
             }
             Message::PendingLinkRenamed(result) => {
                 match result {
                     Ok((conn_id, alias)) => {
-                        if let Some(inv) = self.invitation.as_mut().filter(|i| i.conn_id == conn_id) {
+                        if let Some(inv) = self.invitation.as_mut().filter(|i| i.conn_id == conn_id)
+                        {
                             inv.alias = alias;
                         }
                     }
@@ -5713,7 +5821,11 @@ impl App {
             Message::PendingLinkDeleted(result) => {
                 match result {
                     Ok(conn_id) => {
-                        if self.invitation.as_ref().is_some_and(|i| i.conn_id == conn_id) {
+                        if self
+                            .invitation
+                            .as_ref()
+                            .is_some_and(|i| i.conn_id == conn_id)
+                        {
                             self.invitation = None;
                         }
                         self.status = "Link deleted — it no longer works.".into();
@@ -5814,7 +5926,10 @@ impl App {
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
-                Task::perform(blocking(move || session.delete_address()), Message::AddressDeleted)
+                Task::perform(
+                    blocking(move || session.delete_address()),
+                    Message::AddressDeleted,
+                )
             }
             Message::AddressDeleted(result) => {
                 match result {
@@ -5850,7 +5965,10 @@ impl App {
             }
             Message::PasteInviteLink => iced::clipboard::read().map(Message::InviteLinkPasted),
             Message::InviteLinkPasted(contents) => {
-                match contents.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
+                match contents
+                    .map(|c| c.trim().to_string())
+                    .filter(|c| !c.is_empty())
+                {
                     Some(link) => self.invite_input = link,
                     None => self.status = "Clipboard is empty — copy a link first.".into(),
                 }
@@ -5886,10 +6004,9 @@ impl App {
                     self.last_pointer = (x, y);
                     if POINTER_GATE.moved.load(Ordering::Relaxed) {
                         self.press_moved = true;
-                        self.cancel_press_timers();
+
                         // Touch/drag: finger down → older history; finger up → toward latest.
                         if self.selected.is_some() && self.messages.len() >= 8 {
-
                             if dy > 2.0 {
                                 if let Some(away) = HISTORY_AWAY_GATE.mark_away() {
                                     self.history_away_from_end = away;
@@ -5904,91 +6021,6 @@ impl App {
                 }
                 Task::none()
             }
-            Message::PointerPressed { x, y } => {
-                let (px, py) = if x.is_finite() && y.is_finite() {
-                    (x, y)
-                } else {
-                    POINTER_GATE.last_xy()
-                };
-                self.press_anchor = Some((px, py));
-                self.press_moved = false;
-                self.last_pointer = (px, py);
-                // Gate already began the press in the subscription.
-
-                // Do not capture press in mouse_area — scrollable needs FingerPressed.
-                // Long-press is armed against one target only (same as right-click).
-                let mut tasks = Vec::new();
-
-                // Prefer the deepest hover: reaction → message → chat row.
-                if self.selected_is_group() {
-                    if let Some((item_id, emoji)) = self.hover.reaction.borrow().clone() {
-                        self.reaction_chip_press_generation =
-                            self.reaction_chip_press_generation.wrapping_add(1);
-                        self.reaction_chip_press = Some((item_id, emoji.clone()));
-                        let generation = self.reaction_chip_press_generation;
-                        tasks.push(Task::perform(
-                            async move {
-                                tokio::time::sleep(std::time::Duration::from_millis(
-                                    LONG_PRESS_MS,
-                                ))
-                                .await;
-                                Message::ReactionChipLongPress {
-                                    item_id,
-                                    emoji,
-                                    generation,
-                                }
-                            },
-                            |msg| msg,
-                        ));
-                        return Task::batch(tasks);
-                    }
-                }
-
-                // Message menus on touch use HoverArea double-tap (long-press
-                // was too clunky). Desktop still opens via right-click.
-                if !self.selection_mode && self.hover.msg.get().is_some() {
-                    // Swallow chat-row long-press while a bubble is hot.
-                    return Task::batch(tasks);
-                }
-
-                // Chat-row menu only when the list is the active surface.
-                let hovered_chat = self.hover.chat.get();
-                let list_armed = match self.layout() {
-                    LayoutMode::Desktop => hovered_chat.is_some(),
-                    LayoutMode::Mobile => {
-                        self.selected.is_none() && hovered_chat.is_some()
-                    }
-                };
-                if list_armed {
-                    if let Some(index) = hovered_chat {
-                        self.long_press_generation =
-                            self.long_press_generation.wrapping_add(1);
-                        self.long_press_index = Some(index);
-                        let generation = self.long_press_generation;
-                        tasks.push(Task::perform(
-                            async move {
-                                tokio::time::sleep(std::time::Duration::from_millis(
-                                    LONG_PRESS_MS,
-                                ))
-                                .await;
-                                Message::ChatRowLongPress { index, generation }
-                            },
-                            |msg| msg,
-                        ));
-                    }
-                }
-                Task::batch(tasks)
-            }
-            Message::PointerTouchEnded => {
-                self.hover_ok = false;
-                POINTER_GATE.touch_ended();
-                self.cancel_press_timers();
-                self.press_anchor = None;
-                // Do not leave App.press_moved stuck after a scroll: the next
-                // list tap often skips PointerPressed (hover not hot yet).
-                self.press_moved = false;
-                Task::none()
-            }
             Message::TrayActions(actions) => {
                 let mut tasks = Vec::new();
                 for action in actions {
@@ -6001,29 +6033,16 @@ impl App {
                 Task::batch(tasks)
             }
             Message::ChatRowReleased(index) => {
-                // Use the gate (not sticky App.press_moved): scroll sets
-                // press_moved true, and the next row tap used to never clear it
-                // when PointerPressed was skipped — chats became unopenable.
+                // The widget already rejected holds and swipes; the gate also
+                // prevents a stale release from selecting another chat.
                 let open = POINTER_GATE.tap_ok() && self.chat_menu.is_none();
-                self.cancel_press_timers();
-                self.press_anchor = None;
+
                 self.press_moved = false;
                 if open {
                     // Short tap — open the chat (ignored after a scroll gesture).
                     return self.update(Message::SelectChat(index));
                 }
                 POINTER_GATE.reset_gesture();
-                Task::none()
-            }
-            Message::ChatRowLongPress { index, generation } => {
-                if self.long_press_generation == generation
-                    && self.long_press_index == Some(index)
-                    && !self.press_moved
-                {
-                    self.long_press_index = None;
-                    self.hover_ok = false;
-                    self.open_chat_menu(index);
-                }
                 Task::none()
             }
             Message::OpenChatMenu(index) => {
@@ -6077,10 +6096,6 @@ impl App {
                         }
                         None => Task::none(),
                     },
-                    A::Paste(clip) => {
-                        let task = self.update(Message::ComposerInsert(clip));
-                        Task::batch([task, focus])
-                    }
                 }
             }
             Message::CloseChatMenu => {
@@ -6158,12 +6173,13 @@ impl App {
                 let chat_id = chat.id.clone();
                 self.status = "Updating lists…".into();
                 // Keep the lists pane open; only refresh chats so checkmarks update.
-                Task::perform(set_chat_tags(session, chat_id, tag_ids), |result| {
-                    match result {
+                Task::perform(
+                    set_chat_tags(session, chat_id, tag_ids),
+                    |result| match result {
                         Ok(summary) => Message::ChatMenuTagsUpdated(Ok(summary)),
                         Err(err) => Message::ChatMenuTagsUpdated(Err(err)),
-                    }
-                })
+                    },
+                )
             }
             Message::ChatMenuTagsUpdated(Ok(summary)) => {
                 self.status = summary;
@@ -6401,18 +6417,24 @@ impl App {
             let mut touched_open = false;
             for (chat_id, item_id, status) in &status_updates {
                 if selected.as_ref() == Some(chat_id) {
-                    let patched = self.messages.edit().iter_mut().find(|m| m.item_id == *item_id).map(|msg| {
-                        msg.delivery = *status;
-                        // Outgoing file rows often lag on XFTP status; receipt
-                        // progress means the transfer finished from our POV.
-                        let done = matches!(
-                            status,
-                            cursus_core::DeliveryStatus::Sent | cursus_core::DeliveryStatus::Delivered
-                        );
-                        if let Some(file) = msg.file.as_mut().filter(|_| msg.outgoing && done) {
-                            file.state = cursus_core::FileTransferState::Complete;
-                        }
-                    });
+                    let patched = self
+                        .messages
+                        .edit()
+                        .iter_mut()
+                        .find(|m| m.item_id == *item_id)
+                        .map(|msg| {
+                            msg.delivery = *status;
+                            // Outgoing file rows often lag on XFTP status; receipt
+                            // progress means the transfer finished from our POV.
+                            let done = matches!(
+                                status,
+                                cursus_core::DeliveryStatus::Sent
+                                    | cursus_core::DeliveryStatus::Delivered
+                            );
+                            if let Some(file) = msg.file.as_mut().filter(|_| msg.outgoing && done) {
+                                file.state = cursus_core::FileTransferState::Complete;
+                            }
+                        });
                     if patched.is_some() {
                         touched_open = true;
                     } else if !messages_reload_queued {
@@ -6441,7 +6463,8 @@ impl App {
                     }
                 }
             }
-            if !touched && self.selected_id.is_some() && !messages_reload_queued && about_open_chat {
+            if !touched && self.selected_id.is_some() && !messages_reload_queued && about_open_chat
+            {
                 tasks.push(self.reload_messages());
             }
         } else if event.refreshes_messages()
@@ -6478,8 +6501,7 @@ impl App {
                     }
                 }
                 Event::ReceivedContactRequest(_) => {
-                    self.status =
-                        "Incoming contact request — open the chat and Accept.".into();
+                    self.status = "Incoming contact request — open the chat and Accept.".into();
                 }
                 Event::NewChatItems(_) => {
                     // Keep status quiet for high-frequency message events.
@@ -6487,7 +6509,8 @@ impl App {
                 Event::Other { type_name, body } => {
                     tracing::debug!(%type_name, "core event");
                     match type_name.as_str() {
-                        "callInvitation" | "callOffer" | "callAnswer" | "callExtraInfo" | "callEnded" => {
+                        "callInvitation" | "callOffer" | "callAnswer" | "callExtraInfo"
+                        | "callEnded" => {
                             tasks.push(self.on_call_core_event(type_name, body));
                         }
                         "rcvFileComplete" => {
@@ -6557,7 +6580,12 @@ impl App {
         Task::batch(tasks)
     }
 
-    fn enqueue_receive(&mut self, file_id: i64, file_name: String, mode: ReceiveMode) -> Task<Message> {
+    fn enqueue_receive(
+        &mut self,
+        file_id: i64,
+        file_name: String,
+        mode: ReceiveMode,
+    ) -> Task<Message> {
         let Some(session) = self.session.clone() else {
             return Task::none();
         };
@@ -6702,6 +6730,25 @@ impl App {
     pub(crate) fn selected(&self) -> Option<usize> {
         self.selected
     }
+    pub(crate) fn gallery_paths(&self) -> Vec<PathBuf> {
+        self.messages
+            .iter()
+            .filter_map(|m| m.file.as_ref())
+            .filter(|f| {
+                matches!(
+                    std::path::Path::new(&f.file_name)
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .map(str::to_ascii_lowercase)
+                        .as_deref(),
+                    Some("png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp")
+                )
+            })
+            .filter_map(|f| self.plaintext_path_for(f))
+            .filter(|p| p.is_file())
+            .collect()
+    }
+
     pub(crate) fn composer(&self) -> String {
         self.composer_text()
     }
@@ -6723,11 +6770,7 @@ impl App {
     fn move_composer_cursor_to_end(&mut self) {
         let line = self.composer.line_count().saturating_sub(1);
         // cosmic_text cursor index is a byte offset into the line.
-        let column = self
-            .composer
-            .line(line)
-            .map(|l| l.text.len())
-            .unwrap_or(0);
+        let column = self.composer.line(line).map(|l| l.text.len()).unwrap_or(0);
         self.composer.move_to(text_editor::Cursor {
             position: text_editor::Position { line, column },
             selection: None,
@@ -7060,7 +7103,9 @@ impl App {
         let jobs: Vec<(PathBuf, PathBuf)> = self
             .image_previews
             .iter()
-            .filter(|(p, _)| !self.blurred_previews.contains_key(*p) && !self.blur_pending.contains(*p))
+            .filter(|(p, _)| {
+                !self.blurred_previews.contains_key(*p) && !self.blur_pending.contains(*p)
+            })
             .map(|(p, (png, _, _))| (p.clone(), png.clone()))
             .collect();
         let tasks: Vec<_> = jobs
@@ -7069,10 +7114,11 @@ impl App {
                 self.blur_pending.insert(path.clone());
                 Task::perform(
                     async move {
-                        let blurred = tokio::task::spawn_blocking(move || media::blurred_copy(&png).ok())
-                            .await
-                            .ok()
-                            .flatten();
+                        let blurred =
+                            tokio::task::spawn_blocking(move || media::blurred_copy(&png).ok())
+                                .await
+                                .ok()
+                                .flatten();
                         Message::BlurReady { path, blurred }
                     },
                     |m| m,
@@ -7197,7 +7243,12 @@ impl App {
             }
             paths.push(path);
         }
-        Task::batch(paths.into_iter().map(|p| self.load_waveform(p)).collect::<Vec<_>>())
+        Task::batch(
+            paths
+                .into_iter()
+                .map(|p| self.load_waveform(p))
+                .collect::<Vec<_>>(),
+        )
     }
 
     pub(crate) fn settings_section(&self) -> SettingsSection {
@@ -7247,7 +7298,10 @@ impl App {
             return Task::none();
         }
         self.status = "Accepting link…".into();
-        Task::perform(accept_invite(session, link, incognito), Message::InviteAccepted)
+        Task::perform(
+            accept_invite(session, link, incognito),
+            Message::InviteAccepted,
+        )
     }
 
     /// Opening the New page creates a one-time link at once (as the official
@@ -7473,6 +7527,8 @@ impl App {
         {
             return Task::none();
         }
+        self.pasted_image = None;
+        self.image_viewer = None;
         self.stop_voice_playback();
         if let Some(mut rec) = self.voice_rec.take() {
             let _ = rec.child.kill();
@@ -7750,8 +7806,7 @@ impl App {
     /// True when a release should count as a tap (not a scroll gesture).
     ///
     /// Driven only by [`POINTER_GATE`]: `App.press_moved` can stick after a
-    /// scroll if `PointerPressed` is skipped on the next tap (hover not hot
-    /// yet), which previously made every chat open no-op.
+    /// scroll. The next touch press resets it without requiring a hover event.
     pub(crate) fn tap_allowed(&self) -> bool {
         POINTER_GATE.tap_ok()
     }
@@ -7763,19 +7818,7 @@ impl App {
 
     fn clear_pointer_gesture(&mut self) {
         self.press_moved = false;
-        self.press_anchor = None;
         POINTER_GATE.reset_gesture();
-        self.cancel_press_timers();
-    }
-
-    fn cancel_press_timers(&mut self) {
-        self.long_press_index = None;
-        self.long_press_generation = self.long_press_generation.wrapping_add(1);
-        self.msg_long_press_item = None;
-        self.msg_long_press_generation = self.msg_long_press_generation.wrapping_add(1);
-        self.reaction_chip_press = None;
-        self.reaction_chip_press_generation =
-            self.reaction_chip_press_generation.wrapping_add(1);
     }
 
     fn open_support_list(&mut self, group_id: i64) -> Task<Message> {
@@ -8245,7 +8288,9 @@ impl App {
             } else {
                 item.pointer("/meta/itemText")
                     .and_then(|v| v.as_str())
-                    .or_else(|| item.pointer("/content/msgContent/text").and_then(|v| v.as_str()))
+                    .or_else(|| {
+                        item.pointer("/content/msgContent/text").and_then(|v| v.as_str())
+                    })
                     .unwrap_or("New message")
                     .to_string()
             };
@@ -8912,12 +8957,14 @@ async fn receive_file(
             "Downloading {file_name}… (saving under {})",
             files_dir().display()
         ))),
-        Ok(cursus_core::ReceiveOutcome::NeedsApproval { servers }) => Message::FileNeedsRelayApproval {
+        Ok(cursus_core::ReceiveOutcome::NeedsApproval { servers }) => {
+            Message::FileNeedsRelayApproval {
             file_id,
             file_name,
             servers,
             ask: mode != ReceiveMode::Auto,
-        },
+        }
+        }
         Err(e) => Message::FileReceived(Err(format!("file_id:{file_id}:{e}"))),
     }
 }
@@ -9739,7 +9786,9 @@ fn transcode_voice(wav: &std::path::Path, m4a: &std::path::Path) -> bool {
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return status.success(),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50))
+            }
             _ => {
                 tracing::warn!("voice: ffmpeg conversion timed out; sending WAV");
                 let _ = child.kill();
@@ -9877,13 +9926,11 @@ fn file_detail_line(
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| format!(".{}", e.to_ascii_lowercase()))
-        .unwrap_or_else(|| {
-            match file.kind {
+        .unwrap_or_else(|| match file.kind {
                 cursus_core::FileKind::Image => ".img".into(),
                 cursus_core::FileKind::Video => ".vid".into(),
                 cursus_core::FileKind::Voice => ".audio".into(),
                 _ => "file".into(),
-            }
         });
     let size = if file.file_size > 0 {
         let n = file.file_size as f64;
@@ -10038,7 +10085,9 @@ async fn accept_invite(session: Arc<Session>, link: String, incognito: bool) -> 
             "sentConfirmation" => "Invite accepted — waiting for the other side to confirm.".into(),
             "sentInvitation" => "Request sent to their address — waiting for acceptance.".into(),
             "contactAlreadyExists" => "That contact is already in your chats.".into(),
-            "connectionPlan" => "Link recognized — finish connecting from the plan UI (next).".into(),
+            "connectionPlan" => {
+                "Link recognized — finish connecting from the plan UI (next).".into()
+            }
             other => format!("Link accepted ({other})."),
         })
     })
@@ -10106,4 +10155,53 @@ mod voice_draft_tests {
         assert!(super::finish_voice_recording(path, std::time::Duration::from_secs(1)).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// Image MIME data is read on a worker; normal text stays with iced's clipboard.
+fn read_clipboard_image() -> Result<Option<Vec<u8>>, String> {
+    let Ok(mut clipboard) = arboard::Clipboard::new() else {
+        return Ok(None);
+    };
+    let image = match clipboard.get_image() {
+        Ok(image) => image,
+        Err(arboard::Error::ContentNotAvailable) => return Ok(None),
+        Err(_) => return Ok(None),
+    };
+    let rgba = image::RgbaImage::from_raw(
+        image.width as u32,
+        image.height as u32,
+        image.bytes.into_owned(),
+    )
+    .ok_or("Invalid clipboard image")?;
+    let mut png = std::io::Cursor::new(Vec::new());
+    rgba.write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(Some(png.into_inner()))
+}
+
+async fn send_clipboard_image(
+    session: Arc<Session>,
+    chat: ChatPreview,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = data_dir().join("tmp/clipboard");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!(
+            "image-{}.png",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        let result = session
+            .send_file(&chat.id, &path.to_string_lossy())
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+        let _ = std::fs::remove_file(path);
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

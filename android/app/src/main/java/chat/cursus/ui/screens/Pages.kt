@@ -281,7 +281,7 @@ private fun CreateChatOverlay(kind: CreateKind, onDismiss: () -> Unit, onCreate:
 
 /** The settings pages, in list order (the profile is the list's header):
  *  the same grouping and wording as the Linux app. */
-private enum class SettingsPage(val icon: Int, val title: String) {
+enum class SettingsPage(val icon: Int, val title: String) {
     Profile(R.drawable.ic_user_alt_1, "Profile"),
     Address(R.drawable.ic_address_card, "Your address"),
     Privacy(R.drawable.ic_lock, "Privacy"),
@@ -293,115 +293,116 @@ private enum class SettingsPage(val icon: Int, val title: String) {
 }
 
 @Composable
-fun SettingsPane(model: AppModel) {
+fun SettingsListPane(model: AppModel, selected: SettingsPage?, onOpen: (SettingsPage) -> Unit) {
     val c = Cursus.colors
-    val uri = LocalUriHandler.current
     val user = model.user
-    var page by remember { mutableStateOf<SettingsPage?>(null) }
-    var editing by remember { mutableStateOf<EditField?>(null) }
-    var showLicences by remember { mutableStateOf(false) }
-
-    val open = page
-    if (open == null) {
-        // The list: your profile, then one row per page saying what's inside.
-        Column(Modifier.fillMaxSize()) {
-            PaneHeader("Settings")
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                PageColumn {
-                    Column {
+    Column(Modifier.fillMaxSize()) {
+        PaneHeader("Settings")
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            PageColumn {
+                Column {
+                    Row(
+                        Modifier.pageRow { onOpen(SettingsPage.Profile) },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        chat.cursus.ui.components.Avatar(user?.displayName ?: "", user?.image, 56.dp)
+                        Column(Modifier.weight(1f)) {
+                            Text(user?.displayName ?: "", style = Cursus.type.title, color = c.textPrimary, maxLines = 1)
+                            Text(
+                                user?.shortDescr?.ifBlank { null } ?: "Add a bio",
+                                style = Cursus.type.meta, color = c.textSecondary, maxLines = 1,
+                            )
+                        }
+                    }
+                    Box(Modifier.size(10.dp))
+                    for (p in SettingsPage.entries.drop(1)) {
                         Row(
-                            Modifier.pageRow { page = SettingsPage.Profile },
+                            Modifier.clip(chat.cursus.ui.theme.Radius.lg)
+                                .background(if (selected == p) c.accentSoft else androidx.compose.ui.graphics.Color.Transparent)
+                                .pageRow { onOpen(p) },
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(14.dp),
                         ) {
-                            chat.cursus.ui.components.Avatar(user?.displayName ?: "", user?.image, 56.dp)
-                            Column(Modifier.weight(1f)) {
-                                Text(user?.displayName ?: "", style = Cursus.type.title, color = c.textPrimary, maxLines = 1)
-                                Text(
-                                    user?.shortDescr?.ifBlank { null } ?: "Add a bio",
-                                    style = Cursus.type.meta, color = c.textSecondary, maxLines = 1,
-                                )
-                            }
-                        }
-                        Box(Modifier.size(10.dp))
-                        for (p in SettingsPage.entries.drop(1)) {
-                            Row(
-                                Modifier.pageRow { page = p },
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                            ) {
-                                chat.cursus.ui.components.IconDisc(p.icon)
-                                Text(p.title, style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.weight(1f).padding(vertical = 2.dp))
-                            }
+                            chat.cursus.ui.components.IconDisc(p.icon)
+                            Text(p.title, style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.weight(1f).padding(vertical = 2.dp))
                         }
                     }
-                    if (model.busy) CircularProgressIndicator(color = c.accent)
                 }
+                if (model.busy) CircularProgressIndicator(color = c.accent)
             }
         }
-    } else {
-        androidx.activity.compose.BackHandler { page = null }
-        Column(Modifier.fillMaxSize()) {
-            PaneHeader(open.title, onBack = { page = null })
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                PageColumn {
-                    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                        when (open) {
-                            SettingsPage.Profile -> {
-                                val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-                                    uri?.let { model.withProfileImage(it) { url -> model.setOwnImage(url) } }
-                                }
-                                val photo = PhotoActions(
-                                    hasImage = user?.image != null,
-                                    onPick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                                    onClear = { model.setOwnImage("") },
-                                )
-                                ProfileIdentity(user?.displayName ?: "", user?.image, photo = photo) {
-                                    EditableLine(user?.displayName ?: "", "Your name", LineStyle.Name) { editing = EditField.OwnName }
-                                    EditableLine(user?.shortDescr ?: "", "Add a bio", LineStyle.Sub) { editing = EditField.OwnBio }
-                                }
-                                Box(Modifier.size(18.dp))
-                                CardTitle(0, "Description")
-                                EditableLine(user?.description ?: "", "Tell people about yourself", LineStyle.Body) { editing = EditField.OwnDescription }
+    }
+}
+
+@Composable
+fun SettingsDetailPane(model: AppModel, page: SettingsPage, onBack: () -> Unit) {
+    val c = Cursus.colors
+    val uri = LocalUriHandler.current
+    val user = model.user
+    var editing by remember { mutableStateOf<EditField?>(null) }
+    var showLicences by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(onBack = onBack)
+    Column(Modifier.fillMaxSize()) {
+        PaneHeader(page.title, onBack = onBack)
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            PageColumn {
+                Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                    when (page) {
+                        SettingsPage.Profile -> {
+                            val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+                                uri?.let { model.withProfileImage(it) { url -> model.setOwnImage(url) } }
                             }
-                            SettingsPage.Address -> AddressCard(model)
-                            SettingsPage.Appearance -> {
-                                var themes by remember { mutableStateOf(false) }
-                                var sizes by remember { mutableStateOf(false) }
-                                PreferenceGroup("Display") {
-                                chat.cursus.ui.components.PrefRow("Theme") {
-                                    chat.cursus.ui.components.ChoiceChip(model.prefs.theme.name, { themes = true })
-                                }
-                                chat.cursus.ui.components.PrefRow("Text size") {
-                                    chat.cursus.ui.components.ChoiceChip(model.prefs.textSize.label, { sizes = true })
-                                }
-                                }
-                                if (themes) {
-                                    chat.cursus.ui.components.ChoiceMenu(
-                                        "Theme", ThemeMode.entries.map { it to it.name }, model.prefs.theme, { themes = false },
-                                    ) { model.prefs.theme = it; themes = false }
-                                }
-                                if (sizes) {
-                                    chat.cursus.ui.components.ChoiceMenu(
-                                        "Text size", chat.cursus.TextSize.entries.map { it to it.label }, model.prefs.textSize, { sizes = false },
-                                    ) { model.prefs.textSize = it; sizes = false }
-                                }
+                            val photo = PhotoActions(
+                                hasImage = user?.image != null,
+                                onPick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                                onClear = { model.setOwnImage("") },
+                            )
+                            ProfileIdentity(user?.displayName ?: "", user?.image, photo = photo) {
+                                EditableLine(user?.displayName ?: "", "Your name", LineStyle.Name) { editing = EditField.OwnName }
+                                EditableLine(user?.shortDescr ?: "", "Add a bio", LineStyle.Sub) { editing = EditField.OwnBio }
                             }
-                            SettingsPage.About -> {
-                                Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text("Cursus ${model.info?.version ?: ""} for Android", style = Cursus.type.body, color = c.textPrimary)
-                                    Text(
-                                        "Free software under AGPL-3.0-or-later, built on the official SimpleX Chat core.",
-                                        style = Cursus.type.meta, color = c.textSecondary,
-                                    )
-                                }
-                                NavRow(R.drawable.ic_link_minimalistic_2, "Source code", "github.com/dplz01/cursus") {
-                                    uri.openUri("https://github.com/dplz01/cursus")
-                                }
-                                NavRow(R.drawable.ic_scripture_scroll, "Licences and credits") { showLicences = true }
-                            }
-                            else -> PrivacyRows(model, open)
+                            Box(Modifier.size(18.dp))
+                            CardTitle(0, "Description")
+                            EditableLine(user?.description ?: "", "Tell people about yourself", LineStyle.Body) { editing = EditField.OwnDescription }
                         }
+                        SettingsPage.Address -> AddressCard(model)
+                        SettingsPage.Appearance -> {
+                            var themes by remember { mutableStateOf(false) }
+                            var sizes by remember { mutableStateOf(false) }
+                            PreferenceGroup("Display") {
+                            chat.cursus.ui.components.PrefRow("Theme") {
+                                chat.cursus.ui.components.ChoiceChip(model.prefs.theme.name, { themes = true })
+                            }
+                            chat.cursus.ui.components.PrefRow("Text size") {
+                                chat.cursus.ui.components.ChoiceChip(model.prefs.textSize.label, { sizes = true })
+                            }
+                            }
+                            if (themes) {
+                                chat.cursus.ui.components.ChoiceMenu(
+                                    "Theme", ThemeMode.entries.map { it to it.name }, model.prefs.theme, { themes = false },
+                                ) { model.prefs.theme = it; themes = false }
+                            }
+                            if (sizes) {
+                                chat.cursus.ui.components.ChoiceMenu(
+                                    "Text size", chat.cursus.TextSize.entries.map { it to it.label }, model.prefs.textSize, { sizes = false },
+                                ) { model.prefs.textSize = it; sizes = false }
+                            }
+                        }
+                        SettingsPage.About -> {
+                            Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("Cursus ${model.info?.version ?: ""} for Android", style = Cursus.type.body, color = c.textPrimary)
+                                Text(
+                                    "Free software under AGPL-3.0-or-later, built on the official SimpleX Chat core.",
+                                    style = Cursus.type.meta, color = c.textSecondary,
+                                )
+                            }
+                            NavRow(R.drawable.ic_link_minimalistic_2, "Source code", "github.com/dplz01/cursus") {
+                                uri.openUri("https://github.com/dplz01/cursus")
+                            }
+                            NavRow(R.drawable.ic_scripture_scroll, "Licences and credits") { showLicences = true }
+                        }
+                        else -> PrivacyRows(model, page)
                     }
                 }
             }

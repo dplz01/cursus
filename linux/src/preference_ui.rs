@@ -20,7 +20,8 @@ pub(crate) fn group<'a>(
     body = body.push(
         container(rows)
             .width(Length::Fill)
-            .padding(Padding::from([4, 0]))
+            .padding(5)
+            .clip(true)
             .style(|_| {
                 let t = theme::t();
                 container::Style {

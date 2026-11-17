@@ -34,6 +34,8 @@ Let each platform render **its own native navigation**:
 | Android (Compose) | `NavigationRail` | `NavigationBar` |
 | iOS (SwiftUI) | Sidebar / split | `TabView` + navigation stack |
 
+Android uses one pane below 600dp of available app-window width, and two panes above it. The two-pane shell always keeps its destination dock below the list, with every settings category and chat detail in the right pane; it never adds a rail. Split decisions use actual window constraints, including floating and split-screen windows.
+
 That keeps Cursus recognizable without making it feel like one web app pasted onto four OSes. Shared Rust (`cursus-core` + `libsimplex`) owns session, commands, and models — not pixels.
 
 ## Navigation and back
@@ -164,7 +166,7 @@ Settings categories and contact / group / channel preferences use the same mobil
 
 - Page width: at most 620, centred, with 16px side insets. Groups are 20px apart.
 - Group: `bg.elevated`, 20px corners, quiet `border` at 50% opacity, no shadow. A small secondary heading sits outside the panel, 16px inset and 9px above it. Optional scope / ownership notes sit below it at the same inset.
-- Rows: 16px horizontal and 13–14px vertical padding; 14px between icon, flexible label column and fixed control column. Titles use body size; a short secondary explanation appears 4px below. Text wraps freely, preserving the switch's width even on a narrow phone.
+- Rows: 16px horizontal insets (12px below 360px), with a title/control line and full-width supporting text underneath. Help is attached to the supporting text instead of taking space from the title. Below 360px, decorative icons are omitted; text gets the available width while switches keep their size. Text wraps naturally; it is never squeezed into a tall column beside several controls.
 - Optional leading glyph: 18px in a 32px `accent.soft` square with 10px corners. App privacy rows omit it; group feature rows include it.
 - Switch: 46×28, 20px white thumb, 4px inset. On: `accent`; off: `text.secondary` at 24%. Disabled controls fade to 45%. Android and macOS animate state changes briefly. The entire switch row toggles once; its help button remains a separate action.
 - Longer explanations and existing confirmations remain available. Inline text answers the everyday question; it does not replace privacy warnings.
@@ -287,3 +289,14 @@ Light and dark from day one on desktop. Follow OS preference by default; Setting
 ### Navigation clicks
 
 Back and other page-changing header controls complete an owned press-and-release before navigating. A release arriving after a view changes must never activate the newly exposed conversation header. Composer controls may still act on press to keep the on-screen keyboard usable.
+
+### Touch menus and modal state
+
+- A stationary long press opens the same menu as desktop right-click: on a message, the bubble menu; on a conversation preview, the chat menu. The touched widget owns the timer; no prior hover event is required. Swipes, cancelled touches and the lift after a hold do not activate the underlying content.
+- Opening a modal keeps the background widget tree and scroll position intact. Background mouse, touch and keyboard input is suspended until dismissal; an opening member menu cancels any inertial fling.
+- Layout reference: [Signal Android shared rows](https://github.com/signalapp/Signal-Android/blob/main/core/ui/src/main/java/org/signal/core/ui/compose/Rows.kt) uses a weighted text column and a dedicated switch; [Signal Desktop preferences](https://github.com/signalapp/Signal-Desktop/blob/main/stylesheets/components/Preferences.scss) reflows narrow rows at a container breakpoint. Cursus uses full-width supporting text and removes decorative icons when narrow.
+
+- Android header Back uses the AndroidX back dispatcher, shared with system Back and keyboard Escape; all chat/profile headers keep the same 56dp height and leading inset.
+- Linux supports both native touch holds and mouse-emulated holds. Icon hits glow across the full target without hover boxes; the bottom dock keeps its existing hover style. Hover fills inside grouped cards stay inset from their borders, with visible contrast in both themes.
+- Pasting an image into the composer creates a removable draft preview; Send submits it. Text remains available as a separate draft. Linux supports Ctrl+V, Shift+Insert and the edit menu; Android uses the native rich-content receiver for clipboard and keyboard images.
+- Tapping a downloaded image opens an in-app viewer on Android and Linux: Back/Escape closes it, pinch or wheel zooms, and swiping changes images while at normal zoom. Zoomed images pan within the viewer.

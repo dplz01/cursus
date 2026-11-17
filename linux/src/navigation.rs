@@ -35,6 +35,8 @@ impl App {
 
     /// Pages and sheets belong to the destination that opened them.
     pub(crate) fn clear_section_pages(&mut self) {
+        self.image_viewer = None;
+        self.pasted_image = None;
         self.contact_profile = None;
         self.group_settings = None;
         self.support = None;
@@ -72,6 +74,9 @@ impl App {
             } else {
                 Task::none()
             };
+        }
+        if self.image_viewer.take().is_some() {
+            return Task::none();
         }
         // Reverse the stacking order in ui::shell.
         if self.field_editor.take().is_some() {

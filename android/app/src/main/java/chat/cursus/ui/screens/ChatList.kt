@@ -68,7 +68,7 @@ fun PaneHeader(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onBack != null) {
-            IconTool(R.drawable.ic_back, "Back", onBack)
+            IconTool(R.drawable.ic_back, "Back", chat.cursus.ui.components.systemBack(onBack))
         } else {
             Box(Modifier.size(8.dp))
         }
@@ -98,7 +98,7 @@ fun HeaderPlus(description: String, onClick: () -> Unit) {
 }
 
 @Composable
-fun ChatListPane(model: AppModel, channels: Boolean, onNew: () -> Unit) {
+fun ChatListPane(model: AppModel, channels: Boolean, onNew: () -> Unit, onSelect: (String) -> Unit) {
     val c = Cursus.colors
     val chats = model.chats
         .filter { it.isChannel == channels }
@@ -128,7 +128,7 @@ fun ChatListPane(model: AppModel, channels: Boolean, onNew: () -> Unit) {
         } else {
             LazyColumn(Modifier.fillMaxSize()) {
                 items(chats, key = { it.ref }) { chat ->
-                    ChatRow(model, chat, selected = chat.ref == model.selection)
+                    ChatRow(model, chat, selected = chat.ref == model.selection, onSelect = { onSelect(chat.ref) })
                 }
             }
         }
@@ -137,7 +137,7 @@ fun ChatListPane(model: AppModel, channels: Boolean, onNew: () -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ChatRow(model: AppModel, chat: Chat, selected: Boolean) {
+private fun ChatRow(model: AppModel, chat: Chat, selected: Boolean, onSelect: () -> Unit) {
     val c = Cursus.colors
     var menu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -149,7 +149,8 @@ private fun ChatRow(model: AppModel, chat: Chat, selected: Boolean) {
                 .padding(horizontal = 8.dp, vertical = 2.dp)
                 .clip(Radius.lg)
                 .background(if (selected) c.accentSoft else c.bgList)
-                .combinedClickable(onClick = { model.select(chat.ref) }, onLongClick = { menu = true })
+                .combinedClickable(onClick = onSelect, onLongClick = { menu = true })
+                .heightIn(min = 64.dp)
                 .padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -164,7 +165,7 @@ private fun ChatRow(model: AppModel, chat: Chat, selected: Boolean) {
                         fontWeight = if (chat.unread > 0) FontWeight.SemiBold else FontWeight.Normal,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
+                        modifier = Modifier.weight(1f),
                     )
                     if (chat.favorite) {
                         Icon(painterResource(R.drawable.ic_star_filled), "Favourite", Modifier.padding(start = 4.dp).size(14.dp), tint = c.gold)
@@ -172,8 +173,8 @@ private fun ChatRow(model: AppModel, chat: Chat, selected: Boolean) {
                     if (chat.muted) {
                         Icon(painterResource(R.drawable.ic_notifications_off), "Muted", Modifier.padding(start = 4.dp).size(14.dp), tint = c.textMuted)
                     }
-                    Box(Modifier.weight(1f, fill = true))
-                    Text(Stamps.list(chat.lastTs), style = Cursus.type.meta, color = c.textMuted)
+                    Text(Stamps.list(chat.lastTs), style = Cursus.type.meta, color = c.textMuted,
+                        modifier = Modifier.padding(start = 8.dp), maxLines = 1, softWrap = false)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -199,7 +200,7 @@ private fun ChatRow(model: AppModel, chat: Chat, selected: Boolean) {
             val unread = chat.unread > 0 || chat.unreadChat
             MenuEntry(if (unread) "Mark as read" else "Mark as unread") {
                 menu = false
-                if (unread) model.select(chat.ref) else model.markUnread(chat)
+                if (unread) onSelect() else model.markUnread(chat)
             }
             MenuEntry(if (chat.favorite) "Remove from favourites" else "Add to favourites") {
                 menu = false; model.setFavorite(chat, !chat.favorite)

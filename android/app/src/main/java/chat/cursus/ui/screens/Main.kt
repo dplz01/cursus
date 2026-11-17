@@ -12,11 +12,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,13 +24,8 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.only
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
-import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -50,7 +40,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -60,23 +49,11 @@ import chat.cursus.Section
 import chat.cursus.ui.theme.Cursus
 import chat.cursus.ui.theme.Radius
 
-/** Layout modes on logical (dp) width — docs/DESIGN_SYSTEM.md § Layout breakpoints. */
-enum class LayoutMode { Mobile, Compact, Desktop }
-
-@Composable
-fun layoutMode(): LayoutMode {
-    val width = LocalConfiguration.current.screenWidthDp
-    return when {
-        width < 650 -> LayoutMode.Mobile
-        width <= 950 -> LayoutMode.Compact
-        else -> LayoutMode.Desktop
-    }
-}
-
 /** Pages pushed over a section (New chat, profile, …). */
 sealed interface Page {
     data object NewChat : Page
     data object ChatInfo : Page
+    data class Settings(val section: SettingsPage) : Page
 }
 
 @Composable
@@ -104,10 +81,18 @@ fun Root(model: AppModel) {
 
 @Composable
 fun MainScreen(model: AppModel) {
-    val mode = layoutMode()
+    androidx.compose.foundation.layout.BoxWithConstraints(
+        Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+    ) {
+        MainContent(model, twoPane = PaneLayout.isSplit(maxWidth.value), listWidth = PaneLayout.listWidth(maxWidth.value).dp)
+    }
+}
+
+@Composable
+private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.compose.ui.unit.Dp) {
     val c = Cursus.colors
     var page by remember(model.section) { mutableStateOf<Page?>(null) }
-    var linkToOpen by rememberSaveable { mutableStateOf<String?>(null) }
+    var linkToOpen by rememberSaveable(model.section) { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(model.notice) {
@@ -140,9 +125,10 @@ fun MainScreen(model: AppModel) {
 
     val list: @Composable () -> Unit = {
         when (model.section) {
-            Section.Chats, Section.Channels -> ChatListPane(model, channels = model.section == Section.Channels) { page = Page.NewChat }
+            Section.Chats, Section.Channels -> ChatListPane(model, channels = model.section == Section.Channels,
+                onNew = { page = Page.NewChat }, onSelect = { ref -> page = null; model.select(ref) })
             Section.Calls -> CallsPane()
-            Section.Settings -> SettingsPane(model)
+            Section.Settings -> SettingsListPane(model, (page as? Page.Settings)?.section) { page = Page.Settings(it) }
         }
     }
     val pageContent: @Composable (Page) -> Unit = { p ->
@@ -152,6 +138,7 @@ fun MainScreen(model: AppModel) {
                 linkToOpen = null
                 model.select(ref)
             }
+            is Page.Settings -> SettingsDetailPane(model, p.section, onBack = { page = null })
             Page.ChatInfo -> model.selectedChat?.let { chat ->
                 ChatInfoPage(model, chat, onClose = { page = null }) { ref ->
                     page = null
@@ -163,60 +150,43 @@ fun MainScreen(model: AppModel) {
     val conversation: @Composable () -> Unit = {
         val chat = model.selectedChat?.takeIf { it.isChannel == (model.section == Section.Channels) }
         if (chat != null) {
-            ConversationPane(model, chat, showBack = mode != LayoutMode.Desktop, onInfo = { page = Page.ChatInfo })
+            ConversationPane(model, chat, showBack = true, onInfo = { page = Page.ChatInfo })
         } else {
             EmptyPane("Pick a chat to start messaging.")
         }
     }
 
     val listTone = if (model.section == Section.Settings) c.bgPanel else c.bgList
-    Box(Modifier.fillMaxSize().background(c.bgApp)) {
-        if (mode == LayoutMode.Desktop) {
-            Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Top))) {
-                Rail(model)
-                Box(Modifier.width(320.dp).fillMaxHeight().background(listTone)) { list() }
-                VerticalDivider(color = c.border, thickness = 1.dp)
-                Box(Modifier.weight(1f).fillMaxHeight().background(c.bgPanel)) {
-                    val p = page
-                    when {
-                        p != null -> pageContent(p)
-                        inChatSection -> conversation()
-                        else -> EmptyPane(" ")
-                    }
-                }
-            }
-        } else {
-            val p = page
-            // Fade only when a page or chat is pushed / popped. Switching
-            // sections from the bottom bar swaps the list in place — keying
-            // on the section cross-faded the whole screen (flicker).
-            AnimatedContent(
-                targetState = p to chatOpen,
-                transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(120)) },
-                label = "push",
-            ) { (shownPage, open) ->
-                when {
-                    shownPage != null -> Box(Modifier.fillMaxSize().background(c.bgPanel).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))) {
-                        pageContent(shownPage)
-                    }
-                    open -> Box(Modifier.fillMaxSize().background(c.bgPanel).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))) {
-                        conversation()
-                    }
-                    // Linux main page: the section nav floats over the list
-                    // page's bottom, with a clearance band so nothing hides
-                    // under it; Settings sits on the panel tone (cards here).
-                    else -> Box(Modifier.fillMaxSize().background(listTone)) {
-                        Box(
-                            Modifier.fillMaxSize()
-                                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-                                .padding(bottom = NavBarHeight + NavInset),
-                        ) { list() }
-                        BottomBar(model, Modifier.align(Alignment.BottomCenter))
-                    }
-                }
+    val detail: @Composable () -> Unit = {
+        val current = page
+        androidx.compose.runtime.key(current, model.selection) {
+            when {
+                current != null -> pageContent(current)
+                inChatSection -> conversation()
+                model.section == Section.Settings -> EmptyPane("Choose a settings category.")
+                else -> EmptyPane("Audio calls are coming to Cursus for Android.")
             }
         }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp))
+    }
+    val sidebar: @Composable () -> Unit = {
+        Column(Modifier.fillMaxSize().background(listTone)) {
+            Box(Modifier.weight(1f).fillMaxWidth()) { list() }
+            BottomBar(model)
+        }
+    }
+    Box(Modifier.fillMaxSize().background(c.bgApp)) {
+        if (twoPane) {
+            Row(Modifier.fillMaxSize()) {
+                Box(Modifier.width(listWidth).fillMaxHeight()) { sidebar() }
+                VerticalDivider(color = c.border, thickness = 1.dp)
+                Box(Modifier.weight(1f).fillMaxHeight().background(c.bgPanel)) { detail() }
+            }
+        } else if (page != null || chatOpen) {
+            Box(Modifier.fillMaxSize().background(c.bgPanel)) { detail() }
+        } else {
+            sidebar()
+        }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp))
         ImageGallery(model)
     }
     FileApprovalDialog(model)
@@ -237,7 +207,6 @@ private fun BottomBar(model: AppModel, modifier: Modifier = Modifier) {
     val c = Cursus.colors
     Row(
         modifier
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
             .padding(start = NavInset, end = NavInset, bottom = NavInset)
             .fillMaxWidth()
             .height(NavBarHeight)
@@ -267,28 +236,6 @@ private fun BottomBar(model: AppModel, modifier: Modifier = Modifier) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun Rail(model: AppModel) {
-    val c = Cursus.colors
-    NavigationRail(containerColor = c.bgSidebar) {
-        Box(Modifier.weight(1f))
-        for (s in Section.entries) {
-            NavigationRailItem(
-                selected = model.section == s,
-                onClick = { model.section = s },
-                icon = { NavIcon(s, sectionUnread(model, s)) },
-                label = { Text(s.title, fontSize = 10.sp) },
-                colors = NavigationRailItemDefaults.colors(
-                    selectedIconColor = c.accent,
-                    unselectedIconColor = c.textSecondary,
-                    indicatorColor = c.accentSoft,
-                ),
-            )
-        }
-        Box(Modifier.weight(1f))
     }
 }
 

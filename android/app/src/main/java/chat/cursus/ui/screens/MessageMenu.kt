@@ -87,6 +87,7 @@ private fun IconMenuAction(icon: Int, label: String, danger: Boolean = false, on
 fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
     val c = Cursus.colors
     val clipboard = LocalClipboardManager.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     var pane by remember { mutableStateOf(MenuPane.Actions) }
     val chat = model.selectedChat
     val deleted = m.deleted != null
@@ -138,7 +139,16 @@ fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
                         IconMenuAction(action.icon, label, danger = action == MsgAction.Delete) {
                             when (action) {
                                 MsgAction.Reply -> { onDismiss(); model.composeMode = ComposeMode.Reply(m) }
-                                MsgAction.Copy -> { onDismiss(); clipboard.setText(AnnotatedString(m.caption.ifBlank { m.text })) }
+                                MsgAction.Copy -> {
+                                    val file = m.file
+                                    val path = file?.takeIf { it.kind == "image" }?.let { model.plainFiles[it.id] }
+                                    if (path != null) {
+                                        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", java.io.File(path))
+                                        context.getSystemService(android.content.ClipboardManager::class.java)
+                                            .setPrimaryClip(android.content.ClipData.newUri(context.contentResolver, "Image", uri))
+                                    } else clipboard.setText(AnnotatedString(m.caption.ifBlank { m.text }))
+                                    onDismiss()
+                                }
                                 MsgAction.Edit -> { onDismiss(); model.startEdit(m) }
                                 MsgAction.Forward -> pane = MenuPane.ForwardPick
                                 MsgAction.Info -> pane = MenuPane.Info

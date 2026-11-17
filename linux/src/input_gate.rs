@@ -69,6 +69,14 @@ impl Widget<Message, iced::Theme, iced::Renderer> for InputGate<'_> {
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        // Set input mode before children derive hover state, not after event dispatch.
+        match event {
+            Event::Touch(_) => crate::POINTER_GATE.hover_ok.store(false, std::sync::atomic::Ordering::Relaxed),
+            Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                if let Some(message) = crate::POINTER_GATE.filter_move(position.x, position.y) { shell.publish(message); }
+            }
+            _ => {}
+        }
         if self.blocked
             && matches!(
                 event,
@@ -77,6 +85,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for InputGate<'_> {
         {
             return;
         }
+        let cursor = if matches!(event, Event::Window(_)) && !crate::POINTER_GATE.hover_allowed() { mouse::Cursor::Unavailable } else { cursor };
         self.content.as_widget_mut().update(
             tree, event, layout, cursor, renderer, clipboard, shell, viewport,
         );
@@ -91,9 +100,8 @@ impl Widget<Message, iced::Theme, iced::Renderer> for InputGate<'_> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.content
-            .as_widget()
-            .draw(tree, renderer, theme, style, layout, cursor, viewport);
+        let cursor = if crate::POINTER_GATE.hover_allowed() { cursor } else { mouse::Cursor::Unavailable };
+        self.content.as_widget().draw(tree, renderer, theme, style, layout, cursor, viewport);
     }
     fn mouse_interaction(
         &self,
@@ -103,7 +111,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for InputGate<'_> {
         viewport: &Rectangle,
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
-        if self.blocked {
+        if self.blocked || !crate::POINTER_GATE.hover_allowed() {
             mouse::Interaction::None
         } else {
             self.content

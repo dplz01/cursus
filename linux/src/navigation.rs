@@ -35,7 +35,7 @@ impl App {
 
     /// Pages and sheets belong to the destination that opened them.
     pub(crate) fn clear_section_pages(&mut self) {
-        self.image_viewer = None;
+        self.clear_gallery();
         self.pasted_image = None;
         self.contact_profile = None;
         self.group_settings = None;
@@ -75,7 +75,8 @@ impl App {
                 Task::none()
             };
         }
-        if self.image_viewer.take().is_some() {
+        if self.image_viewer.is_some() {
+            self.clear_gallery();
             return Task::none();
         }
         // Reverse the stacking order in ui::shell.

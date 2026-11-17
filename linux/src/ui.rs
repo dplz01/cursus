@@ -243,10 +243,12 @@ pub fn shell(app: &App) -> Element<'_, Message> {
     if let Some(lock) = app.lock_state() {
         return lock_screen(app, lock);
     }
-    let base: Element<'_, Message> = match app.layout() {
+    // The image viewer is opaque. Keep the page's widget tree for Back, but
+    // do not construct, lay out or paint thousands of hidden chat rows per photo.
+    let base = crate::retained::view(if app.image_viewer.is_some() { None } else { Some(match app.layout() {
         LayoutMode::Desktop => desktop_shell(app),
         LayoutMode::Mobile => stacked_shell(app),
-    };
+    }) });
     let modal = app.chat_menu().is_some()
         || app.pending_url().is_some()
         || app.privacy_confirm().is_some()
@@ -6521,10 +6523,10 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
 
 fn calls_section_label(label: &str, d: Density) -> Element<'static, Message> {
     container(
-        text(label.to_uppercase())
-            .size(d.meta)
+        text(label.to_string())
+            .size(d.body * 0.82)
             .font(BOLD)
-            .color(theme::t().text_muted),
+            .color(theme::t().text_secondary),
     )
     .padding(Padding {
         top: 14.0,
@@ -6585,14 +6587,11 @@ fn call_history_row<'a>(
     let info = row![
         profile_avatar_fallback(image, &name, 40.0, AvatarFallback::ContactIcon),
         column![
-            text(name.clone())
-                .size(d.body)
-                .wrapping(Wrapping::None)
-                .color(if missed { t.danger } else { t.text_primary }),
+            crate::ellipsis::ellipsis_text_weight(name.clone(), d.body, if missed { t.danger } else { t.text_primary }, 1, true),
             row![
-                icons::call_history_icon(rec.outgoing, &rec.status, 18.0, tint),
+                icons::call_history_icon(rec.outgoing, &rec.status, d.body * 0.9, tint),
                 text(call_record_label(rec))
-                    .size(d.meta)
+                    .size(d.body * 0.85)
                     .wrapping(Wrapping::None)
                     .color(tint),
             ]
@@ -6601,7 +6600,7 @@ fn call_history_row<'a>(
         ]
         .spacing(2)
         .width(Length::Fill),
-        text(when).size(d.meta).color(t.text_muted),
+        text(when).size(d.body * 0.78).color(t.text_muted),
     ]
     .spacing(10)
     .align_y(Alignment::Center);
@@ -9747,11 +9746,7 @@ fn image_gallery(app: &App) -> Element<'_, Message> {
             .on_press(message)
             .style(theme::icon_action(app.hover_ok()))
     };
-    let title = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
+    let title = app.gallery_name(path);
     let header = row![
         tool(icons::cancel_icon(20.0, iced::Color::WHITE), Message::CloseImage),
         container(crate::ellipsis::ellipsis_text(title, 16.0, iced::Color::WHITE, 1)).width(Length::Fill).clip(true),
@@ -9777,7 +9772,15 @@ fn image_gallery(app: &App) -> Element<'_, Message> {
     .align_y(Alignment::Center);
     container(column![
         header,
-        crate::image_gestures::view(path, *zoom),
+        if let Some(handle) = app.gallery_cache.get(path) {
+            crate::image_gestures::from_handle(path, *zoom, handle)
+        } else if let Some((preview, _, _)) = app.image_preview_for(path, 220, 280) {
+            image(iced::widget::image::Handle::from_path(preview)).content_fit(ContentFit::Contain)
+                .width(Length::Fill).height(Length::Fill).into()
+        } else {
+            container(text(if app.gallery_cache.failed(path) { "Could not open this image." } else { "Loading image…" }).color(iced::Color::WHITE))
+                .center_x(Length::Fill).center_y(Length::Fill).into()
+        },
         container(footer).center_x(Length::Fill).padding(8)
     ])
     .width(Length::Fill)

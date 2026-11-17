@@ -297,9 +297,9 @@ fun CallsPane(model: AppModel) {
                     }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         chat.cursus.ui.components.Avatar(contact?.title ?: call.peerName, contact?.image, 40.dp)
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(contact?.title ?: call.peerName, style = Cursus.type.body, color = c.textPrimary, maxLines = 1)
+                            Text(contact?.title ?: call.peerName, style = Cursus.type.body, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = c.textPrimary, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Icon(painterResource(icon), null, Modifier.size(18.dp), tint = tint)
+                                Icon(painterResource(icon), null, Modifier.size(14.dp), tint = tint)
                                 val label = when { call.missed -> "Missed"; call.status == "rejected" -> "Declined"; call.status == "error" -> "Failed"; call.outgoing -> "Outgoing"; else -> "Incoming" }
                                 Text(if (call.durationSecs > 0) "$label · ${formatDuration(call.durationSecs)}" else label, style = Cursus.type.meta, color = tint)
                             }

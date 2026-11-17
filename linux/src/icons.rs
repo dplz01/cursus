@@ -571,7 +571,7 @@ pub fn composer_tool_icon<'a>(
         .content_fit(ContentFit::ScaleDown)
         .style(move |_, status| svg::Style {
             color: Some(match status {
-                svg::Status::Hovered if hover_ok => glow_color(idle),
+                svg::Status::Hovered if hover_ok && crate::POINTER_GATE.hover_allowed() => glow_color(idle),
                 _ => idle,
             }),
         });
@@ -595,7 +595,7 @@ pub fn profile_tool_icon<'a>(
         .content_fit(ContentFit::Contain)
         .style(move |_, status| svg::Style {
             color: Some(match status {
-                svg::Status::Hovered if hover_ok => glow_color(idle),
+                svg::Status::Hovered if hover_ok && crate::POINTER_GATE.hover_allowed() => glow_color(idle),
                 _ => idle,
             }),
         });
@@ -637,7 +637,7 @@ pub fn next_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     svg(svg_handle!("../assets/icons/back.svg"))
         .width(size).height(size)
         .rotation(iced::Radians(std::f32::consts::PI))
-        .style(move |_, status| svg::Style { color: Some(if crate::POINTER_GATE.hover_ok.load(std::sync::atomic::Ordering::Relaxed) && matches!(status, svg::Status::Hovered) { glow_color(color) } else { color }) })
+        .style(move |_, status| svg::Style { color: Some(if crate::POINTER_GATE.hover_allowed() && matches!(status, svg::Status::Hovered) { glow_color(color) } else { color }) })
         .into()
 }
 

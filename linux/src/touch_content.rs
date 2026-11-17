@@ -255,7 +255,10 @@ mod tests {
                         if index == 0 && !end {
                             ui.operate(&renderer, &mut SetOffset);
                         }
-                        let pointer = match &event {
+                        let event = if matches!(event, Event::Window(iced::window::Event::RedrawRequested(_))) {
+                        Event::Window(iced::window::Event::RedrawRequested(std::time::Instant::now() + std::time::Duration::from_millis(crate::LONG_PRESS_MS + 1)))
+                    } else { event };
+                    let pointer = match &event {
                             Event::Mouse(mouse::Event::CursorMoved { position }) => *position,
                             _ => point,
                         };

@@ -6,7 +6,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 |---|---|---|---|---|
 | `chats.svg` | [svgrepo/50042](https://www.svgrepo.com/svg/50042/chat-messages) | SVG Vector collection (via SVG Repo) | SVG Repo default open license (commercial app use allowed; do not resell as an icon pack). Attribution appreciated. | Yes |
 | `channels.svg` | [svgrepo/438285](https://www.svgrepo.com/svg/438285/antenna) | CFPB Design System Icons | **Public Domain (PD)** | Yes |
-| `calls.svg`, `call_*.svg` | [svgrepo/472750](https://www.svgrepo.com/svg/472750/phone) | Jtb Variety Oval Icons / jtblabs | **MIT License** | Yes |
+| `calls.svg`, `call_*.svg` | [Solar handset](https://www.svgrepo.com/svg/524804/phone-rounded), [supplied Jtb reference family](https://www.svgrepo.com/svg/472750/phone) | Solar / 480 Design handset; Cursus status marks | **CC BY 4.0** handset; MIT supplied reference family | Yes (with credit) |
 | `settings.svg` | [svgrepo/524954](https://www.svgrepo.com/svg/524954/settings) | Solar Linear Icons / Solar Icons (480 Design) | **CC BY 4.0** — attribution required | Yes (with credit) |
 | `send.svg` | [svgrepo/533306](https://www.svgrepo.com/svg/533306/send) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |
 | `star.svg`, `star-filled.svg` | [Line MD](https://github.com/cyberalien/line-md) `star` / `star-filled` | Line MD / Vjacheslav Trushkin | **MIT License** — notice in `licenses/MIT-Line-MD.txt` | Yes (with notice) |
@@ -138,3 +138,5 @@ shipped: preferences use `settings.svg`.
 
 
 Call history phone family (`calls.svg`, `call_*.svg`): Jtb Variety Oval Icons by jtblabs, supplied from SVG Repo, MIT License. Source: https://www.svgrepo.com/svg/472750/phone . Resized to the shared 24px icon system; tint is applied by the app. The same assets generate Android VectorDrawables.
+
+Call family revision: Solar Linear / 480 Design handset from the existing phone-rounded asset (https://www.svgrepo.com/svg/524804/phone-rounded), CC BY 4.0; status marks adapted to the roles of the supplied Jtb family. All now use a 24×24 viewBox and approximately 2px rounded monoline strokes.

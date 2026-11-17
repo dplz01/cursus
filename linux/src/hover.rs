@@ -377,7 +377,7 @@ where
 
         let state = tree.state.downcast_mut::<HoverState>();
         let was = state.is_hovered;
-        state.is_hovered = cursor.is_over(layout.bounds());
+        state.is_hovered = crate::POINTER_GATE.hover_allowed() && cursor.is_over(layout.bounds());
 
         if state.is_hovered && !was {
             if let Some(f) = self.set_enter.as_ref() {
@@ -511,7 +511,7 @@ where
         let state = tree.state.downcast_ref::<HoverState>();
         let bg = if self.selected_bg.is_some() {
             self.selected_bg
-        } else if state.is_hovered {
+        } else if state.is_hovered && crate::POINTER_GATE.hover_allowed() {
             self.hover_bg.or(self.idle_bg)
         } else {
             self.idle_bg

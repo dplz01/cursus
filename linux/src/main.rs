@@ -15,6 +15,8 @@ mod emoji_font;
 mod exit_wipe;
 mod float_open;
 mod history;
+mod gallery;
+mod retained;
 mod hover;
 mod icons;
 mod image_gestures;
@@ -74,6 +76,7 @@ struct PointerGate {
     anchor: Mutex<Option<(f32, f32)>>,
     moved: AtomicBool,
     hover_ok: AtomicBool,
+    hover_origin: Mutex<Option<(f32, f32)>>,
     /// True between FingerPressed and FingerLifted (touch scroll session).
     touch_down: AtomicBool,
     /// Last gesture involved a finger (so release handlers honor `moved`).
@@ -87,6 +90,7 @@ impl PointerGate {
             anchor: Mutex::new(None),
             moved: AtomicBool::new(false),
             hover_ok: AtomicBool::new(true),
+            hover_origin: Mutex::new(None),
             touch_down: AtomicBool::new(false),
             touch_gesture: AtomicBool::new(false),
         }
@@ -103,6 +107,8 @@ impl PointerGate {
     }
 
     fn begin_press(&self, x: f32, y: f32) {
+        self.hover_ok.store(false, Ordering::Relaxed);
+        if let Ok(mut origin) = self.hover_origin.lock() { *origin = Some((x, y)); }
         self.set_last(x, y);
         if let Ok(mut a) = self.anchor.lock() {
             *a = Some((x, y));
@@ -120,6 +126,7 @@ impl PointerGate {
     }
 
     fn touch_ended(&self) {
+        if let Ok(mut origin) = self.hover_origin.lock() { *origin = Some(self.last_xy()); }
         self.hover_ok.store(false, Ordering::Relaxed);
         self.clear_press();
         // Keep `moved` + `touch_gesture` until release handlers in this frame
@@ -128,15 +135,13 @@ impl PointerGate {
 
     /// Mouse click — not a touch gesture; don't inherit the last scroll's `moved`.
     fn mouse_click_reset(&self) {
-        self.reset_gesture();
-        self.hover_ok.store(true, Ordering::Relaxed);
+        if !self.touch_down.load(Ordering::Relaxed) { self.reset_gesture(); }
     }
 
     /// Drop sticky scroll/tap state (Back, successful open, etc.).
     fn reset_gesture(&self) {
         self.moved.store(false, Ordering::Relaxed);
         self.touch_gesture.store(false, Ordering::Relaxed);
-        self.touch_down.store(false, Ordering::Relaxed);
         if let Ok(mut a) = self.anchor.lock() {
             *a = None;
         }
@@ -150,12 +155,30 @@ impl PointerGate {
         }
     }
 
+    fn track_touch_move(&self, x: f32, y: f32) {
+        self.set_last(x, y);
+        self.hover_ok.store(false, Ordering::Relaxed);
+        if let Some((ax, ay)) = self.anchor.lock().ok().and_then(|a| *a) {
+            if (x - ax).hypot(y - ay) > PRESS_MOVE_SLOP { self.moved.store(true, Ordering::Relaxed); }
+        }
+    }
+
+    fn hover_allowed(&self) -> bool {
+        self.hover_ok.load(Ordering::Relaxed) && !self.touch_down.load(Ordering::Relaxed)
+    }
+
     /// Update tracking; return a Message only when App must react.
     fn filter_move(&self, x: f32, y: f32) -> Option<Message> {
         self.set_last(x, y);
+        let origin = self.hover_origin.lock().ok().and_then(|origin| *origin);
+        if self.touch_down.load(Ordering::Relaxed)
+            || (!self.hover_ok.load(Ordering::Relaxed) && origin.is_some_and(|(ox, oy)| (x - ox).hypot(y - oy) <= 2.0)) {
+            return None;
+        }
         let mut publish = false;
         if !self.hover_ok.swap(true, Ordering::Relaxed) {
             publish = true;
+            if let Ok(mut origin) = self.hover_origin.lock() { *origin = None; }
         }
         let anchor = self.anchor.lock().ok().and_then(|a| *a);
         if let Some((ax, ay)) = anchor {
@@ -1360,6 +1383,7 @@ pub enum Message {
     },
     DiscardComposerImage,
     OpenImage(PathBuf),
+    GalleryReady { path: PathBuf, generation: u64, result: Result<iced::widget::image::Handle, String> },
     CloseImage,
     ImageStep(i32),
     ImageZoom(f32),
@@ -1406,6 +1430,7 @@ struct App {
     composer: text_editor::Content,
     pasted_image: Option<Vec<u8>>,
     image_viewer: Option<(PathBuf, f32)>,
+    gallery_cache: gallery::Cache,
     connecting: bool,
     invite_input: String,
     /// One-time link on the New page's Connect card (core keeps it until
@@ -1662,6 +1687,7 @@ impl App {
                 composer: text_editor::Content::new(),
                 pasted_image: None,
                 image_viewer: None,
+                gallery_cache: gallery::Cache::default(),
                 connecting: false,
                 invite_input: String::new(),
                 invitation: None,
@@ -1791,6 +1817,7 @@ impl App {
             }
             iced::Event::Window(iced::window::Event::Focused) => Some(Message::WindowFocused(true)),
             iced::Event::Window(iced::window::Event::Unfocused) => {
+                POINTER_GATE.touch_ended();
                 Some(Message::WindowFocused(false))
             }
             iced::Event::Window(iced::window::Event::CloseRequested) => {
@@ -1814,7 +1841,7 @@ impl App {
             }
             iced::Event::Touch(iced::touch::Event::FingerMoved { position, .. }) => {
                 let prev = POINTER_GATE.last_xy();
-                let moved_msg = POINTER_GATE.filter_move(position.x, position.y);
+                POINTER_GATE.track_touch_move(position.x, position.y);
                 // History FAB edge flips without requiring PointerMoved (which we
                 // no longer publish on ordinary scrolls).
                 if POINTER_GATE.touch_down.load(Ordering::Relaxed)
@@ -1831,7 +1858,7 @@ impl App {
                         }
                     }
                 }
-                moved_msg
+                None
             }
             iced::Event::Touch(iced::touch::Event::FingerLifted { .. })
             | iced::Event::Touch(iced::touch::Event::FingerLost { .. }) => {
@@ -2087,7 +2114,7 @@ impl App {
                 }
                 self.clear_pointer_gesture();
                 self.pasted_image = None;
-                self.image_viewer = None;
+                self.clear_gallery();
                 self.selected = Some(index);
                 self.selected_id = self.chats.get(index).map(|c| c.id.without_scope());
                 self.support = None;
@@ -2351,12 +2378,19 @@ impl App {
             }
             Message::OpenImage(path) => {
                 if self.tap_allowed() && !self.selection_mode {
+                    let items = self.chat_gallery_items();
+                    self.gallery_cache.begin(items);
                     self.image_viewer = Some((path, 1.0));
+                    return self.load_gallery();
                 }
                 Task::none()
             }
+            Message::GalleryReady { path, generation, result } => {
+                self.gallery_cache.complete(path, generation, result);
+                if self.image_viewer.is_some() && self.locked.is_none() { self.load_gallery() } else { Task::none() }
+            }
             Message::CloseImage => {
-                self.image_viewer = None;
+                self.clear_gallery();
                 Task::none()
             }
             Message::ImageZoom(factor) => {
@@ -2370,7 +2404,7 @@ impl App {
                         if next != index { *path = paths[next].clone(); *zoom = 1.0; }
                     }
                 }
-                Task::none()
+                self.load_gallery()
             }
             Message::PasteComposer => {
                 if self.selected_chat_for_api().is_none() || self.locked.is_some() {
@@ -6648,14 +6682,14 @@ impl App {
 
     fn view(&self, _window: iced::window::Id) -> Element<'_, Message> {
         self.apply_appearance();
-        container(shell(self))
+        input_gate::freeze(container(shell(self))
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_| container::Style {
                 background: Some(iced::Background::Color(theme::t().bg_app)),
                 ..container::Style::default()
             })
-            .into()
+            , false)
     }
 
     pub(crate) fn nav(&self) -> NavSection {
@@ -6677,23 +6711,42 @@ impl App {
     pub(crate) fn selected(&self) -> Option<usize> {
         self.selected
     }
+    pub(crate) fn clear_gallery(&mut self) {
+        self.image_viewer = None;
+        self.gallery_cache.reset();
+    }
+    fn load_gallery(&mut self) -> Task<Message> {
+        let Some((path, _)) = &self.image_viewer else { return Task::none(); };
+        let paths = self.gallery_paths();
+        // A standalone local preview may not be in history yet.
+        let paths = if paths.contains(path) { paths } else { vec![path.clone()] };
+        let index = paths.iter().position(|p| p == path).unwrap_or(0);
+        Task::batch(self.gallery_cache.plan(&paths, index).into_iter().map(|(path, generation)| {
+            Task::perform(async move {
+                let worker_path = path.clone();
+                let result = tokio::task::spawn_blocking(move || gallery::decode(&worker_path)).await.unwrap_or_else(|e| Err(e.to_string()));
+                Message::GalleryReady { path, generation, result }
+            }, |message| message)
+        }))
+    }
+    pub(crate) fn gallery_name(&self, path: &std::path::Path) -> String {
+        if let Some((_, name)) = self.gallery_cache.items().iter().find(|(item, _)| item == path) { return name.clone(); }
+        self.messages.iter().filter_map(|m| m.file.as_ref())
+            .find(|file| self.plaintext_path_for(file).as_deref() == Some(path))
+            .map(|file| file.file_name.clone())
+            .unwrap_or_else(|| path.file_name().unwrap_or_default().to_string_lossy().into_owned())
+    }
+
     pub(crate) fn gallery_paths(&self) -> Vec<PathBuf> {
-        self.messages
-            .iter()
-            .filter_map(|m| m.file.as_ref())
-            .filter(|f| {
-                matches!(
-                    std::path::Path::new(&f.file_name)
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map(str::to_ascii_lowercase)
-                        .as_deref(),
-                    Some("png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp")
-                )
-            })
-            .filter_map(|f| self.plaintext_path_for(f))
-            .filter(|p| p.is_file())
-            .collect()
+        if !self.gallery_cache.items().is_empty() {
+            return self.gallery_cache.items().iter().map(|(path, _)| path.clone()).collect();
+        }
+        self.chat_gallery_items().into_iter().map(|(path, _)| path).collect()
+    }
+    fn chat_gallery_items(&self) -> Vec<(PathBuf, String)> {
+        self.messages.iter().filter_map(|m| m.file.as_ref()).filter(|file| {
+            matches!(std::path::Path::new(&file.file_name).extension().and_then(|s| s.to_str()).map(str::to_ascii_lowercase).as_deref(), Some("png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp"))
+        }).filter_map(|file| self.plaintext_path_for(file).map(|path| (path, file.file_name.clone()))).collect()
     }
 
     pub(crate) fn composer(&self) -> String {
@@ -7349,7 +7402,7 @@ impl App {
     }
     pub(crate) fn hover_ok(&self) -> bool {
         // Gate clears on finger-up without always publishing a Message.
-        self.hover_ok && POINTER_GATE.hover_ok.load(Ordering::Relaxed)
+        self.hover_ok && POINTER_GATE.hover_allowed()
     }
     pub(crate) fn window_width(&self) -> f32 {
         self.width
@@ -7475,7 +7528,7 @@ impl App {
             return Task::none();
         }
         self.pasted_image = None;
-        self.image_viewer = None;
+        self.clear_gallery();
         self.stop_voice_playback();
         if let Some(mut rec) = self.voice_rec.take() {
             let _ = rec.child.kill();
@@ -10152,4 +10205,29 @@ async fn send_clipboard_image(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod pointer_mode_tests {
+    use super::*;
+    #[test]
+    fn touch_and_emulated_mouse_motion_never_reenable_hover() {
+        let gate = PointerGate::new();
+        gate.begin_press(10.0, 10.0);
+        assert!(!gate.hover_allowed());
+        gate.track_touch_move(20.0, 25.0);
+        assert!(!gate.hover_allowed());
+        let _ = gate.filter_move(20.0, 25.0);
+        gate.mouse_click_reset();
+        gate.reset_gesture(); // Opening a menu must not pretend the finger lifted.
+        let _ = gate.filter_move(30.0, 25.0);
+        assert!(!gate.hover_allowed());
+        gate.track_touch_move(20.0, 25.0);
+        gate.touch_ended();
+        assert!(gate.filter_move(20.0, 25.0).is_none());
+        assert!(!gate.hover_allowed());
+        for step in 1..=4 { assert!(gate.filter_move(20.0 + step as f32 * 0.5, 25.0).is_none()); }
+        assert!(gate.filter_move(22.5, 25.0).is_some());
+        assert!(gate.hover_allowed());
+    }
 }

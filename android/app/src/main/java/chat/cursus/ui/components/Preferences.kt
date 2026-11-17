@@ -40,7 +40,7 @@ fun PreferenceGroup(title: String? = null, note: String? = null, content: @Compo
         )
         Column(
             Modifier.fillMaxWidth().clip(PreferenceShape).background(c.bgElevated)
-                .border(1.dp, c.border.copy(alpha = 0.5f), PreferenceShape).padding(vertical = 4.dp),
+                .border(1.dp, c.border, PreferenceShape).padding(vertical = 4.dp),
             content = content,
         )
         if (note != null) Text(note, style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(horizontal = 16.dp))
@@ -65,7 +65,7 @@ fun PreferenceRow(
         val showIcon = icon != null && maxWidth >= 360.dp && androidx.compose.ui.platform.LocalDensity.current.fontScale <= 1.3f
         val inset = if (maxWidth < 360.dp) 12.dp else 16.dp
         Column(
-            Modifier.fillMaxWidth().defaultMinSize(minHeight = 68.dp)
+            Modifier.fillMaxWidth().defaultMinSize(minHeight = if (subtitle.isNullOrBlank()) 48.dp else 68.dp)
                 .then(if (checked != null && onToggle != null) Modifier.toggleable(checked, enabled = enabled, role = Role.Switch, onValueChange = onToggle) else Modifier)
                 .padding(horizontal = inset, vertical = if (subtitle == null) 8.dp else 12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),

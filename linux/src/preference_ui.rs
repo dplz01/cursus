@@ -29,7 +29,7 @@ pub(crate) fn group<'a>(
                     border: iced::Border {
                         radius: 20.0.into(),
                         width: 1.0,
-                        color: iced::Color { a: 0.5, ..t.border },
+                        color: t.border,
                     },
                     ..Default::default()
                 }

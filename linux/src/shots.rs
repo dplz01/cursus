@@ -1715,6 +1715,11 @@ fn holds_open_menus_in_the_complete_linux_shell() {
                     &mut renderer,
                 );
                 let mut messages = vec![];
+                // Advance the fake clock after layout, so cold-font/layout time
+                // cannot consume the intended hold interval before the press.
+                let event = if matches!(event, Event::Window(iced::window::Event::RedrawRequested(_))) {
+                    Event::Window(iced::window::Event::RedrawRequested(std::time::Instant::now() + std::time::Duration::from_millis(crate::LONG_PRESS_MS + 1)))
+                } else { event };
                 let _ = ui.update(
                     &[event],
                     cursor,
@@ -1779,6 +1784,8 @@ fn shots_image_viewer_and_paste() {
         let mut app = demo_app(dark, 800.0, 760.0);
         select(&mut app, 0);
         app.image_viewer = Some((path.clone(), 1.0));
+        let jobs = app.gallery_cache.plan(std::slice::from_ref(&path), 0);
+        for (file, generation) in jobs { app.gallery_cache.complete(file.clone(), generation, crate::gallery::decode(&file)); }
         render(&app, Size::new(800.0, 760.0), if dark { "viewer-dark" } else { "viewer-light" });
         app.image_viewer = None;
         app.pasted_image = Some(bytes.clone());
@@ -1819,6 +1826,27 @@ fn profile_action_labels_hover_and_click_as_part_of_the_button() {
         }
     }
     assert!(glowing > 3, "hovering the button padding must illuminate its icon");
+    crate::POINTER_GATE.begin_press(point.x, point.y);
+    let touch_point = point + iced::Vector::new(0.0, 5.0);
+    let _ = ui.update(&[
+        Event::Touch(iced::touch::Event::FingerPressed { id: iced::touch::Finger(91), position: point }),
+        Event::Touch(iced::touch::Event::FingerMoved { id: iced::touch::Finger(91), position: touch_point }),
+        Event::Window(iced::window::Event::RedrawRequested(std::time::Instant::now())),
+    ], mouse::Cursor::Available(touch_point), &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
+    ui.draw(&mut renderer, &theme, &iced::advanced::renderer::Style { text_color: iced::Color::WHITE }, mouse::Cursor::Available(touch_point));
+    let pixels = renderer.screenshot(Size::new(400, 900), 1.0, iced::Color::BLACK);
+    let mut glowing = 0;
+    for y in (bounds.y as usize).saturating_sub(32)..bounds.y as usize {
+        for x in (bounds.center_x() as usize).saturating_sub(15)..(bounds.center_x() as usize + 15).min(400) {
+            let i = (y * 400 + x) * 4;
+            if pixels[i + 2] > 220 && pixels[i + 1] > 120 && pixels[i + 1] < 185 && pixels[i] < 145 { glowing += 1; }
+        }
+    }
+    assert_eq!(glowing, 0, "touching or swiping over a profile action must never illuminate its icon");
+    let _ = ui.update(&[Event::Touch(iced::touch::Event::FingerLost { id: iced::touch::Finger(91), position: touch_point })], mouse::Cursor::Available(touch_point), &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
+    crate::POINTER_GATE.touch_ended();
+    let _ = crate::POINTER_GATE.filter_move(point.x + 20.0, point.y);
+
     let _ = ui.update(&[Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)), Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))], mouse::Cursor::Available(point), &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
     drop(ui);
     for message in messages { let _ = app.update(message); }
@@ -1830,13 +1858,20 @@ fn gallery_navigation_stops_at_both_ends() {
     let mut app = demo_app(true, 800.0, 760.0); select(&mut app, 0);
     let folder = std::env::temp_dir().join(format!("cursus-gallery-bounds-{}", std::process::id()));
     std::fs::create_dir_all(&folder).unwrap();
-    let paths: Vec<_> = ["first.png", "second.png"].iter().map(|name| folder.join(name)).collect();
+    let paths: Vec<_> = ["cachehash_first.png", "cachehash_second.png"].iter().map(|name| folder.join(name)).collect();
     app.messages = paths.iter().enumerate().map(|(index, path)| {
         image::RgbaImage::new(2, 2).save(path).unwrap();
         let mut message = msg(index as i64 + 1, "", false, "09:06");
-        message.file = Some(cursus_core::FileInfo { file_id: index as i64 + 1, file_name: path.file_name().unwrap().to_string_lossy().into(), file_size: 100, state: cursus_core::FileTransferState::Complete, kind: cursus_core::FileKind::Image, duration_secs: None, local_path: Some(path.clone()), encrypted: false, crypto_key: None, crypto_nonce: None, transferred: None, transfer_total: None, error_detail: None, preview: None });
+        message.file = Some(cursus_core::FileInfo { file_id: index as i64 + 1, file_name: ["first.png", "second.png"][index].into(), file_size: 100, state: cursus_core::FileTransferState::Complete, kind: cursus_core::FileKind::Image, duration_secs: None, local_path: Some(path.clone()), encrypted: false, crypto_key: None, crypto_nonce: None, transferred: None, transfer_total: None, error_detail: None, preview: None });
         message
     }).collect::<Vec<_>>().into();
+    assert_eq!(app.gallery_name(&paths[0]), "first.png");
+    assert_eq!(app.gallery_name(&paths[1]), "second.png");
+    assert!(paths[0].file_name().unwrap().to_string_lossy().starts_with("cachehash_"));
+    let items = app.chat_gallery_items();
+    app.gallery_cache.begin(items);
+    app.messages.clear(); // Incoming reloads must not replace the visible name or gallery order.
+    assert_eq!(app.gallery_name(&paths[0]), "first.png");
     app.image_viewer = Some((paths[0].clone(), 2.0));
     let _ = app.update(Message::ImageStep(-1));
     assert_eq!(app.image_viewer.as_ref().unwrap(), &(paths[0].clone(), 2.0), "edge navigation must preserve the current photo and zoom");
@@ -1873,4 +1908,29 @@ fn shots_audit_design() {
         ]);
         render(&app, size, &format!("audit-calls-{tone}"));
     }
+}
+
+#[test]
+fn gallery_does_not_construct_or_traverse_unrelated_chat_rows() {
+    use iced::advanced::widget::Operation;
+    struct Count { hidden: usize, loading: bool }
+    impl Operation for Count {
+        fn traverse(&mut self, op: &mut dyn FnMut(&mut dyn Operation)) { op(self); }
+        fn text(&mut self, _: Option<&iced::widget::Id>, _: iced::Rectangle, text: &str) {
+            if text.starts_with("hidden-chat-") { self.hidden += 1; }
+            self.loading |= text == "Loading image…";
+        }
+    }
+    load_fonts();
+    let mut app = demo_app(true, 800.0, 760.0);
+    let template = app.chats[0].clone();
+    app.chats = (0..10_000).map(|index| { let mut chat = template.clone(); chat.title = format!("hidden-chat-{index}"); chat }).collect();
+    app.image_viewer = Some((PathBuf::from("current-photo.png"), 1.0));
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(iced::Font::DEFAULT, iced::Pixels(16.0), Some("tiny-skia"))).unwrap();
+    let started = std::time::Instant::now();
+    let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), Size::new(800.0, 760.0), Cache::default(), &mut renderer);
+    let mut count = Count { hidden: 0, loading: false }; ui.operate(&renderer, &mut count);
+    assert_eq!(count.hidden, 0);
+    assert!(count.loading);
+    eprintln!("gallery build/layout with 10,000 unrelated chats: {:?}", started.elapsed());
 }

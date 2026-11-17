@@ -252,9 +252,6 @@ private fun ContactPreferencesPage(model: AppModel, chat: Chat, onBack: () -> Un
                 }
             }
         }
-        CursusCard {
-            PrefRow("Send receipts", R.drawable.ic_check_read) { ChoiceChip(receiptsLabel(chat.sendReceipts), { menu = "receipts" }) }
-        }
     }
     when (val m = menu) {
         null -> Unit

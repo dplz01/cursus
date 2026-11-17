@@ -5,8 +5,12 @@ use iced::widget::image::{self, Handle};
 use iced::{mouse, touch, ContentFit, Element, Event, Length, Point, Rectangle, Size};
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
 pub(crate) fn view<'a>(path: &Path, zoom: f32) -> Element<'a, Message> {
-    let handle = Handle::from_path(path);
+    from_handle(path, zoom, Handle::from_path(path))
+}
+
+pub(crate) fn from_handle<'a>(path: &Path, zoom: f32, handle: Handle) -> Element<'a, Message> {
     Element::new(Photo {
         path: path.into(),
         initial_zoom: zoom,

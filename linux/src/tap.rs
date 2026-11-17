@@ -144,6 +144,15 @@ where
     ) {
         let mut messages = Vec::new();
         let mut sub = Shell::new(&mut messages);
+        // Redraws deliberately have no hover cursor in touch mode. Replayed
+        // touch presses must still hit-test at the finger, including after HOLD.
+        let cursor = match event {
+            Event::Touch(touch::Event::FingerPressed { position, .. }
+                | touch::Event::FingerMoved { position, .. }
+                | touch::Event::FingerLifted { position, .. }
+                | touch::Event::FingerLost { position, .. }) => mouse::Cursor::Available(*position),
+            _ => cursor,
+        };
         self.forward(tree, event, layout, cursor, renderer, clipboard, &mut sub, viewport);
         shell.merge(sub, |m| m);
     }
@@ -614,6 +623,22 @@ mod tests {
         }
         h.touch(touch::Event::FingerLifted { id: F, position: Point::new(50.0, 100.0) });
         assert!(h.clicks().is_empty(), "drag after hold must not click: {:?}", h.msgs);
+    }
+
+    #[test]
+    fn held_touch_taps_work_without_a_hover_cursor() {
+        let mut h = H::new(false);
+        let p = Point::new(50.0, 120.0);
+        h.touch(touch::Event::FingerPressed { id: F, position: p });
+        let mut ui = UserInterface::build(H::view(false), Size::new(400.0, 300.0), h.cache.take().unwrap(), &mut h.renderer);
+        let _ = ui.update(
+            &[Event::Window(window::Event::RedrawRequested(Instant::now() + HOLD * 2))],
+            mouse::Cursor::Unavailable, &mut h.renderer, &mut NoClip, &mut h.msgs,
+        );
+        h.cache = Some(ui.into_cache());
+        h.touch(touch::Event::FingerLifted { id: F, position: p });
+        assert_eq!(h.clicks(), vec![1], "holding a touch past HOLD must still activate the button once");
+        assert!(!h.scrolled());
     }
 
     #[test]

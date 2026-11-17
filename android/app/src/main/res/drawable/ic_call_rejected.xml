@@ -10,7 +10,7 @@
             android:strokeLineCap="round"
             android:strokeLineJoin="round" />
     </group>
-    <path android:pathData="M15 6H22"
+    <path android:pathData="M15 3L21 9M21 3L15 9"
         android:strokeColor="#FF000000"
         android:strokeWidth="2"
         android:strokeLineCap="round"

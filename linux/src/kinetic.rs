@@ -192,8 +192,8 @@ where
             {
                 state.velocity = 0.0;
                 state.generation = generation();
-                state.pressed = !state.pressed;
-                state.finger = state.pressed.then_some(*id);
+                state.pressed = true;
+                state.finger = Some(*id);
                 state.samples.clear();
                 state.samples.push_back((Instant::now(), position.y));
             }

@@ -18,6 +18,10 @@ use iced_runtime::user_interface::{Cache, UserInterface};
 use crate::desktop::{DesktopPrefs, ThemePreference};
 use crate::{App, GroupSettingsPane, Message, NavSection};
 
+// Full-shell input tests share the process-wide physical pointer mode.
+// Keep their synthetic devices from changing another test's hover mid-frame.
+static POINTER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn load_fonts() {
     crate::emoji_font::prefer_color_emoji();
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/fonts");
@@ -1251,6 +1255,7 @@ fn escape_closes_sheets_before_the_page_underneath() {
 /// conversation header exposed by closing the profile on its press.
 #[test]
 fn profile_back_click_does_not_reopen_the_profile() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use iced::{mouse, Event, Point};
     load_fonts();
     let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
@@ -1328,6 +1333,7 @@ fn profile_back_click_does_not_reopen_the_profile() {
 
 #[test]
 fn preference_help_does_not_toggle_the_setting() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use iced::{mouse, Event, Point};
     load_fonts();
     let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
@@ -1454,6 +1460,7 @@ fn shots_preferences_redesign() {
 
 #[test]
 fn member_popups_preserve_scroll_and_block_the_background() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use iced::advanced::widget::{operation::Scrollable, Operation};
     use iced::{mouse, Event, Point, Rectangle, Vector};
     struct Probe {
@@ -1628,6 +1635,7 @@ fn narrow_preferences_keep_supporting_text_wider_than_the_title() {
 
 #[test]
 fn holds_open_menus_in_the_complete_linux_shell() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use iced::advanced::widget::Operation;
     use iced::{mouse, touch, Event, Point};
     struct Locate {
@@ -1796,6 +1804,7 @@ fn shots_image_viewer_and_paste() {
 
 #[test]
 fn profile_action_labels_hover_and_click_as_part_of_the_button() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use iced::{mouse, Event, Point, Rectangle};
     use iced::advanced::widget::Operation;
     struct Locate(Option<Rectangle>);
@@ -1933,4 +1942,100 @@ fn gallery_does_not_construct_or_traverse_unrelated_chat_rows() {
     assert_eq!(count.hidden, 0);
     assert!(count.loading);
     eprintln!("gallery build/layout with 10,000 unrelated chats: {:?}", started.elapsed());
+}
+
+#[test]
+fn swiping_profile_actions_does_not_block_other_rows() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use iced::advanced::widget::Operation;
+    use iced::{mouse, touch, Event, Point};
+    struct Locate<'a>(&'a str, Option<Point>);
+    impl Operation for Locate<'_> {
+        fn traverse(&mut self, op: &mut dyn FnMut(&mut dyn Operation)) { op(self); }
+        fn text(&mut self, _: Option<&iced::widget::Id>, bounds: iced::Rectangle, text: &str) {
+            if text == self.0 { self.1 = Some(bounds.center()); }
+        }
+    }
+    load_fonts();
+    let size = Size::new(400.0, 1100.0);
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(iced::Font::with_name("Noto Sans"), iced::Pixels(16.0), Some("tiny-skia"))).unwrap();
+    for action in ["Mute", "Settings", "Star"] {
+        for target in ["Invite", "Welcome message", "Chats with members"] {
+            let mut app = demo_app(true, size.width, size.height);
+            group_page(&mut app, GroupSettingsPane::Overview);
+            let cache = Cache::default();
+            let mut messages = vec![];
+            let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), size, cache, &mut renderer);
+            let mut locate = Locate(action, None); ui.operate(&renderer, &mut locate);
+            let origin = locate.1.expect(action);
+            let end = origin + iced::Vector::new(35.0, -20.0);
+            for (event, point) in [
+                (Event::Touch(touch::Event::FingerPressed { id: touch::Finger(1), position: origin }), origin),
+                (Event::Window(iced::window::Event::RedrawRequested(std::time::Instant::now() + crate::tap::HOLD * 2)), origin),
+                (Event::Touch(touch::Event::FingerMoved { id: touch::Finger(1), position: origin + iced::Vector::new(0.0, -5.0) }), origin + iced::Vector::new(0.0, -5.0)),
+                (Event::Touch(touch::Event::FingerMoved { id: touch::Finger(1), position: end }), end),
+                (Event::Touch(touch::Event::FingerLifted { id: touch::Finger(1), position: end }), end),
+            ] {
+                let _ = ui.update(&[event], mouse::Cursor::Available(point), &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
+            }
+            assert!(messages.is_empty(), "a swipe on {action} must not activate it");
+            // No app message is emitted by a swipe: retain the live widget tree.
+            let mut locate = Locate(target, None); ui.operate(&renderer, &mut locate);
+            let point = locate.1.expect(target);
+            for event in [touch::Event::FingerPressed { id: touch::Finger(2), position: point }, touch::Event::FingerLifted { id: touch::Finger(2), position: point }] {
+                let _ = ui.update(&[Event::Touch(event)], mouse::Cursor::Available(point), &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
+            }
+            assert!(messages.iter().any(|m| match target {
+                "Invite" => matches!(m, Message::OpenAddGroupMember),
+                "Welcome message" => matches!(m, Message::OpenFieldEditor(crate::EditField::GroupWelcome)),
+                _ => matches!(m, Message::OpenSupportChatList),
+            }), "{target} must respond immediately after swiping {action}: {messages:?}");
+        }
+    }
+}
+
+#[test]
+fn group_nested_back_keeps_its_position_and_returns_to_profile() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use iced::advanced::widget::Operation;
+    use iced::{mouse, touch, Event, Point, Rectangle};
+    struct Heading<'a>(&'a str, Option<Rectangle>);
+    impl Operation for Heading<'_> {
+        fn traverse(&mut self, op: &mut dyn FnMut(&mut dyn Operation)) { op(self); }
+        fn text(&mut self, _: Option<&iced::widget::Id>, bounds: Rectangle, text: &str) {
+            if text == self.0 && bounds.y < 100.0 { self.1 = Some(bounds); }
+        }
+    }
+    load_fonts();
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(iced::Font::with_name("Noto Sans"), iced::Pixels(16.0), Some("tiny-skia"))).unwrap();
+    for channel in [false, true] {
+        for pane in [GroupSettingsPane::Preferences, GroupSettingsPane::AddMember] {
+            if channel && pane == GroupSettingsPane::AddMember { continue; }
+            let size = Size::new(400.0, 900.0);
+            let mut app = demo_app(true, size.width, size.height);
+            group_page(&mut app, GroupSettingsPane::Overview);
+            app.group_settings.as_mut().unwrap().is_channel = channel;
+            let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), size, Cache::default(), &mut renderer);
+            let mut heading = Heading(if channel { "Channel" } else { "Group" }, None);
+            ui.operate(&renderer, &mut heading);
+            let profile_heading = heading.1.unwrap();
+            let cache = ui.into_cache();
+            let _ = app.update(if pane == GroupSettingsPane::Preferences { Message::OpenGroupPreferences } else { Message::OpenAddGroupMember });
+            let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), size, cache, &mut renderer);
+            let mut heading = Heading(if pane == GroupSettingsPane::Preferences { "Group settings" } else { "Invite" }, None);
+            ui.operate(&renderer, &mut heading);
+            let nested_heading = heading.1.unwrap();
+            assert_eq!(profile_heading.position(), nested_heading.position(), "Back must stay fixed between profile and nested page");
+            let point = Point::new(nested_heading.x - 22.0, nested_heading.center_y());
+            let mut messages = vec![];
+            for event in [touch::Event::FingerPressed { id: touch::Finger(3), position: point }, touch::Event::FingerLifted { id: touch::Finger(3), position: point }] {
+                let _ = ui.update(&[Event::Touch(event)], mouse::Cursor::Available(point), &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
+            }
+            drop(ui);
+            assert!(messages.iter().any(|m| matches!(m, Message::Back)));
+            for message in messages { let _ = app.update(message); }
+            assert_eq!(app.group_settings.as_ref().unwrap().pane, GroupSettingsPane::Overview);
+            assert!(app.selected.is_some(), "Back must retain the selected conversation");
+        }
+    }
 }

@@ -6894,7 +6894,6 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
         GroupSettingsPane::Overview => ("Group", Message::CloseGroupSettings),
     };
     let nested = !matches!(g.pane, GroupSettingsPane::Overview);
-    let overview = matches!(g.pane, GroupSettingsPane::Overview);
 
     let overview_actions: Element<'_, Message> = horizontal().width(0).into();
 
@@ -6906,23 +6905,8 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
     };
     let leading = page_title(heading, back, d, hover);
 
-    let header = if overview {
-        profile_header_bar(leading, overview_actions, d, with_back)
-    } else if with_back || nested {
-        let pad = if with_back {
-            Padding {
-                top: d.pad_tight,
-                right: d.pad,
-                bottom: d.pad_tight,
-                left: 4.0,
-            }
-        } else {
-            Padding::from([d.pad_tight, 0.0])
-        };
-        row![leading].align_y(Alignment::Center).padding(pad).into()
-    } else {
-        profile_header_bar(leading, horizontal().width(0).into(), d, with_back)
-    };
+    // Keep the same Back hit target and header geometry in every profile pane.
+    let header = profile_header_bar(leading, overview_actions, d, with_back);
 
     let body: Element<'_, Message> = match g.pane {
         GroupSettingsPane::AddMember => group_add_member_pane(app, g, d, hover),

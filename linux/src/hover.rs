@@ -247,6 +247,8 @@ where
                 state.mouse_hold = None;
                 state.touch_hold = None;
                 state.press_at = None;
+                state.press_moved = false;
+                state.hold_fired = false;
             }
 
             Event::Touch(touch::Event::FingerPressed { id, position })
@@ -277,10 +279,12 @@ where
             Event::Touch(touch::Event::FingerLost { .. }) => {
                 state.touch_hold = None;
                 state.press_at = None;
+                state.press_moved = false;
                 state.hold_fired = false;
             }
             Event::Touch(touch::Event::FingerLifted { id, .. }) => {
                 swallow_lift = state.hold_fired || state.press_moved;
+                state.press_moved = false;
                 if let Some((finger, position, at)) = state.touch_hold.take() {
                     if finger == *id
                         && !state.hold_fired
@@ -334,21 +338,23 @@ where
                     id: *id,
                     position: *position,
                 }),
-                None => event.clone(),
+                None => match event {
+                    Event::Touch(touch::Event::FingerLifted { id, position }) => Event::Touch(touch::Event::FingerLost { id: *id, position: *position }),
+                    _ => Event::Mouse(mouse::Event::CursorLeft),
+                },
             };
-            // Cancel any pressed inner control before exposing a modal menu.
-            if fire_hold.is_some() {
-                self.content.as_widget_mut().update(
-                    &mut tree.children[0],
-                    &cancelled,
-                    layout,
-                    cursor,
-                    renderer,
-                    clipboard,
-                    shell,
-                    viewport,
-                );
-            }
+            // A swallowed lift must also clear the child's pressed state.
+            // Otherwise it can capture later taps on unrelated controls.
+            self.content.as_widget_mut().update(
+                &mut tree.children[0],
+                &cancelled,
+                layout,
+                cursor,
+                renderer,
+                clipboard,
+                shell,
+                viewport,
+            );
             if let Some((message, _, _)) = fire_hold {
                 shell.publish(message);
             }
@@ -752,6 +758,31 @@ mod tests {
     }
     const F: touch::Finger = touch::Finger(1);
     const AT: Point = Point::new(40.0, 32.0);
+
+    #[test]
+    fn cancelled_drag_does_not_capture_another_controls_release() {
+        let renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+            iced::Font::DEFAULT, iced::Pixels(16.0), Some("tiny-skia"),
+        )).unwrap();
+        let mut area: HoverArea<'_, Msg, iced::Theme, iced::Renderer> = HoverArea::new(
+            iced::widget::button(text("Settings")).on_press(Msg::Click).width(100).height(72),
+        ).icon_glow();
+        let mut tree = Tree::new(&area as &dyn Widget<Msg, iced::Theme, iced::Renderer>);
+        let node = area.layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, Size::new(300.0, 300.0)));
+        let viewport = Rectangle::new(Point::ORIGIN, Size::new(300.0, 300.0));
+        let end = AT + Vector::new(35.0, 0.0);
+        let mut messages = vec![];
+        for event in [touch::Event::FingerPressed { id: F, position: AT }, touch::Event::FingerMoved { id: F, position: end }, touch::Event::FingerLifted { id: F, position: end }] {
+            let mut shell = Shell::new(&mut messages);
+            area.update(&mut tree, &Event::Touch(event), Layout::new(&node), mouse::Cursor::Available(end), &renderer, &mut iced::advanced::clipboard::Null, &mut shell, &viewport);
+        }
+        assert!(messages.is_empty());
+        assert!(!tree.state.downcast_ref::<HoverState>().press_moved, "drag state must end with its finger");
+        let elsewhere = Point::new(200.0, 150.0);
+        let mut shell = Shell::new(&mut messages);
+        area.update(&mut tree, &Event::Touch(touch::Event::FingerLifted { id: touch::Finger(2), position: elsewhere }), Layout::new(&node), mouse::Cursor::Available(elsewhere), &renderer, &mut iced::advanced::clipboard::Null, &mut shell, &viewport);
+        assert!(!shell.is_event_captured(), "an unrelated button must receive its own release");
+    }
 
     #[test]
     fn mouse_emulated_holds_open_once_and_dragging_cancels() {

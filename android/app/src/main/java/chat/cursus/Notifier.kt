@@ -51,7 +51,11 @@ object Notifier {
             .setContentIntent(pending)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(msg.chat.hashCode(), n) }
+        try {
+            NotificationManagerCompat.from(context).notify(msg.chat.hashCode(), n)
+        } catch (_: SecurityException) {
+            // Notification permission can be revoked after the check above.
+        }
     }
 
     fun clear(context: Context, chat: String) {

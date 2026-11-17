@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package chat.cursus.ui.screens
 
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -7,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -18,7 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
+import chat.cursus.ui.components.rememberLoaded
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -101,15 +104,16 @@ fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
         when (pane) {
             MenuPane.Actions -> {
                 if (!deleted) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         for (glyph in model.info?.reactions.orEmpty()) {
                             val mine = m.reactions.any { it.glyph == glyph && it.mine }
                             Text(
                                 glyph, fontSize = 22.sp,
                                 modifier = Modifier.clip(Radius.sm).background(if (mine) c.accentSoft else Color.Transparent)
-                                    .clickable { onDismiss(); model.react(m, glyph, !mine) }.padding(5.dp),
+                                    .clickable { onDismiss(); model.react(m, glyph, !mine) }.padding(8.dp),
                             )
                         }
+
                     }
                 }
                 Text("Message", style = Cursus.type.meta, color = c.textMuted)
@@ -187,7 +191,7 @@ fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
                 SecondaryButton("Cancel", onDismiss)
             }
             MenuPane.Info -> {
-                val info by produceState<chat.cursus.core.MessageInfo?>(null) { value = model.messageInfo(m) }
+                val info by rememberLoaded<chat.cursus.core.MessageInfo?>(null, m.id) { model.messageInfo(m) }
                 Text("Message info", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Item #${m.id}", style = Cursus.type.meta, color = c.textSecondary)
@@ -208,7 +212,7 @@ fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
 @Composable
 fun ReactionMembers(model: AppModel, m: Message, emoji: String, onDismiss: () -> Unit) {
     val c = Cursus.colors
-    val names by produceState<List<String>?>(null, emoji) { value = model.reactionMembers(m, emoji) }
+    val names by rememberLoaded<List<String>?>(null, m.id, emoji) { model.reactionMembers(m, emoji) }
     val glyph = m.reactions.firstOrNull { it.emoji == emoji }?.glyph ?: emoji
     CursusOverlay(onDismiss) {
         Text("Reacted $glyph", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)

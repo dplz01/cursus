@@ -387,7 +387,7 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
             ButtonCard {
                 if (owner) {
                     val preview = chat.description.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
-                    NavRow(R.drawable.ic_scripture_scroll, "Welcome message", preview) {
+                    NavRow(R.drawable.ic_scripture_scroll, "Welcome message", preview, richSubtitle = true) {
                         editing = EditField.GroupWelcome
                     }
                 }

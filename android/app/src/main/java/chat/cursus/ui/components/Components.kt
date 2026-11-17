@@ -162,12 +162,12 @@ fun IconDisc(icon: Int, danger: Boolean = false) {
 val RowIconBox = 24.dp
 val RowShape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
 fun Modifier.pageRow(onClick: (() -> Unit)? = null): Modifier =
-    fillMaxWidth().clip(RowShape).then(if (onClick != null) clickable(onClick = onClick) else this)
+    fillMaxWidth().clip(RowShape).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
         .padding(horizontal = 12.dp, vertical = 10.dp)
 
 /** Ghost action tile: icon disc + label, no fill until pressed. */
 @Composable
-fun ActionTile(icon: Int, text: String, onClick: () -> Unit, danger: Boolean = false, modifier: Modifier = Modifier) {
+fun ActionTile(icon: Int, text: String, onClick: () -> Unit, modifier: Modifier = Modifier, danger: Boolean = false) {
     val c = Cursus.colors
     Row(
         modifier.pageRow(onClick),
@@ -197,7 +197,7 @@ fun CardTitle(icon: Int, title: String, subtitle: String? = null) {
 
 /** Navigation row: icon disc · title / subtitle · chevron. */
 @Composable
-fun NavRow(icon: Int, title: String, subtitle: String? = null, badge: Long = 0, onClick: () -> Unit) {
+fun NavRow(icon: Int, title: String, subtitle: String? = null, badge: Long = 0, richSubtitle: Boolean = false, onClick: () -> Unit) {
     val c = Cursus.colors
     Row(
         Modifier.pageRow(onClick),
@@ -207,7 +207,10 @@ fun NavRow(icon: Int, title: String, subtitle: String? = null, badge: Long = 0, 
         IconDisc(icon)
         Column(Modifier.weight(1f)) {
             Text(title, style = Cursus.type.body, color = c.textPrimary)
-            if (!subtitle.isNullOrEmpty()) Text(subtitle, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (!subtitle.isNullOrEmpty()) {
+                if (richSubtitle) ProfileText(subtitle, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                else Text(subtitle, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         if (badge > 0) AttentionCount(badge)
         Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(16.dp).rotate(-90f), tint = c.textMuted)

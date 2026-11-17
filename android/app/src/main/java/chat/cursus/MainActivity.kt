@@ -48,12 +48,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
-        if (event.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE) {
-            if (event.action == android.view.KeyEvent.ACTION_UP) onBackPressedDispatcher.onBackPressed()
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        if (keyCode == android.view.KeyEvent.KEYCODE_ESCAPE) return true
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        if (keyCode == android.view.KeyEvent.KEYCODE_ESCAPE) {
+            onBackPressedDispatcher.onBackPressed()
             return true
         }
-        return super.dispatchKeyEvent(event)
+        return super.onKeyUp(keyCode, event)
     }
 
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {

@@ -63,6 +63,7 @@ pub(crate) struct CallState {
     /// Recent calls, newest first (from the core's call chat items).
     history: Vec<CallRecord>,
     history_loading: bool,
+    history_loaded: bool,
     /// A change arrived while loading: load again when this one lands.
     history_stale: bool,
 }
@@ -78,6 +79,16 @@ impl CallState {
 
     pub(crate) fn history(&self) -> &[CallRecord] {
         &self.history
+    }
+
+    pub(crate) fn history_is_current(&self) -> bool {
+        self.history_loaded && !self.history_stale
+    }
+    pub(crate) fn history_loading(&self) -> bool {
+        self.history_loading
+    }
+    pub(crate) fn invalidate_history(&mut self) {
+        self.history_stale = true;
     }
 
     #[cfg(test)]
@@ -144,6 +155,7 @@ pub enum CallMsg {
     /// Once a second while connected (duration label).
     Tick,
     ReloadHistory,
+    HistoryProgress(Vec<CallRecord>),
     HistoryLoaded(Result<Vec<CallRecord>, String>),
     /// Calls page row: open the chat with this contact.
     OpenChat(i64),
@@ -261,7 +273,9 @@ impl App {
         let active = self.call.active.take().map(|c| c.contact_id);
         let incoming = self.call.incoming.take().map(|c| c.contact_id);
         self.call.sync_awake();
-        let Some(session) = self.session.clone() else { return };
+        let Some(session) = self.session.clone() else {
+            return;
+        };
         if let Some(id) = active {
             let _ = session.call_end(id);
         }
@@ -276,11 +290,17 @@ impl App {
         task
     }
 
-    /// Load the call history (coalesced: a request while loading reloads once
-    /// more when the current load lands).
+    /// Reopening Calls uses the existing history until a call event invalidates it.
+    pub(crate) fn open_call_history(&mut self) -> iced::Task<Message> {
+        if self.call.history_is_current() {
+            iced::Task::none()
+        } else {
+            self.reload_call_history()
+        }
+    }
+
     pub(crate) fn reload_call_history(&mut self) -> iced::Task<Message> {
         if self.call.history_loading {
-            self.call.history_stale = true;
             return iced::Task::none();
         }
         let Some(session) = self.session.clone() else {
@@ -288,28 +308,53 @@ impl App {
         };
         self.call.history_loading = true;
         self.call.history_stale = false;
-        iced::Task::perform(
-            blocking(move || {
-                session.call_history(HISTORY_LIMIT, HISTORY_SCAN_ITEMS).map_err(|e| e.to_string())
-            }),
-            |r| Message::Call(CallMsg::HistoryLoaded(r)),
+        iced::Task::run(
+            iced::stream::channel(
+                8,
+                move |mut out: iced::futures::channel::mpsc::Sender<Message>| async move {
+                    use iced::futures::SinkExt;
+                    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+                    let worker = tokio::task::spawn_blocking(move || {
+                        let result = session
+                            .call_history_progress(HISTORY_LIMIT, HISTORY_SCAN_ITEMS, |calls| {
+                                let _ = tx.send(CallMsg::HistoryProgress(calls.to_vec()));
+                            })
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(CallMsg::HistoryLoaded(result));
+                    });
+                    while let Some(message) = rx.recv().await {
+                        if out.send(Message::Call(message)).await.is_err() {
+                            break;
+                        }
+                    }
+                    let _ = worker.await;
+                },
+            ),
+            |message| message,
         )
     }
 
     /// A core event that adds / updates / deletes a call item: refresh the
-    /// history if the Calls page shows it (opening the page always reloads).
+    /// history if the Calls page shows it, otherwise invalidate the cached view.
     pub(crate) fn call_history_event(&mut self, event: &Event) -> iced::Task<Message> {
         let touches = match event {
             Event::NewChatItems(body) => CallRecord::touches_calls(body),
             Event::Other { type_name, body } => {
-                matches!(type_name.as_str(), "callEnded" | "callInvitation")
-                    || CallRecord::touches_calls(body)
+                matches!(
+                    type_name.as_str(),
+                    "callEnded"
+                        | "callInvitation"
+                        | "chatCleared"
+                        | "contactDeleted"
+                        | "chatItemDeleted"
+                ) || CallRecord::touches_calls(body)
             }
             _ => false,
         };
         if !touches {
             return iced::Task::none();
         }
+        self.call.history_stale = true;
         if self.nav == NavSection::Calls {
             self.reload_call_history()
         } else {
@@ -320,11 +365,23 @@ impl App {
     fn update_call_inner(&mut self, msg: CallMsg) -> iced::Task<Message> {
         match msg {
             CallMsg::ReloadHistory => self.reload_call_history(),
+            CallMsg::HistoryProgress(list) => {
+                if !self.call.history_loaded {
+                    self.call.history = list;
+                }
+                iced::Task::none()
+            }
             CallMsg::HistoryLoaded(result) => {
                 self.call.history_loading = false;
                 match result {
-                    Ok(list) => self.call.history = list,
-                    Err(err) => tracing::warn!(%err, "call history"),
+                    Ok(list) => {
+                        self.call.history = list;
+                        self.call.history_loaded = true;
+                    }
+                    Err(err) => {
+                        self.call.history_loaded = false;
+                        tracing::warn!(%err, "call history");
+                    }
                 }
                 if self.call.history_stale {
                     return self.reload_call_history();

@@ -8,7 +8,7 @@ name: macOS
 
 on:
   push:
-    branches: [master, "feature/macos"]
+    branches: [main, master, "feature/macos"]
     paths: ["macos/**", "bridge/**", "core/**", "Cargo.lock", ".github/workflows/macos.yml"]
   pull_request:
     paths: ["macos/**", "bridge/**", "core/**", "Cargo.lock", ".github/workflows/macos.yml"]

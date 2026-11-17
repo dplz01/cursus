@@ -140,17 +140,32 @@ pub fn dispatch(method: &str, p: &Value) -> Result<Value, String> {
                 .map(|q| cursus_core::suggest_emoji_shortcodes(q, 6))
                 .unwrap_or_default();
             Ok(Value::Array(
-                hits.iter().map(|h| json!({ "shortcode": h.shortcode, "glyph": h.glyph })).collect(),
+                hits.iter()
+                    .map(|h| json!({ "shortcode": h.shortcode, "glyph": h.glyph }))
+                    .collect(),
             ))
         }
-        "acceptShortcode" => {
-            Ok(json!(cursus_core::accept_shortcode(str_param(p, "text")?, str_param(p, "glyph")?)))
-        }
-        "expandShortcodes" => Ok(json!(cursus_core::expand_emoji_shortcodes(str_param(p, "text")?))),
+        "acceptShortcode" => Ok(json!(cursus_core::accept_shortcode(
+            str_param(p, "text")?,
+            str_param(p, "glyph")?
+        ))),
+        "formatProfileText" => Ok(Value::Array(
+            cursus_core::profile_text(str_param(p, "text")?)
+                .iter()
+                .map(dto::segment)
+                .collect(),
+        )),
+        "expandShortcodes" => Ok(json!(cursus_core::expand_emoji_shortcodes(str_param(
+            p, "text"
+        )?))),
         // A picked image as a profile picture (core media rule: SimpleX data-URL budget).
-        "encodeProfileImage" => Ok(json!(cursus_core::media::encode_profile_image(std::path::Path::new(str_param(p, "path")?))?)),
+        "encodeProfileImage" => Ok(json!(cursus_core::media::encode_profile_image(
+            std::path::Path::new(str_param(p, "path")?)
+        )?)),
         // Executables a sender named are never opened (core safety rule).
-        "riskyFile" => Ok(json!(cursus_core::safety::is_risky_to_open(std::path::Path::new(str_param(p, "path")?)))),
+        "riskyFile" => Ok(json!(cursus_core::safety::is_risky_to_open(
+            std::path::Path::new(str_param(p, "path")?)
+        ))),
         _ => with_session(method, p),
     }
 }

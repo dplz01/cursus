@@ -14,9 +14,8 @@ mod ellipsis;
 mod emoji_font;
 mod exit_wipe;
 mod float_open;
-mod history;
 mod gallery;
-mod retained;
+mod history;
 mod hover;
 mod icons;
 mod image_gestures;
@@ -27,13 +26,14 @@ mod media;
 mod navigation;
 mod preference_row;
 mod preference_ui;
+mod retained;
 #[cfg(test)]
 mod shots;
 mod single_instance;
 mod tap;
 mod theme;
-mod touch_mouse;
 mod touch_content;
+mod touch_mouse;
 mod trail_row;
 mod ui;
 use std::collections::{HashMap, HashSet};
@@ -471,7 +471,10 @@ pub enum EditField {
 impl EditField {
     /// Long texts get a multi-line editor.
     pub fn multiline(self) -> bool {
-        matches!(self, Self::OwnDescription | Self::GroupWelcome)
+        matches!(
+            self,
+            Self::OwnDescription | Self::GroupShortDescr | Self::GroupWelcome
+        )
     }
 
     /// An empty value can't be saved.
@@ -1043,8 +1046,6 @@ pub enum Message {
     ClearNewMessagesMarker(u64),
     /// User scrolled up in history — show jump-to-latest (edge-triggered).
     HistoryAwayChanged(bool),
-    /// Reveal / hide original content of a marked-deleted item.
-    ToggleRevealDeleted(i64),
     /// Reveal / hide a `#secret#` rich-text span.
     ToggleSecretReveal {
         item_id: i64,
@@ -1164,7 +1165,6 @@ pub enum Message {
     GroupMembersLoaded(Result<Vec<GroupMemberInfo>, String>),
     OpenAddGroupMember,
     CloseAddGroupMember,
-    GroupInviteRoleCycle,
     AddGroupMember(i64),
     GroupMemberAdded(Result<(), String>),
     OpenGroupMember(i64),
@@ -1207,7 +1207,6 @@ pub enum Message {
     SetGroupInviteRole(String),
     GroupInviteSearch(String),
     CopyGroupLink,
-    GroupLinkRoleCycle,
     GroupLinkRoleSet(Result<(), String>),
     DeleteGroupLink,
     GroupLinkDeleted(Result<(), String>),
@@ -1260,7 +1259,6 @@ pub enum Message {
         path: PathBuf,
         duration_secs: u32,
     },
-    StopVoicePlayback,
     VoiceTick,
     /// Decoded waveform for a voice message.
     WaveformReady {
@@ -1274,7 +1272,6 @@ pub enum Message {
         preview: Option<(PathBuf, u32, u32)>,
     },
     MediaSaved(Result<String, String>),
-    RefreshChats,
     /// Coalesced chat-list refresh after high-frequency core events.
     RefreshChatsDebounced(u64),
     ChatsLoaded(Result<Vec<ChatPreview>, String>),
@@ -2011,7 +2008,7 @@ impl App {
                     self.history_count = HISTORY_PAGE;
                 }
                 let history = if section == NavSection::Calls {
-                    self.reload_call_history()
+                    self.open_call_history()
                 } else {
                     Task::none()
                 };
@@ -4234,12 +4231,6 @@ impl App {
                 }
                 Task::none()
             }
-            Message::GroupInviteRoleCycle => {
-                if let Some(g) = self.group_settings.as_mut() {
-                    g.invite_role = cycle_role_below(&g.invite_role, &g.my_role);
-                }
-                Task::none()
-            }
             Message::AddGroupMember(contact_id) => {
                 let Some(g) = self.group_settings.as_ref() else {
                     return Task::none();
@@ -4617,26 +4608,6 @@ impl App {
                 } else {
                     self.update(Message::EnsureGroupLink)
                 }
-            }
-            Message::GroupLinkRoleCycle => {
-                let Some(g) = self.group_settings.as_mut() else {
-                    return Task::none();
-                };
-                // Core rejects roles above `member` for link joiners
-                // (`CEGroupMemberInitialRole` — only observer/member).
-                g.link_member_role = cycle_link_joiner_role(&g.link_member_role);
-                let role = g.link_member_role.clone();
-                let group_id = g.group_id;
-                let Some(session) = self.session.clone() else {
-                    return Task::none();
-                };
-                if g.link.is_none() {
-                    return Task::none();
-                }
-                Task::perform(
-                    set_group_link_role(session, group_id, role),
-                    Message::GroupLinkRoleSet,
-                )
             }
             Message::GroupLinkRoleSet(Ok(())) => {
                 self.status = "Link joiner role updated.".into();
@@ -5161,10 +5132,6 @@ impl App {
                     .unwrap_or_else(Task::none);
                 Task::batch([close, iced::exit()])
             }
-            Message::ToggleRevealDeleted(item_id) => {
-                self.toggle_reveal_deleted(item_id);
-                Task::none()
-            }
             Message::ToggleSecretReveal { item_id, index } => {
                 if !self.tap_allowed() {
                     return Task::none();
@@ -5209,6 +5176,7 @@ impl App {
                 Task::none()
             }
             Message::DeleteItemsDone(Ok(())) => {
+                self.call.invalidate_history();
                 self.status = if self.selected_full_delete_for_user() {
                     "Message deleted for everyone.".into()
                 } else {
@@ -5360,10 +5328,6 @@ impl App {
                 }
                 self.play_voice_bubble(file_id, path, duration_secs)
             }
-            Message::StopVoicePlayback => {
-                self.stop_voice_playback();
-                Task::none()
-            }
             Message::VoiceTick => {
                 if let Some(play) = self.voice_playback.as_mut() {
                     let elapsed = play.started.elapsed().as_secs_f32();
@@ -5404,7 +5368,6 @@ impl App {
                 self.status = err;
                 Task::none()
             }
-            Message::RefreshChats => self.reload_chats(),
             Message::RefreshChatsDebounced(gen) => {
                 if gen != self.chats_refresh_gen {
                     return Task::none();
@@ -6171,6 +6134,8 @@ impl App {
                 Task::none()
             }
             Message::ChatMenuDone(Ok(summary)) => {
+                // Local clears/deletes return here rather than as core events.
+                self.call.invalidate_history();
                 self.pending_delete_id = None;
                 self.status = summary;
                 self.chat_menu = None;
@@ -9343,30 +9308,6 @@ async fn accept_group_member(
 
 async fn leave_group(session: Arc<Session>, group_id: i64) -> Result<(), String> {
     blocking(move || session.leave_group(group_id).map(|_| ())).await
-}
-
-fn cycle_role_below(current: &str, my_role: &str) -> String {
-    let allowed = cursus_core::roles::assignable_roles(my_role);
-    if allowed.is_empty() {
-        return "member".into();
-    }
-    let idx = allowed
-        .iter()
-        .position(|r| *r == current)
-        .map(|i| (i + 1) % allowed.len())
-        .unwrap_or(0);
-    allowed[idx].to_string()
-}
-
-/// Group invite-link joiner role — SimpleX allows only `observer` / `member`.
-fn cycle_link_joiner_role(current: &str) -> String {
-    const LINK_ROLES: &[&str] = &["observer", "member"];
-    let idx = LINK_ROLES
-        .iter()
-        .position(|r| *r == current)
-        .map(|i| (i + 1) % LINK_ROLES.len())
-        .unwrap_or(0);
-    LINK_ROLES[idx].to_string()
 }
 
 fn set_group_pref(prefs: &mut Option<serde_json::Value>, key: &str, turn_on: bool) {

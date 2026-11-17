@@ -372,40 +372,36 @@ pub fn reaction_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 
 /// Peer / contact allow indicator — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
 pub fn user_alt_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg_handle!("../assets/icons/user-alt-1.svg"),
-        color,
-        size,
-    )
+    tinted(svg_handle!("../assets/icons/user-alt-1.svg"), color, size)
 }
 
 /// Phone / calls — Solar Linear Icons (CC BY via SVG Repo); same asset as nav Calls.
-pub fn call_history_icon<'a>(outgoing: bool, status: &str, size: f32, color: Color) -> Element<'a, Message> {
+pub fn call_history_icon<'a>(
+    outgoing: bool,
+    status: &str,
+    size: f32,
+    color: Color,
+) -> Element<'a, Message> {
     let handle = match (outgoing, status) {
         (false, "missed" | "pending") => svg_handle!("../assets/icons/call_missed.svg"),
         (_, "rejected" | "error") => svg_handle!("../assets/icons/call_rejected.svg"),
-        (_, "accepted" | "negotiated" | "progress") => svg_handle!("../assets/icons/call_active.svg"),
+        (_, "accepted" | "negotiated" | "progress") => {
+            svg_handle!("../assets/icons/call_active.svg")
+        }
         (true, _) => svg_handle!("../assets/icons/call_outgoing.svg"),
         _ => svg_handle!("../assets/icons/call_incoming.svg"),
     };
-    tinted(handle, color, size)
+    // Status indicators keep their semantic colour when the pointer passes over.
+    tinted_static(handle, color, size)
 }
 
 pub fn phone_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg_handle!("../assets/icons/calls.svg"),
-        color,
-        size,
-    )
+    tinted(svg_handle!("../assets/icons/calls.svg"), color, size)
 }
 
 /// Edit / set profile picture — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
 pub fn image_pen_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg_handle!("../assets/icons/image-pen.svg"),
-        color,
-        size,
-    )
+    tinted(svg_handle!("../assets/icons/image-pen.svg"), color, size)
 }
 
 pub fn avatar_initial<'a>(label: &str, size: f32) -> Element<'a, Message> {

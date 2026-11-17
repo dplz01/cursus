@@ -183,7 +183,7 @@ fn kinetic_scroll<'a>(
         .id(iced::widget::Id::new(id))
         .height(Length::Fill)
         .direction(Direction::Vertical(no_bar()));
-    crate::kinetic::track(id, scroller)
+    crate::kinetic::track(id, crate::tap::guard(scroller))
 }
 
 /// Text with Advanced shaping so emoji can fall back to Noto Color Emoji.
@@ -2770,16 +2770,20 @@ fn reaction_picker_row(item_id: i64, d: Density, hover: bool) -> Element<'static
     for emoji in KNOWN_REACTIONS {
         let glyph = if *emoji == "❤" { "❤️" } else { *emoji };
         row = row.push(
-            button(emoji_glyph(glyph.to_string()).size(d.body).color(Color::WHITE))
-                .on_press(Message::ToggleReaction {
-                    item_id,
-                    emoji: (*emoji).to_string(),
-                })
-                .padding(Padding::from([6, 8]))
-                .style(theme::reaction_chip(false, hover)),
+            button(
+                emoji_glyph(glyph.to_string())
+                    .size(d.body)
+                    .color(Color::WHITE),
+            )
+            .on_press(Message::ToggleReaction {
+                item_id,
+                emoji: (*emoji).to_string(),
+            })
+            .padding(8)
+            .style(theme::reaction_chip(false, hover)),
         );
     }
-    row.into()
+    row.wrap().into()
 }
 
 /// Big emoji; `reserve` is the trailing stamp room (see [`stamp_reserve`]).
@@ -2837,6 +2841,36 @@ fn message_text_content(
     } else {
         rich.into()
     }
+}
+
+fn profile_rich<'a>(
+    raw: &str,
+    size: f32,
+    color: Color,
+    bold: bool,
+) -> iced::widget::text::Rich<'a, Message, Message> {
+    let spans = cursus_core::profile_text(raw)
+        .into_iter()
+        .map(|mut segment| {
+            if segment.style == TextStyle::Secret {
+                segment.style = TextStyle::Snippet;
+            }
+            let styled = styled_span(&segment, size, -1, 0, true);
+            if matches!(
+                segment.style,
+                TextStyle::Plain | TextStyle::Bold | TextStyle::Italic | TextStyle::Strike
+            ) {
+                styled.color(color)
+            } else {
+                styled
+            }
+        })
+        .collect::<Vec<_>>();
+    rich_text(spans)
+        .size(size)
+        .color(color)
+        .font(if bold { BOLD } else { Font::DEFAULT })
+        .wrapping(Wrapping::WordOrGlyph)
 }
 
 /// Unformatted body followed by the stamp reservation.
@@ -5263,7 +5297,7 @@ fn role_label(role: &str) -> &'static str {
 }
 
 fn menu_card<'a>(body: Element<'a, Message>, d: Density) -> Element<'a, Message> {
-    container(body)
+    container(crate::tap::guard(body))
         .padding(d.pad)
         .width(Length::Fill)
         .max_width(400)
@@ -5794,35 +5828,51 @@ const PROFILE_HEADER_ICON: f32 = 22.0;
 
 /// The actions under a profile's name: a rounded square with the glyph and
 /// a short label below it, centred in a row (call, favourite, mute, …).
-fn quick_actions(actions: Vec<(Element<'static, Message>, &'static str, Message)>, d: Density, hover: bool) -> Element<'static, Message> {
+fn quick_actions(
+    actions: Vec<(Element<'static, Message>, &'static str, Message)>,
+    d: Density,
+    hover: bool,
+) -> Element<'static, Message> {
     let count = actions.len() as f32;
     let mut row = Row::new().spacing(8);
     for (icon, label, on_press) in actions {
         let face = column![
             icons::centered_hit(icon, 24.0),
             ellipsis_text(label.to_string(), d.meta, theme::t().text_secondary, 1),
-        ].spacing(6).align_x(Alignment::Center).width(Length::Fill);
+        ]
+        .spacing(6)
+        .align_x(Alignment::Center)
+        .width(Length::Fill);
         row = row.push(crate::hover::action_glow(
-            button(face).on_press(on_press).padding(Padding::from([12, 4])).width(Length::Fill)
-                .style(theme::profile_action(hover)), 24.0,
+            button(face)
+                .on_press(on_press)
+                .padding(Padding::from([12, 4]))
+                .width(Length::Fill)
+                .style(theme::profile_action(hover)),
+            24.0,
         ));
     }
-    container(container(row).max_width(92.0 * count)).padding(Padding::from([0, 8])).center_x(Length::Fill).into()
+    container(container(row).max_width(92.0 * count))
+        .padding(Padding::from([0, 8]))
+        .center_x(Length::Fill)
+        .into()
 }
 
 /// A centred secondary line of a profile header (bio, full name).
 fn hero_line<'a>(value: String, d: Density) -> Element<'a, Message> {
-    container(txt(value).size(d.body).color(theme::t().text_secondary).align_x(Alignment::Center).wrapping(Wrapping::WordOrGlyph))
-        .padding(Padding::from([0, 12]))
-        .center_x(Length::Fill)
-        .into()
+    container(
+        profile_rich(&value, d.body, theme::t().text_secondary, false).align_x(Alignment::Center),
+    )
+    .padding(Padding::from([0, 12]))
+    .center_x(Length::Fill)
+    .into()
 }
 
 /// A paragraph of a profile under its section label.
 fn about_block<'a>(label: &'a str, value: String, d: Density) -> Element<'a, Message> {
     column![
         card_title(vertical().height(0).into(), label, "", d),
-        container(txt(value).size(d.body).color(theme::t().text_primary).wrapping(Wrapping::WordOrGlyph))
+        container(profile_rich(&value, d.body, theme::t().text_primary, false))
             .padding(Padding::from([2, 12]))
             .width(Length::Fill),
     ]
@@ -6468,11 +6518,36 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
         col = col.push(card);
     }
 
+    let contacts_by_id: std::collections::HashMap<_, _> = app
+        .chats()
+        .iter()
+        .filter(|chat| matches!(chat.id.chat_type, ChatType::Direct))
+        .map(|chat| (chat.id.api_id, chat))
+        .collect();
     let history = app.call_history();
+    if app.call.history_loading() {
+        col = col.push(
+            container(
+                text(if history.is_empty() {
+                    "Loading recent calls…"
+                } else {
+                    "Loading earlier calls…"
+                })
+                .size(d.meta)
+                .color(theme::t().text_muted),
+            )
+            .padding(Padding::from([10, 4])),
+        );
+    }
     if !history.is_empty() {
         col = col.push(calls_section_label("Recent", d));
         for rec in history {
-            col = col.push(call_history_row(app, rec, d, hover));
+            col = col.push(call_history_row(
+                contacts_by_id.get(&rec.contact_id).copied(),
+                rec,
+                d,
+                hover,
+            ));
         }
     }
 
@@ -6567,27 +6642,35 @@ fn call_record_label(rec: &cursus_core::CallRecord) -> String {
 
 /// Recent-call row: tap opens the chat, the phone button calls back.
 fn call_history_row<'a>(
-    app: &'a App,
+    chat: Option<&'a cursus_core::ChatPreview>,
     rec: &'a cursus_core::CallRecord,
     d: Density,
     hover: bool,
 ) -> Element<'a, Message> {
     let t = theme::t();
-    let chat = app
-        .chats()
-        .iter()
-        .find(|c| matches!(c.id.chat_type, ChatType::Direct) && c.id.api_id == rec.contact_id);
     let name = chat
         .map(|c| c.title.clone())
         .unwrap_or_else(|| rec.peer_name.clone());
     let image = chat.and_then(|c| c.peer_profile.image.as_deref());
     let missed = rec.is_missed();
-    let tint = if missed || matches!(rec.status.as_str(), "rejected" | "error") { t.danger } else if rec.outgoing { t.accent } else { t.success };
+    let tint = if missed || matches!(rec.status.as_str(), "rejected" | "error") {
+        t.danger
+    } else if rec.outgoing {
+        t.accent
+    } else {
+        t.success
+    };
     let when = format_list_time(rec.ts.as_deref()).unwrap_or_default();
     let info = row![
         profile_avatar_fallback(image, &name, 40.0, AvatarFallback::ContactIcon),
         column![
-            crate::ellipsis::ellipsis_text_weight(name.clone(), d.body, if missed { t.danger } else { t.text_primary }, 1, true),
+            crate::ellipsis::ellipsis_text_weight(
+                name.clone(),
+                d.body,
+                if missed { t.danger } else { t.text_primary },
+                1,
+                true
+            ),
             row![
                 icons::call_history_icon(rec.outgoing, &rec.status, d.body * 0.9, tint),
                 text(call_record_label(rec))
@@ -7349,8 +7432,10 @@ fn group_overview_pane(
     let mut people = Column::new().spacing(0).width(Length::Fill);
     if owner {
         // Same row as "Chats with members" / "Invite"; opens the editor.
-        let preview = g
-            .welcome_message
+        let preview = cursus_core::profile_text(&g.welcome_message)
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect::<String>()
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
@@ -7649,10 +7734,17 @@ fn group_members_list<'a>(
                 }
             }
             list = list.push(
-                row![leading, actions]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-                    .padding(Padding::from([4, 4])),
+                row![
+                    button(leading)
+                        .on_press(Message::OpenGroupMember(mid))
+                        .padding(0)
+                        .width(Length::Fill)
+                        .style(theme::ghost_tile(hover)),
+                    actions,
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .padding(Padding::from([4, 4])),
             );
         }
         col = col.push(list);
@@ -7666,10 +7758,7 @@ const PROFILE_AVATAR: f32 = 96.0;
 /// Read-only name line, inset to line up with the text inside the fields.
 fn profile_name_text<'a>(name: String, d: Density) -> Element<'a, Message> {
     container(
-        txt(name)
-            .size(d.title + 4.0)
-            .font(BOLD)
-            .color(theme::t().text_primary)
+        profile_rich(&name, d.title + 4.0, theme::t().text_primary, true)
             .align_x(Alignment::Center)
             .wrapping(Wrapping::WordOrGlyph),
     )
@@ -7689,7 +7778,7 @@ enum LineStyle {
     Body,
 }
 
-/// Profile text shown as plain text, with a pencil right after it that opens
+/// Formatted profile text, with a pencil right after it that opens
 /// the editor sheet. Empty values show a muted hint instead.
 fn editable_line<'a>(
     value: &str,
@@ -7710,13 +7799,12 @@ fn editable_line<'a>(
         LineStyle::Sub => (d.body, theme::t().text_secondary),
         LineStyle::Body => (d.body, theme::t().text_secondary),
     };
-    let mut label = txt(shown)
-        .size(size)
-        .color(if empty { theme::t().text_muted } else { color })
-        .wrapping(Wrapping::WordOrGlyph);
-    if matches!(style, LineStyle::Name) && !empty {
-        label = label.font(BOLD);
-    }
+    let label = profile_rich(
+        &shown,
+        size,
+        if empty { theme::t().text_muted } else { color },
+        matches!(style, LineStyle::Name) && !empty,
+    );
     let pencil = button(icons::edit_icon(16.0, theme::t().text_muted))
         .on_press(Message::OpenFieldEditor(field))
         .padding(6)
@@ -7832,6 +7920,29 @@ fn field_editor_overlay(app: &App) -> Element<'_, Message> {
     };
 
     let mut content = column![header, field].spacing(14).width(Length::Fill);
+    let raw = editor.text();
+    if editor.field.required() {
+        content = content.push(text("Names must start with a letter, number or emoji. Put formatting after the first word.").size(d.meta).color(theme::t().text_secondary));
+    }
+    content = content.push(
+        text(if editor.field.required() {
+            "Format: *bold* · _italic_"
+        } else {
+            "Format: *bold* · _italic_ · ~strike~ · `code`"
+        })
+        .size(d.meta)
+        .color(theme::t().text_secondary),
+    );
+    if !raw.trim().is_empty() {
+        content = content.push(text("Preview").size(d.meta).color(theme::t().text_muted));
+        content = content.push(
+            container(
+                scrollable(profile_rich(&raw, d.body, theme::t().text_primary, false))
+                    .height(Length::Shrink),
+            )
+            .max_height(120),
+        );
+    }
     if let Some(err) = editor.error.as_ref() {
         content = content.push(text(err.clone()).size(d.meta).color(theme::t().danger));
     }
@@ -9662,7 +9773,10 @@ fn pending_links_overlay(app: &App) -> Element<'_, Message> {
                 }),
         );
     }
-    col = col.push(scrollable(list).height(Length::Shrink));
+    col = col.push(crate::tap::guard(
+        scrollable(crate::touch_content::content(crate::tap::defer_touch(list)))
+            .height(Length::Shrink),
+    ));
     sheet_overlay(menu_card(col.into(), d), Message::ClosePendingLinks)
 }
 
@@ -9759,16 +9873,240 @@ fn image_gallery(app: &App) -> Element<'_, Message> {
         if let Some(handle) = app.gallery_cache.get(path) {
             crate::image_gestures::from_handle(path, *zoom, handle)
         } else if let Some((preview, _, _)) = app.image_preview_for(path, 220, 280) {
-            image(iced::widget::image::Handle::from_path(preview)).content_fit(ContentFit::Contain)
-                .width(Length::Fill).height(Length::Fill).into()
+            image(iced::widget::image::Handle::from_path(preview))
+                .content_fit(ContentFit::Contain)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
         } else {
-            container(text(if app.gallery_cache.failed(path) { "Could not open this image." } else { "Loading image…" }).color(iced::Color::WHITE))
-                .center_x(Length::Fill).center_y(Length::Fill).into()
+            container(
+                text(if app.gallery_cache.failed(path) {
+                    "Could not open this image."
+                } else {
+                    "Loading image…"
+                })
+                .color(iced::Color::WHITE),
+            )
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into()
         },
         container(footer).center_x(Length::Fill).padding(8)
     ])
     .width(Length::Fill)
     .height(Length::Fill)
-    .style(|_| container::Style { background: Some(iced::Color::BLACK.into()), ..Default::default() })
+    .style(|_| container::Style {
+        background: Some(iced::Color::BLACK.into()),
+        ..Default::default()
+    })
     .into()
+}
+
+#[cfg(test)]
+mod swipe_control_tests {
+    use super::*;
+    use iced::advanced::renderer::Headless;
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    #[test]
+    fn slow_swipes_ending_on_the_original_control_never_activate_it() {
+        let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+            iced::Font::DEFAULT,
+            iced::Pixels(16.0),
+            Some("tiny-skia"),
+        ))
+        .unwrap();
+        let d = Density::for_window(LayoutMode::Mobile, 400.0, 300.0);
+        for kind in ["navigation", "danger", "switch", "choice", "link"] {
+            for held in [false, true] {
+                let mut cache = Cache::default();
+                let mut messages = vec![];
+                let origin = iced::Point::new(
+                    if kind == "choice" { 40.0 } else { 120.0 },
+                    if kind == "choice" { 164.0 } else { 180.0 },
+                );
+                let mut events = vec![(
+                    iced::Event::Touch(iced::touch::Event::FingerPressed {
+                        id: iced::touch::Finger(33),
+                        position: origin,
+                    }),
+                    origin,
+                )];
+                if held {
+                    events.push((
+                        iced::Event::Window(iced::window::Event::RedrawRequested(
+                            std::time::Instant::now() + crate::tap::HOLD * 2,
+                        )),
+                        origin,
+                    ));
+                }
+                // Each step is below slop. Scrolling translates the content back
+                // under the finger, so measuring only content positions misses it.
+                for step in 1..=10 {
+                    let point = origin + iced::Vector::new(0.0, -3.0 * step as f32);
+                    events.push((
+                        iced::Event::Touch(iced::touch::Event::FingerMoved {
+                            id: iced::touch::Finger(33),
+                            position: point,
+                        }),
+                        point,
+                    ));
+                }
+                let end = origin + iced::Vector::new(0.0, -30.0);
+                events.push((
+                    iced::Event::Touch(iced::touch::Event::FingerLifted {
+                        id: iced::touch::Finger(33),
+                        position: end,
+                    }),
+                    end,
+                ));
+                events.push((
+                    iced::Event::Touch(iced::touch::Event::FingerPressed {
+                        id: iced::touch::Finger(34),
+                        position: end,
+                    }),
+                    end,
+                ));
+                events.push((
+                    iced::Event::Touch(iced::touch::Event::FingerLifted {
+                        id: iced::touch::Finger(34),
+                        position: end,
+                    }),
+                    end,
+                ));
+                for (event, point) in events {
+                    let control: Element<'_, Message> = match kind {
+                        "navigation" => card_row(
+                            icons::link_icon(18.0, theme::t().accent),
+                            "Invite",
+                            None,
+                            Message::OpenAddGroupMember,
+                            None,
+                            d,
+                            false,
+                        ),
+                        "danger" => button(text("Delete group"))
+                            .on_press(Message::OpenAddGroupMember)
+                            .padding(16)
+                            .width(Length::Fill)
+                            .style(theme::danger_action(false))
+                            .into(),
+                        "switch" => preference_switch(
+                            None,
+                            "Notifications",
+                            None,
+                            true,
+                            Some(Message::OpenAddGroupMember),
+                            d,
+                            false,
+                        ),
+                        "choice" => choice_chip("Default", Message::OpenAddGroupMember, d, false),
+                        _ => button(text("Create invite link"))
+                            .on_press(Message::OpenAddGroupMember)
+                            .padding(16)
+                            .width(Length::Fill)
+                            .into(),
+                    };
+                    let body = page_scroll_y(iced::widget::column![
+                        Space::new().height(150),
+                        control,
+                        Space::new().height(1000)
+                    ]);
+                    let mut ui = UserInterface::build(
+                        body,
+                        iced::Size::new(400.0, 300.0),
+                        cache,
+                        &mut renderer,
+                    );
+                    let event = if matches!(event, iced::Event::Window(_)) {
+                        iced::Event::Window(iced::window::Event::RedrawRequested(
+                            std::time::Instant::now() + crate::tap::HOLD * 2,
+                        ))
+                    } else {
+                        event
+                    };
+                    let swipe_lift = matches!(
+                        event,
+                        iced::Event::Touch(iced::touch::Event::FingerLifted {
+                            id: iced::touch::Finger(33),
+                            ..
+                        })
+                    );
+                    let _ = ui.update(
+                        &[event],
+                        mouse::Cursor::Available(point),
+                        &mut renderer,
+                        &mut iced::advanced::clipboard::Null,
+                        &mut messages,
+                    );
+                    if swipe_lift {
+                        assert!(
+                            !messages
+                                .iter()
+                                .any(|m| matches!(m, Message::OpenAddGroupMember)),
+                            "{kind}, held={held}: scrolling must never activate a control"
+                        );
+                    }
+                    cache = ui.into_cache();
+                }
+                assert_eq!(
+                    messages
+                        .iter()
+                        .filter(|m| matches!(m, Message::OpenAddGroupMember))
+                        .count(),
+                    1,
+                    "{kind}, held={held}: a real tap must still work immediately after swiping"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod reaction_layout_tests {
+    use super::*;
+    use iced::advanced::{renderer::Headless, widget::Operation};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    #[test]
+    fn reaction_rows_fit_narrow_windows_and_large_text() {
+        struct Probe {
+            width: f32,
+            glyphs: usize,
+        }
+        impl Operation for Probe {
+            fn traverse(&mut self, op: &mut dyn FnMut(&mut dyn Operation)) {
+                op(self);
+            }
+            fn text(&mut self, _: Option<&iced::widget::Id>, bounds: iced::Rectangle, _: &str) {
+                assert!(
+                    bounds.x >= 0.0 && bounds.x + bounds.width <= self.width + 0.1,
+                    "reaction overflow at {}px: {bounds:?}",
+                    self.width
+                );
+                self.glyphs += 1;
+            }
+        }
+        let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+            iced::Font::DEFAULT,
+            iced::Pixels(16.0),
+            Some("tiny-skia"),
+        ))
+        .unwrap();
+        for width in [160.0, 220.0, 280.0] {
+            for scale in [1.0, 1.6] {
+                let d =
+                    Density::for_window(LayoutMode::Mobile, width, 600.0).with_text_scale(scale);
+                let mut ui = UserInterface::build(
+                    reaction_picker_row(1, d, false),
+                    iced::Size::new(width, 600.0),
+                    Cache::default(),
+                    &mut renderer,
+                );
+                let mut probe = Probe { width, glyphs: 0 };
+                ui.operate(&renderer, &mut probe);
+                assert_eq!(probe.glyphs, 8);
+            }
+        }
+    }
 }

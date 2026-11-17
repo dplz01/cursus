@@ -5,6 +5,8 @@ import android.app.Application
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -82,7 +84,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     val messages = mutableStateListOf<Message>()
     var messagesFor by mutableStateOf<String?>(null); private set
     /** How many of the newest messages are loaded; "Load earlier messages" adds a page. */
-    private var historyCount by mutableStateOf(HISTORY_PAGE)
+    private var historyCount by mutableIntStateOf(HISTORY_PAGE)
     /** The history is full to its limit: there may be older messages. */
     val hasEarlierMessages: Boolean get() = messages.size >= historyCount && historyCount < HISTORY_MAX
 
@@ -103,8 +105,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     // Voice messages: recording → draft → send (as on Linux).
     private val recorder = VoiceRecorder()
     var recording by mutableStateOf(false); private set
-    var recordLevel by mutableStateOf(0f); private set
-    var recordSecs by mutableStateOf(0); private set
+    var recordLevel by mutableFloatStateOf(0f); private set
+    var recordSecs by mutableIntStateOf(0); private set
     var voiceDraft by mutableStateOf<VoiceDraft?>(null); private set
     /** The take is being filtered and encoded ("Preparing voice…"). */
     var voicePreparing by mutableStateOf(false); private set

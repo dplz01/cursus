@@ -2,6 +2,7 @@ package chat.cursus.media
 
 import android.media.MediaPlayer
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
@@ -9,7 +10,7 @@ import androidx.compose.runtime.setValue
 object VoicePlayer {
     private var player: MediaPlayer? = null
     var playing by mutableStateOf<Long?>(null); private set
-    var progress by mutableStateOf(0f); private set
+    var progress by mutableFloatStateOf(0f); private set
 
     fun toggle(fileId: Long, path: String) {
         if (playing == fileId) return stop()

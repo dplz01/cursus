@@ -706,8 +706,8 @@ private fun LicencesOverlay(onDismiss: () -> Unit) {
                 }
             } else {
                 PaneHeader(name, onBack = { open = null })
-                val lines by androidx.compose.runtime.produceState<List<String>?>(null, name) {
-                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val lines by chat.cursus.ui.components.rememberLoaded<List<String>?>(null, name) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         runCatching { context.assets.open("licenses/$name").bufferedReader().use { it.readLines() } }
                             .getOrDefault(listOf("Could not read $name."))
                     }

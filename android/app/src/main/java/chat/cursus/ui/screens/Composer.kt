@@ -34,7 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import chat.cursus.ui.components.rememberLoaded
 import androidx.compose.ui.graphics.ImageBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -104,8 +104,8 @@ fun Composer(model: AppModel) {
         ContextBar(model)
         model.pastedImage?.let { file ->
             Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                val bitmap by produceState<ImageBitmap?>(null, file) {
-                    value = withContext(Dispatchers.IO) { decodeScaled(file.absolutePath, 256) }
+                val bitmap by rememberLoaded<ImageBitmap?>(null, file) {
+                    withContext(Dispatchers.IO) { decodeScaled(file.absolutePath, 256) }
                 }
                 bitmap?.let { androidx.compose.foundation.Image(it, "Image to send", Modifier.size(72.dp).clip(Radius.md)) }
                 Text("Image ready to send", Modifier.weight(1f).padding(12.dp), color = c.textSecondary)

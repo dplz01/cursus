@@ -3,6 +3,8 @@ package chat.cursus.ui.components
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,7 +48,7 @@ enum class EditField(val title: String, val hint: String, val placeholder: Strin
     GroupName("Name", "Every member sees this name.", "Name", required = true),
     GroupAlias("Local name", "Only you see this name.", "Local name"),
     ContactAlias("Local name", "Only you see this name.", "Local name"),
-    GroupShortDescr("Short description", "Shown under the name.", "Short description"),
+    GroupShortDescr("Short description", "Shown under the name.", "Short description", multiline = true),
     GroupWelcome("Welcome message", "Sent to every new member when they join.", "Welcome to the group! Please…", multiline = true),
 }
 
@@ -69,7 +71,7 @@ fun EditableLine(value: String, emptyText: String, style: LineStyle, onEdit: () 
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (centred) Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally) else Arrangement.spacedBy(6.dp),
     ) {
-        Text(
+        ProfileText(
             value.ifBlank { emptyText },
             style = if (style == LineStyle.Name) textStyle.copy(fontSize = textStyle.fontSize * 1.25f) else textStyle,
             color = when {
@@ -95,30 +97,38 @@ fun FieldEditor(field: EditField, initial: String, onDismiss: () -> Unit, onSave
     val focus = remember { FocusRequester() }
     val canSave = !field.required || value.isNotBlank()
     CursusOverlay(onDismiss) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Column(Modifier.weight(1f)) {
-                Text(field.title, style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.Bold)
-                Text(field.hint, style = Cursus.type.meta, color = c.textSecondary)
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(field.title, style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.Bold)
+                    Text(field.hint, style = Cursus.type.meta, color = c.textSecondary)
+                }
+                IconTool(R.drawable.ic_cancel, "Cancel", onDismiss)
+                Box(
+                    Modifier.size(36.dp).clip(Radius.pill).background(if (canSave) c.accent else c.disabledFill)
+                        .clickable(enabled = canSave) { onSave(value) },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(painterResource(R.drawable.ic_check), "Save", Modifier.size(18.dp), tint = c.accentOn) }
             }
-            IconTool(R.drawable.ic_cancel, "Cancel", onDismiss)
             Box(
-                Modifier.size(36.dp).clip(Radius.pill).background(if (canSave) c.accent else c.disabledFill)
-                    .clickable(enabled = canSave) { onSave(value) },
-                contentAlignment = Alignment.Center,
-            ) { Icon(painterResource(R.drawable.ic_check), "Save", Modifier.size(18.dp), tint = c.accentOn) }
-        }
-        Box(
-            Modifier.fillMaxWidth().clip(Radius.md).background(c.bgField).border(1.dp, c.accent, Radius.md)
-                .heightIn(min = if (field.multiline) 140.dp else 0.dp).padding(12.dp),
-        ) {
-            if (value.isEmpty()) Text(field.placeholder, style = Cursus.type.body, color = c.textSecondary)
-            BasicTextField(
-                value, { value = it },
-                singleLine = !field.multiline,
-                textStyle = Cursus.type.body.copy(color = c.textPrimary),
-                cursorBrush = SolidColor(c.accent),
-                modifier = Modifier.fillMaxWidth().focusRequester(focus),
-            )
+                Modifier.fillMaxWidth().clip(Radius.md).background(c.bgField).border(1.dp, c.accent, Radius.md)
+                    .heightIn(min = if (field.multiline) 140.dp else 0.dp, max = 240.dp).padding(12.dp),
+            ) {
+                if (value.isEmpty()) Text(field.placeholder, style = Cursus.type.body, color = c.textSecondary)
+                BasicTextField(
+                    value, { value = it },
+                    singleLine = !field.multiline,
+                    textStyle = Cursus.type.body.copy(color = c.textPrimary),
+                    cursorBrush = SolidColor(c.accent),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                )
+            }
+            if (field.required) Text("Names must start with a letter, number or emoji. Put formatting after the first word.", style = Cursus.type.meta, color = c.textSecondary)
+            Text(if (field.required) "Format: *bold* · _italic_" else "Format: *bold* · _italic_ · ~strike~ · `code`", style = Cursus.type.meta, color = c.textSecondary)
+            if (value.isNotBlank()) {
+                Text("Preview", style = Cursus.type.meta, color = c.textMuted)
+                ProfileText(value, style = Cursus.type.body, color = c.textPrimary, maxLines = 6, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
@@ -175,7 +185,7 @@ private fun SheetItem(icon: Int, label: String, color: androidx.compose.ui.graph
 @Composable
 fun ProfileName(name: String) {
     val title = Cursus.type.title
-    Text(
+    ProfileText(
         name, style = title.copy(fontSize = title.fontSize * 1.25f), color = Cursus.colors.textPrimary, fontWeight = FontWeight.SemiBold,
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), maxLines = 2, overflow = TextOverflow.Ellipsis,
@@ -185,7 +195,7 @@ fun ProfileName(name: String) {
 /** A centred secondary line of a profile header (bio, short description). */
 @Composable
 fun HeroLine(text: String) {
-    Text(
+    ProfileText(
         text, style = Cursus.type.body, color = Cursus.colors.textSecondary,
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -226,7 +236,7 @@ fun QuickActions(vararg actions: QuickAction) {
 fun AboutBlock(label: String, text: String) {
     Column {
         CardTitle(0, label)
-        Text(text, style = Cursus.type.body, color = Cursus.colors.textPrimary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp))
+        ProfileText(text, style = Cursus.type.body, color = Cursus.colors.textPrimary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp))
     }
 }
 

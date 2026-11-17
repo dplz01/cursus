@@ -37,7 +37,11 @@ adb logcat -s Cursus                  # core logs
 ```
 
 `./gradlew assembleRelease` builds an optimised APK (debug-signed until
-release signing is set up).
+release signing is set up). Tagged releases publish this APK as
+`cursus-android-arm64-v8a.apk`. CI uses a fresh debug key, so it cannot
+upgrade an APK signed with a different key. Back up data before uninstalling
+an existing installation; uninstalling deletes local data. Keep the same
+local key when building versions that need to upgrade each other.
 
 **64-bit ARM only** — SimpleX publishes its Android core for arm64-v8a.
 x86_64 emulator images from API 30 run it through Android's ARM

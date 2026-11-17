@@ -3,6 +3,7 @@
 #
 #   cursus-x86_64.flatpak   cursus-aarch64.flatpak    (any distro, glibc or musl)
 #   Cursus-x86_64.AppImage  Cursus-aarch64.AppImage   (glibc distros)
+#   cursus-android-arm64-v8a.apk                  (Android 8+, preview)
 #   SHA256SUMS
 name: Release
 
@@ -87,8 +88,40 @@ jobs:
           name: Cursus-${{ matrix.arch }}.AppImage
           path: Cursus-${{ matrix.arch }}.AppImage
 
+  android:
+    name: Android (arm64-v8a)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android build tools
+        run: |
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked --version 4.1.2
+      - name: Check and build preview APK
+        working-directory: android
+        run: ./gradlew :app:lintRelease :app:testReleaseUnitTest :app:assembleRelease --no-daemon
+      - name: Name APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk cursus-android-arm64-v8a.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cursus-android-arm64-v8a.apk
+          path: cursus-android-arm64-v8a.apk
+          if-no-files-found: error
+
   release:
-    needs: [flatpak, appimage]
+    needs: [flatpak, appimage, android]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     steps:
@@ -116,16 +149,18 @@ jobs:
             echo "| \`cursus-aarch64.flatpak\` | Flatpak, ARM64 — phones (postmarketOS, Mobian…) and ARM laptops |"
             echo "| \`Cursus-x86_64.AppImage\` | AppImage, x86_64 — glibc distros |"
             echo "| \`Cursus-aarch64.AppImage\` | AppImage, ARM64 — glibc distros |"
+            echo "| \`cursus-android-arm64-v8a.apk\` | Android 8+, ARM64 — debug-signed preview |"
             echo "| \`SHA256SUMS\` | Checksums of all files above |"
             echo
             echo "Install instructions: see the README."
             echo
             echo "## License and source"
             echo
-            echo "Cursus is free software under **AGPL-3.0-or-later**. Every package ships the full license texts and notices in \`share/licenses/\` (see \`NOTICE.md\`)."
+            echo "Cursus is free software under **AGPL-3.0-or-later**. Linux packages ship license texts and notices in \`share/licenses/\`; Android includes them under Settings → About → Licences and credits (see \`NOTICE.md\`)."
             echo
             echo "- **Cursus source** for this release: tag [\`${GITHUB_REF_NAME}\`](https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_REF_NAME}) (also attached below as *Source code*)."
-            echo "- **SimpleX core (libsimplex 7.1.0.17, AGPL-3.0)**: [simplex-chat \`1fd7ed8\`](https://github.com/simplex-chat/simplex-chat/tree/1fd7ed8327d8481299215ca3240eb0140400924a) with [simplexmq \`d1f97d3\`](https://github.com/simplex-chat/simplexmq/tree/d1f97d38f7a01f112efb6be753a1b45a40777826), prebuilt by SimpleX as [\`core-7.1.0.17\`](https://github.com/simplex-chat/simplex-chat-libs/releases/tag/core-7.1.0.17)."
+            echo "- **Desktop SimpleX core (libsimplex 7.1.0.17, AGPL-3.0)**: [simplex-chat \`1fd7ed8\`](https://github.com/simplex-chat/simplex-chat/tree/1fd7ed8327d8481299215ca3240eb0140400924a) with [simplexmq \`d1f97d3\`](https://github.com/simplex-chat/simplexmq/tree/d1f97d38f7a01f112efb6be753a1b45a40777826), prebuilt by SimpleX as [\`core-7.1.0.17\`](https://github.com/simplex-chat/simplex-chat-libs/releases/tag/core-7.1.0.17)."
+            echo "- **Android SimpleX core**: extracted from the pinned official [SimpleX v7.1.0 APK](https://github.com/simplex-chat/simplex-chat/releases/tag/v7.1.0), verified by SHA-256 during the build; see \`android/fetch-libsimplex.sh\`."
             echo "- **Third-party notices**: Rust crates in \`THIRD_PARTY_LICENSES.txt\`; the SimpleX core's Haskell and native libraries in \`SIMPLEX-CORE-LICENSES.txt\`; **fonts**: Noto (SIL OFL 1.1); **icons**: see \`ICONS-ATTRIBUTION.md\`."
           } > ../NOTES.md
       - uses: softprops/action-gh-release@v2

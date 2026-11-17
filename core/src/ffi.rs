@@ -24,22 +24,16 @@ type ChatMigrateInit = unsafe extern "C" fn(
     *const c_char,
     *mut *mut std::ffi::c_void,
 ) -> *mut c_char;
+type ChatParseMarkdown = unsafe extern "C" fn(*const c_char) -> *mut c_char;
 type ChatSendCmd = unsafe extern "C" fn(*mut std::ffi::c_void, *const c_char) -> *mut c_char;
 type ChatRecvMsgWait = unsafe extern "C" fn(*mut std::ffi::c_void, c_int) -> *mut c_char;
 type ChatCloseStore = unsafe extern "C" fn(*mut std::ffi::c_void) -> *mut c_char;
 /// Decrypt CryptoFile on disk → plaintext path. Empty string = success.
-type ChatDecryptFile = unsafe extern "C" fn(
-    *const c_char,
-    *const c_char,
-    *const c_char,
-    *const c_char,
-) -> *mut c_char;
+type ChatDecryptFile =
+    unsafe extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char) -> *mut c_char;
 /// Encrypt plaintext → CryptoFile; returns JSON WriteFileResult (needs chat ctrl).
-type ChatEncryptFile = unsafe extern "C" fn(
-    *mut std::ffi::c_void,
-    *const c_char,
-    *const c_char,
-) -> *mut c_char;
+type ChatEncryptFile =
+    unsafe extern "C" fn(*mut std::ffi::c_void, *const c_char, *const c_char) -> *mut c_char;
 
 static HS_INIT: Once = Once::new();
 
@@ -55,6 +49,7 @@ pub struct LibSimplex {
     _library: Library,
     chat_migrate_init: ChatMigrateInit,
     chat_send_cmd: ChatSendCmd,
+    chat_parse_markdown: ChatParseMarkdown,
     chat_recv_msg_wait: ChatRecvMsgWait,
     chat_close_store: ChatCloseStore,
     chat_decrypt_file: ChatDecryptFile,
@@ -113,13 +108,15 @@ impl LibSimplex {
 
         // SAFETY: we only call C ABI symbols exported by libsimplex, with
         // the signatures of its header.
-        let library = unsafe { Library::new(&path) }.map_err(|err| Error::LibraryLoad(explain_load_error(&err)))?;
+        let library = unsafe { Library::new(&path) }
+            .map_err(|err| Error::LibraryLoad(explain_load_error(&err)))?;
         let lib = unsafe {
             let hs_init: HsInit = symbol(&library, "hs_init_with_rtsopts")?;
             HS_INIT.call_once(|| init_haskell(hs_init));
             Self {
                 chat_migrate_init: symbol(&library, "chat_migrate_init")?,
                 chat_send_cmd: symbol(&library, "chat_send_cmd")?,
+                chat_parse_markdown: symbol(&library, "chat_parse_markdown")?,
                 chat_recv_msg_wait: symbol(&library, "chat_recv_msg_wait")?,
                 chat_close_store: symbol(&library, "chat_close_store")?,
                 chat_decrypt_file: symbol(&library, "chat_decrypt_file")?,
@@ -160,7 +157,19 @@ impl LibSimplex {
         take_c_string(raw)
     }
 
-    pub fn recv_msg_wait(&self, ctrl: *mut std::ffi::c_void, wait_us: i32) -> Result<Option<String>> {
+    /// The same pure markdown parser used by official SimpleX clients.
+    pub fn parse_markdown(&self, text: &str) -> Result<serde_json::Value> {
+        let text = CString::new(text)?;
+        // SAFETY: the input CString lives through the call; the result is owned.
+        let raw = unsafe { (self.chat_parse_markdown)(text.as_ptr()) };
+        Ok(serde_json::from_str(&take_c_string(raw)?)?)
+    }
+
+    pub fn recv_msg_wait(
+        &self,
+        ctrl: *mut std::ffi::c_void,
+        wait_us: i32,
+    ) -> Result<Option<String>> {
         // SAFETY: ctrl must come from migrate_init.
         let raw = unsafe { (self.chat_recv_msg_wait)(ctrl, wait_us) };
         let s = take_c_string(raw)?;

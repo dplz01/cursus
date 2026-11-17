@@ -823,26 +823,58 @@ impl Session {
     /// back through the newest items of all chats (at most `scan_items`)
     /// until `limit` calls are found.
     pub fn call_history(&self, limit: usize, scan_items: u32) -> Result<Vec<CallRecord>> {
-        const PAGE: u32 = 250;
-        let mut calls = Vec::new();
-        let mut before = None;
-        let mut scanned = 0;
-        while scanned < scan_items && calls.len() < limit {
-            let value = self.send(&Commands::get_items(PAGE, before))?;
-            let items = value.array_at("/chatItems");
-            scanned += items.len() as u32;
-            calls.extend(items.iter().filter_map(CallRecord::parse));
-            let oldest = items.iter().filter_map(|aci| aci.i64_at("/chatItem/meta/itemId")).min();
-            if oldest.is_none() || oldest == before || (items.len() as u32) < PAGE {
-                break;
-            }
-            before = oldest;
-        }
-        // Item ids grow with time across chats: newest first.
+        self.call_history_progress(limit, scan_items, |_| {})
+    }
+
+    /// Publish useful results after each page instead of hiding them until the
+    /// entire bounded scan finishes. No message bodies are retained by callers.
+    pub fn call_history_progress(
+        &self,
+        limit: usize,
+        scan_items: u32,
+        progress: impl FnMut(&[CallRecord]),
+    ) -> Result<Vec<CallRecord>> {
+        scan_call_history(
+            limit,
+            scan_items,
+            |count, before| self.send(&Commands::get_items(count, before)),
+            progress,
+        )
+    }
+}
+
+fn scan_call_history(
+    limit: usize,
+    scan_items: u32,
+    mut fetch: impl FnMut(u32, Option<i64>) -> Result<Value>,
+    mut progress: impl FnMut(&[CallRecord]),
+) -> Result<Vec<CallRecord>> {
+    const PAGE: u32 = 250;
+    let mut calls = Vec::new();
+    let mut before = None;
+    let mut scanned = 0;
+    while scanned < scan_items && calls.len() < limit {
+        let count = PAGE.min(scan_items - scanned);
+        let value = fetch(count, before)?;
+        let items = value.array_at("/chatItems");
+        scanned += items.len() as u32;
+        let previous = calls.len();
+        calls.extend(items.iter().filter_map(CallRecord::parse));
         calls.sort_by_key(|r| std::cmp::Reverse(r.item_id));
         calls.truncate(limit);
-        Ok(calls)
+        if calls.len() != previous {
+            progress(&calls);
+        }
+        let oldest = items
+            .iter()
+            .filter_map(|aci| aci.i64_at("/chatItem/meta/itemId"))
+            .min();
+        if oldest.is_none() || oldest == before || (items.len() as u32) < count {
+            break;
+        }
+        before = oldest;
     }
+    Ok(calls)
 }
 
 impl Drop for Session {
@@ -950,6 +982,36 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn call_history_publishes_before_the_next_page_and_respects_the_budget() {
+        let published = std::cell::Cell::new(0);
+        let mut requested = Vec::new();
+        let mut updates = Vec::new();
+        let calls = scan_call_history(100, 350, |count, before| {
+            if before.is_some() { assert_eq!(published.get(), 1, "first calls must be visible before the next query"); }
+            requested.push((count, before));
+            let newest = before.map_or(500, |id| id - 1);
+            Ok(json!({"chatItems": (0..count).map(|offset| json!({
+                "chatInfo": {"type": "direct", "contact": {"contactId": 7, "profile": {"displayName": "Alice"}}},
+                "chatItem": {"meta": {"itemId": newest - i64::from(offset)}, "content": {"type": if offset == 0 { "rcvCall" } else { "rcvMsgContent" }, "status": "ended", "duration": 42}}
+            })).collect::<Vec<_>>() }))
+        }, |calls| { published.set(published.get() + 1); updates.push(calls.to_vec()); }).unwrap();
+        assert_eq!(requested, vec![(250, None), (100, Some(251))]);
+        assert_eq!(updates.iter().map(Vec::len).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(
+            calls.iter().map(|call| call.item_id).collect::<Vec<_>>(),
+            vec![500, 250]
+        );
+        assert!(scan_call_history(
+            0,
+            350,
+            |_, _| panic!("empty request must not query"),
+            |_| {}
+        )
+        .unwrap()
+        .is_empty());
+    }
+
+    #[test]
     fn file_not_approved_lists_server_hosts() {
         let err = json!({"type": "error", "errorType": {
             "type": "fileNotApproved", "fileId": 9,
@@ -1012,14 +1074,43 @@ mod live_tests {
     }
 
     #[test]
+    fn inline_rich_profile_names_are_accepted_by_the_real_core() {
+        let _startup = crate::LIBSIMPLEX_STARTUP
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("cursus-rich-profile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let session = open(&dir);
+        let fields = ProfileFields {
+            display_name: "Team *Cursus* 🚀".into(),
+            short_descr: "Build _nice_ things".into(),
+            ..ProfileFields::default()
+        };
+        let user = session
+            .update_profile(fields)
+            .expect("save inline markdown in a valid SimpleX name");
+        assert_eq!(user.profile.display_name, "Team *Cursus* 🚀");
+        assert!(crate::profile_text(&user.profile.display_name)
+            .iter()
+            .any(|s| s.text == "Cursus" && s.style == crate::TextStyle::Bold));
+        drop(session);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn open_send_and_reopen() {
-        let _startup = crate::LIBSIMPLEX_STARTUP.lock().unwrap_or_else(PoisonError::into_inner);
+        let _startup = crate::LIBSIMPLEX_STARTUP
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!("cursus-smoke-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
         let session = open(&dir);
-        assert_eq!(session.active_profile().expect("user").display_name(), "Smoke");
+        assert_eq!(
+            session.active_profile().expect("user").display_name(),
+            "Smoke"
+        );
         let chats = session.list_chats().expect("list chats");
         // What every app does right after the password opened the DB: the
         // lock-screen verifier, with the core running.

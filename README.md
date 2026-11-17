@@ -7,17 +7,19 @@ It uses a **shared Rust core** on top of the official SimpleX chat library (`lib
 | Platform | UI |
 |---|---|
 | Linux | Rust + Iced |
-| macOS | Rust + Iced (same desktop crate family) |
-| Android | Kotlin + Jetpack Compose → UniFFI |
-| iOS | Swift + SwiftUI → UniFFI |
+| macOS | Swift + SwiftUI → shared Rust bridge |
+| Android | Kotlin + Jetpack Compose → JNI → shared Rust bridge |
+| iOS | Planned Swift + SwiftUI shell |
 
 ## Status
 
-**Milestone 1 (Linux foundation):** shared core + Iced Linux client — messaging, invites, attachments/voice/gallery, reactions, message menu, replies. See [`roadmap.md`](roadmap.md).
+Linux and Android support messaging, groups, channels, attachments, voice messages,
+reactions, profiles and settings, with layouts for phones and larger screens.
+Audio calls currently work on Linux; Android has call history only.
+macOS has an experimental native SwiftUI client; iOS remains a scaffold.
 
-**Next (Milestone 2):** macOS shell sharing desktop modules. Mobile UniFFI shells and channels/calls are later milestones. Light/dark theming (System / Light / Dark) ships on Linux.
-
-Other platforms are scaffolded but not implemented yet.
+The v0.1.2 checkpoint includes an Android preview APK. See the
+[release notes](docs/releases/v0.1.2.md) and [roadmap](roadmap.md).
 
 ## Repository layout
 
@@ -25,8 +27,8 @@ Other platforms are scaffolded but not implemented yet.
 cursus/
 ├── core/                 # Shared Rust library (protocol session, models, services)
 ├── linux/                # Linux desktop application
-├── macos/                # macOS application (later)
-├── android/              # Android application (later)
+├── macos/                # macOS SwiftUI application
+├── android/              # Android Compose application
 ├── ios/                  # iOS application (later)
 ├── docs/                 # Architecture and design
 ├── scripts/              # Tooling (fetch libsimplex, …)
@@ -38,6 +40,12 @@ Each platform directory is meant to be extractable into its own GitHub repositor
 ## Install
 
 Prebuilt packages for **x86_64** and **ARM64** are on the [releases page](https://github.com/dplz01/cursus/releases/latest). `$(uname -m)` picks the right one for your device.
+
+### Android
+
+Download `cursus-android-arm64-v8a.apk` from the release page and install it
+on Android 8.0 or newer (64-bit ARM). This preview is debug-signed; see the
+[Android build and signing notes](android/README.md).
 
 ### Flatpak
 

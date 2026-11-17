@@ -314,4 +314,15 @@ Back and other page-changing header controls complete an owned press-and-release
 - Sliding gallery animation is postponed: Iced 0.14 exposes the native zoom/pan viewer, but no native paged-gallery transition. A custom pager/physics layer would need separate work. API checked: https://docs.rs/iced/0.14.0/iced/widget/index.html .
 
 - Cancelled touch drags clear both the gesture wrapper and its pressed child control before consuming the lift. A subsequent tap must work without navigating or rebuilding the page. New kinetic presses start a session rather than toggling stale state. Deferred touch presses use their finger position for hit testing when redraws have no hover cursor.
-- Group/channel profiles, settings and invite panes share the same 56px header and Back-button position. Missed calls use a horizontal handset and returning arrow; declined calls use the cross-marked handset on both platforms.
+- Group/channel profiles, settings and invite panes share the same 56px header and Back-button position. Missed calls use the shared Solar handset rotated down, with a returning arrow above it; declined calls use the cross-marked handset on both platforms.
+
+- Touch cancellation is measured before scroll translation. The scrollable receives a cancelled release after any drag, including slow swipes ending on the starting control; its outer kinetic tracker still receives the physical lift. Deferred controls also cancel when the viewport moves.
+- Calls retain their loaded history across navigation and invalidate it on call/clear/delete events. The first cold-load page is published immediately; refreshing keeps existing rows until the scan finishes. A contact-id index replaces per-record chat-list searches on both platforms. The shared scanner respects its exact item budget.
+
+- Profile field editors share SimpleX markdown parsing and a formatting preview on Android and Linux. Source markup and literal shortcodes are preserved; profile fields do not autocomplete or expand emoji shortcodes. Profile names, aliases, bios and descriptions render through that same parser with a bounded cache.
+- Message reactions display all eight supported emojis directly, wrapping on narrow screens without an additional picker. The bundled SimpleX core permits eight emoji reactions (`MREmojiChar`); arbitrary emoji cannot be sent as reactions without a protocol-core change. The UI does not substitute quoted messages or pretend unsupported reactions succeeded.
+- Multi-state preference buttons and their choice menus retain the earlier boxed-value styling.
+
+- SimpleX naming validation still applies to public names: the first character must be a letter, number or supported emoji, and some punctuation is prohibited. The editor explains this and offers inline bold/italic formatting after the first word; descriptions and local aliases are not restricted by those public-name rules.
+
+- Group/channel short descriptions use the same multiline editor, sizing, scrolling and rich-text preview as welcome messages. Existing short-description length limits remain in force.

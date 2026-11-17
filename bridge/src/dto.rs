@@ -2,13 +2,13 @@
 //! here, not as serde derives on the core models, so the core can change its
 //! internals without breaking the app.
 
-use cursus_core::{
-    parse_chat_info_id, ChatId, ChatMessage, ChatPreview, ChatTag, ChatType, ConnLink, DeletedState,
-    DeliveryStatus, Event, FileInfo, FileKind, FileTransferState, FormatColor, GroupChatScope,
-    GroupMemberInfo, SimplexLinkKind, TextSegment, TextStyle, UserProfile,
-};
 use cursus_core::preferences;
 use cursus_core::roles;
+use cursus_core::{
+    parse_chat_info_id, ChatId, ChatMessage, ChatPreview, ChatTag, ChatType, ConnLink,
+    DeletedState, DeliveryStatus, Event, FileInfo, FileKind, FileTransferState, FormatColor,
+    GroupChatScope, GroupMemberInfo, SimplexLinkKind, TextSegment, TextStyle, UserProfile,
+};
 use serde_json::{json, Value};
 
 /// Parse a chat reference (`@3`, `#9`, `#9(_support)`, `#9(_support:4)`, `*1`).
@@ -199,7 +199,7 @@ pub fn simplex_kind(k: SimplexLinkKind) -> &'static str {
     }
 }
 
-fn segment(s: &TextSegment) -> Value {
+pub(crate) fn segment(s: &TextSegment) -> Value {
     let (style, color) = match s.style {
         TextStyle::Plain => ("plain", None),
         TextStyle::Bold => ("bold", None),
@@ -321,24 +321,36 @@ fn chat_title_from_info(info: &Value) -> Option<String> {
 
 /// Incoming messages in a `newChatItems` event, for notifications.
 fn incoming(e: &Event) -> Vec<Value> {
-    let Event::NewChatItems(value) = e else { return Vec::new() };
-    let Some(items) = value.get("chatItems").and_then(Value::as_array) else { return Vec::new() };
+    let Event::NewChatItems(value) = e else {
+        return Vec::new();
+    };
+    let Some(items) = value.get("chatItems").and_then(Value::as_array) else {
+        return Vec::new();
+    };
     items
         .iter()
         .filter_map(|aci| {
             let info = aci.get("chatInfo")?;
             let chat = parse_chat_info_id(info)?;
             let item = aci.get("chatItem").unwrap_or(aci);
-            let dir = item.pointer("/chatDir/type").and_then(Value::as_str).unwrap_or("");
+            let dir = item
+                .pointer("/chatDir/type")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             if dir.contains("Snd") || dir == "local" {
                 return None;
             }
             let text = item
                 .pointer("/meta/itemText")
                 .and_then(Value::as_str)
-                .or_else(|| item.pointer("/content/msgContent/text").and_then(Value::as_str))
+                .or_else(|| {
+                    item.pointer("/content/msgContent/text")
+                        .and_then(Value::as_str)
+                })
                 .unwrap_or("");
-            let sender = item.pointer("/chatDir/groupMember/memberProfile/displayName").and_then(Value::as_str);
+            let sender = item
+                .pointer("/chatDir/groupMember/memberProfile/displayName")
+                .and_then(Value::as_str);
             Some(json!({
                 "chat": chat.command_ref(),
                 "title": chat_title_from_info(info).unwrap_or_else(|| "Cursus".into()),

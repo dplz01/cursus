@@ -37,7 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
+import chat.cursus.ui.components.rememberLoaded
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -119,8 +119,8 @@ private fun ImageThumb(model: AppModel, f: FileInfo, onLongPress: () -> Unit) {
     // "Blur photos and videos": blurred until tapped. A tiny decode scaled
     // up blurs on every Android version; Modifier.blur adds to it on 12+.
     val blurred = model.prefs.blurMedia && f.id !in model.revealedMedia
-    val bitmap by produceState<ImageBitmap?>(null, path, blurred) {
-        value = withContext(Dispatchers.IO) { decodeScaled(path, if (blurred) 24 else 720) }
+    val bitmap by rememberLoaded<ImageBitmap?>(null, path, blurred) {
+        withContext(Dispatchers.IO) { decodeScaled(path, if (blurred) 24 else 720) }
     }
     bitmap?.let {
         Image(
@@ -205,8 +205,8 @@ private fun VoiceRow(model: AppModel, m: Message, f: FileInfo, onLongPress: () -
     val c = Cursus.colors
     val path = model.plainFiles[f.id]
     val playing = VoicePlayer.playing == f.id
-    val peaks by produceState(path?.let { Waveforms.cached(it) }, path) {
-        if (path != null && value == null) value = withContext(Dispatchers.IO) { Waveforms.load(path) }
+    val peaks by rememberLoaded(path?.let { Waveforms.cached(it) }, path) {
+        path?.let { Waveforms.cached(it) ?: withContext(Dispatchers.IO) { Waveforms.load(it) } }
     }
     LaunchedEffect(playing) {
         while (playing) {
@@ -295,9 +295,9 @@ fun ImageGallery(model: AppModel) {
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
             val f = images[page]
-            val bitmap by produceState<ImageBitmap?>(null, f.id) {
+            val bitmap by rememberLoaded<ImageBitmap?>(null, f.id) {
                 val path = model.plainPath(f)
-                value = path?.let { withContext(Dispatchers.IO) { decodeScaled(it, 2048) } }
+                path?.let { withContext(Dispatchers.IO) { decodeScaled(it, 2048) } }
             }
             var scale by remember { mutableFloatStateOf(1f) }
             var offset by remember { mutableStateOf(Offset.Zero) }

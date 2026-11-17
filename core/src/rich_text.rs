@@ -229,6 +229,36 @@ pub struct TextSegment {
     pub simplex: Option<SimplexLinkKind>,
 }
 
+/// Format editable profile text through SimpleX, with a bounded in-memory cache.
+/// The source markup is preserved for editing and sending to peers.
+pub fn profile_text(raw: &str) -> Vec<TextSegment> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, Vec<TextSegment>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(raw) {
+        return hit.clone();
+    }
+    let mut segments = crate::ffi::LibSimplex::shared(None)
+        .and_then(|lib| lib.parse_markdown(raw))
+        .map(|v| parse_formatted_text(v.get("formattedText")))
+        .unwrap_or_default();
+    if segments.is_empty() {
+        segments.push(TextSegment {
+            text: raw.to_string(),
+            style: TextStyle::Plain,
+            link: None,
+            simplex: None,
+        });
+    }
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.len() >= 256 {
+        cache.clear();
+    }
+    cache.insert(raw.to_string(), segments.clone());
+    segments
+}
+
 /// One autocomplete hit for an incomplete `:prefix` in the composer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmojiSuggestion {
@@ -785,20 +815,54 @@ mod tests {
     }
 
     #[test]
+    fn profile_fields_format_markdown_without_expanding_shortcodes() {
+        let _lib = crate::ffi::LibSimplex::shared(None).expect("libsimplex parser");
+        let raw = "*Profile* _description_ :rocket:";
+        let formatted = profile_text(raw);
+        assert!(formatted
+            .iter()
+            .any(|s| s.text == "Profile" && s.style == TextStyle::Bold));
+        assert!(formatted
+            .iter()
+            .any(|s| s.text == "description" && s.style == TextStyle::Italic));
+        assert!(formatted.iter().any(|s| s.text.contains(":rocket:")));
+        assert_eq!(
+            formatted,
+            profile_text(raw),
+            "cached formatting must preserve the result"
+        );
+    }
+
+    #[test]
     fn colon_shortcodes_expand() {
         assert_eq!(expand_emoji_shortcodes("hi :rocket:"), "hi 🚀");
         assert_eq!(expand_emoji_shortcodes(":+1:"), "👍");
-        assert_eq!(expand_emoji_shortcodes(":not_a_real_emoji:"), ":not_a_real_emoji:");
+        assert_eq!(
+            expand_emoji_shortcodes(":not_a_real_emoji:"),
+            ":not_a_real_emoji:"
+        );
         // `:b:` is a real gemoji shortcode (B button).
         // Letter-block emoji are never produced from ordinary text.
         assert_eq!(expand_emoji_shortcodes("a:b:c"), "a:b:c");
-        assert_eq!(expand_emoji_shortcodes("ratio 1:m:2 :heart:"), "ratio 1:m:2 ❤️");
+        assert_eq!(
+            expand_emoji_shortcodes("ratio 1:m:2 :heart:"),
+            "ratio 1:m:2 ❤️"
+        );
         assert_eq!(expand_emoji_shortcodes("still :typing"), "still :typing");
         assert_eq!(expand_emoji_shortcodes("time 12:30 ok"), "time 12:30 ok");
         // Text-style emoji gain the colour selector; others stay untouched.
-        assert_eq!(emoji_presentation("I \u{2764} it \u{263A}"), "I \u{2764}\u{FE0F} it \u{263A}\u{FE0F}");
-        assert_eq!(emoji_presentation("\u{2764}\u{FE0F} 😄 ⭐"), "\u{2764}\u{FE0F} 😄 ⭐");
-        assert_eq!(emoji_presentation("\u{270C}\u{1F3FD} ok"), "\u{270C}\u{1F3FD} ok");
+        assert_eq!(
+            emoji_presentation("I \u{2764} it \u{263A}"),
+            "I \u{2764}\u{FE0F} it \u{263A}\u{FE0F}"
+        );
+        assert_eq!(
+            emoji_presentation("\u{2764}\u{FE0F} 😄 ⭐"),
+            "\u{2764}\u{FE0F} 😄 ⭐"
+        );
+        assert_eq!(
+            emoji_presentation("\u{270C}\u{1F3FD} ok"),
+            "\u{270C}\u{1F3FD} ok"
+        );
         assert_eq!(emoji_presentation("a → b © 2026 #1 ™"), "a → b © 2026 #1 ™");
     }
 

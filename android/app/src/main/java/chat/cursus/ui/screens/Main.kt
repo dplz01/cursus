@@ -274,6 +274,7 @@ fun CallsPane(model: AppModel) {
             .onSuccess { calls = it }.onFailure { failure = it.message }
     }
     val c = Cursus.colors
+    val contactsById = model.chats.filter { it.isContact }.associateBy { it.apiId }
     Column(Modifier.fillMaxSize()) {
         PaneHeader("Calls")
         when {
@@ -283,7 +284,7 @@ fun CallsPane(model: AppModel) {
             else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f)) {
                 items(calls!!.size, key = { calls!![it].itemId }) { index ->
                     val call = calls!![index]
-                    val contact = model.chats.firstOrNull { it.isContact && it.apiId == call.contactId }
+                    val contact = contactsById[call.contactId]
                     val icon = when {
                         call.missed -> chat.cursus.R.drawable.ic_call_missed
                         call.status in setOf("rejected", "error") -> chat.cursus.R.drawable.ic_call_rejected

@@ -37,6 +37,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.rotate
@@ -143,58 +145,53 @@ fun AccentSquare(icon: Int, description: String, onClick: () -> Unit, modifier: 
     }
 }
 
-/** 32px `accent.soft` disc with an accent glyph (danger: red-tinted). */
+/** A 20dp row glyph in the shared 24dp slot. */
 @Composable
-fun IconDisc(icon: Int, size: Dp = 32.dp, danger: Boolean = false) {
+fun IconDisc(icon: Int, danger: Boolean = false) {
+    // The glyph in front of a row: a fixed 24dp box, no backdrop.
     val c = Cursus.colors
-    val tint = if (danger) c.danger else c.accent
-    Box(
-        Modifier.size(size).clip(Radius.pill).background(if (danger) c.danger.copy(alpha = 0.14f) else c.accentSoft),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(painterResource(icon), null, Modifier.size(size * 0.55f), tint = tint)
+    Box(Modifier.size(RowIconBox), contentAlignment = Alignment.Center) {
+        Icon(painterResource(icon), null, Modifier.size(20.dp), tint = if (danger) c.danger else c.accent)
     }
 }
+
+/** Every row of a page — navigation, preference, action — shares one inset,
+ *  icon box, gap and corner, so labels line up down the whole page (the
+ *  same numbers as the Linux app's `ROW_*`). */
+val RowIconBox = 24.dp
+val RowShape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+fun Modifier.pageRow(onClick: (() -> Unit)? = null): Modifier =
+    fillMaxWidth().clip(RowShape).then(if (onClick != null) clickable(onClick = onClick) else this)
+        .padding(horizontal = 12.dp, vertical = 10.dp)
 
 /** Ghost action tile: icon disc + label, no fill until pressed. */
 @Composable
 fun ActionTile(icon: Int, text: String, onClick: () -> Unit, danger: Boolean = false, modifier: Modifier = Modifier) {
     val c = Cursus.colors
     Row(
-        modifier.fillMaxWidth().clip(Radius.lg).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 10.dp),
+        modifier.pageRow(onClick),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         IconDisc(icon, danger = danger)
         Text(text, style = Cursus.type.body, color = if (danger) c.danger else c.textPrimary)
     }
 }
 
-/** Card: `bg.elevated`, 1px border, radius 12, 10px padding. */
-private val CardShape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
-
+/** A section of a page: rows straight on the panel, no box around them —
+ *  the same flat language as the chat list. */
 @Composable
 fun CursusCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    val c = Cursus.colors
-    // Light: Linux `card` — tone, not lines: white on the grey page, radius
-    // 16, a whisper of shadow. Dark keeps the bordered card.
-    val m = if (c.isDark) {
-        modifier.fillMaxWidth().clip(Radius.lg).background(c.bgElevated).border(1.dp, c.border, Radius.lg)
-    } else {
-        modifier.fillMaxWidth().shadow(1.dp, CardShape).clip(CardShape).background(c.bgElevated)
-    }
-    Column(m.padding(10.dp), content = content)
+    Column(modifier.fillMaxWidth(), content = content)
 }
 
-/** Card title: 36px icon disc, title and one-line explanation. */
+/** Section heading: a small accent label above its rows. */
 @Composable
 fun CardTitle(icon: Int, title: String, subtitle: String? = null) {
-    val c = Cursus.colors
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        IconDisc(icon, size = 36.dp)
-        // Titles only: descriptions belong in ⓘ sheets (`subtitle` not shown).
-        Text(title, style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.Medium)
-    }
+    Text(
+        title, style = Cursus.type.meta, color = Cursus.colors.accent, fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 4.dp),
+    )
 }
 
 /** Navigation row: icon disc · title / subtitle · chevron. */
@@ -202,9 +199,9 @@ fun CardTitle(icon: Int, title: String, subtitle: String? = null) {
 fun NavRow(icon: Int, title: String, subtitle: String? = null, badge: Long = 0, onClick: () -> Unit) {
     val c = Cursus.colors
     Row(
-        Modifier.fillMaxWidth().clip(Radius.lg).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 8.dp),
+        Modifier.pageRow(onClick),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         IconDisc(icon)
         Column(Modifier.weight(1f)) {
@@ -216,36 +213,34 @@ fun NavRow(icon: Int, title: String, subtitle: String? = null, badge: Long = 0, 
     }
 }
 
+/** Shared switch: a 46×28 track and a 20dp white thumb, with a quiet off state. */
+@Composable
+fun CursusSwitch(checked: Boolean, onChange: ((Boolean) -> Unit)?, enabled: Boolean = true) {
+    val c = Cursus.colors
+    val offset by androidx.compose.animation.core.animateDpAsState(if (checked) 22.dp else 4.dp, label = "switch position")
+    val track by androidx.compose.animation.animateColorAsState(if (checked) c.accent else c.textSecondary.copy(alpha = 0.24f), label = "switch fill")
+    Box(
+        Modifier.size(width = 46.dp, height = 28.dp)
+            .then(if (enabled) Modifier else Modifier.alpha(0.45f))
+            .clip(Radius.pill).background(track)
+            .then(if (onChange != null && enabled) Modifier.toggleable(checked, role = androidx.compose.ui.semantics.Role.Switch, onValueChange = onChange) else Modifier),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Box(Modifier.offset(x = offset).size(20.dp).clip(Radius.pill).background(Color.White))
+    }
+}
+
 /** Preference row: label (fills) … control. */
 @Composable
-fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, note: String? = null) {
-    val c = Cursus.colors
-    Row(
-        Modifier.fillMaxWidth().clip(Radius.lg).clickable { onChange(!checked) }.padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = Cursus.type.body, color = c.textPrimary)
-            // Titles only: `note` is not shown (explanations live in ⓘ sheets).
-        }
-        Spacer(Modifier.width(10.dp))
-        Switch(
-            checked = checked,
-            onCheckedChange = onChange,
-            colors = SwitchDefaults.colors(
-                checkedTrackColor = c.accent,
-                checkedThumbColor = c.accentOn,
-                uncheckedTrackColor = c.bgField,
-                uncheckedBorderColor = c.border,
-                uncheckedThumbColor = c.textMuted,
-            ),
-        )
+fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, note: String? = null, icon: Int? = null, enabled: Boolean = true) {
+    PreferenceRow(title, note, icon, checked, enabled, onChange) {
+        CursusSwitch(checked, null, enabled)
     }
 }
 
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) {
-    Text(text, style = Cursus.type.meta, color = Cursus.colors.textMuted, modifier = modifier.padding(start = 8.dp, top = 14.dp, bottom = 4.dp))
+    Text(text, style = Cursus.type.meta, color = Cursus.colors.textMuted, modifier = modifier.padding(start = 12.dp, top = 14.dp, bottom = 4.dp))
 }
 
 /** A shareable link: the whole box copies. */
@@ -360,8 +355,9 @@ fun UnreadBadge(count: Long, muted: Boolean = false) {
 fun PageColumn(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         Column(
-            Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            // Same column on every Cursus app: at most 620 wide, centred.
+            Modifier.widthIn(max = 620.dp).fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(22.dp),
             content = content,
         )
     }
@@ -391,28 +387,37 @@ fun RoundedField(value: String, onValueChange: (String) -> Unit, placeholder: St
  *  [InfoSheet] with the explanation (`info` = title to paragraphs). */
 @Composable
 fun InfoSwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, info: Pair<String, String>) {
-    val c = Cursus.colors
     var open by remember { mutableStateOf(false) }
-    Row(
-        Modifier.fillMaxWidth().clip(Radius.lg).clickable { onChange(!checked) }.padding(horizontal = 8.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.weight(1f, fill = false))
-        IconTool(R.drawable.ic_info_circle, "About this setting", { open = true }, tint = c.textMuted)
-        Spacer(Modifier.weight(1f).width(10.dp))
-        Switch(
-            checked = checked,
-            onCheckedChange = onChange,
-            colors = SwitchDefaults.colors(
-                checkedTrackColor = c.accent,
-                checkedThumbColor = c.accentOn,
-                uncheckedTrackColor = c.bgField,
-                uncheckedBorderColor = c.border,
-                uncheckedThumbColor = c.textMuted,
-            ),
-        )
+    val label = when (title) {
+        "Message previews in chat list" -> "Message previews"
+        "Delivery receipts to contacts" -> "Contact delivery receipts"
+        "Delivery receipts in small groups" -> "Group delivery receipts"
+        "Download images and voice automatically" -> "Automatic media downloads"
+        "Hide message text in notifications" -> "Private notifications"
+        else -> title
+    }
+    PreferenceRow(label, settingSummary(title), checked = checked, onToggle = onChange) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconTool(R.drawable.ic_info_circle, "About $title", { open = true }, tint = Cursus.colors.textMuted)
+            CursusSwitch(checked, null)
+        }
     }
     if (open) InfoSheet(info.first, info.second) { open = false }
+}
+
+private fun settingSummary(title: String): String? = when (title) {
+    "Message previews in chat list" -> "Show the latest message below each name."
+    "Blur photos and videos" -> "Reveal media only when you tap it."
+    "Block screenshots" -> "Keep chats out of captures and recent apps."
+    "Delivery receipts to contacts" -> "Let contacts know their messages arrived."
+    "Delivery receipts in small groups" -> "Share delivery status in groups of up to 20."
+    "Remove tracking from links" -> "Clean the links you send and open."
+    "App lock" -> "Require your password when you return."
+    "Download images and voice automatically" -> "Keep small media ready to view and play."
+    "Protect IP address" -> "Ask before using unfamiliar file servers."
+    "Encrypt stored files" -> "Protect new attachments on this device."
+    "Hide message text in notifications" -> "Show the sender, keep the message private."
+    else -> null
 }
 
 /** Linux `setting_info_overlay`: title with ⓘ, paragraphs, "Got it". */

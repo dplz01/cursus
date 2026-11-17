@@ -74,31 +74,34 @@ struct GroupPreferencesPage: View {
     @EnvironmentObject private var model: AppModel
     let chat: Chat
 
+    private let sections = ["Messages", "Media & interaction", "Members"]
+
     var body: some View {
-        Card(spacing: 2) {
-            CardTitle(icon: "settings", title: "Chat features",
-                      subtitle: chat.isOwner
-                        ? "Owners change these for everyone. Changes save immediately."
-                        : "View only — only owners can change them.")
-                .padding(.bottom, 6)
-            ForEach(Features.group) { feature in
-                row(feature)
-            }
-        }
-        .disabled(!chat.isOwner)
-        if !chat.isChannel {
-            Card(spacing: 2) {
-                CardTitle(icon: "user-group", title: "Joining", subtitle: "How new members get in.")
-                    .padding(.bottom, 6)
-                PrefRow(icon: "review-file", label: "Review new members",
-                        note: "Admins accept each member before they can read or write.") {
-                    Toggle("", isOn: Binding(
-                        get: { chat.memberReview },
-                        set: { on in Task { await model.setMemberReview(chat, on) } }))
-                        .toggleStyle(.switch)
+        ForEach(sections, id: \.self) { title in
+            PreferenceGroup(title: title, note: title == "Messages"
+                ? (chat.isOwner ? "Changes apply to everyone in this \(chat.isChannel ? "channel" : "group")."
+                   : "Only owners can change these preferences.") : nil) {
+                ForEach(Features.group.filter { keys(title).contains($0.key) }) { feature in
+                    row(feature)
+                }
+                if title == "Members" && !chat.isChannel && chat.isOwner {
+                    PrefRow(icon: "review-file", label: "Review new members", note: "Approve requests before people join.") {
+                        Toggle("", isOn: Binding(get: { chat.memberReview },
+                            set: { on in Task { await model.setMemberReview(chat, on) } }))
+                            .labelsHidden()
+                    }
                 }
             }
             .disabled(!chat.isOwner)
+            .toggleStyle(PreferenceToggleStyle())
+        }
+    }
+
+    private func keys(_ title: String) -> [String] {
+        switch title {
+        case "Messages": return ["timedMessages", "directMessages", "fullDelete", "history"]
+        case "Members": return ["support"]
+        default: return ["reactions", "voice", "files", "simplexLinks"]
         }
     }
 
@@ -110,11 +113,11 @@ struct GroupPreferencesPage: View {
 
     @ViewBuilder
     private func row(_ feature: FeatureInfo) -> some View {
-        PrefRow(icon: feature.icon, label: feature.label) {
+        PrefRow(icon: feature.icon, label: feature.label, note: featureSummary(feature.key)) {
             Toggle("", isOn: Binding(
                 get: { isOn(feature.key) },
                 set: { on in Task { await model.setGroupFeature(chat, feature.key, on: on) } }))
-                .toggleStyle(.switch)
+                .toggleStyle(PreferenceToggleStyle())
                 .labelsHidden()
                 .controlSize(.small)
                 .tint(Theme.accent)
@@ -226,7 +229,7 @@ struct MemberPage: View {
                     Toggle("", isOn: Binding(
                         get: { member.showMessages },
                         set: { on in Task { await model.setMemberShowMessages(chat, member, on) } }))
-                        .toggleStyle(.switch)
+                        .toggleStyle(PreferenceToggleStyle())
                 }
                 if chat.isModerator && canManage {
                     PrefRow(icon: "block-prohibited", label: "Block for everyone",
@@ -234,7 +237,7 @@ struct MemberPage: View {
                         Toggle("", isOn: Binding(
                             get: { member.blocked },
                             set: { on in Task { await model.blockMember(chat, member, on) } }))
-                            .toggleStyle(.switch)
+                            .toggleStyle(PreferenceToggleStyle())
                     }
                 }
             }
@@ -488,5 +491,20 @@ struct GroupLinkPage: View {
         loading = true
         link = await model.groupLink(chat, role: role, quiet: quiet)
         loading = false
+    }
+}
+
+
+private func featureSummary(_ key: String) -> String {
+    switch key {
+    case "timedMessages": return "Automatically remove messages after a set time."
+    case "directMessages": return "Let members connect with each other."
+    case "fullDelete": return "Allow senders to remove messages for everyone."
+    case "history": return "Share recent messages with new members."
+    case "reactions": return "Respond with a quick emoji."
+    case "voice": return "Record and share audio messages."
+    case "files": return "Share photos, videos and documents."
+    case "simplexLinks": return "Share SimpleX invitations in messages."
+    default: return "Give members a private way to reach admins."
     }
 }

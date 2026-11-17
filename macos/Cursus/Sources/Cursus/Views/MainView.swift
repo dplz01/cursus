@@ -19,6 +19,16 @@ struct MainView: View {
             }
         }
         .background(Theme.app)
+        .onExitCommand {
+            if model.showInfo { model.showInfo = false }
+            else if model.support != nil { model.closeSupport() }
+            else if model.selectingMessages {
+                model.selectingMessages = false
+                model.selectedMessages = []
+            } else if model.composeMode != .new { model.composeMode = .new }
+            else if model.destination == .settings { model.settingsPage = nil }
+            else { model.selection = nil }
+        }
         .sheet(isPresented: $model.showNewChat) {
             NewChatSheet().environmentObject(model)
         }

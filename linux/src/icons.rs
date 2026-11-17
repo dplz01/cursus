@@ -306,10 +306,21 @@ pub fn paperplane_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 }
 
 /// SimpleX links — Solar Broken Line Icons (CC Attribution via SVG Repo).
-/// Padlock — Orchid Line Interface Icons (MIT), app lock screen / Lock button.
+/// Padlock (drawn for Cursus in the set's stroke style): lock screen,
+/// "Lock now", Privacy settings.
 pub fn lock_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
         svg_handle!("../assets/icons/lock.svg"),
+        color,
+        size,
+    )
+}
+
+/// Folder (after an SVG Repo glyph, redrawn in the set's stroke style):
+/// Files and network settings.
+pub fn files_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg_handle!("../assets/icons/files.svg"),
         color,
         size,
     )

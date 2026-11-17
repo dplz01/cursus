@@ -185,7 +185,7 @@ enum Features {
         FeatureInfo("voice", "Voice messages", "mic"),
         FeatureInfo("files", "Files and media", "image-square"),
         FeatureInfo("simplexLinks", "SimpleX links", "link-minimalistic-2"),
-        FeatureInfo("history", "Recent history for new members", "history"),
+        FeatureInfo("history", "Recent history", "history"),
         FeatureInfo("support", "Chat with admins", "admin"),
     ]
 

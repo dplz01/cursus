@@ -20,6 +20,8 @@ mod icons;
 mod kinetic;
 mod layout;
 mod media;
+mod navigation;
+mod preference_ui;
 mod theme;
 mod touch_mouse;
 mod trail_row;
@@ -596,16 +598,27 @@ pub enum SettingsSection {
     #[default]
     Profile,
     Address,
-    Appearance,
     Privacy,
-    Desktop,
+    Security,
+    Data,
+    Notifications,
+    Appearance,
+    About,
 }
 
 impl SettingsSection {
-    /// Order in the settings list: who you are, how people reach you, what
-    /// protects you, how Cursus behaves on the desktop, how it looks.
-    pub const ALL: [Self; 5] =
-        [Self::Profile, Self::Address, Self::Privacy, Self::Desktop, Self::Appearance];
+    /// The settings list, top to bottom (the profile is its header): how
+    /// people reach you, what others see, who can open the app, what goes
+    /// over the network and onto the disk, alerts, looks, about.
+    pub const ALL: [Self; 7] = [
+        Self::Address,
+        Self::Privacy,
+        Self::Security,
+        Self::Data,
+        Self::Notifications,
+        Self::Appearance,
+        Self::About,
+    ];
 }
 
 /// Overlay menu for settings that used to be iced `pick_list`s.
@@ -1056,7 +1069,6 @@ pub enum Message {
     /// Contact profile overlay.
     OpenContactProfile,
     CloseContactProfile,
-    CloseContactProfileAfterSave,
     OpenContactPreferences,
     CloseContactPreferences,
     ContactAliasChanged(String),
@@ -1101,7 +1113,6 @@ pub enum Message {
     /// Group settings + members / prefs / link.
     OpenGroupSettings,
     CloseGroupSettings,
-    CloseGroupSettingsAfterSave,
     /// Member support (“Chat with admins”).
     OpenSupportChatList,
     OpenUserSupportChat,
@@ -1323,7 +1334,7 @@ pub enum Message {
     ChatMenuToggleTag(i64),
     ChatMenuTagsUpdated(Result<String, String>),
     ChatMenuDone(Result<String, String>),
-    /// Esc — close media viewer first, else chat menu.
+    /// Navigate back through the topmost overlay or page.
     Escape,
     OpenSettingsSection(SettingsSection),
     /// Text-field context menu (Select all / Cut / Copy / Paste).
@@ -1341,6 +1352,8 @@ struct App {
     /// Window scale factor (physical = logical * scale). Not used for layout;
     /// only for snapping fine drawing (waveforms) to device pixels.
     scale_factor: f32,
+    /// One column only: a settings page is open over the settings list.
+    settings_open: bool,
     status: String,
     session: Option<Arc<Session>>,
     /// Handoff slot so `Session` never has to live inside a Clone `Message`.
@@ -1626,6 +1639,7 @@ impl App {
                 width: 1180.0,
                 height: 720.0,
                 scale_factor: 1.0,
+                settings_open: false,
                 status,
                 session: None,
                 pending_session: Arc::clone(&pending_session),
@@ -1965,6 +1979,13 @@ impl App {
                 // Commit dirty settings/profile drafts when leaving Settings.
                 let leaving_settings =
                     self.nav == NavSection::Settings && section != NavSection::Settings;
+                let drafts = if self.nav != section {
+                    let saves = Task::batch([self.save_contact_draft(), self.save_group_drafts()]);
+                    self.clear_section_pages();
+                    saves
+                } else {
+                    Task::none()
+                };
                 self.nav = section;
                 self.compose_open = false;
                 self.pref_menu = None;
@@ -1981,6 +2002,7 @@ impl App {
                     self.selected = None;
                     self.selected_id = None;
                     self.messages.clear();
+                    self.messages_load_gen = self.messages_load_gen.wrapping_add(1);
                     self.history_count = HISTORY_PAGE;
                 }
                 let history = if section == NavSection::Calls {
@@ -1989,59 +2011,16 @@ impl App {
                     Task::none()
                 };
                 if leaving_settings && self.own_profile.dirty {
-                    return Task::batch([history, self.update(Message::SaveOwnProfile)]);
+                    return Task::batch([drafts, history, self.update(Message::SaveOwnProfile)]);
                 }
                 if section == NavSection::Settings {
                     // Settings → Address shows whether there is an address.
                     self.address_revealed = false;
-                    return Task::batch([history, self.update(Message::LoadAddress)]);
+                    return Task::batch([drafts, history, self.update(Message::LoadAddress)]);
                 }
-                history
+                Task::batch([drafts, history])
             }
-            Message::Back => {
-                // Back is often a button press after scrolling the chat — clear
-                // sticky press_moved or the chat list cannot open another row.
-                self.clear_pointer_gesture();
-                if self.pref_menu.take().is_some() {
-                    return Task::none();
-                }
-                if let Some(support) = self.support.as_ref() {
-                    match &support.pane {
-                        SupportPane::Thread { from_list: true, .. } => {
-                            return self.open_support_list(support.group_id);
-                        }
-                        SupportPane::Thread { from_list: false, .. } | SupportPane::List => {
-                            return self.close_support_overlay();
-                        }
-                    }
-                }
-                if self.group_settings.as_ref().is_some_and(|g| {
-                    !matches!(g.pane, GroupSettingsPane::Overview)
-                }) {
-                    if let Some(g) = self.group_settings.as_mut() {
-                        g.pane = GroupSettingsPane::Overview;
-                        g.selected_member_id = None;
-                    }
-                    return Task::none();
-                }
-                if self.group_settings.is_some() {
-                    self.group_settings = None;
-                    return Task::none();
-                }
-                if self.contact_profile.is_some() {
-                    self.contact_profile = None;
-                    return Task::none();
-                }
-                if self.compose_open {
-                    self.compose_open = false;
-                    return Task::none();
-                }
-                self.selected = None;
-                self.selected_id = None;
-                self.messages.clear();
-                self.history_count = HISTORY_PAGE;
-                Task::none()
-            }
+            Message::Back | Message::Escape => self.go_back(),
             Message::WindowResized(size) => {
                 self.width = size.width;
                 self.height = size.height;
@@ -3277,23 +3256,9 @@ impl App {
                 self.open_contact_profile()
             }
             Message::CloseContactProfile => {
-                let dirty = self
-                    .contact_profile
-                    .as_ref()
-                    .is_some_and(|p| p.alias_dirty);
-                if dirty {
-                    // Save first (needs overlay), then dismiss.
-                    return Task::batch([
-                        self.update(Message::SaveContactAlias),
-                        Task::done(Message::CloseContactProfileAfterSave),
-                    ]);
-                }
+                let save = self.save_contact_draft();
                 self.contact_profile = None;
-                Task::none()
-            }
-            Message::CloseContactProfileAfterSave => {
-                self.contact_profile = None;
-                Task::none()
+                save
             }
             Message::ContactAliasChanged(v) => {
                 if let Some(p) = self.contact_profile.as_mut() {
@@ -3714,30 +3679,9 @@ impl App {
                 self.open_group_settings()
             }
             Message::CloseGroupSettings => {
-                let dirty = self
-                    .group_settings
-                    .as_ref()
-                    .is_some_and(|g| g.alias_dirty);
-                if dirty {
-                    return Task::batch([
-                        self.update(Message::SaveGroupAlias),
-                        Task::done(Message::CloseGroupSettingsAfterSave),
-                    ]);
-                }
-                // Also commit dirty group profile fields on leave.
-                let profile_dirty = self.group_settings.as_ref().is_some_and(|g| g.dirty);
-                if profile_dirty {
-                    return Task::batch([
-                        self.update(Message::SaveGroupProfile),
-                        Task::done(Message::CloseGroupSettingsAfterSave),
-                    ]);
-                }
+                let save = self.save_group_drafts();
                 self.group_settings = None;
-                Task::none()
-            }
-            Message::CloseGroupSettingsAfterSave => {
-                self.group_settings = None;
-                Task::none()
+                save
             }
             Message::OpenSupportChatList => {
                 let Some(chat) = self.selected.and_then(|i| self.chats.get(i)) else {
@@ -6009,9 +5953,9 @@ impl App {
 
                 // Chat-row menu only when the list is the active surface.
                 let hovered_chat = self.hover.chat.get();
-                let list_armed = match resolve(self.width, self.height) {
+                let list_armed = match self.layout() {
                     LayoutMode::Desktop => hovered_chat.is_some(),
-                    LayoutMode::Compact | LayoutMode::Mobile => {
+                    LayoutMode::Mobile => {
                         self.selected.is_none() && hovered_chat.is_some()
                     }
                 };
@@ -6088,6 +6032,7 @@ impl App {
             }
             Message::OpenSettingsSection(section) => {
                 self.settings_section = section;
+                self.settings_open = true;
                 if section == SettingsSection::Address {
                     return self.update(Message::LoadAddress);
                 }
@@ -6136,118 +6081,6 @@ impl App {
                         let task = self.update(Message::ComposerInsert(clip));
                         Task::batch([task, focus])
                     }
-                }
-            }
-            Message::Escape => {
-                if self.field_editor.take().is_some() {
-                    return Task::none();
-                }
-                if self.setting_info.take().is_some() {
-                    return Task::none();
-                }
-                if self.privacy_confirm.take().is_some() {
-                    return Task::none();
-                }
-                if self.pref_menu.take().is_some() {
-                    return Task::none();
-                }
-                if self.group_settings.as_ref().is_some_and(|g| g.member_dropdown.is_some()) {
-                    if let Some(g) = self.group_settings.as_mut() {
-                        g.member_dropdown = None;
-                    }
-                    return Task::none();
-                }
-                if let Some(support) = self.support.as_ref() {
-                    return match &support.pane {
-                        SupportPane::Thread { from_list: true, .. } => {
-                            self.open_support_list(support.group_id)
-                        }
-                        _ => self.close_support_overlay(),
-                    };
-                }
-                if self.create_chat.is_some() {
-                    self.create_chat = None;
-                    Task::none()
-                } else if self
-                    .group_settings
-                    .as_ref()
-                    .is_some_and(|g| !matches!(g.pane, GroupSettingsPane::Overview))
-                {
-                    if let Some(g) = self.group_settings.as_mut() {
-                        g.pane = GroupSettingsPane::Overview;
-                        g.selected_member_id = None;
-                    }
-                    Task::none()
-                } else if self.group_settings.is_some() {
-                    // Esc: discard dirty group profile / alias, don't save.
-                    self.group_settings = None;
-                    Task::none()
-                } else if self.contact_profile.is_some() {
-                    // Esc: leave without committing alias.
-                    self.contact_profile = None;
-                    Task::none()
-                } else if self.nav == NavSection::Settings && self.own_profile.dirty {
-                    // Esc: discard settings edits (do not submit).
-                    if let Some(user) = self.session.as_ref().and_then(|s| s.active_profile()) {
-                        self.own_profile = OwnProfileDraft {
-                            fields: user.profile,
-                            dirty: false,
-                        };
-                    } else {
-                        self.own_profile.dirty = false;
-                    }
-                    Task::none()
-                } else if self.compose_open {
-                    self.compose_open = false;
-                    Task::none()
-                } else if self.reaction_members.is_some() {
-                    self.reaction_members = None;
-                    Task::none()
-                } else if self.message_menu.is_some() {
-                    self.message_menu = None;
-                    Task::none()
-                } else if self.pending_url.is_some() {
-                    self.pending_url = None;
-                    Task::none()
-                } else if self.editing.is_some() {
-                    self.editing = None;
-                    self.clear_composer();
-                    Task::none()
-                } else if self.reply_to.is_some() {
-                    self.reply_to = None;
-                    Task::none()
-                } else if self.selection_mode {
-                    self.selection_mode = false;
-                    self.selected_items.clear();
-                    Task::none()
-                } else if cursus_core::pending_shortcode_query(&self.composer_text()).is_some() {
-                    // Drop the unfinished `:prefix` so suggestions close.
-                    let mut text = self.composer_text();
-                    if let Some(start) = text.rfind(':') {
-                        text.truncate(start);
-                        self.set_composer_text(text);
-                    }
-                    self.emoji_suggest_index = 0;
-                    Task::none()
-                } else if self.chat_menu.is_some() {
-                    self.chat_menu = None;
-                    Task::none()
-                } else if self.selected.is_some()
-                    && matches!(self.nav, NavSection::Chats | NavSection::Channels)
-                {
-                    // Leave the conversation: mobile/compact → the list of the
-                    // current section (Chats or Channels); desktop → the
-                    // “select a chat” placeholder in the main pane. Section is
-                    // kept, so a channel returns to Channels, a chat to Chats.
-                    self.clear_pointer_gesture();
-                    self.selected = None;
-                    self.selected_id = None;
-                    self.messages.clear();
-                    self.history_count = HISTORY_PAGE;
-                    self.reply_to = None;
-                    Task::none()
-                } else {
-                    Task::none()
                 }
             }
             Message::CloseChatMenu => {
@@ -7370,6 +7203,10 @@ impl App {
     pub(crate) fn settings_section(&self) -> SettingsSection {
         self.settings_section
     }
+    /// One column: whether a settings page covers the settings list.
+    pub(crate) fn settings_open(&self) -> bool {
+        self.settings_open
+    }
 
     pub(crate) fn connected(&self) -> bool {
         self.session.is_some() || self.demo
@@ -7503,7 +7340,7 @@ impl App {
         self.compose_open
     }
     pub(crate) fn layout(&self) -> LayoutMode {
-        resolve(self.width, self.height)
+        resolve(self.width)
     }
     pub(crate) fn density(&self) -> Density {
         Density::for_window(self.layout(), self.width, self.height)
@@ -8909,15 +8746,11 @@ fn new_tail(old: &[ChatMessage], new: &[ChatMessage]) -> Option<(bool, Option<i6
 }
 
 async fn activate_network(session: Arc<Session>) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || session.activate_network().map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || session.activate_network()).await
 }
 
 async fn load_chats(session: Arc<Session>) -> Result<Vec<ChatPreview>, String> {
-    tokio::task::spawn_blocking(move || session.list_chats().map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || session.list_chats()).await
 }
 
 /// Messages loaded when a chat opens, and added by "Load earlier messages".
@@ -8928,13 +8761,7 @@ async fn load_messages(
     chat: ChatId,
     count: u32,
 ) -> Result<Vec<ChatMessage>, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .list_messages(&chat, count)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.list_messages(&chat, count)).await
 }
 
 async fn send_text(
@@ -8943,14 +8770,12 @@ async fn send_text(
     text: String,
     quoted_item_id: Option<i64>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .send_text(&chat.id, &text, quoted_item_id)
             .map(|_| ())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn update_text(
@@ -8959,14 +8784,7 @@ async fn update_text(
     item_id: i64,
     text: String,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .update_text(&chat, item_id, &text)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.update_text(&chat, item_id, &text).map(|_| ())).await
 }
 
 fn friendly_edit_error(err: &str) -> String {
@@ -8988,14 +8806,12 @@ async fn delete_items(
     item_ids: Vec<i64>,
     broadcast: bool,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .delete_items(&chat_id, &item_ids, broadcast)
             .map(|_| ())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn forward_item(
@@ -9004,14 +8820,7 @@ async fn forward_item(
     to: ChatId,
     item_id: i64,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .forward_items(&from, &to, &[item_id])
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.forward_items(&from, &to, &[item_id]).map(|_| ())).await
 }
 
 async fn load_item_info(
@@ -9305,34 +9114,20 @@ async fn set_reaction(
     emoji: String,
     add: bool,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .set_reaction(&chat_id, item_id, &emoji, add)
             .map(|_| ())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn sync_address_auto_accept(session: Arc<Session>) -> Result<bool, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .address_auto_accept()
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.address_auto_accept()).await
 }
 
 async fn set_address_auto_accept(session: Arc<Session>, enable: bool) -> Result<bool, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .set_address_auto_accept(enable)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.set_address_auto_accept(enable)).await
 }
 
 async fn load_reaction_members(
@@ -9341,7 +9136,7 @@ async fn load_reaction_members(
     item_id: i64,
     emoji: String,
 ) -> Result<Vec<String>, String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .reaction_members(&chat_id, item_id, &emoji)
             .map(|members| {
@@ -9350,23 +9145,15 @@ async fn load_reaction_members(
                     .map(|m| m.display_name)
                     .collect::<Vec<_>>()
             })
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn load_group_members(
     session: Arc<Session>,
     group_id: i64,
 ) -> Result<Vec<GroupMemberInfo>, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .list_group_members(group_id)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.list_group_members(group_id)).await
 }
 
 async fn add_group_member(
@@ -9375,14 +9162,12 @@ async fn add_group_member(
     contact_id: i64,
     role: String,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .add_group_member(group_id, contact_id, &role)
             .map(|_| ())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn save_group_profile(
@@ -9390,14 +9175,7 @@ async fn save_group_profile(
     group_id: i64,
     profile: GroupProfileUpdate,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .update_group_profile(group_id, &profile)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.update_group_profile(group_id, &profile).map(|_| ())).await
 }
 
 async fn save_group_alias(
@@ -9405,14 +9183,7 @@ async fn save_group_alias(
     group_id: i64,
     alias: String,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .set_group_alias(group_id, &alias)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.set_group_alias(group_id, &alias).map(|_| ())).await
 }
 
 async fn ensure_group_link(
@@ -9420,13 +9191,7 @@ async fn ensure_group_link(
     group_id: i64,
     role: String,
 ) -> Result<ConnLink, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .group_invite_link(group_id, &role)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.group_invite_link(group_id, &role)).await
 }
 
 async fn set_group_link_role(
@@ -9434,25 +9199,11 @@ async fn set_group_link_role(
     group_id: i64,
     role: String,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .set_group_link_role(group_id, &role)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.set_group_link_role(group_id, &role).map(|_| ())).await
 }
 
 async fn delete_group_link(session: Arc<Session>, group_id: i64) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .delete_group_link(group_id)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.delete_group_link(group_id).map(|_| ())).await
 }
 
 async fn delete_member_support_chat(
@@ -9460,24 +9211,16 @@ async fn delete_member_support_chat(
     group_id: i64,
     group_member_id: i64,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .delete_member_support_chat(group_id, group_member_id)
             .map(|_| ())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn add_group_short_link(session: Arc<Session>, group_id: i64) -> Result<ConnLink, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .short_group_link(group_id)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.short_group_link(group_id)).await
 }
 
 async fn set_group_member_role(
@@ -9486,14 +9229,12 @@ async fn set_group_member_role(
     member_id: i64,
     role: String,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .set_group_member_role(group_id, member_id, &role)
             .map(|_| ())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn remove_group_member(
@@ -9502,14 +9243,12 @@ async fn remove_group_member(
     member_id: i64,
     with_messages: bool,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .remove_group_member(group_id, member_id, with_messages)
             .map(|_| ())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn set_member_show_messages(
@@ -9518,14 +9257,12 @@ async fn set_member_show_messages(
     member_id: i64,
     show: bool,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .set_member_show_messages(group_id, member_id, show)
             .map(|_| ())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn block_group_member(
@@ -9534,14 +9271,12 @@ async fn block_group_member(
     member_id: i64,
     blocked: bool,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .block_group_member(group_id, member_id, blocked)
             .map(|_| ())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn accept_group_member(
@@ -9550,25 +9285,16 @@ async fn accept_group_member(
     member_id: i64,
     role: String,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .accept_group_member(group_id, member_id, &role)
             .map(|_| ())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn leave_group(session: Arc<Session>, group_id: i64) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .leave_group(group_id)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.leave_group(group_id).map(|_| ())).await
 }
 
 fn cycle_role_below(current: &str, my_role: &str) -> String {
@@ -9729,19 +9455,11 @@ async fn save_own_profile(
     session: Arc<Session>,
     fields: ProfileFields,
 ) -> Result<UserProfile, String> {
-    tokio::task::spawn_blocking(move || session.update_profile(fields).map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || session.update_profile(fields)).await
 }
 
 async fn set_profile_address(session: Arc<Session>, on: bool) -> Result<UserProfile, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .set_profile_address(on)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.set_profile_address(on)).await
 }
 
 async fn save_contact_alias(
@@ -9749,14 +9467,7 @@ async fn save_contact_alias(
     contact_id: i64,
     alias: String,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .set_contact_alias(contact_id, &alias)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.set_contact_alias(contact_id, &alias).map(|_| ())).await
 }
 
 fn reaction_emoji_eq(a: &str, b: &str) -> bool {
@@ -10224,31 +9935,20 @@ async fn blocking<T: Send + 'static>(
 }
 
 async fn ensure_address(session: Arc<Session>) -> Result<ConnLink, String> {
-    tokio::task::spawn_blocking(move || session.ensure_address_link().map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || session.ensure_address_link()).await
 }
 
-async fn mark_chat_read(
-    session: Arc<Session>,
-    chat: ChatId,
-) -> Result<ChatId, String> {
-    tokio::task::spawn_blocking(move || {
-        session.mark_chat_read(&chat).map(|_| chat).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+async fn mark_chat_read(session: Arc<Session>, chat: ChatId) -> Result<ChatId, String> {
+    blocking(move || session.mark_chat_read(&chat).map(|_| chat)).await
 }
 
 async fn mark_chat_unread(session: Arc<Session>, chat: ChatId) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .mark_chat_unread(&chat)
             .map(|_| "Marked as unread.".into())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn set_chat_settings(
@@ -10257,36 +9957,20 @@ async fn set_chat_settings(
     settings: ChatSettings,
     ok_label: &'static str,
 ) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .set_chat_settings(&chat, &settings)
             .map(|_| ok_label.into())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn clear_chat(session: Arc<Session>, chat: ChatId) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .clear_chat(&chat)
-            .map(|_| "Chat cleared.".into())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.clear_chat(&chat).map(|_| "Chat cleared.".into())).await
 }
 
 async fn delete_chat(session: Arc<Session>, chat: ChatId) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        session
-            .delete_chat(&chat)
-            .map(|_| "Chat deleted.".into())
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session.delete_chat(&chat).map(|_| "Chat deleted.".into())).await
 }
 
 /// Core already removed the group/chat (`errorStore` / `groupNotFound`).
@@ -10295,15 +9979,11 @@ fn store_already_gone(err: &str) -> bool {
 }
 
 async fn load_chat_tags(session: Arc<Session>) -> Result<Vec<ChatTag>, String> {
-    tokio::task::spawn_blocking(move || session.list_chat_tags().map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || session.list_chat_tags()).await
 }
 
 async fn create_chat_tag(session: Arc<Session>, name: String) -> Result<Vec<ChatTag>, String> {
-    tokio::task::spawn_blocking(move || session.create_chat_tag(&name).map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || session.create_chat_tag(&name)).await
 }
 
 async fn set_chat_tags(
@@ -10311,14 +9991,12 @@ async fn set_chat_tags(
     chat: ChatId,
     tag_ids: Vec<i64>,
 ) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         session
             .set_chat_tags(&chat, &tag_ids)
             .map(|_| "Lists updated.".into())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn accept_contact_request(
@@ -10340,18 +10018,13 @@ async fn accept_contact_request(
     .map_err(|e| e.to_string())?
 }
 
-async fn reject_contact_request(
-    session: Arc<Session>,
-    req_id: i64,
-) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+async fn reject_contact_request(session: Arc<Session>, req_id: i64) -> Result<String, String> {
+    blocking(move || {
         session
             .reject_contact_request(req_id)
             .map(|_| "Contact request rejected.".into())
-            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn accept_invite(session: Arc<Session>, link: String, incognito: bool) -> Result<String, String> {

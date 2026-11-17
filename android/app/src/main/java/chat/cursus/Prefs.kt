@@ -62,8 +62,9 @@ class Prefs(context: Context) {
     /** New one-time links and links pasted on the Connect card use a random
      *  incognito profile (the official apps' toggle). */
     var incognito by bool("incognito", false)
-    /** Keep chats out of screenshots and the recent-apps preview. */
-    var secureScreen by bool("secureScreen", true)
+    /** Keep chats out of screenshots and the recent-apps preview (off unless
+     *  the user turns it on: Privacy → Block screenshots). */
+    var secureScreen by bool("secureScreen", false)
     /** Keep receiving while Cursus is in the background (foreground service). */
     var background by bool("background", true)
 }

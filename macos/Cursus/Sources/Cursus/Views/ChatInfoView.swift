@@ -59,6 +59,7 @@ struct ChatInfoView: View {
             pages
         }
         .background(Theme.panel)
+        .onExitCommand(perform: back)
         .onAppear {
             // Back from a member's thread opened from the list: the list again.
             if let returning = model.infoReturnPage {
@@ -502,10 +503,7 @@ struct ChatSettingsCard: View {
     @State private var addingList = false
 
     var body: some View {
-        Card(spacing: 0) {
-            CardTitle(icon: "user-alt-1", title: "Your settings",
-                      subtitle: "Only for you — \(chat.isDirect ? "they don't" : "other members don't") see these.")
-                .padding(.bottom, 6)
+        PreferenceGroup(title: "Just for you", note: "These choices only affect your account.") {
             PrefRow(icon: "notifications", label: "Notifications") {
                 ChoiceMenu(options: notificationChoices, selection: chat.notifications) { mode in
                     Task { await model.setNotifications(chat, mode) }

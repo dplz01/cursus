@@ -53,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import chat.cursus.AppModel
 import chat.cursus.Phase
 import chat.cursus.Section
@@ -91,7 +92,10 @@ fun Root(model: AppModel) {
         AlertDialog(
             onDismissRequest = { model.error = null },
             confirmButton = { TextButton({ model.error = null }) { Text("OK", color = Cursus.colors.accent) } },
-            text = { Text(text, style = Cursus.type.body) },
+            text = {
+                chat.cursus.ui.components.DialogEscape { model.error = null }
+                Text(text, style = Cursus.type.body)
+            },
             containerColor = Cursus.colors.bgElevated,
             shape = Radius.lg,
         )
@@ -102,7 +106,7 @@ fun Root(model: AppModel) {
 fun MainScreen(model: AppModel) {
     val mode = layoutMode()
     val c = Cursus.colors
-    var page by remember { mutableStateOf<Page?>(null) }
+    var page by remember(model.section) { mutableStateOf<Page?>(null) }
     var linkToOpen by rememberSaveable { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
 
@@ -129,10 +133,10 @@ fun MainScreen(model: AppModel) {
     }
 
     val inChatSection = model.section == Section.Chats || model.section == Section.Channels
-    val chatOpen = inChatSection && model.selection != null
+    val chatOpen = inChatSection && model.selectedChat?.isChannel == (model.section == Section.Channels)
 
     BackHandler(enabled = page != null) { page = null }
-    BackHandler(enabled = page == null && chatOpen && mode != LayoutMode.Desktop) { model.select(null) }
+    BackHandler(enabled = page == null && chatOpen) { model.select(null) }
 
     val list: @Composable () -> Unit = {
         when (model.section) {
@@ -157,7 +161,7 @@ fun MainScreen(model: AppModel) {
         }
     }
     val conversation: @Composable () -> Unit = {
-        val chat = model.selectedChat
+        val chat = model.selectedChat?.takeIf { it.isChannel == (model.section == Section.Channels) }
         if (chat != null) {
             ConversationPane(model, chat, showBack = mode != LayoutMode.Desktop, onInfo = { page = Page.ChatInfo })
         } else {
@@ -256,7 +260,10 @@ private fun BottomBar(model: AppModel, modifier: Modifier = Modifier) {
                 contentAlignment = Alignment.Center,
             ) {
                 CompositionLocalProvider(LocalContentColor provides if (active) c.accent else c.textSecondary) {
-                    NavIcon(s, sectionUnread(model, s))
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        NavIcon(s, sectionUnread(model, s))
+                        Text(s.title, fontSize = 10.sp, maxLines = 1)
+                    }
                 }
             }
         }
@@ -273,6 +280,7 @@ private fun Rail(model: AppModel) {
                 selected = model.section == s,
                 onClick = { model.section = s },
                 icon = { NavIcon(s, sectionUnread(model, s)) },
+                label = { Text(s.title, fontSize = 10.sp) },
                 colors = NavigationRailItemDefaults.colors(
                     selectedIconColor = c.accent,
                     unselectedIconColor = c.textSecondary,

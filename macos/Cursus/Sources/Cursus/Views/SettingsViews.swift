@@ -53,17 +53,23 @@ struct SettingsDetailView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            PaneHeader(title: (model.settingsPage ?? .profile).title)
-            Page {
-                switch model.settingsPage ?? .profile {
-                case .profile: ProfilePage()
-                case .address: AddressPage()
-                case .privacy: PrivacyPage()
-                case .notifications: NotificationsPage()
-                case .appearance: AppearancePage()
-                case .about: AboutPage()
+        Group {
+            if let page = model.settingsPage {
+                VStack(spacing: 0) {
+                    PaneHeader(title: page.title, back: { model.settingsPage = nil })
+                    Page {
+                        switch page {
+                        case .profile: ProfilePage()
+                        case .address: AddressPage()
+                        case .privacy: PrivacyPage()
+                        case .notifications: NotificationsPage()
+                        case .appearance: AppearancePage()
+                        case .about: AboutPage()
+                        }
+                    }
                 }
+            } else {
+                Placeholder(icon: "settings", text: "Choose a settings category")
             }
         }
         .background(Theme.panel)
@@ -78,13 +84,9 @@ struct SettingsSection<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        Card(spacing: 6) {
-            CardTitle(icon: icon, title: title, subtitle: subtitle)
-                .padding(.bottom, 4)
-            content
-        }
-        .toggleStyle(.switch)
-        .tint(Theme.accent)
+        PreferenceGroup(title: title, note: subtitle) { content }
+            .toggleStyle(PreferenceToggleStyle())
+            .tint(Theme.accent)
     }
 }
 

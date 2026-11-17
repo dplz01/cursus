@@ -341,7 +341,10 @@ fun FileApprovalDialog(model: AppModel) {
         onDismissRequest = { model.fileApproval = null },
         containerColor = c.bgElevated,
         shape = Radius.lg,
-        title = { Text("Download from unknown servers?", style = Cursus.type.title) },
+        title = {
+            chat.cursus.ui.components.DialogEscape { model.fileApproval = null }
+            Text("Download from unknown servers?", style = Cursus.type.title)
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(

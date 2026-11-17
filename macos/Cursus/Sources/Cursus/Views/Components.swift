@@ -376,9 +376,10 @@ struct IconDisc: View {
     var fill: Color = Theme.accentSoft
 
     var body: some View {
-        CIcon(icon, size: size * 0.52, color: tint)
-            .frame(width: size, height: size)
-            .background(Circle().fill(fill))
+        // The glyph in front of a row: a fixed 24pt box, no backdrop
+        // (`size` and `fill` are kept for call sites).
+        CIcon(icon, size: 20, color: tint)
+            .frame(width: 24, height: 24)
     }
 }
 
@@ -394,23 +395,15 @@ struct ActionTile: View {
     var body: some View {
         Button(action: action) {
             Group {
-                if stacked {
-                    VStack(spacing: 8) {
-                        disc
-                        label
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .padding(.horizontal, 8)
-                } else {
-                    HStack(spacing: 10) {
-                        disc
-                        label
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 10)
+                // Actions are rows like every other row, on any width
+                // (`stacked` is kept for call sites).
+                HStack(spacing: 14) {
+                    disc
+                    label
+                    Spacer(minLength: 0)
                 }
+                .padding(.vertical, 10)
+                .padding(.horizontal, 12)
             }
             .contentShape(Rectangle())
         }
@@ -445,7 +438,7 @@ struct NavRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: 14) {
                 IconDisc(icon: icon)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title).font(.cBody).foregroundColor(Theme.primaryText)
@@ -465,8 +458,9 @@ struct NavRow: View {
                     CIcon(trailing, size: 16, color: Theme.mutedText)
                 }
             }
-            .padding(.vertical, flush ? 12 : 8)
-            .padding(.horizontal, flush ? 14 : 10)
+            // One row pitch everywhere (`flush` is kept for call sites).
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
             .contentShape(Rectangle())
         }
         .buttonStyle(GhostTileStyle(selected: selected))
@@ -486,10 +480,10 @@ struct Card<Content: View>: View {
         VStack(alignment: .leading, spacing: spacing) {
             content
         }
-        .padding(padding)
+        // A section of a page: rows straight on the panel, no box around
+        // them — the same flat language as the chat list (`padding` is kept
+        // for call sites).
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).fill(Theme.elevated))
-        .overlay(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
     }
 }
 
@@ -500,13 +494,13 @@ struct CardTitle: View {
     var subtitle: String? = nil
 
     var body: some View {
-        HStack(spacing: 10) {
-            IconDisc(icon: icon, size: 36)
-            // Titles only: descriptions belong in ⓘ sheets (`subtitle` kept
-            // for call sites, not shown).
-            Text(title).font(.cBodyBold).foregroundColor(Theme.primaryText)
+        // Section heading: a small accent label above its rows (`icon` and
+        // `subtitle` are kept for call sites, not shown).
+        HStack(spacing: 0) {
+            Text(title).font(.cMetaBold).foregroundColor(Theme.accent)
             Spacer(minLength: 0)
         }
+        .padding(.horizontal, 12)
     }
 }
 
@@ -517,7 +511,7 @@ struct SectionLabel: View {
 
     var body: some View {
         Text(text).font(.cMeta).foregroundColor(Theme.mutedText)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 12)
             .padding(.top, 4)
     }
 }
@@ -530,33 +524,40 @@ struct PrefRow<Control: View>: View {
     @ViewBuilder let control: Control
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 14) {
             if let icon = icon {
-                CIcon(icon, size: 20, color: Theme.secondaryText).frame(width: 24)
+                CIcon(icon, size: 18, color: Theme.accent)
+                    .frame(width: 32, height: 32)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Theme.accentSoft))
             }
-            // Titles only: `note` is kept for call sites but not shown
-            // (explanations belong in ⓘ sheets).
-            Text(label).font(.cBody).foregroundColor(Theme.primaryText)
-            Spacer(minLength: 8)
-            control
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label).font(.cBody).foregroundColor(Theme.primaryText)
+                if let note = note, !note.isEmpty {
+                    Text(note).font(.cMeta).foregroundColor(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            control.fixedSize()
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 8)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
     }
 }
 
-/// A scrolling column of cards, centred and capped at 760pt.
+/// A scrolling column of sections, centred and capped at 620pt (the same
+/// column on every Cursus app).
 struct Page<Content: View>: View {
     var background: Color = Theme.panel
     @ViewBuilder let content: Content
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 22) {
                 content
             }
             .padding(16)
-            .frame(maxWidth: 760)
+            .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
         }
         .background(background)
@@ -773,5 +774,52 @@ struct InlineConfirm: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
+    }
+}
+
+
+/// The same inset preference surface used by Compose and Iced.
+struct PreferenceGroup<Content: View>: View {
+    var title: String? = nil
+    var note: String? = nil
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            if let title = title {
+                Text(title).font(.cMeta).foregroundColor(Theme.secondaryText).padding(.horizontal, 16)
+            }
+            VStack(alignment: .leading, spacing: 0) { content }
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Theme.elevated))
+                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Theme.border.opacity(0.5), lineWidth: 1))
+            if let note = note {
+                Text(note).font(.cMeta).foregroundColor(Theme.secondaryText).padding(.horizontal, 16)
+            }
+        }
+    }
+}
+
+struct PreferenceToggleStyle: ToggleStyle {
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: {
+            HStack {
+                configuration.label
+                Spacer(minLength: 0)
+                Capsule()
+                    .fill(configuration.isOn ? Theme.accent : Theme.secondaryText.opacity(0.24))
+                    .frame(width: 46, height: 28)
+                    .overlay(Circle().fill(Color.white).frame(width: 20, height: 20)
+                        .offset(x: configuration.isOn ? 9 : -9))
+                    .opacity(enabled ? 1 : 0.45)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(configuration.isOn ? "On" : "Off")
+        .animation(.easeOut(duration: 0.15), value: configuration.isOn)
     }
 }

@@ -1,6 +1,7 @@
 package chat.cursus.ui.screens
 
 import androidx.compose.foundation.border
+import chat.cursus.ui.components.PreferenceGroup
 import chat.cursus.ui.components.PrefRow
 import chat.cursus.ui.components.ChoiceChip
 import chat.cursus.ui.components.ChoiceMenu
@@ -67,6 +68,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import chat.cursus.ui.components.NavRow
 import chat.cursus.ui.components.CursusOverlay
+import chat.cursus.ui.components.pageRow
 import chat.cursus.ui.components.DangerButton
 import chat.cursus.ui.components.RoundedField
 import chat.cursus.ui.components.PageColumn
@@ -148,15 +150,12 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
     }
     CursusCard {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(Modifier.padding(4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(Modifier.size(36.dp).clip(Radius.pill).background(c.accentSoft), contentAlignment = Alignment.Center) {
-                    Icon(painterResource(R.drawable.ic_link_minimalistic_2), null, Modifier.size(18.dp), tint = c.accent)
-                }
-                Text("Connect", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { CardTitle(R.drawable.ic_link_minimalistic_2, "Connect") }
                 IconTool(R.drawable.ic_info_circle, "What do these do?", { info = true }, tint = c.textMuted)
             }
             SectionLabel("Copy one-time link")
-            Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Box(Modifier.weight(1f)) {
                     val inv = invitation
                     if (inv != null) {
@@ -204,7 +203,7 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
                 }, Modifier.fillMaxWidth(), enabled = !busy)
             }
             SectionLabel("Join with a link")
-            Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     RoundedField(link, onLink, "Invite or address link…", Modifier.weight(1f))
                     IconTool(R.drawable.ic_paste, "Paste", { clipboard.getText()?.let { onLink(it.text.trim()) } })
@@ -280,99 +279,131 @@ private fun CreateChatOverlay(kind: CreateKind, onDismiss: () -> Unit, onCreate:
     }
 }
 
+/** The settings pages, in list order (the profile is the list's header):
+ *  the same grouping and wording as the Linux app. */
+private enum class SettingsPage(val icon: Int, val title: String) {
+    Profile(R.drawable.ic_user_alt_1, "Profile"),
+    Address(R.drawable.ic_address_card, "Your address"),
+    Privacy(R.drawable.ic_lock, "Privacy"),
+    Security(R.drawable.ic_shield_check, "Security"),
+    Data(R.drawable.ic_files, "Files and network"),
+    Notifications(R.drawable.ic_notifications, "Notifications"),
+    Appearance(R.drawable.ic_image_square, "Appearance"),
+    About(R.drawable.ic_info_circle, "About"),
+}
+
 @Composable
 fun SettingsPane(model: AppModel) {
     val c = Cursus.colors
-    val scope = rememberCoroutineScope()
     val uri = LocalUriHandler.current
     val user = model.user
+    var page by remember { mutableStateOf<SettingsPage?>(null) }
     var editing by remember { mutableStateOf<EditField?>(null) }
     var showLicences by remember { mutableStateOf(false) }
-    val context = LocalContext.current
 
-    Column(Modifier.fillMaxSize()) {
-        PaneHeader("Settings")
-        Column(Modifier.verticalScroll(rememberScrollState())) {
-            PageColumn {
-                // The profile card is the profile itself (picture first, like
-                // a contact page): no title row; tapping the picture changes it.
-                CursusCard {
+    val open = page
+    if (open == null) {
+        // The list: your profile, then one row per page saying what's inside.
+        Column(Modifier.fillMaxSize()) {
+            PaneHeader("Settings")
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                PageColumn {
                     Column {
-                        val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-                            uri?.let { model.withProfileImage(it) { url -> model.setOwnImage(url) } }
+                        Row(
+                            Modifier.pageRow { page = SettingsPage.Profile },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        ) {
+                            chat.cursus.ui.components.Avatar(user?.displayName ?: "", user?.image, 56.dp)
+                            Column(Modifier.weight(1f)) {
+                                Text(user?.displayName ?: "", style = Cursus.type.title, color = c.textPrimary, maxLines = 1)
+                                Text(
+                                    user?.shortDescr?.ifBlank { null } ?: "Add a bio",
+                                    style = Cursus.type.meta, color = c.textSecondary, maxLines = 1,
+                                )
+                            }
                         }
-                        val photo = PhotoActions(
-                            hasImage = user?.image != null,
-                            onPick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                            onClear = { model.setOwnImage("") },
-                        )
-                        ProfileIdentity(user?.displayName ?: "", user?.image, photo = photo) {
-                            EditableLine(user?.displayName ?: "", "Your name", LineStyle.Name) { editing = EditField.OwnName }
-                            EditableLine(user?.shortDescr ?: "", "Add a bio", LineStyle.Sub) { editing = EditField.OwnBio }
-                        }
-                        SectionLabel("Description")
-                        EditableLine(user?.description ?: "", "Tell people about yourself", LineStyle.Body) { editing = EditField.OwnDescription }
-                    }
-                }
-                AddressCard(model)
-                CursusCard {
-                    CardTitle(R.drawable.ic_image_square, "Appearance", "Theme")
-                    Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        for (mode in ThemeMode.entries) {
-                            val on = model.prefs.theme == mode
-                            Text(
-                                mode.name,
-                                style = Cursus.type.body,
-                                color = if (on) c.accent else c.textPrimary,
-                                fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                                modifier = Modifier.weight(1f).clip(Radius.md)
-                                    .background(if (on) c.accentSoft else c.bgField)
-                                    .clickable { model.prefs.theme = mode }
-                                    .padding(vertical = 10.dp)
-                                    .then(Modifier),
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            )
+                        Box(Modifier.size(10.dp))
+                        for (p in SettingsPage.entries.drop(1)) {
+                            Row(
+                                Modifier.pageRow { page = p },
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            ) {
+                                chat.cursus.ui.components.IconDisc(p.icon)
+                                Text(p.title, style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.weight(1f).padding(vertical = 2.dp))
+                            }
                         }
                     }
-                    var sizes by remember { mutableStateOf(false) }
-                    chat.cursus.ui.components.PrefRow("Text size") {
-                        chat.cursus.ui.components.ChoiceChip(model.prefs.textSize.label, { sizes = true })
-                    }
-                    if (sizes) {
-                        chat.cursus.ui.components.ChoiceMenu(
-                            "Text size", chat.cursus.TextSize.entries.map { it to it.label }, model.prefs.textSize, { sizes = false },
-                        ) { model.prefs.textSize = it; sizes = false }
+                    if (model.busy) CircularProgressIndicator(color = c.accent)
+                }
+            }
+        }
+    } else {
+        androidx.activity.compose.BackHandler { page = null }
+        Column(Modifier.fillMaxSize()) {
+            PaneHeader(open.title, onBack = { page = null })
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                PageColumn {
+                    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                        when (open) {
+                            SettingsPage.Profile -> {
+                                val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+                                    uri?.let { model.withProfileImage(it) { url -> model.setOwnImage(url) } }
+                                }
+                                val photo = PhotoActions(
+                                    hasImage = user?.image != null,
+                                    onPick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                                    onClear = { model.setOwnImage("") },
+                                )
+                                ProfileIdentity(user?.displayName ?: "", user?.image, photo = photo) {
+                                    EditableLine(user?.displayName ?: "", "Your name", LineStyle.Name) { editing = EditField.OwnName }
+                                    EditableLine(user?.shortDescr ?: "", "Add a bio", LineStyle.Sub) { editing = EditField.OwnBio }
+                                }
+                                Box(Modifier.size(18.dp))
+                                CardTitle(0, "Description")
+                                EditableLine(user?.description ?: "", "Tell people about yourself", LineStyle.Body) { editing = EditField.OwnDescription }
+                            }
+                            SettingsPage.Address -> AddressCard(model)
+                            SettingsPage.Appearance -> {
+                                var themes by remember { mutableStateOf(false) }
+                                var sizes by remember { mutableStateOf(false) }
+                                PreferenceGroup("Display") {
+                                chat.cursus.ui.components.PrefRow("Theme") {
+                                    chat.cursus.ui.components.ChoiceChip(model.prefs.theme.name, { themes = true })
+                                }
+                                chat.cursus.ui.components.PrefRow("Text size") {
+                                    chat.cursus.ui.components.ChoiceChip(model.prefs.textSize.label, { sizes = true })
+                                }
+                                }
+                                if (themes) {
+                                    chat.cursus.ui.components.ChoiceMenu(
+                                        "Theme", ThemeMode.entries.map { it to it.name }, model.prefs.theme, { themes = false },
+                                    ) { model.prefs.theme = it; themes = false }
+                                }
+                                if (sizes) {
+                                    chat.cursus.ui.components.ChoiceMenu(
+                                        "Text size", chat.cursus.TextSize.entries.map { it to it.label }, model.prefs.textSize, { sizes = false },
+                                    ) { model.prefs.textSize = it; sizes = false }
+                                }
+                            }
+                            SettingsPage.About -> {
+                                Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text("Cursus ${model.info?.version ?: ""} for Android", style = Cursus.type.body, color = c.textPrimary)
+                                    Text(
+                                        "Free software under AGPL-3.0-or-later, built on the official SimpleX Chat core.",
+                                        style = Cursus.type.meta, color = c.textSecondary,
+                                    )
+                                }
+                                NavRow(R.drawable.ic_link_minimalistic_2, "Source code", "github.com/dplz01/cursus") {
+                                    uri.openUri("https://github.com/dplz01/cursus")
+                                }
+                                NavRow(R.drawable.ic_scripture_scroll, "Licences and credits") { showLicences = true }
+                            }
+                            else -> PrivacyRows(model, open)
+                        }
                     }
                 }
-                PrivacyCard(model)
-                CursusCard {
-                    CardTitle(R.drawable.ic_notifications, "Notifications", "Alerts and background running")
-                    SwitchRow("Receive in background", model.prefs.background, {
-                        model.prefs.background = it
-                        model.syncBackground()
-                    })
-                }
-                CursusCard {
-                    CardTitle(R.drawable.ic_info_circle, "About", "Version, source and licences")
-                    Column(Modifier.padding(top = 10.dp, start = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Cursus ${model.info?.version ?: ""} for Android", style = Cursus.type.body, color = c.textPrimary)
-                        Text(
-                            "Free software under AGPL-3.0-or-later, built on the official SimpleX Chat core.",
-                            style = Cursus.type.meta, color = c.textSecondary,
-                        )
-                        Text(
-                            "Source code",
-                            style = Cursus.type.body, color = c.accent,
-                            modifier = Modifier.clickable { uri.openUri("https://github.com/dplz01/cursus") },
-                        )
-                        Text(
-                            "Licences and credits",
-                            style = Cursus.type.body, color = c.accent,
-                            modifier = Modifier.clickable { showLicences = true },
-                        )
-                    }
-                }
-                if (model.busy) CircularProgressIndicator(color = c.accent)
             }
         }
     }
@@ -411,18 +442,16 @@ private fun AddressCard(model: AppModel) {
         if (address != null) autoAccept = model.addressAutoAccept()
         loaded = true
     }
-    CursusCard {
-        CardTitle(R.drawable.ic_link_minimalistic_2, "Address")
-        SectionLabel("Your address")
+    PreferenceGroup("Your address") {
         val a = address
         when {
-            !loaded -> Text("Loading…", style = Cursus.type.meta, color = c.textMuted, modifier = Modifier.padding(8.dp))
+            !loaded -> Text("Loading…", style = Cursus.type.meta, color = c.textMuted, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
             a == null -> NavRow(R.drawable.ic_address_card, "Create address") {
                 scope.launch { address = model.addressLink(); revealed = address != null }
             }
             else -> {
                 if (revealed) {
-                    Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Box(Modifier.weight(1f)) { LinkBox(a.short ?: a.full) { model.notice = "Address copied" } }
                         IconTool(R.drawable.ic_eye_observer, "Hide address", { revealed = false }, tint = c.accent)
                     }
@@ -434,15 +463,7 @@ private fun AddressCard(model: AppModel) {
                     autoAccept = on
                     scope.launch { autoAccept = model.setAddressAutoAccept(on) }
                 })
-                Row(
-                    Modifier.padding(8.dp).clip(Radius.md).border(1.dp, c.danger, Radius.md)
-                        .clickable { confirmDelete = true }.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(painterResource(R.drawable.ic_trash_delete), null, Modifier.size(16.dp), tint = c.danger)
-                    Text("Delete address", style = Cursus.type.body, color = c.danger)
-                }
+                ActionTile(R.drawable.ic_trash_delete, "Delete address", { confirmDelete = true }, danger = true)
             }
         }
     }
@@ -475,95 +496,123 @@ private data class PrivacyAsk(val title: String, val body: String, val action: S
 
 /** Linux Settings → Privacy & security: same sections, order, wording and
  *  confirmations; explanations behind ⓘ (phone wording). */
+/** The rows of one settings page that are privacy switches (each explains
+ *  itself behind ⓘ and asks before lowering your privacy). */
 @Composable
-private fun PrivacyCard(model: AppModel) {
+private fun PrivacyRows(model: AppModel, page: SettingsPage) {
     val p = model.prefs
     var ask by remember { mutableStateOf<PrivacyAsk?>(null) }
     var lockMenu by remember { mutableStateOf(false) }
     var remembered by remember { mutableStateOf(model.rememberedPassword) }
-    CursusCard {
-        CardTitle(R.drawable.ic_shield_check, "Privacy & security", "Lock, screen, files and receipts")
-        SectionLabel("Lock")
-        InfoSwitchRow("App lock", p.appLock, { on ->
-            if (on) p.appLock = true
-            else ask = PrivacyAsk("Turn off app lock?",
-                "Anyone who has your unlocked phone while Cursus is running can read your chats.",
-                "Turn off") { p.appLock = false }
-        }, InfoText.AppLock)
-        if (p.appLock) {
-            PrefRow("Lock") { ChoiceChip(lockAfterLabel(p.lockAfter), { lockMenu = true }) }
-        }
-        ActionTile(R.drawable.ic_lock, "Lock now", { model.lockApp() })
-        if (remembered) {
-            ActionTile(R.drawable.ic_lock, "Forget saved password", {
-                model.forgetPassword(); remembered = false
-                model.notice = "Cursus will ask for your password next time"
-            })
-        }
-        SectionLabel("On screen")
-        InfoSwitchRow("Message previews in chat list", p.chatPreviews, { on ->
+    val user = model.user
+    when (page) {
+        SettingsPage.Privacy -> {
+            PreferenceGroup("On screen") {
+            InfoSwitchRow("Message previews in chat list", p.chatPreviews, { on ->
             if (!on) p.chatPreviews = false
             else ask = PrivacyAsk("Show message previews?",
                 "The last message of every chat will be visible in the chat list to anyone who can see your screen.",
                 "Show previews") { p.chatPreviews = true }
         }, InfoText.ChatPreviews)
-        InfoSwitchRow("Blur photos and videos", p.blurMedia, { on ->
+            InfoSwitchRow("Blur photos and videos", p.blurMedia, { on ->
             if (on) p.blurMedia = true
             else ask = PrivacyAsk("Stop blurring media?",
                 "Photos and videos will be shown in full in your chats, visible to anyone who can see your screen.",
                 "Show media") { p.blurMedia = false }
         }, InfoText.BlurMedia)
-        InfoSwitchRow("Hide message text in notifications", p.hideNotificationText, { on ->
-            if (on) p.hideNotificationText = true
-            else ask = PrivacyAsk("Show message text in notifications?",
-                "Anyone who can see your screen will be able to read incoming messages, also on the lock screen, and Android may keep them in its notification history.",
-                "Show text") { p.hideNotificationText = false }
-        }, InfoText.HideNotificationText)
-        InfoSwitchRow("Hide chats from screenshots", p.secureScreen, { on ->
+            InfoSwitchRow("Block screenshots", p.secureScreen, { on ->
             if (on) p.secureScreen = true
             else ask = PrivacyAsk("Allow screenshots?",
                 "Screenshots and screen recordings will show your chats, and so will the recent-apps preview.",
                 "Allow") { p.secureScreen = false }
         }, InfoText.SecureScreen)
-        SectionLabel("Files & network")
-        InfoSwitchRow("Protect IP address", p.protectIp, { on ->
-            if (on) p.protectIp = true
-            else ask = PrivacyAsk("Stop protecting your IP address?",
-                "Files will download from any server the sender chooses, including automatic downloads. Without Tor or VPN, those servers see your IP address.",
-                "Turn off") { p.protectIp = false }
-        }, InfoText.ProtectIp)
-        InfoSwitchRow("Download images and voice automatically", p.autoDownload, { on ->
-            if (!on) p.autoDownload = false
-            else ask = PrivacyAsk("Download media automatically?",
-                "Images, voice messages and short videos from anyone who writes to you will download without asking \u2014 including from strangers in groups.",
-                "Download automatically") { p.autoDownload = true }
-        }, InfoText.AutoDownload)
-        InfoSwitchRow("Encrypt stored files", model.info?.encryptLocalFiles ?: true, { on ->
-            if (on) model.setEncryptLocalFiles(true)
-            else ask = PrivacyAsk("Store new files unencrypted?",
-                "Photos, videos, voice messages and files you send or receive from now on will be saved readable on this phone. Files already stored stay encrypted.",
-                "Store unencrypted") { model.setEncryptLocalFiles(false) }
-        }, InfoText.EncryptFiles)
-        InfoSwitchRow("Remove tracking from links", p.cleanLinks, { on ->
-            if (on) p.cleanLinks = true
-            else ask = PrivacyAsk("Keep tracking codes in links?",
-                "Links you send and open will keep codes like utm_source or fbclid, which let websites track who shared them and where you came from.",
-                "Keep codes") { p.cleanLinks = false }
-        }, InfoText.CleanLinks)
-        SectionLabel("What contacts see")
-        val user = model.user
-        InfoSwitchRow("Delivery receipts to contacts", user?.sendRcptsContacts ?: true, { on ->
+            }
+            PreferenceGroup("What contacts see") {
+            InfoSwitchRow("Delivery receipts to contacts", user?.sendRcptsContacts ?: true, { on ->
             if (!on) model.setDeliveryReceipts(groups = false, on = false)
             else ask = PrivacyAsk("Send delivery receipts?",
                 "Your contacts will see when their messages reach this phone.",
                 "Send receipts") { model.setDeliveryReceipts(groups = false, on = true) }
         }, InfoText.ReceiptsContacts)
-        InfoSwitchRow("Delivery receipts in small groups", user?.sendRcptsSmallGroups ?: true, { on ->
+            InfoSwitchRow("Delivery receipts in small groups", user?.sendRcptsSmallGroups ?: true, { on ->
             if (!on) model.setDeliveryReceipts(groups = true, on = false)
             else ask = PrivacyAsk("Send delivery receipts?",
                 "Members of small groups will see when their messages reach this phone.",
                 "Send receipts") { model.setDeliveryReceipts(groups = true, on = true) }
         }, InfoText.ReceiptsGroups)
+            }
+            PreferenceGroup("Links") {
+            InfoSwitchRow("Remove tracking from links", p.cleanLinks, { on ->
+            if (on) p.cleanLinks = true
+            else ask = PrivacyAsk("Keep tracking codes in links?",
+                "Links you send and open will keep codes like utm_source or fbclid, which let websites track who shared them and where you came from.",
+                "Keep codes") { p.cleanLinks = false }
+        }, InfoText.CleanLinks)
+            }
+        }
+        SettingsPage.Security -> {
+            PreferenceGroup("App access") {
+            InfoSwitchRow("App lock", p.appLock, { on ->
+            if (on) p.appLock = true
+            else ask = PrivacyAsk("Turn off app lock?",
+                "Anyone who has your unlocked phone while Cursus is running can read your chats.",
+                "Turn off") { p.appLock = false }
+        }, InfoText.AppLock)
+            if (p.appLock) {
+                PrefRow("Lock") { ChoiceChip(lockAfterLabel(p.lockAfter), { lockMenu = true }) }
+            }
+            ActionTile(R.drawable.ic_lock, "Lock now", { model.lockApp() })
+            }
+            if (remembered) {
+                PreferenceGroup("Starting") {
+                ActionTile(R.drawable.ic_lock, "Forget saved password", {
+                    model.forgetPassword(); remembered = false
+                    model.notice = "Cursus will ask for your password next time"
+                })
+            }
+            }
+        }
+        SettingsPage.Data -> {
+            PreferenceGroup("Downloads") {
+            InfoSwitchRow("Download images and voice automatically", p.autoDownload, { on ->
+            if (!on) p.autoDownload = false
+            else ask = PrivacyAsk("Download media automatically?",
+                "Images, voice messages and short videos from anyone who writes to you will download without asking \u2014 including from strangers in groups.",
+                "Download automatically") { p.autoDownload = true }
+        }, InfoText.AutoDownload)
+            InfoSwitchRow("Protect IP address", p.protectIp, { on ->
+            if (on) p.protectIp = true
+            else ask = PrivacyAsk("Stop protecting your IP address?",
+                "Files will download from any server the sender chooses, including automatic downloads. Without Tor or VPN, those servers see your IP address.",
+                "Turn off") { p.protectIp = false }
+        }, InfoText.ProtectIp)
+            }
+            PreferenceGroup("On this phone") {
+            InfoSwitchRow("Encrypt stored files", model.info?.encryptLocalFiles ?: true, { on ->
+            if (on) model.setEncryptLocalFiles(true)
+            else ask = PrivacyAsk("Store new files unencrypted?",
+                "Photos, videos, voice messages and files you send or receive from now on will be saved readable on this phone. Files already stored stay encrypted.",
+                "Store unencrypted") { model.setEncryptLocalFiles(false) }
+        }, InfoText.EncryptFiles)
+            }
+        }
+        SettingsPage.Notifications -> {
+            PreferenceGroup("Alerts") {
+            InfoSwitchRow("Hide message text in notifications", p.hideNotificationText, { on ->
+            if (on) p.hideNotificationText = true
+            else ask = PrivacyAsk("Show message text in notifications?",
+                "Anyone who can see your screen will be able to read incoming messages, also on the lock screen, and Android may keep them in its notification history.",
+                "Show text") { p.hideNotificationText = false }
+        }, InfoText.HideNotificationText)
+            }
+            PreferenceGroup("Background") {
+            SwitchRow("Receive in background", p.background, {
+                p.background = it
+                model.syncBackground()
+            })
+            }
+        }
+        else -> Unit
     }
     if (lockMenu) {
         ChoiceMenu("Lock", LockAfterChoices, p.lockAfter, { lockMenu = false }) { p.lockAfter = it; lockMenu = false }
@@ -630,7 +679,9 @@ private fun LicencesOverlay(onDismiss: () -> Unit) {
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         val name = open
-        androidx.activity.compose.BackHandler { if (name != null) open = null else onDismiss() }
+        val back = { if (name != null) open = null else onDismiss() }
+        androidx.activity.compose.BackHandler(onBack = back)
+        chat.cursus.ui.components.DialogEscape(back)
         Column(
             Modifier.fillMaxSize().background(c.bgPanel)
                 .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.safeDrawing),
@@ -643,7 +694,7 @@ private fun LicencesOverlay(onDismiss: () -> Unit) {
                             "Cursus is free software under the GNU AGPL v3. It is built on the SimpleX Chat core " +
                                 "and on the open-source libraries, icons and fonts credited here.",
                             style = Cursus.type.meta, color = c.textSecondary,
-                            modifier = Modifier.padding(horizontal = 8.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp),
                         )
                         CursusCard {
                             for ((file, about) in files) {

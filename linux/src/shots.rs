@@ -314,6 +314,27 @@ fn shots() {
                 render(&app, size, &format!("{name}-{t}"));
             }
         }
+        if want("sizes") {
+            // Every column arrangement, and the narrowest tile.
+            for (w, h) in [(280.0, 560.0), (360.0, 720.0), (640.0, 720.0), (940.0, 720.0), (1280.0, 760.0)] {
+                let size = Size::new(w, h);
+                let mut app = demo_app(dark, w, h);
+                render(&app, size, &format!("size{w}-list-{t}"));
+                select(&mut app, 0);
+                render(&app, size, &format!("size{w}-chat-{t}"));
+                let _ = app.open_contact_profile();
+                render(&app, size, &format!("size{w}-contact-{t}"));
+                let mut app = demo_app(dark, w, h);
+                group_page(&mut app, GroupSettingsPane::Overview);
+                render(&app, size, &format!("size{w}-group-{t}"));
+                let mut app = demo_app(dark, w, h);
+                app.nav = NavSection::Settings;
+                app.own_profile.fields = profile("Davide", "Building Cursus");
+                render(&app, size, &format!("size{w}-settings-{t}"));
+                let _ = app.update(Message::OpenSettingsSection(crate::SettingsSection::Privacy));
+                render(&app, size, &format!("size{w}-settings-privacy-{t}"));
+            }
+        }
         if want("mobile") {
             let app = demo_app(dark, MOBILE.width, MOBILE.height);
             render(&app, MOBILE, &format!("mobile-list-{t}"));
@@ -480,13 +501,14 @@ fn shots() {
             let mut app = demo_app(dark, MOBILE.width, MOBILE.height);
             app.nav = NavSection::Settings;
             app.desktop_prefs.app_lock = true;
+            let _ = app.update(Message::OpenSettingsSection(crate::SettingsSection::Privacy));
             render(&app, Size::new(MOBILE.width, 2200.0), &format!("msettings-privacy-{t}"));
         }
         if want("privacy") {
             let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);
             app.desktop_prefs.app_lock = true;
             app.nav = NavSection::Settings;
-            app.settings_section = crate::SettingsSection::Privacy;
+            let _ = app.update(Message::OpenSettingsSection(crate::SettingsSection::Privacy));
             render(&app, DESKTOP, &format!("privacy-{t}"));
             app.privacy_confirm = Some(crate::PrivacyConfirm::UnknownFileServers {
                 files: vec![(1, "photo.jpg".into())],
@@ -557,7 +579,7 @@ fn shots() {
             app.pending_links_open = false;
             app.pending_links.clear();
             app.nav = NavSection::Settings;
-            app.settings_section = crate::SettingsSection::Address;
+            let _ = app.update(Message::OpenSettingsSection(crate::SettingsSection::Address));
             app.address_link = Some(None);
             render(&app, DESKTOP, &format!("settings-address-{t}"));
             app.address_link = Some(Some("https://smp12.simplex.im/a#lrdvu2d8A1GumSmoKb2krQmtKhWXq-tyGpHuM7aMwsw".into()));
@@ -1129,4 +1151,259 @@ fn opening_a_chat_labels_unread_messages() {
 
     open(&mut app, 0);
     assert_eq!(app.new_messages_from(), None);
+}
+
+#[test]
+fn back_and_escape_pop_one_page_at_a_time() {
+    for size in [MOBILE, DESKTOP] {
+        for back in [Message::Back, Message::Escape] {
+            let mut app = demo_app(true, size.width, size.height);
+            select(&mut app, 0);
+            let _ = app.update(Message::OpenContactProfile);
+            let _ = app.update(Message::OpenContactPreferences);
+            let _ = app.update(back.clone());
+            assert!(matches!(app.contact_profile.as_ref().map(|p| p.pane), Some(crate::ContactProfilePane::Overview)));
+            assert!(app.selected.is_some());
+            let _ = app.update(back.clone());
+            assert!(app.contact_profile.is_none());
+            assert!(app.selected.is_some());
+            let _ = app.update(back.clone());
+            assert!(app.selected.is_none());
+
+            for pane in [
+                GroupSettingsPane::Preferences, GroupSettingsPane::AddMember,
+                GroupSettingsPane::MemberInfo, GroupSettingsPane::ChannelMembers,
+                GroupSettingsPane::ConfirmLeave, GroupSettingsPane::ConfirmDelete,
+            ] {
+                group_page(&mut app, pane);
+                let _ = app.update(back.clone());
+                assert_eq!(app.group_settings.as_ref().unwrap().pane, GroupSettingsPane::Overview);
+                let _ = app.update(back.clone());
+                assert!(app.group_settings.is_none());
+                assert!(app.selected.is_some());
+            }
+            let _ = app.update(Message::Navigate(NavSection::Settings));
+            let _ = app.update(Message::OpenSettingsSection(crate::SettingsSection::Privacy));
+            assert!(app.settings_open);
+            let _ = app.update(back);
+            assert!(!app.settings_open);
+            assert_eq!(app.nav, NavSection::Settings);
+        }
+    }
+}
+
+#[test]
+fn section_switches_drop_foreign_pages_and_invalidate_history() {
+    for destination in NavSection::all() {
+        for group in [false, true] {
+            let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+            if group {
+                group_page(&mut app, GroupSettingsPane::Preferences);
+            } else {
+                select(&mut app, 0);
+                let _ = app.update(Message::OpenContactProfile);
+            }
+            // Switch away from whichever section owns the profile.
+            if destination == NavSection::Chats { app.nav = NavSection::Channels; }
+            app.photo_menu = Some(crate::PhotoTarget::Own);
+            app.pending_links_open = true;
+            let old_gen = app.messages_load_gen;
+            let _ = app.update(Message::Navigate(destination));
+            assert_eq!(app.nav, destination);
+            assert!(app.contact_profile.is_none() && app.group_settings.is_none());
+            assert!(app.photo_menu.is_none() && !app.pending_links_open);
+            assert!(app.support.is_none() && !app.compose_open);
+            if matches!(destination, NavSection::Calls | NavSection::Settings | NavSection::Channels) {
+                assert!(app.selected.is_none());
+                assert_ne!(app.messages_load_gen, old_gen);
+                let _ = app.update(Message::MessagesLoaded {
+                    gen: old_gen, result: Ok(vec![msg(999, "stale history", false, "09:00")]),
+                });
+                assert!(app.messages.is_empty(), "history from the previous section must stay hidden");
+            }
+        }
+    }
+}
+
+#[test]
+fn escape_closes_sheets_before_the_page_underneath() {
+    let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+    group_page(&mut app, GroupSettingsPane::Preferences);
+    app.photo_menu = Some(crate::PhotoTarget::Own);
+    let _ = app.update(Message::Escape);
+    assert!(app.photo_menu.is_none());
+    assert_eq!(app.group_settings.as_ref().unwrap().pane, GroupSettingsPane::Preferences);
+    app.pending_links_open = true;
+    let _ = app.update(Message::Escape);
+    assert!(!app.pending_links_open);
+    assert_eq!(app.group_settings.as_ref().unwrap().pane, GroupSettingsPane::Preferences);
+}
+
+/// A real click is split by view rebuilds: its release must never open the
+/// conversation header exposed by closing the profile on its press.
+#[test]
+fn profile_back_click_does_not_reopen_the_profile() {
+    use iced::{mouse, Event, Point};
+    load_fonts();
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+        iced::Font::with_name("Noto Sans"),
+        iced::Pixels(16.0),
+        Some("tiny-skia"),
+    ))
+    .unwrap();
+    for width in [400.0, 800.0, 1200.0] {
+        for group in [false, true] {
+            let size = Size::new(width, 760.0);
+            let mut app = demo_app(true, width, size.height);
+            if group {
+                group_page(&mut app, GroupSettingsPane::Overview);
+            } else {
+                select(&mut app, 0);
+                let _ = app.open_contact_profile();
+            }
+            let density = app.density();
+            let left = if density.info_width > 0.0 {
+                width - density.info_width
+            } else if width >= 600.0 {
+                density.rail_width + density.list_width + 1.0
+            } else {
+                0.0
+            };
+            let point = Point::new(left + 24.0, 24.0);
+            let mut cache = Cache::default();
+            for event in [
+                mouse::Event::CursorMoved { position: point },
+                mouse::Event::ButtonPressed(mouse::Button::Left),
+                mouse::Event::ButtonReleased(mouse::Button::Left),
+                mouse::Event::ButtonReleased(mouse::Button::Left),
+            ] {
+                let mut ui = UserInterface::build(
+                    app.view(iced::window::Id::unique()),
+                    size,
+                    cache,
+                    &mut renderer,
+                );
+                let mut messages = Vec::new();
+                let _ = ui.update(
+                    &[Event::Mouse(event)],
+                    mouse::Cursor::Available(point),
+                    &mut renderer,
+                    &mut iced::advanced::clipboard::Null,
+                    &mut messages,
+                );
+                cache = ui.into_cache();
+                assert!(
+                    !messages.iter().any(|m| matches!(
+                        m,
+                        Message::OpenContactProfile | Message::OpenGroupSettings
+                    )),
+                    "the Back click must not reach the profile opener ({width}, group={group})"
+                );
+                for message in messages {
+                    let _ = app.update(message);
+                }
+                if matches!(event, mouse::Event::ButtonPressed(_)) {
+                    assert!(
+                        app.contact_profile.is_some() || app.group_settings.is_some(),
+                        "Back waits for release"
+                    );
+                }
+            }
+            assert!(
+                app.contact_profile.is_none() && app.group_settings.is_none(),
+                "Back closes the page ({width}, group={group})"
+            );
+            assert!(app.selected.is_some(), "the conversation stays open");
+        }
+    }
+}
+
+#[test]
+fn preference_help_does_not_toggle_the_setting() {
+    use iced::{mouse, Event, Point};
+    load_fonts();
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+        iced::Font::with_name("Noto Sans"),
+        iced::Pixels(16.0),
+        Some("tiny-skia"),
+    ))
+    .unwrap();
+    let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+    let _ = app.update(Message::Navigate(NavSection::Settings));
+    let _ = app.update(Message::OpenSettingsSection(
+        crate::SettingsSection::Privacy,
+    ));
+    assert!(app.desktop_prefs.chat_previews);
+    let mut cache = Cache::default();
+    for (point, help) in [
+        (Point::new(1024.0, 132.0), true),
+        (Point::new(600.0, 132.0), false),
+    ] {
+        for event in [
+            mouse::Event::CursorMoved { position: point },
+            mouse::Event::ButtonPressed(mouse::Button::Left),
+            mouse::Event::ButtonReleased(mouse::Button::Left),
+        ] {
+            let mut ui = UserInterface::build(
+                app.view(iced::window::Id::unique()),
+                DESKTOP,
+                cache,
+                &mut renderer,
+            );
+            let mut messages = Vec::new();
+            let _ = ui.update(
+                &[Event::Mouse(event)],
+                mouse::Cursor::Available(point),
+                &mut renderer,
+                &mut iced::advanced::clipboard::Null,
+                &mut messages,
+            );
+            cache = ui.into_cache();
+            for message in messages {
+                let _ = app.update(message);
+            }
+        }
+        if help {
+            assert!(app.setting_info.is_some(), "help opens its explanation");
+            assert!(
+                app.desktop_prefs.chat_previews,
+                "help must not toggle its parent row"
+            );
+            let _ = app.update(Message::Escape);
+        } else {
+            assert!(
+                !app.desktop_prefs.chat_previews,
+                "clicking the row toggles exactly once"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn shots_preferences_redesign() {
+    for dark in [true, false] {
+        let tone = if dark { "dark" } else { "light" };
+        let size = Size::new(400.0, 900.0);
+        let mut app = demo_app(dark, size.width, size.height);
+        let _ = app.update(Message::Navigate(NavSection::Settings));
+        let _ = app.update(Message::OpenSettingsSection(
+            crate::SettingsSection::Privacy,
+        ));
+        render(&app, size, &format!("preferences-privacy-{tone}"));
+        for channel in [false, true] {
+            let mut app = demo_app(dark, size.width, size.height);
+            app.chats[1].is_channel = channel;
+            app.nav = if channel {
+                NavSection::Channels
+            } else {
+                NavSection::Chats
+            };
+            group_page(&mut app, GroupSettingsPane::Preferences);
+            let name = if channel { "channel" } else { "group" };
+            render(&app, size, &format!("preferences-{name}-{tone}"));
+            app.group_settings.as_mut().unwrap().my_role = "member".into();
+            render(&app, size, &format!("preferences-{name}-readonly-{tone}"));
+        }
+    }
 }

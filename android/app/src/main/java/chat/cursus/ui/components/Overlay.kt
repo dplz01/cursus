@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +38,7 @@ fun CursusOverlay(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> 
     val c = Cursus.colors
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         BackHandler(onBack = onDismiss)
+        DialogEscape(onDismiss)
         Box(
             Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f))
                 .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss)
@@ -53,5 +55,26 @@ fun CursusOverlay(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> 
                 content = content,
             )
         }
+    }
+}
+
+/** Dialogs have their own Android window, so Escape must be handled there too. */
+@Composable
+fun DialogEscape(onBack: () -> Unit) {
+    val view = androidx.compose.ui.platform.LocalView.current
+    val currentBack by androidx.compose.runtime.rememberUpdatedState(onBack)
+    androidx.compose.runtime.DisposableEffect(view) {
+        val window = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+        val previous = window?.callback
+        if (window == null || previous == null) return@DisposableEffect onDispose {}
+        val callback = object : android.view.Window.Callback by previous {
+            override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+                if (event.keyCode != android.view.KeyEvent.KEYCODE_ESCAPE) return previous.dispatchKeyEvent(event)
+                if (event.action == android.view.KeyEvent.ACTION_UP) currentBack()
+                return true
+            }
+        }
+        window.callback = callback
+        onDispose { if (window.callback === callback) window.callback = previous }
     }
 }

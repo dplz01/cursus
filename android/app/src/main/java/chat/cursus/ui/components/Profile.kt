@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -55,25 +56,29 @@ fun EditableLine(value: String, emptyText: String, style: LineStyle, onEdit: () 
     val c = Cursus.colors
     val textStyle = when (style) {
         LineStyle.Name -> Cursus.type.title
-        LineStyle.Sub -> Cursus.type.meta
+        LineStyle.Sub -> Cursus.type.body
         LineStyle.Body -> Cursus.type.body
     }
+    // Header lines (name, bio) are centred under the picture; paragraphs
+    // start at the row inset under their section label.
+    val centred = style != LineStyle.Body
     Row(
-        Modifier.fillMaxWidth().clip(Radius.lg).clickable(onClick = onEdit).padding(horizontal = 8.dp, vertical = 4.dp),
+        Modifier.fillMaxWidth().clip(RowShape).clickable(onClick = onEdit).padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = if (centred) Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally) else Arrangement.spacedBy(6.dp),
     ) {
         Text(
             value.ifBlank { emptyText },
-            style = textStyle,
+            style = if (style == LineStyle.Name) textStyle.copy(fontSize = textStyle.fontSize * 1.25f) else textStyle,
             color = when {
                 value.isBlank() -> c.textMuted
                 style == LineStyle.Sub -> c.textSecondary
                 else -> c.textPrimary
             },
             fontWeight = if (style == LineStyle.Name && value.isNotBlank()) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = if (style == LineStyle.Body) 4 else 1,
+            maxLines = if (style == LineStyle.Body) 4 else 2,
             overflow = TextOverflow.Ellipsis,
+            textAlign = if (centred) androidx.compose.ui.text.style.TextAlign.Center else null,
             modifier = Modifier.weight(1f, fill = false),
         )
         Icon(painterResource(R.drawable.ic_edit_3), "Edit", Modifier.size(14.dp), tint = c.textMuted)
@@ -126,11 +131,17 @@ class PhotoActions(val hasImage: Boolean, val onPick: () -> Unit, val onClear: (
 fun ProfileIdentity(name: String, image: String?, group: Boolean = false, photo: PhotoActions? = null, lines: @Composable () -> Unit) {
     val c = Cursus.colors
     var sheet by remember { mutableStateOf(false) }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+    // Centred hero: picture, then the name and the lines under it.
+    Column(
+        Modifier.fillMaxWidth().padding(top = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         Box(if (photo != null) Modifier.clip(Radius.pill).clickable { sheet = true } else Modifier) {
-            Avatar(name, image, 84.dp, group = group)
+            Avatar(name, image, 96.dp, group = group)
         }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) { lines() }
+        Box(Modifier.size(4.dp))
+        lines()
     }
     if (sheet && photo != null) {
         CursusOverlay({ sheet = false }) {
@@ -158,13 +169,57 @@ private fun SheetItem(icon: Int, label: String, color: androidx.compose.ui.graph
     }
 }
 
-/** Read-only name, title size, inset to line up with editable lines. */
+/** Read-only name of a profile header: large, centred. */
 @Composable
 fun ProfileName(name: String) {
+    val title = Cursus.type.title
     Text(
-        name, style = Cursus.type.title, color = Cursus.colors.textPrimary, fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(horizontal = 8.dp), maxLines = 2, overflow = TextOverflow.Ellipsis,
+        name, style = title.copy(fontSize = title.fontSize * 1.25f), color = Cursus.colors.textPrimary, fontWeight = FontWeight.SemiBold,
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), maxLines = 2, overflow = TextOverflow.Ellipsis,
     )
+}
+
+/** A centred secondary line of a profile header (bio, short description). */
+@Composable
+fun HeroLine(text: String) {
+    Text(
+        text, style = Cursus.type.body, color = Cursus.colors.textSecondary,
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+    )
+}
+
+/** One of the actions under a profile's name (Linux `quick_actions`). */
+class QuickAction(val icon: Int, val label: String, val active: Boolean = false, val onClick: () -> Unit)
+
+/** Rounded squares with a glyph and a short label below, centred in a row. */
+@Composable
+fun QuickActions(vararg actions: QuickAction) {
+    val c = Cursus.colors
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)) {
+        for (a in actions) {
+            Column(
+                Modifier.clip(RowShape).clickable(onClick = a.onClick).padding(vertical = 6.dp).widthIn(min = 76.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Box(Modifier.size(width = 52.dp, height = 44.dp).clip(RowShape).background(c.bgElevated), contentAlignment = Alignment.Center) {
+                    Icon(painterResource(a.icon), null, Modifier.size(22.dp), tint = if (a.active) c.accent else c.textSecondary)
+                }
+                Text(a.label, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1)
+            }
+        }
+    }
+}
+
+/** A paragraph of a profile under its section label (Linux `about_block`). */
+@Composable
+fun AboutBlock(label: String, text: String) {
+    Column {
+        CardTitle(0, label)
+        Text(text, style = Cursus.type.body, color = Cursus.colors.textPrimary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp))
+    }
 }
 
 /** Linux `choice_chip`: a secondary button showing only the current value. */
@@ -203,15 +258,7 @@ fun <T> ChoiceMenu(title: String, options: List<Pair<T, String>>, current: T?, o
 /** Preference row: [icon] label … control (Linux `pref_row`). */
 @Composable
 fun PrefRow(label: String, icon: Int? = null, control: @Composable () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        if (icon != null) Icon(painterResource(icon), null, Modifier.size(20.dp), tint = Cursus.colors.accent)
-        Text(label, style = Cursus.type.body, color = Cursus.colors.textPrimary, modifier = Modifier.weight(1f))
-        control()
-    }
+    PreferenceRow(label, icon = icon, control = control)
 }
 
 /** Header tool (star / mute / settings): no background; accent when on, plain text colour when off. */

@@ -81,7 +81,17 @@ final class AppModel: ObservableObject {
     @Published var info: AppInfo?
     @Published var user: User?
     @Published var chats: [Chat] = []
-    @Published var destination: Destination = .chats
+    @Published var destination: Destination = .chats {
+        didSet {
+            guard destination != oldValue else { return }
+            showInfo = false
+            showNewChat = false
+            showPendingLinks = false
+            infoReturnPage = nil
+            selection = nil
+            settingsPage = nil
+        }
+    }
     @Published var settingsPage: SettingsPage? = .profile
     @Published var selection: String? {
         didSet {

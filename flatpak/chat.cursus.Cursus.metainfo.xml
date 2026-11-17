@@ -34,6 +34,16 @@
     <display_length compare="ge">360</display_length>
   </requires>
   <releases>
+    <release version="0.1.2" date="2026-11-18">
+      <description>
+        <p>Android preview and shared navigation, touch and layout improvements.</p>
+        <ul>
+          <li>Independent desktop panes and consistent back navigation</li>
+          <li>Touch gestures, image previews and clipboard images</li>
+          <li>Faster call history, rich profile text and responsive reactions</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.1" date="2026-11-09">
       <description>
         <p>Bug fixes and UI polish.</p>

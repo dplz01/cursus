@@ -25,6 +25,11 @@ build-dir/
 repo/
 *.flatpak
 
+# macOS app builds (./macos/build.sh)
+/macos/build/
+/macos/Cursus/.build/
+/macos/Cursus/.swiftpm/
+
 # Android build output (also ignored here so branches without android/ never pick it up)
 android/.gradle/
 android/build/

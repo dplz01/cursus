@@ -18,6 +18,7 @@ musl-glibc-compat = ["cursus-core/musl-glibc-compat"]
 [dependencies]
 cursus-core.workspace = true
 base64 = "0.22"
+arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 chrono.workspace = true
 iced = { version = "0.14", features = ["tokio", "debug", "svg", "image", "canvas", "advanced", "lazy"] }
 iced_aw = { version = "0.14.1", default-features = false, features = ["context_menu"] }
@@ -40,6 +41,17 @@ tray-icon.workspace = true
 unicode-segmentation.workspace = true
 # Fallback trait signature (same version cosmic-text uses).
 unicode-script = "0.5"
+# Calls: the shared engine (WebRTC, signaling, frame encryption) — this app
+# adds its sound devices, which encode / decode Opus.
+cursus-call.workspace = true
+opus = "0.3"
+# Bundled libopus built statically: phones may not ship libopus.so.
+audiopus_sys = { version = "0.2", features = ["static"] }
+# Calls: acoustic echo cancellation (pure Rust, finds the echo delay itself).
+decibri-aec = "0.2"
+# Keep phones awake during calls (portal / logind inhibitor). Already in the
+# tree via the tray icon; no extra crates.
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [dev-dependencies]
 emojis.workspace = true

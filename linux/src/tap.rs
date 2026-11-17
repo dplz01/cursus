@@ -43,6 +43,19 @@ struct Press {
     id: touch::Finger,
     origin: Point,
     at: Instant,
+    viewport: Point,
+}
+
+impl Press {
+    fn moved(self, position: Point, viewport: &Rectangle) -> bool {
+        // Scroll content translates with the finger. Measure in viewport space,
+        // and treat actual page scrolling as cancellation even for slow drags.
+        self.viewport.distance(viewport.position()) > 2.0
+            || far(
+                self.origin,
+                position + (self.viewport - viewport.position()),
+            )
+    }
 }
 
 #[derive(Debug, Default)]
@@ -68,6 +81,24 @@ where
     })
 }
 
+/// Guard a scrollable in window coordinates, before it translates its content.
+/// The outer kinetic tracker still sees the real lift and can start coasting.
+pub fn guard<'a, Message: 'a, Theme: 'a, Renderer: iced::advanced::Renderer + 'a>(
+    content: impl Into<Element<'a, Message, Theme, Renderer>>,
+) -> Element<'a, Message, Theme, Renderer> {
+    Element::new(Wrap {
+        content: content.into(),
+        kind: Kind::Guard,
+    })
+}
+
+#[derive(Debug, Default)]
+struct GuardState {
+    finger: Option<touch::Finger>,
+    origin: Point,
+    moved: bool,
+}
+
 #[derive(Debug, Default)]
 struct LinkState {
     press: Option<Press>,
@@ -90,6 +121,7 @@ where
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
+    Guard,
     Defer,
     Links,
 }
@@ -144,6 +176,15 @@ where
     ) {
         let mut messages = Vec::new();
         let mut sub = Shell::new(&mut messages);
+        // Redraws deliberately have no hover cursor in touch mode. Replayed
+        // touch presses must still hit-test at the finger, including after HOLD.
+        let cursor = match event {
+            Event::Touch(touch::Event::FingerPressed { position, .. }
+                | touch::Event::FingerMoved { position, .. }
+                | touch::Event::FingerLifted { position, .. }
+                | touch::Event::FingerLost { position, .. }) => mouse::Cursor::Available(*position),
+            _ => cursor,
+        };
         self.forward(tree, event, layout, cursor, renderer, clipboard, &mut sub, viewport);
         shell.merge(sub, |m| m);
     }
@@ -179,6 +220,7 @@ where
                             id: *id,
                             origin: *position,
                             at,
+                            viewport: viewport.position(),
                         }),
                         None,
                     );
@@ -189,45 +231,70 @@ where
                 if pending.is_some() {
                     set(tree, None, forwarded);
                 }
-                self.forward(tree, event, layout, cursor, renderer, clipboard, shell, viewport);
+                self.forward(
+                    tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+                );
             }
             Event::Touch(touch::Event::FingerMoved { id, position }) => {
                 if let Some(p) = pending.filter(|p| p.id == *id) {
-                    if far(p.origin, *position) {
+                    if p.moved(*position, viewport) {
                         set(tree, None, None);
                     }
                     return;
                 }
                 if let Some(p) = forwarded.filter(|p| p.id == *id) {
-                    if far(p.origin, *position) {
+                    if p.moved(*position, viewport) {
                         // Became a scroll: release the content without a click.
                         set(tree, None, None);
                         let lost = Event::Touch(touch::Event::FingerLost {
                             id: *id,
                             position: *position,
                         });
-                        self.forward_fresh(tree, &lost, layout, cursor, renderer, clipboard, shell, viewport);
+                        self.forward_fresh(
+                            tree, &lost, layout, cursor, renderer, clipboard, shell, viewport,
+                        );
                     } else {
-                        self.forward(tree, event, layout, cursor, renderer, clipboard, shell, viewport);
+                        self.forward(
+                            tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+                        );
                     }
                     return;
                 }
-                self.forward(tree, event, layout, cursor, renderer, clipboard, shell, viewport);
+                self.forward(
+                    tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+                );
             }
-            Event::Touch(touch::Event::FingerLifted { id, .. }) => {
+            Event::Touch(touch::Event::FingerLifted { id, position }) => {
                 if let Some(p) = pending.filter(|p| p.id == *id) {
                     set(tree, None, None);
+                    if p.moved(*position, viewport) {
+                        return;
+                    }
                     let press = Event::Touch(touch::Event::FingerPressed {
                         id: p.id,
                         position: p.origin,
                     });
-                    self.forward_fresh(tree, &press, layout, cursor, renderer, clipboard, shell, viewport);
-                    self.forward_fresh(tree, event, layout, cursor, renderer, clipboard, shell, viewport);
+                    self.forward_fresh(
+                        tree, &press, layout, cursor, renderer, clipboard, shell, viewport,
+                    );
+                    self.forward_fresh(
+                        tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+                    );
                     return;
                 }
-                if forwarded.is_some_and(|p| p.id == *id) {
+                if let Some(p) = forwarded.filter(|p| p.id == *id) {
                     set(tree, None, None);
-                    self.forward(tree, event, layout, cursor, renderer, clipboard, shell, viewport);
+                    let event = if p.moved(*position, viewport) {
+                        Event::Touch(touch::Event::FingerLost {
+                            id: *id,
+                            position: *position,
+                        })
+                    } else {
+                        event.clone()
+                    };
+                    self.forward_fresh(
+                        tree, &event, layout, cursor, renderer, clipboard, shell, viewport,
+                    );
                     return;
                 }
                 // Lift of a gesture that turned into a scroll: the content never
@@ -245,25 +312,35 @@ where
                 if forwarded.is_some_and(|p| p.id == *id) {
                     set(tree, None, None);
                 }
-                self.forward(tree, event, layout, cursor, renderer, clipboard, shell, viewport);
+                self.forward(
+                    tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+                );
             }
             Event::Window(window::Event::RedrawRequested(now)) => {
-                self.forward(tree, event, layout, cursor, renderer, clipboard, shell, viewport);
+                self.forward(
+                    tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+                );
                 if let Some(p) = pending {
-                    if *now >= p.at + HOLD {
+                    if p.viewport.distance(viewport.position()) > 2.0 {
+                        set(tree, None, None);
+                    } else if *now >= p.at + HOLD {
                         set(tree, None, Some(p));
                         let press = Event::Touch(touch::Event::FingerPressed {
                             id: p.id,
                             position: p.origin,
                         });
-                        self.forward_fresh(tree, &press, layout, cursor, renderer, clipboard, shell, viewport);
+                        self.forward_fresh(
+                            tree, &press, layout, cursor, renderer, clipboard, shell, viewport,
+                        );
                         shell.request_redraw();
                     } else {
                         shell.request_redraw_at(p.at + HOLD);
                     }
                 }
             }
-            _ => self.forward(tree, event, layout, cursor, renderer, clipboard, shell, viewport),
+            _ => self.forward(
+                tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+            ),
         }
     }
 
@@ -287,10 +364,11 @@ where
                         id: *id,
                         origin: *position,
                         at: Instant::now(),
+                        viewport: viewport.position(),
                     });
             }
             Event::Touch(touch::Event::FingerMoved { id, position }) => {
-                if press.is_some_and(|p| p.id == *id && far(p.origin, *position)) {
+                if press.is_some_and(|p| p.id == *id && p.moved(*position, viewport)) {
                     tree.state.downcast_mut::<LinkState>().press = None;
                 }
             }
@@ -305,23 +383,31 @@ where
                 // `rich_text` hit-tests links against the cursor (= the finger).
                 let down = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
                 let up = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
-                self.forward_fresh(tree, &down, layout, cursor, renderer, clipboard, shell, viewport);
-                self.forward_fresh(tree, &up, layout, cursor, renderer, clipboard, shell, viewport);
+                self.forward_fresh(
+                    tree, &down, layout, cursor, renderer, clipboard, shell, viewport,
+                );
+                self.forward_fresh(
+                    tree, &up, layout, cursor, renderer, clipboard, shell, viewport,
+                );
             }
             Event::Touch(touch::Event::FingerLost { .. }) => {
                 tree.state.downcast_mut::<LinkState>().press = None;
             }
-            _ => self.forward(tree, event, layout, cursor, renderer, clipboard, shell, viewport),
+            _ => self.forward(
+                tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+            ),
         }
     }
 }
 
-impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Wrap<'_, Message, Theme, Renderer>
+impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
+    for Wrap<'_, Message, Theme, Renderer>
 where
     Renderer: iced::advanced::Renderer,
 {
     fn tag(&self) -> tree::Tag {
         match self.kind {
+            Kind::Guard => tree::Tag::of::<GuardState>(),
             Kind::Defer => tree::Tag::of::<DeferState>(),
             Kind::Links => tree::Tag::of::<LinkState>(),
         }
@@ -329,6 +415,7 @@ where
 
     fn state(&self) -> tree::State {
         match self.kind {
+            Kind::Guard => tree::State::new(GuardState::default()),
             Kind::Defer => tree::State::new(DeferState::default()),
             Kind::Links => tree::State::new(LinkState::default()),
         }
@@ -385,12 +472,54 @@ where
         viewport: &Rectangle,
     ) {
         match self.kind {
-            Kind::Defer => {
-                self.update_defer(tree, event, layout, cursor, renderer, clipboard, shell, viewport)
+            Kind::Guard => {
+                let state = tree.state.downcast_mut::<GuardState>();
+                let mut cancelled = None;
+                match event {
+                    Event::Touch(touch::Event::FingerPressed { id, position }) => {
+                        if state.finger.is_none() && layout.bounds().contains(*position) {
+                            state.finger = Some(*id);
+                            state.origin = *position;
+                            state.moved = false;
+                        }
+                    }
+                    Event::Touch(touch::Event::FingerMoved { id, position })
+                        if state.finger == Some(*id) =>
+                    {
+                        state.moved |= far(state.origin, *position);
+                    }
+                    Event::Touch(touch::Event::FingerLifted { id, position })
+                        if state.finger == Some(*id) =>
+                    {
+                        if state.moved || far(state.origin, *position) {
+                            cancelled = Some(Event::Touch(touch::Event::FingerLost {
+                                id: *id,
+                                position: *position,
+                            }));
+                        }
+                        *state = GuardState::default();
+                    }
+                    Event::Touch(touch::Event::FingerLost { .. })
+                    | Event::Window(window::Event::Unfocused) => *state = GuardState::default(),
+                    _ => {}
+                }
+                self.forward(
+                    tree,
+                    cancelled.as_ref().unwrap_or(event),
+                    layout,
+                    cursor,
+                    renderer,
+                    clipboard,
+                    shell,
+                    viewport,
+                );
             }
-            Kind::Links => {
-                self.update_links(tree, event, layout, cursor, renderer, clipboard, shell, viewport)
-            }
+            Kind::Defer => self.update_defer(
+                tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+            ),
+            Kind::Links => self.update_links(
+                tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+            ),
         }
     }
 
@@ -614,6 +743,22 @@ mod tests {
         }
         h.touch(touch::Event::FingerLifted { id: F, position: Point::new(50.0, 100.0) });
         assert!(h.clicks().is_empty(), "drag after hold must not click: {:?}", h.msgs);
+    }
+
+    #[test]
+    fn held_touch_taps_work_without_a_hover_cursor() {
+        let mut h = H::new(false);
+        let p = Point::new(50.0, 120.0);
+        h.touch(touch::Event::FingerPressed { id: F, position: p });
+        let mut ui = UserInterface::build(H::view(false), Size::new(400.0, 300.0), h.cache.take().unwrap(), &mut h.renderer);
+        let _ = ui.update(
+            &[Event::Window(window::Event::RedrawRequested(Instant::now() + HOLD * 2))],
+            mouse::Cursor::Unavailable, &mut h.renderer, &mut NoClip, &mut h.msgs,
+        );
+        h.cache = Some(ui.into_cache());
+        h.touch(touch::Event::FingerLifted { id: F, position: p });
+        assert_eq!(h.clicks(), vec![1], "holding a touch past HOLD must still activate the button once");
+        assert!(!h.scrolled());
     }
 
     #[test]

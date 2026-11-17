@@ -17,6 +17,10 @@ pub fn data_dir() -> PathBuf {
     if let Some(dir) = DATA_DIR.get() {
         return dir.clone();
     }
+    // This crate's tests never touch the user's real profile.
+    #[cfg(test)]
+    return std::env::temp_dir().join(format!("cursus-test-data-{}", std::process::id()));
+    #[cfg(not(test))]
     directories::ProjectDirs::from("chat", "Cursus", "cursus")
         .map(|d| d.data_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from(".").join("cursus-data"))
@@ -58,6 +62,40 @@ pub fn init_process_env() {
         std::env::set_var("TMPDIR", &tmp);
         std::env::set_var("TMP", &tmp);
         std::env::set_var("TEMP", &tmp);
+    }
+}
+
+/// Create `path` (and its parents) for the owner only (`0700`).
+pub(crate) fn ensure_private_dir(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path)?;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+    Ok(())
+}
+
+/// Best-effort removal of everything inside `path` (the directory stays).
+pub(crate) fn wipe_dir_contents(path: &Path) {
+    for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+        let p = entry.path();
+        // `symlink_metadata`: never follow a link out of our directory.
+        if std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir()) {
+            let _ = std::fs::remove_dir_all(&p);
+        } else {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+}
+
+/// Delete decrypted attachments, playback transcodes and unsent voice
+/// recordings (`tmp/plain`, `tmp/play`, `tmp/rec`). Call when the session ends
+/// or the app locks, so plaintext media never stays behind. XFTP staging is
+/// left alone (may be mid-transfer); it is wiped on the next session open.
+pub fn wipe_plaintext_cache() {
+    for sub in ["plain", "play", "rec"] {
+        wipe_dir_contents(&temp_dir().join(sub));
+    }
+    if let Some(ram) = runtime_cache_dir() {
+        wipe_dir_contents(&ram);
     }
 }
 
@@ -179,7 +217,23 @@ pub fn lib_filename() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+
+    #[test]
+    fn wipe_empties_dir_without_following_symlinks() {
+        let root = std::env::temp_dir().join(format!("cursus-wipe-{}", std::process::id()));
+        let inside = root.join("plain");
+        let outside = root.join("keep");
+        std::fs::create_dir_all(inside.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(inside.join("photo.jpg"), b"x").unwrap();
+        std::fs::write(inside.join("sub/voice.wav"), b"x").unwrap();
+        std::fs::write(outside.join("precious.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink(&outside, inside.join("link")).unwrap();
+        wipe_dir_contents(&inside);
+        assert_eq!(std::fs::read_dir(&inside).unwrap().count(), 0);
+        assert!(outside.join("precious.txt").is_file(), "followed a symlink");
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn ram_cache_only_with_room_to_spare() {

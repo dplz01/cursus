@@ -61,6 +61,15 @@ Default servers and default chat options are used; no custom relay UI in milesto
 - `safety`: which links and attachments may be opened, tracking cleanup
 - Future: UniFFI surface for Android/iOS
 
+### Shared Rust (`cursus-call`, `call/`)
+
+- Audio calls: native WebRTC (webrtc-rs) speaking the official clients'
+  format, SimpleX signaling packing, end-to-end frame encryption, the jitter
+  buffer. Platforms plug in their microphone / speaker through
+  `cursus_call::audio::AudioDevice` (Linux: sound-server tools + echo
+  canceller; macOS: AVAudioEngine voice processing) and keep their own call
+  screens and signaling glue.
+
 ### Platform-specific
 
 | Concern | Owner |
@@ -77,12 +86,14 @@ Default servers and default chat options are used; no custom relay UI in milesto
 
 ```text
 cursus-core  ←── linux (Iced, links core as Rust crate)
-             ←── macos (Iced, shares most UI modules with linux)
-             ←── android (Kotlin UI + UniFFI bindings to core)
-             ←── ios (SwiftUI + UniFFI bindings to core)
+     ↑
+cursus-bridge (bridge/, JSON API)
+             ←── macos (SwiftUI, links the bridge's C ABI)
+             ←── android (Kotlin + Compose, JNI wrapper in android/jni)
+             ←── ios (planned: SwiftUI over the same bridge)
 ```
 
-Desktop apps depend on `cursus-core` as a normal Cargo path dependency. Mobile apps consume a UniFFI-generated Kotlin/Swift API over the same crate (milestone after Linux works). UniFFI is the planned interoperability layer; it is not required for the Linux milestone.
+The Linux app depends on `cursus-core` as a normal Cargo path dependency; the other apps go through `bridge/` (`cursus-bridge`), a four-function JSON API: requests `{method, params}`, replies `{ok}` / `{error}`, and a polled event stream. macOS links it as a static C library (no generated bindings, so it builds with the Swift 5.7 toolchain of macOS 12); Android loads it inside `libcursus_android.so` behind four JNI functions. One API for every native app means a method added for one is there for all; the bridge only converts to JSON, the rules stay in `cursus-core`. (This replaces the earlier UniFFI plan: the JSON API already existed, works with old toolchains, and needs no code generator.)
 
 Each top-level platform directory (`linux/`, `macos/`, `android/`, `ios/`) stays independently understandable so it can become its own GitHub repository later.
 

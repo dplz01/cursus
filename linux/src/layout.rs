@@ -1,37 +1,42 @@
-//! Centralized responsive layout for Cursus.
+//! Centralized responsive layout for Cursus — the Telegram Desktop model.
 //!
-//! **Breakpoints use logical pixels only** (CSS/DIP-style units), never raw
-//! framebuffer / physical pixels. On HiDPI Linux and Retina macOS, a 1200×800
-//! logical window stays “desktop” whether the scale factor is 1.0 or 2.0.
+//! The window's **logical width** alone decides how many columns fit:
 //!
-//! Iced’s `window::Event::Resized` already reports logical size; we also track
-//! scale for diagnostics without letting it affect breakpoint math.
+//! | Width | Columns |
+//! |---|---|
+//! | under 600 | one: list, or the open chat / page (phone) |
+//! | from 600 | two: list + chat; the four destinations sit in a bar under the list |
+//! | from 900 | the destinations move to a rail on the left |
+//! | chat has 700 to spare | three: list + chat + info (the open profile) |
+//!
+//! Logical pixels only (what iced reports), so HiDPI scale factors never
+//! change the layout.
 
-/// Logical width below which the mobile (full-screen push) layout is used.
-pub const MOBILE_MAX_WIDTH: f32 = 650.0;
+/// Below this width only one column fits.
+pub const ONE_COLUMN_MAX: f32 = 600.0;
 
-/// Logical width below which the compact (bottom nav + push) layout is used.
-/// At or above this value the desktop three-column layout is preferred.
-pub const COMPACT_MAX_WIDTH: f32 = 950.0;
+/// From this width the destinations get their own rail.
+const RAIL_MIN_WIDTH: f32 = 900.0;
 
-/// When taller than wide by this factor (and still under the compact band),
-/// prefer mobile even if width alone would allow compact.
-const PORTRAIT_ASPECT: f32 = 0.85;
+/// Narrowest a conversation may get next to the info column.
+const CHAT_MIN_WIDTH: f32 = 380.0;
 
-/// Extreme portrait on a wide window: fall back from desktop to compact.
-const EXTREME_PORTRAIT_ASPECT: f32 = 0.70;
+/// Width of the info (third) column.
+const INFO_WIDTH: f32 = 340.0;
+
+/// Widest a page column (profile, settings) gets; beyond it the content is
+/// centred instead of stretched.
+pub const CONTENT_MAX_WIDTH: f32 = 620.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LayoutMode {
-    /// Narrow / portrait: full-screen destinations, bottom nav, push conversation.
+    /// One column: list ↔ conversation push, bottom bar.
     Mobile,
-    /// Mid width: bottom nav, list ↔ content push, no left rail.
-    Compact,
-    /// Wide: nav rail + list + content.
+    /// List + content side by side (+ info column when it fits).
     Desktop,
 }
 
-/// Density tokens derived from layout mode + window size.
+/// Sizes derived from the layout and the window width.
 #[derive(Debug, Clone, Copy)]
 pub struct Density {
     pub title: f32,
@@ -41,8 +46,11 @@ pub struct Density {
     pub pad_tight: f32,
     pub list_row: f32,
     pub composer: f32,
+    /// Width of the destinations rail; 0 = they are a bar under the list.
     pub rail_width: f32,
     pub list_width: f32,
+    /// Width of the info column; 0 = no room, profiles replace the chat.
+    pub info_width: f32,
     pub icon: f32,
     /// Square (rail) or min height (bottom bar) for nav destinations.
     pub nav_hit: f32,
@@ -52,49 +60,26 @@ pub struct Density {
 impl Density {
     pub fn for_window(mode: LayoutMode, logical_width: f32, _logical_height: f32) -> Self {
         match mode {
-            LayoutMode::Mobile => {
-                let scale = (logical_width / 390.0).clamp(1.0, 1.45);
-                let icon = (26.0 * scale).round().clamp(26.0, 34.0);
-                let bar = (54.0 * scale).round().clamp(54.0, 70.0);
-                Self {
-                    title: 17.0,
-                    body: 16.0,
-                    meta: 13.0,
-                    pad: 16.0,
-                    pad_tight: 10.0,
-                    list_row: 6.0,
-                    composer: 14.0,
-                    rail_width: 0.0,
-                    list_width: 0.0,
-                    icon,
-                    nav_hit: bar - 8.0,
-                    nav_bar_height: bar,
-                }
-            }
-            LayoutMode::Compact => {
-                let scale = (logical_width / 800.0).clamp(1.0, 1.25);
-                let icon = (24.0 * scale).round().clamp(24.0, 30.0);
-                let bar = (50.0 * scale).round().clamp(50.0, 62.0);
-                Self {
-                    title: 16.0,
-                    body: 14.0,
-                    meta: 12.0,
-                    pad: 14.0,
-                    pad_tight: 8.0,
-                    list_row: 6.0,
-                    composer: 12.0,
-                    rail_width: 0.0,
-                    list_width: 0.0,
-                    icon,
-                    nav_hit: bar - 8.0,
-                    nav_bar_height: bar,
-                }
-            }
+            LayoutMode::Mobile => Self {
+                title: 17.0,
+                body: 16.0,
+                meta: 13.0,
+                pad: 16.0,
+                pad_tight: 10.0,
+                list_row: 6.0,
+                composer: 14.0,
+                rail_width: 0.0,
+                list_width: 0.0,
+                info_width: 0.0,
+                icon: 26.0,
+                nav_hit: 46.0,
+                nav_bar_height: 54.0,
+            },
             LayoutMode::Desktop => {
-                let scale = (logical_width / 1200.0).clamp(1.0, 1.4);
-                let rail = (80.0 * scale).round().clamp(72.0, 104.0);
-                let icon = (26.0 * scale).round().clamp(24.0, 34.0);
-                let hit = (rail - 16.0).max(icon + 20.0);
+                let rail = if logical_width >= RAIL_MIN_WIDTH { 72.0 } else { 0.0 };
+                // The list grows a little with the window, like Telegram's.
+                let list = (logical_width * 0.27).round().clamp(260.0, 340.0);
+                let chat = logical_width - rail - list;
                 Self {
                     title: 18.0,
                     body: 14.0,
@@ -104,10 +89,11 @@ impl Density {
                     list_row: 6.0,
                     composer: 12.0,
                     rail_width: rail,
-                    list_width: (300.0 * scale.min(1.2)).round(),
-                    icon,
-                    nav_hit: hit,
-                    nav_bar_height: 0.0,
+                    list_width: list,
+                    info_width: if chat >= CHAT_MIN_WIDTH + INFO_WIDTH { INFO_WIDTH } else { 0.0 },
+                    icon: if rail > 0.0 { 26.0 } else { 22.0 },
+                    nav_hit: if rail > 0.0 { rail - 16.0 } else { 40.0 },
+                    nav_bar_height: if rail > 0.0 { 0.0 } else { 54.0 },
                 }
             }
         }
@@ -133,27 +119,10 @@ fn scale_font(px: f32, scale: f32) -> f32 {
     (px * scale).round().clamp(10.0, 36.0)
 }
 
-/// Resolve layout from **logical** window dimensions.
-pub fn resolve(logical_width: f32, logical_height: f32) -> LayoutMode {
-    let aspect = if logical_height > 0.0 {
-        logical_width / logical_height
-    } else {
-        1.0
-    };
-
-    if logical_width < MOBILE_MAX_WIDTH {
-        return LayoutMode::Mobile;
-    }
-
-    if logical_width < COMPACT_MAX_WIDTH {
-        if aspect < PORTRAIT_ASPECT {
-            return LayoutMode::Mobile;
-        }
-        return LayoutMode::Compact;
-    }
-
-    if aspect < EXTREME_PORTRAIT_ASPECT {
-        LayoutMode::Compact
+/// Layout for a window `logical_width` wide.
+pub fn resolve(logical_width: f32) -> LayoutMode {
+    if logical_width < ONE_COLUMN_MAX {
+        LayoutMode::Mobile
     } else {
         LayoutMode::Desktop
     }
@@ -163,58 +132,43 @@ pub fn resolve(logical_width: f32, logical_height: f32) -> LayoutMode {
 mod tests {
     use super::*;
 
-    #[test]
-    fn breakpoints_match_spec_logical() {
-        assert_eq!(resolve(400.0, 800.0), LayoutMode::Mobile);
-        assert_eq!(resolve(800.0, 600.0), LayoutMode::Compact);
-        assert_eq!(resolve(900.0, 900.0), LayoutMode::Compact);
-        assert_eq!(resolve(1200.0, 800.0), LayoutMode::Desktop);
-        assert_eq!(resolve(1600.0, 900.0), LayoutMode::Desktop);
+    fn columns(width: f32) -> (LayoutMode, bool, bool) {
+        let mode = resolve(width);
+        let d = Density::for_window(mode, width, 800.0);
+        (mode, d.rail_width > 0.0, d.info_width > 0.0)
     }
 
     #[test]
-    fn hi_dpi_uses_logical_not_framebuffer() {
-        assert_eq!(resolve(600.0, 800.0), LayoutMode::Mobile);
-        assert_ne!(resolve(1200.0, 1600.0), LayoutMode::Mobile);
+    fn columns_follow_the_width() {
+        // Narrow tiles and phones: one column.
+        assert_eq!(columns(280.0), (LayoutMode::Mobile, false, false));
+        assert_eq!(columns(599.0), (LayoutMode::Mobile, false, false));
+        // Half of a 1280 px screen: list + chat, destinations under the list.
+        assert_eq!(columns(640.0), (LayoutMode::Desktop, false, false));
+        // Roomier: the rail appears.
+        assert_eq!(columns(940.0), (LayoutMode::Desktop, true, false));
+        // Wide: the info column fits next to the chat.
+        assert_eq!(columns(1180.0), (LayoutMode::Desktop, true, true));
+        assert_eq!(columns(1920.0), (LayoutMode::Desktop, true, true));
     }
 
     #[test]
-    fn portrait_nudge_inside_compact_band() {
-        assert_eq!(resolve(700.0, 900.0), LayoutMode::Mobile);
-    }
-
-    #[test]
-    fn desktop_nav_grows_with_width() {
-        let small = Density::for_window(LayoutMode::Desktop, 1200.0, 800.0);
-        let large = Density::for_window(LayoutMode::Desktop, 1800.0, 1000.0);
-        assert!(large.rail_width >= small.rail_width);
-        assert!(large.nav_hit >= small.nav_hit);
-        assert!(large.icon >= small.icon);
+    fn the_chat_keeps_a_usable_width() {
+        for width in [600.0, 640.0, 760.0, 899.0, 900.0, 1100.0, 1132.0, 1400.0, 2560.0] {
+            let d = Density::for_window(LayoutMode::Desktop, width, 800.0);
+            let chat = width - d.rail_width - d.list_width - d.info_width;
+            assert!(chat >= 330.0, "{width}: chat {chat}");
+            assert!((260.0..=340.0).contains(&d.list_width), "{width}");
+        }
     }
 
     #[test]
     fn text_scale_grows_fonts_keeps_rail() {
         let base = Density::for_window(LayoutMode::Desktop, 1200.0, 800.0);
         let large = base.with_text_scale(1.3);
-        assert!(large.body > base.body);
-        assert!(large.title > base.title);
-        assert!(large.meta > base.meta);
+        assert!(large.body > base.body && large.title > base.title && large.meta > base.meta);
         assert_eq!(large.rail_width, base.rail_width);
-        assert_eq!(large.icon, base.icon);
-    }
-
-    #[test]
-    fn text_scale_default_is_identity() {
-        let base = Density::for_window(LayoutMode::Compact, 800.0, 600.0);
-        let same = base.with_text_scale(1.0);
-        assert_eq!(same.body, base.body);
-        assert_eq!(same.title, base.title);
-    }
-
-    #[test]
-    fn text_scale_small_keeps_readable_meta() {
-        let d = Density::for_window(LayoutMode::Desktop, 1200.0, 800.0).with_text_scale(0.875);
-        assert!(d.meta >= 10.0, "meta must stay ≥10px so time glyphs do not crush");
-        assert!(d.body >= 10.0);
+        assert_eq!(base.with_text_scale(1.0).body, base.body);
+        assert!(base.with_text_scale(0.875).meta >= 10.0, "meta stays readable");
     }
 }

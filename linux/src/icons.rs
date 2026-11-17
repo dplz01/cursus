@@ -33,7 +33,7 @@ pub fn nav_icon<'a>(kind: NavIcon, active: bool, size: f32) -> Element<'a, Messa
     } else {
         theme::t().text_secondary
     };
-    tinted(handle_for(kind), color, size)
+    tinted_static(handle_for(kind), color, size)
 }
 
 /// Admin / “Chat with admins” — Instructure UI Line Icons (MIT via SVG Repo).
@@ -57,12 +57,13 @@ pub fn plus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 
 /// Center an icon inside a square hit target (iced buttons lay out content top-left).
 pub fn centered_hit<'a>(icon: Element<'a, Message>, hit: f32) -> Element<'a, Message> {
-    container(icon)
+    crate::hover::icon_glow(
+        container(icon)
         .width(hit)
         .height(hit)
         .center_x(hit)
-        .center_y(hit)
-        .into()
+        .center_y(hit),
+    )
 }
 
 /// Expand control (Zest Interface Icons / MIT).
@@ -306,10 +307,21 @@ pub fn paperplane_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 }
 
 /// SimpleX links — Solar Broken Line Icons (CC Attribution via SVG Repo).
-/// Padlock — Orchid Line Interface Icons (MIT), app lock screen / Lock button.
+/// Padlock (drawn for Cursus in the set's stroke style): lock screen,
+/// "Lock now", Privacy settings.
 pub fn lock_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
         svg_handle!("../assets/icons/lock.svg"),
+        color,
+        size,
+    )
+}
+
+/// Folder (after an SVG Repo glyph, redrawn in the set's stroke style):
+/// Files and network settings.
+pub fn files_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(
+        svg_handle!("../assets/icons/files.svg"),
         color,
         size,
     )
@@ -360,29 +372,36 @@ pub fn reaction_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 
 /// Peer / contact allow indicator — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
 pub fn user_alt_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg_handle!("../assets/icons/user-alt-1.svg"),
-        color,
-        size,
-    )
+    tinted(svg_handle!("../assets/icons/user-alt-1.svg"), color, size)
 }
 
 /// Phone / calls — Solar Linear Icons (CC BY via SVG Repo); same asset as nav Calls.
+pub fn call_history_icon<'a>(
+    outgoing: bool,
+    status: &str,
+    size: f32,
+    color: Color,
+) -> Element<'a, Message> {
+    let handle = match (outgoing, status) {
+        (false, "missed" | "pending") => svg_handle!("../assets/icons/call_missed.svg"),
+        (_, "rejected" | "error") => svg_handle!("../assets/icons/call_rejected.svg"),
+        (_, "accepted" | "negotiated" | "progress") => {
+            svg_handle!("../assets/icons/call_active.svg")
+        }
+        (true, _) => svg_handle!("../assets/icons/call_outgoing.svg"),
+        _ => svg_handle!("../assets/icons/call_incoming.svg"),
+    };
+    // Status indicators keep their semantic colour when the pointer passes over.
+    tinted_static(handle, color, size)
+}
+
 pub fn phone_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg_handle!("../assets/icons/calls.svg"),
-        color,
-        size,
-    )
+    tinted(svg_handle!("../assets/icons/calls.svg"), color, size)
 }
 
 /// Edit / set profile picture — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
 pub fn image_pen_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg_handle!("../assets/icons/image-pen.svg"),
-        color,
-        size,
-    )
+    tinted(svg_handle!("../assets/icons/image-pen.svg"), color, size)
 }
 
 pub fn avatar_initial<'a>(label: &str, size: f32) -> Element<'a, Message> {
@@ -488,12 +507,39 @@ fn handle_for(kind: NavIcon) -> svg::Handle {
     }
 }
 
+fn glow_color(idle: Color) -> Color {
+    if idle.a < 0.5 { return idle; }
+    if idle == theme::t().danger {
+        theme::t().danger_hover
+    } else {
+        theme::t().accent_hover
+    }
+}
+
+fn tinted_static<'a>(handle: svg::Handle, color: Color, size: f32) -> Element<'a, Message> {
+    svg(handle)
+        .width(size)
+        .height(size)
+        .style(move |_, _| svg::Style { color: Some(color) })
+        .into()
+}
+
 fn tinted<'a>(handle: svg::Handle, color: Color, size: f32) -> Element<'a, Message> {
     let icon: Svg<'a, iced::Theme> = svg(handle)
         .width(Length::Fixed(size))
         .height(Length::Fixed(size))
-        .style(move |_, _| svg::Style {
-            color: Some(color),
+        .style(move |_, status| svg::Style {
+            color: Some(
+                if crate::POINTER_GATE
+                    .hover_ok
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    && matches!(status, svg::Status::Hovered)
+                {
+                    glow_color(color)
+                } else {
+                    color
+                },
+            ),
         });
 
     container(icon)
@@ -512,7 +558,7 @@ pub fn composer_tool_icon<'a>(
     handle: svg::Handle,
     hit: f32,
     idle: Color,
-    hot: Color,
+    _hot: Color,
     hover_ok: bool,
 ) -> Element<'a, Message> {
     let icon: Svg<'a, iced::Theme> = svg(handle)
@@ -521,7 +567,7 @@ pub fn composer_tool_icon<'a>(
         .content_fit(ContentFit::ScaleDown)
         .style(move |_, status| svg::Style {
             color: Some(match status {
-                svg::Status::Hovered if hover_ok => hot,
+                svg::Status::Hovered if hover_ok && crate::POINTER_GATE.hover_allowed() => glow_color(idle),
                 _ => idle,
             }),
         });
@@ -535,7 +581,7 @@ pub fn profile_tool_icon<'a>(
     handle: svg::Handle,
     hit: f32,
     idle: Color,
-    hot: Color,
+    _hot: Color,
     hover_ok: bool,
 ) -> Element<'a, Message> {
     const GLYPH: f32 = 20.0;
@@ -545,16 +591,17 @@ pub fn profile_tool_icon<'a>(
         .content_fit(ContentFit::Contain)
         .style(move |_, status| svg::Style {
             color: Some(match status {
-                svg::Status::Hovered if hover_ok => hot,
+                svg::Status::Hovered if hover_ok && crate::POINTER_GATE.hover_allowed() => glow_color(idle),
                 _ => idle,
             }),
         });
-    container(icon)
+    crate::hover::icon_glow(
+        container(icon)
         .width(hit)
         .height(hit)
         .center_x(hit)
-        .center_y(hit)
-        .into()
+        .center_y(hit),
+    )
 }
 
 pub fn plus_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
@@ -578,6 +625,18 @@ pub fn mic_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
 }
 
 /// Header chrome tools — same optical size / stroke as the main-page settings gear.
+pub fn back_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(svg_handle!("../assets/icons/back.svg"), color, size)
+}
+
+pub fn next_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    svg(svg_handle!("../assets/icons/back.svg"))
+        .width(size).height(size)
+        .rotation(iced::Radians(std::f32::consts::PI))
+        .style(move |_, status| svg::Style { color: Some(if crate::POINTER_GATE.hover_allowed() && matches!(status, svg::Status::Hovered) { glow_color(color) } else { color }) })
+        .into()
+}
+
 pub fn back_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     profile_tool_icon(
         svg_handle!("../assets/icons/back.svg"),
@@ -862,15 +921,6 @@ pub fn chevron_right<'a>(size: f32, color: Color) -> Element<'a, Message> {
         .into()
 }
 
-/// Plain tinted gear (no hover states) for icon discs.
-pub fn settings_icon_plain<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg_handle!("../assets/icons/settings.svg"),
-        color,
-        size,
-    )
-}
-
 /// “My address” — Dazzle Line Icons address-card (CC BY).
 pub fn address_card_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
@@ -887,4 +937,8 @@ pub fn repeat_once_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
         color,
         size,
     )
+}
+
+pub fn minus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(svg::Handle::from_memory(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 12h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>"#.as_slice()), color, size)
 }

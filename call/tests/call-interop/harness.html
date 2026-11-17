@@ -1,0 +1,136 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cursus call interop</title>
+<!--
+  Browser side of `call::interop_tests` (cargo test -- --ignored browser).
+  Mirrors what the official SimpleX clients do in call.ts:
+  - 4 transceivers in order mic audio, camera video, screen audio, screen video;
+  - session / candidates as LZString.compressToBase64(JSON);
+  - per-frame AES-GCM via RTCRtpScriptTransform (worker.js = callCryptoFunction);
+  - initial ICE batch after 750 ms, extras afterwards.
+  A 440 Hz tone is sent; inbound audio energy is reported back.
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
+<script>
+const params = new URLSearchParams(location.search)
+const role = params.get("role") // "offerer" = official callee, "answerer" = official caller
+const aesKey = params.get("key")
+
+const post = (body) => fetch("/from-browser", {method: "POST", body: JSON.stringify(body)})
+const log = (msg) => post({type: "log", msg: String(msg)})
+const serialize = (x) => LZString.compressToBase64(JSON.stringify(x))
+const parse = (s) => JSON.parse(LZString.decompressFromBase64(s))
+async function next() {
+  for (;;) {
+    const r = await fetch("/to-browser")
+    if (r.status === 200) return r.json()
+  }
+}
+
+window.onerror = (m) => log("error: " + m)
+window.onunhandledrejection = (e) => log("rejection: " + e.reason)
+
+async function main() {
+  const ctx = new AudioContext()
+  await ctx.resume()
+  const osc = ctx.createOscillator()
+  osc.frequency.value = 440
+  const dst = ctx.createMediaStreamDestination()
+  osc.connect(dst)
+  osc.start()
+  const localStream = dst.stream
+  const mic = localStream.getAudioTracks()[0]
+
+  const worker = new Worker("worker.js")
+  const pc = new RTCPeerConnection({iceServers: [], iceCandidatePoolSize: 10})
+  const encrypt = (s) => aesKey && (s.transform = new RTCRtpScriptTransform(worker, {operation: "encrypt", aesKey}))
+  const decrypt = (r) => aesKey && (r.transform = new RTCRtpScriptTransform(worker, {operation: "decrypt", aesKey}))
+
+  let remoteMid = null
+  pc.ontrack = (e) => {
+    decrypt(e.receiver)
+    if (e.transceiver.mid === "0") remoteMid = "0"
+    log(`ontrack mid=${e.transceiver.mid} kind=${e.track.kind}`)
+  }
+  pc.onconnectionstatechange = () => log("connection " + pc.connectionState)
+
+  // getIceCandidates() from call.ts
+  let candidates = []
+  let resolved = false
+  const iceReady = new Promise((resolve) => {
+    const flush = () => {
+      if (candidates.length) post({type: "ice", iceCandidates: serialize(candidates)})
+      candidates = []
+    }
+    const resolveNow = () => {
+      if (resolved) return
+      resolved = true
+      const c = serialize(candidates)
+      candidates = []
+      resolve(c)
+      const extras = setInterval(flush, 1500)
+      setTimeout(() => { clearInterval(extras); flush() }, 12000)
+    }
+    setTimeout(resolveNow, 750)
+    pc.onicecandidate = ({candidate: c}) => c && candidates.push(c)
+    pc.onicegatheringstatechange = () => {
+      if (pc.iceGatheringState == "complete") resolved ? flush() : resolveNow()
+    }
+  })
+  const addIce = (list) => list.forEach((c) => pc.addIceCandidate(new RTCIceCandidate(c)).catch((e) => log("addIce " + e)))
+
+  if (role === "offerer") {
+    // "start" command: incoming call accepted, create the offer
+    const t0 = pc.addTransceiver("audio", {streams: [localStream]})
+    await t0.sender.replaceTrack(mic)
+    pc.addTransceiver("video", {streams: [localStream]})
+    pc.addTransceiver("audio", {streams: [new MediaStream()]})
+    pc.addTransceiver("video", {streams: [new MediaStream()]})
+    const offer = await pc.createOffer()
+    await pc.setLocalDescription(offer)
+    pc.getTransceivers().forEach((t) => encrypt(t.sender))
+    await post({type: "offer", offer: serialize(offer), iceCandidates: await iceReady})
+    const msg = await next()
+    await pc.setRemoteDescription(new RTCSessionDescription(parse(msg.answer)))
+    // call.ts: adaptToOldVersion(pc.getTransceivers()[2].currentDirection == "sendonly")
+    log("transceiver[2].currentDirection=" + pc.getTransceivers()[2].currentDirection)
+    addIce(parse(msg.iceCandidates))
+  } else {
+    // "offer" command: our outgoing call, the peer's offer arrived
+    const msg = await next()
+    await pc.setRemoteDescription(new RTCSessionDescription(parse(msg.offer)))
+    const ts = pc.getTransceivers()
+    log("transceivers after offer: " + ts.length)
+    // setupLocalStream(false): new version → replace the mic slot's track
+    if (ts.length > 2) await ts.find((t) => t.mid === "0").sender.replaceTrack(mic)
+    else pc.addTrack(mic, localStream)
+    pc.getTransceivers().forEach((t) => encrypt(t.sender))
+    pc.getTransceivers().forEach((t) => (t.direction = "sendrecv"))
+    const answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    addIce(parse(msg.iceCandidates))
+    await post({type: "answer", answer: serialize(answer), iceCandidates: await iceReady})
+  }
+
+  // Extra candidates from Cursus.
+  ;(async () => {
+    for (;;) {
+      const m = await next()
+      if (m.type === "ice") addIce(parse(m.iceCandidates))
+    }
+  })()
+
+  for (let i = 0; i < 100 && pc.connectionState !== "connected"; i++) await new Promise((r) => setTimeout(r, 100))
+  await new Promise((r) => setTimeout(r, 4000))
+  let energy = 0, packets = 0, decodeErrors = 0
+  const stats = await pc.getStats()
+  stats.forEach((s) => {
+    if (s.type === "inbound-rtp" && s.kind === "audio") {
+      energy += s.totalAudioEnergy || 0
+      packets += s.packetsReceived || 0
+    }
+  })
+  await post({type: "result", connection: pc.connectionState, energy, packets, remoteMid})
+}
+main().catch((e) => log("main failed: " + e))
+</script>

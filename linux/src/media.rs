@@ -523,7 +523,7 @@ pub fn truncate_bio_bytes(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cursus_core::media::upright_copy_for_send;
+    use cursus_core::media::prepare_outgoing_image;
 
     /// 40×20 JPEG with an EXIF Orientation=6 (rotate 90° CW) APP1 segment.
     fn jpeg_with_orientation(orientation: u16) -> Vec<u8> {
@@ -561,12 +561,11 @@ mod tests {
         // Rotated CW: the left (red) half ends up on top.
         let top = up.to_rgb8().get_pixel(10, 5).0;
         assert!(top[0] > 200 && top[2] < 60, "top pixel {top:?}");
-        let sent = upright_copy_for_send(&path, &dir.join("out")).unwrap().unwrap();
+        // Sent photos are re-encoded: upright, and without any EXIF.
+        let sent = prepare_outgoing_image(&path, &dir.join("out")).unwrap().path;
         assert!(exif_orientation(&sent).is_none_or(|o| o == Orientation::NoTransforms));
         assert_eq!(image::image_dimensions(&sent).unwrap(), (20, 40));
-        // Untagged / identity JPEGs are sent untouched.
-        std::fs::write(&path, jpeg_with_orientation(1)).unwrap();
-        assert!(upright_copy_for_send(&path, &dir.join("out2")).unwrap().is_none());
+        assert!(!std::fs::read(&sent).unwrap().windows(4).any(|w| w == b"Exif"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -1,13 +1,16 @@
 [workspace]
 resolver = "2"
 members = [
+    "call",
     "core",
     "linux",
+    "bridge",
+    "android/jni",
 ]
 default-members = ["linux"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/dplz01/cursus"
@@ -15,6 +18,7 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 cursus-core = { path = "core" }
+cursus-call = { path = "call" }
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 directories = "6"

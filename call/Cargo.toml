@@ -1,0 +1,28 @@
+[package]
+name = "cursus-call"
+description = "Audio calls for Cursus apps: WebRTC, SimpleX signaling and frame encryption, Opus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+base64 = "0.22"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+# Native WebRTC (no browser / WebView), speaking the official clients' format.
+webrtc = "=0.17.2"
+opus = "0.3"
+# Bundled libopus built statically: phones may not ship libopus.so.
+audiopus_sys = { version = "0.2", features = ["static"] }
+aes-gcm = "0.10"
+# SimpleX signaling packs SDP / ICE as LZString.compressToBase64(JSON).
+lz-str = "0.2"
+
+[dev-dependencies]
+# The end-to-end test runs two real chat sessions.
+cursus-core.workspace = true
+zeroize.workspace = true

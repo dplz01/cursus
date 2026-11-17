@@ -76,7 +76,7 @@ impl Tokens {
             bg_sidebar: rgb(0x15181E),
             bg_list: rgb(0x15181E),
             bg_panel: rgb(0x0E1015),
-            bg_elevated: rgb(0x1C2028),
+            bg_elevated: rgb(0x252B36),
             text_primary: rgb(0xF2F3F5),
             text_secondary: rgb(0xA0A6B3),
             text_muted: rgb(0x6E7585),
@@ -85,7 +85,7 @@ impl Tokens {
             accent_soft: Color::from_rgba(0.357, 0.549, 1.0, 0.16),
             accent_soft_hover: Color::from_rgba(0.357, 0.549, 1.0, 0.26),
             accent_soft_press: Color::from_rgba(0.357, 0.549, 1.0, 0.36),
-            border: rgb(0x252A33),
+            border: rgb(0x3B4453),
             danger: rgb(0xFF6B6B),
             success: rgb(0x6BCB77),
             always: Color::from_rgb(0.925, 0.757, 0.310), // gold
@@ -97,7 +97,7 @@ impl Tokens {
             danger_hover: Color::from_rgb(0.85, 0.28, 0.28),
             danger_press: Color::from_rgb(0.70, 0.20, 0.20),
             disabled_fill: Color::from_rgb(0.25, 0.30, 0.40),
-            bg_hover: rgb(0x20242D),
+            bg_hover: rgb(0x303746),
             bg_field: rgb(0x111318),
             bubble_in: rgb(0x1C2028),
             bubble_out: rgb(0x243A63),
@@ -352,12 +352,11 @@ pub fn floating_nav_style() -> impl Fn(&iced::Theme) -> container::Style {
 /// touch point, which would otherwise keep buttons stuck in `Hovered`.
 pub fn nav_active(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let background = match status {
             button::Status::Pressed => Some(Background::Color(c.accent_soft_press)),
-            button::Status::Hovered if hover_ok => {
-                Some(Background::Color(c.accent_soft_hover))
-            }
+            button::Status::Hovered if hover_ok => Some(Background::Color(c.accent_soft_hover)),
             _ => Some(Background::Color(c.accent_soft)),
         };
         button::Style {
@@ -375,12 +374,15 @@ pub fn nav_active(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
 
 pub fn nav_idle(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let background = match status {
             button::Status::Pressed => Some(Background::Color(c.accent_soft)),
-            button::Status::Hovered if hover_ok => {
-                Some(Background::Color(c.bg_hover))
-            }
+            button::Status::Hovered if hover_ok => Some(Background::Color(if is_light_active() {
+                c.bg_hover
+            } else {
+                rgb(0x20242D)
+            })),
             _ => Some(Background::Color(Color::TRANSPARENT)),
         };
         button::Style {
@@ -398,6 +400,7 @@ pub fn nav_idle(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> butt
 
 pub fn primary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let background = match status {
             button::Status::Hovered if hover_ok => c.accent_hover,
@@ -420,6 +423,7 @@ pub fn primary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -
 
 pub fn secondary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let background = match status {
             button::Status::Hovered if hover_ok => c.bg_hover,
@@ -443,6 +447,7 @@ pub fn secondary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status)
 /// "+" button, filled with the `attention` yellow — something to look at.
 pub fn attention_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let mut fill = c.attention;
         if matches!(status, button::Status::Pressed) || (hover_ok && matches!(status, button::Status::Hovered)) {
@@ -469,6 +474,7 @@ pub fn on_attention() -> Color {
 /// Selectable list row (settings categories): `accent.soft` when selected.
 pub fn list_row(selected: bool, hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let background = if selected {
             Some(Background::Color(c.accent_soft))
@@ -494,6 +500,7 @@ pub fn list_row(selected: bool, hover_ok: bool) -> impl Fn(&iced::Theme, button:
 
 pub fn menu_item(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let background = match status {
             button::Status::Hovered if hover_ok => Some(Background::Color(c.bg_hover)),
@@ -518,6 +525,7 @@ pub fn reaction_chip(
     hover_ok: bool,
 ) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let background = if selected {
             Some(Background::Color(match status {
@@ -527,9 +535,7 @@ pub fn reaction_chip(
             }))
         } else {
             match status {
-                button::Status::Hovered if hover_ok => {
-                    Some(Background::Color(c.accent_soft))
-                }
+                button::Status::Hovered if hover_ok => Some(Background::Color(c.accent_soft)),
                 button::Status::Pressed => Some(Background::Color(c.accent_soft_press)),
                 _ => Some(Background::Color(c.bg_elevated)),
             }
@@ -556,6 +562,7 @@ pub fn emoji_suggest_row(
     hover_ok: bool,
 ) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let background = if selected {
             Some(Background::Color(match status {
@@ -564,9 +571,7 @@ pub fn emoji_suggest_row(
             }))
         } else {
             match status {
-                button::Status::Hovered if hover_ok => {
-                    Some(Background::Color(c.accent_soft))
-                }
+                button::Status::Hovered if hover_ok => Some(Background::Color(c.accent_soft)),
                 button::Status::Pressed => Some(Background::Color(c.accent_soft_press)),
                 _ => Some(Background::Color(Color::TRANSPARENT)),
             }
@@ -590,6 +595,7 @@ pub fn emoji_suggest_row(
 
 pub fn danger_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let background = match status {
             button::Status::Hovered if hover_ok => c.danger_hover,
@@ -612,6 +618,7 @@ pub fn danger_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) ->
 /// Quiet danger tile — outlined / soft fill for destructive chrome (delete).
 pub fn danger_quiet(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let (background, border_color) = match status {
             button::Status::Hovered if hover_ok => (
@@ -659,6 +666,7 @@ pub fn ghost_tile(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
 /// [`ghost_tile`] with its own corner radius (16 = flush with a card edge).
 pub fn ghost_tile_r(hover_ok: bool, radius: f32) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let background = match status {
             button::Status::Hovered if hover_ok => Some(Background::Color(c.bg_hover)),
@@ -686,6 +694,7 @@ pub fn ghost_danger(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> 
 /// [`ghost_danger`] with its own corner radius.
 pub fn ghost_danger_r(hover_ok: bool, radius: f32) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let background = match status {
             button::Status::Hovered if hover_ok => Some(Background::Color(Color { a: 0.14, ..c.danger })),
@@ -754,6 +763,7 @@ pub fn rounded_editor() -> impl Fn(&iced::Theme, text_editor::Status) -> text_ed
 /// Blue link box (accent-soft fill, accent hairline) — shared links / call cards.
 pub fn link_box(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
         let background = match status {
             button::Status::Hovered if hover_ok => c.accent_soft_press,
@@ -810,5 +820,36 @@ pub fn composer_editor() -> impl Fn(&iced::Theme, text_editor::Status) -> text_e
             value: c.text_primary,
             selection: c.accent_soft,
         }
+    }
+}
+
+/// Icon hits have a transparent face; the glyph supplies the hover glow.
+pub fn icon_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
+        let c = t();
+        button::Style {
+            background: None,
+            text_color: if hover_ok
+                && matches!(status, button::Status::Hovered | button::Status::Pressed)
+            {
+                c.accent_hover
+            } else {
+                c.text_secondary
+            },
+            ..Default::default()
+        }
+    }
+}
+
+pub fn profile_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
+        let c = t();
+        let hot = hover_ok && matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style { background: Some(if hot { c.accent_soft } else { c.bg_elevated }.into()),
+            text_color: c.text_secondary,
+            border: Border { radius: 16.0.into(), width: 1.0, color: if hot { c.accent } else { c.border } },
+            ..Default::default() }
     }
 }

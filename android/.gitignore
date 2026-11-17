@@ -1,0 +1,8 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+# Built by cargo-ndk / fetched by fetch-libsimplex.sh
+app/src/main/jniLibs/

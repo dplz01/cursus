@@ -14,6 +14,7 @@ use std::sync::OnceLock;
 use libloading::{Library, Symbol};
 
 use crate::error::{Error, Result};
+use crate::json::JsonExt;
 use crate::paths::{default_libs_dir, lib_filename};
 
 type HsInit = unsafe extern "C" fn(*mut c_int, *mut *mut *mut c_char);
@@ -23,29 +24,32 @@ type ChatMigrateInit = unsafe extern "C" fn(
     *const c_char,
     *mut *mut std::ffi::c_void,
 ) -> *mut c_char;
+type ChatParseMarkdown = unsafe extern "C" fn(*const c_char) -> *mut c_char;
 type ChatSendCmd = unsafe extern "C" fn(*mut std::ffi::c_void, *const c_char) -> *mut c_char;
 type ChatRecvMsgWait = unsafe extern "C" fn(*mut std::ffi::c_void, c_int) -> *mut c_char;
 type ChatCloseStore = unsafe extern "C" fn(*mut std::ffi::c_void) -> *mut c_char;
 /// Decrypt CryptoFile on disk → plaintext path. Empty string = success.
-type ChatDecryptFile = unsafe extern "C" fn(
-    *const c_char,
-    *const c_char,
-    *const c_char,
-    *const c_char,
-) -> *mut c_char;
+type ChatDecryptFile =
+    unsafe extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char) -> *mut c_char;
 /// Encrypt plaintext → CryptoFile; returns JSON WriteFileResult (needs chat ctrl).
-type ChatEncryptFile = unsafe extern "C" fn(
-    *mut std::ffi::c_void,
-    *const c_char,
-    *const c_char,
-) -> *mut c_char;
+type ChatEncryptFile =
+    unsafe extern "C" fn(*mut std::ffi::c_void, *const c_char, *const c_char) -> *mut c_char;
 
 static HS_INIT: Once = Once::new();
+
+/// The one loaded libsimplex, never unloaded. `hs_init` starts the GHC
+/// runtime once per process and its threads (network, timers, GC) keep
+/// running code from the library after a session is closed; dropping the
+/// last handle `dlclose`d it underneath them → SIGSEGV (reproduced by
+/// opening sessions again after closing networked ones, see
+/// `call::simplex_e2e_tests`; in the app: on quit / after a failed unlock).
+static LOADED: std::sync::Mutex<Option<std::sync::Arc<LibSimplex>>> = std::sync::Mutex::new(None);
 
 pub struct LibSimplex {
     _library: Library,
     chat_migrate_init: ChatMigrateInit,
     chat_send_cmd: ChatSendCmd,
+    chat_parse_markdown: ChatParseMarkdown,
     chat_recv_msg_wait: ChatRecvMsgWait,
     chat_close_store: ChatCloseStore,
     chat_decrypt_file: ChatDecryptFile,
@@ -57,7 +61,18 @@ unsafe impl Send for LibSimplex {}
 unsafe impl Sync for LibSimplex {}
 
 impl LibSimplex {
-    pub fn load(libs_dir: Option<&Path>) -> Result<Self> {
+    /// Load once per process and share (see [`LOADED`]).
+    pub fn shared(libs_dir: Option<&Path>) -> Result<std::sync::Arc<Self>> {
+        let mut slot = LOADED.lock().map_err(|_| Error::LibraryLoad("libsimplex lock poisoned".into()))?;
+        if let Some(lib) = slot.as_ref() {
+            return Ok(std::sync::Arc::clone(lib));
+        }
+        let lib = std::sync::Arc::new(Self::load(libs_dir)?);
+        *slot = Some(std::sync::Arc::clone(&lib));
+        Ok(lib)
+    }
+
+    fn load(libs_dir: Option<&Path>) -> Result<Self> {
         let dir = libs_dir
             .map(Path::to_path_buf)
             .unwrap_or_else(default_libs_dir);
@@ -91,43 +106,25 @@ impl LibSimplex {
             return Err(Error::LibraryLoad(hint));
         }
 
-        // SAFETY: we only call C ABI symbols exported by libsimplex.
-        let library = unsafe {
-            Library::new(&path).map_err(|err| Error::LibraryLoad(explain_load_error(&err)))?
+        // SAFETY: we only call C ABI symbols exported by libsimplex, with
+        // the signatures of its header.
+        let library = unsafe { Library::new(&path) }
+            .map_err(|err| Error::LibraryLoad(explain_load_error(&err)))?;
+        let lib = unsafe {
+            let hs_init: HsInit = symbol(&library, "hs_init_with_rtsopts")?;
+            HS_INIT.call_once(|| init_haskell(hs_init));
+            Self {
+                chat_migrate_init: symbol(&library, "chat_migrate_init")?,
+                chat_send_cmd: symbol(&library, "chat_send_cmd")?,
+                chat_parse_markdown: symbol(&library, "chat_parse_markdown")?,
+                chat_recv_msg_wait: symbol(&library, "chat_recv_msg_wait")?,
+                chat_close_store: symbol(&library, "chat_close_store")?,
+                chat_decrypt_file: symbol(&library, "chat_decrypt_file")?,
+                chat_encrypt_file: symbol(&library, "chat_encrypt_file")?,
+                _library: library,
+            }
         };
-        let hs_init: Symbol<HsInit> = unsafe { library.get(b"hs_init_with_rtsopts\0") }
-            .map_err(|_| Error::MissingSymbol("hs_init_with_rtsopts".into()))?;
-        let chat_migrate_init: Symbol<ChatMigrateInit> =
-            unsafe { library.get(b"chat_migrate_init\0") }
-                .map_err(|_| Error::MissingSymbol("chat_migrate_init".into()))?;
-        let chat_send_cmd: Symbol<ChatSendCmd> = unsafe { library.get(b"chat_send_cmd\0") }
-            .map_err(|_| Error::MissingSymbol("chat_send_cmd".into()))?;
-        let chat_recv_msg_wait: Symbol<ChatRecvMsgWait> =
-            unsafe { library.get(b"chat_recv_msg_wait\0") }
-                .map_err(|_| Error::MissingSymbol("chat_recv_msg_wait".into()))?;
-        let chat_close_store: Symbol<ChatCloseStore> =
-            unsafe { library.get(b"chat_close_store\0") }
-                .map_err(|_| Error::MissingSymbol("chat_close_store".into()))?;
-        let chat_decrypt_file: Symbol<ChatDecryptFile> =
-            unsafe { library.get(b"chat_decrypt_file\0") }
-                .map_err(|_| Error::MissingSymbol("chat_decrypt_file".into()))?;
-        let chat_encrypt_file: Symbol<ChatEncryptFile> =
-            unsafe { library.get(b"chat_encrypt_file\0") }
-                .map_err(|_| Error::MissingSymbol("chat_encrypt_file".into()))?;
-
-        HS_INIT.call_once(|| unsafe {
-            init_haskell(*hs_init);
-        });
-
-        Ok(Self {
-            chat_migrate_init: *chat_migrate_init,
-            chat_send_cmd: *chat_send_cmd,
-            chat_recv_msg_wait: *chat_recv_msg_wait,
-            chat_close_store: *chat_close_store,
-            chat_decrypt_file: *chat_decrypt_file,
-            chat_encrypt_file: *chat_encrypt_file,
-            _library: library,
-        })
+        Ok(lib)
     }
 
     pub fn migrate_init(&self, db_prefix: &Path, key: &str, confirm: &str) -> Result<*mut std::ffi::c_void> {
@@ -160,7 +157,19 @@ impl LibSimplex {
         take_c_string(raw)
     }
 
-    pub fn recv_msg_wait(&self, ctrl: *mut std::ffi::c_void, wait_us: i32) -> Result<Option<String>> {
+    /// The same pure markdown parser used by official SimpleX clients.
+    pub fn parse_markdown(&self, text: &str) -> Result<serde_json::Value> {
+        let text = CString::new(text)?;
+        // SAFETY: the input CString lives through the call; the result is owned.
+        let raw = unsafe { (self.chat_parse_markdown)(text.as_ptr()) };
+        Ok(serde_json::from_str(&take_c_string(raw)?)?)
+    }
+
+    pub fn recv_msg_wait(
+        &self,
+        ctrl: *mut std::ffi::c_void,
+        wait_us: i32,
+    ) -> Result<Option<String>> {
         // SAFETY: ctrl must come from migrate_init.
         let raw = unsafe { (self.chat_recv_msg_wait)(ctrl, wait_us) };
         let s = take_c_string(raw)?;
@@ -211,32 +220,28 @@ impl LibSimplex {
         let to = CString::new(to.to_string_lossy().as_bytes())?;
         // SAFETY: ctrl from migrate_init; paths are valid CStrings.
         let raw = unsafe { (self.chat_encrypt_file)(ctrl, from.as_ptr(), to.as_ptr()) };
-        let json = take_c_string(raw)?;
-        let value: serde_json::Value = serde_json::from_str(&json)
-            .map_err(|e| Error::Command(format!("encrypt file JSON: {e}; raw={json}")))?;
-        let ty = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if ty == "error" {
-            let err = value
-                .get("writeError")
-                .and_then(|v| v.as_str())
-                .unwrap_or(json.as_str());
-            return Err(Error::Command(format!("encrypt file: {err}")));
+        let value: serde_json::Value = serde_json::from_str(&take_c_string(raw)?)?;
+        if value.tag() == "error" {
+            let reason = value.str_at("/writeError").unwrap_or("unknown error");
+            return Err(Error::Command(format!("encrypt file: {reason}")));
         }
-        let args = value
-            .get("cryptoArgs")
-            .ok_or_else(|| Error::Command(format!("encrypt file: missing cryptoArgs: {json}")))?;
-        let key = args
-            .get("fileKey")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::Command("encrypt file: missing fileKey".into()))?
-            .to_string();
-        let nonce = args
-            .get("fileNonce")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::Command("encrypt file: missing fileNonce".into()))?
-            .to_string();
-        Ok((key, nonce))
+        let arg = |name: &str| {
+            value
+                .str_at(&format!("/cryptoArgs/{name}"))
+                .map(str::to_string)
+                .ok_or_else(|| Error::Command(format!("encrypt file: missing {name}")))
+        };
+        Ok((arg("fileKey")?, arg("fileNonce")?))
     }
+}
+
+/// A C function exported by the library, as a plain function pointer.
+///
+/// # Safety
+/// `T` must be the function's real signature.
+unsafe fn symbol<T: Copy>(library: &Library, name: &str) -> Result<T> {
+    let symbol: Symbol<T> = library.get(name.as_bytes()).map_err(|_| Error::MissingSymbol(name.into()))?;
+    Ok(*symbol)
 }
 
 fn take_c_string(ptr: *mut c_char) -> Result<String> {
@@ -279,6 +284,7 @@ unsafe fn init_haskell(hs_init: HsInit) {
     hs_init(&mut argc, &mut argv);
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn is_musl_host() -> bool {
     #[cfg(target_os = "linux")]
     {

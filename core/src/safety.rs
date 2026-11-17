@@ -69,10 +69,13 @@ pub fn strip_tracking_params(url: &str) -> String {
 }
 
 /// File types whose default handler may *run* them (Wine `.exe`, Java
-/// `.jar`, `.desktop` launchers, macOS apps, scripts, installers). The name is chosen by
-/// the sender, so these are never opened with a tap — Save as… still works.
+/// `.jar`, `.desktop` launchers, macOS apps, scripts, installers) or make it
+/// contact servers the sender chose (playlists, internet shortcuts, web
+/// pages). The name is chosen by the sender, so these are never opened with
+/// a tap — Save as… still works.
 pub fn is_risky_to_open(path: &std::path::Path) -> bool {
     const RISKY: &[&str] = &[
+        "m3u", "m3u8", "pls", "html", "htm", "xhtml",
         "exe", "msi", "bat", "cmd", "com", "scr", "pif", "cpl", "lnk", "reg", "vbs", "vbe",
         "js", "jse", "wsf", "ps1", "jar", "desktop", "sh", "bash", "zsh", "fish", "csh", "ksh",
         "command", "py", "pyw", "pl", "rb", "php", "lua", "appimage", "run", "bin", "elf", "so",
@@ -84,6 +87,32 @@ pub fn is_risky_to_open(path: &std::path::Path) -> bool {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .is_some_and(|e| RISKY.contains(&e.as_str()))
+}
+
+/// Whether `path` really is an audio / video file, going by its first bytes
+/// — never by its name, which the sender picks. mpv opens text playlists
+/// whatever they are called and fetches the URLs in them, so a playlist
+/// named `voice.m4a` or `clip.mp4` would show its sender your IP address
+/// when played. Checked before a received file is handed to mpv.
+pub fn is_media_container(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 189];
+    let Ok(n) = std::fs::File::open(path).and_then(|mut f| f.read(&mut head)) else {
+        return false;
+    };
+    let head = &head[..n];
+    let at = |offset: usize, magic: &[u8]| head.get(offset..offset + magic.len()) == Some(magic);
+    // MP4 family (m4a, mov, 3gp): a box type right after the 4-byte size.
+    [b"ftyp", b"moov", b"mdat", b"free", b"wide"].iter().any(|kind| at(4, *kind))
+        || at(0, &[0x1A, 0x45, 0xDF, 0xA3]) // Matroska / WebM
+        || at(0, b"RIFF") // WAV, AVI
+        || at(0, b"OggS")
+        || at(0, b"fLaC")
+        || at(0, b"ID3") // MP3 with a tag
+        || at(0, &[0x00, 0x00, 0x01, 0xBA]) // MPEG program stream
+        || at(0, &[0x00, 0x00, 0x01, 0xB3])
+        || (head.len() >= 2 && head[0] == 0xFF && head[1] & 0xE0 == 0xE0) // MP3 / AAC frames
+        || (at(0, &[0x47]) && at(188, &[0x47])) // MPEG transport stream
 }
 
 /// Every web link in a message with its tracking parameters removed (see
@@ -198,7 +227,31 @@ mod tests {
     }
 
     #[test]
+    fn only_real_media_files_are_played() {
+        let dir = std::env::temp_dir().join(format!("cursus-magic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, bytes: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        assert!(is_media_container(&file("a.m4a", b"\0\0\0\x20ftypM4A \0\0\0\0")));
+        assert!(is_media_container(&file("a.ogg", b"OggS\0\x02")));
+        assert!(is_media_container(&file("a.wav", b"RIFF\x24\0\0\0WAVE")));
+        assert!(is_media_container(&file("a.webm", &[0x1A, 0x45, 0xDF, 0xA3, 0x9F])));
+        assert!(is_media_container(&file("a.mp3", &[0xFF, 0xFB, 0x90, 0x00])));
+        // A playlist named like a voice message: it would make the player go online.
+        assert!(!is_media_container(&file("voice.m4a", b"#EXTM3U\nhttp://evil.example/track.ts\n")));
+        assert!(!is_media_container(&file("clip.mp4", b"ffconcat version 1.0\nfile /etc/passwd\n")));
+        assert!(!is_media_container(&file("empty.mp4", b"")));
+        assert!(!is_media_container(&dir.join("missing.mp4")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn executable_attachments_are_not_opened() {
+        assert!(super::is_risky_to_open(std::path::Path::new("/x/radio.m3u8")));
+        assert!(super::is_risky_to_open(std::path::Path::new("/x/Invoice.HTML")));
         use std::path::Path;
         assert!(super::is_risky_to_open(Path::new("/x/holiday.jpg.EXE")));
         assert!(super::is_risky_to_open(Path::new("/x/run.desktop")));

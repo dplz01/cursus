@@ -1,0 +1,7 @@
+module CCursusBridge [system] {
+    header "cursus_bridge.h"
+    link "cursus_bridge"
+    // Rust std on macOS (rustc --print native-static-libs).
+    link "iconv"
+    export *
+}

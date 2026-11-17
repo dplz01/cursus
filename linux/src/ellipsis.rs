@@ -250,7 +250,8 @@ impl Widget<Message, Theme, iced::Renderer> for Ellipsis {
             self.inner = make_text(fitted, self.size, self.color, self.wrapping, self.bold);
             self.fitted_for = Some(max_w);
         }
-        <iced::widget::Text<'static, Theme, iced::Renderer> as Widget<Message, Theme, iced::Renderer>>::layout(
+        <iced::widget::Text<'static, Theme, iced::Renderer> as Widget<Message, Theme, iced::Renderer,
+        >>::layout(
             &mut self.inner,
             &mut tree.children[0],
             renderer,
@@ -268,7 +269,8 @@ impl Widget<Message, Theme, iced::Renderer> for Ellipsis {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        <iced::widget::Text<'static, Theme, iced::Renderer> as Widget<Message, Theme, iced::Renderer>>::draw(
+        <iced::widget::Text<'static, Theme, iced::Renderer> as Widget<Message, Theme, iced::Renderer,
+        >>::draw(
             &self.inner,
             &tree.children[0],
             renderer,
@@ -296,10 +298,11 @@ impl Widget<Message, Theme, iced::Renderer> for Ellipsis {
     fn operate(
         &mut self,
         _tree: &mut Tree,
-        _layout: Layout<'_>,
+        layout: Layout<'_>,
         _renderer: &iced::Renderer,
-        _operation: &mut dyn widget::Operation,
+        operation: &mut dyn widget::Operation,
     ) {
+        operation.text(None, layout.bounds(), &self.full);
     }
 }
 

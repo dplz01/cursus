@@ -1,0 +1,164 @@
+//! End-to-end through the C ABI against the real libsimplex of this machine
+//! (third_party/libsimplex). Uses a temporary data dir, never the user's.
+//!
+//!   cargo test -p cursus-bridge --test abi -- --ignored --nocapture
+//!
+//! With CURSUS_ABI_DUMP=<file> it writes every reply, for checking the JSON
+//! shapes against macos/Cursus/Sources/Cursus/Models.swift.
+
+use std::ffi::{CStr, CString};
+
+use cursus_bridge::{cursus_call, cursus_free, cursus_init, cursus_next_event};
+use serde_json::{json, Value};
+
+fn call(method: &str, params: Value, dump: &mut Vec<Value>) -> Value {
+    let req = CString::new(json!({ "method": method, "params": params }).to_string()).unwrap();
+    let raw = unsafe { cursus_call(req.as_ptr()) };
+    assert!(!raw.is_null());
+    let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_string();
+    unsafe { cursus_free(raw) };
+    let reply: Value = serde_json::from_str(&text).unwrap();
+    dump.push(json!({ "method": method, "reply": reply }));
+    if let Some(err) = reply.get("error") {
+        panic!("{method}: {err}");
+    }
+    reply["ok"].clone()
+}
+
+#[test]
+#[ignore]
+fn abi_round_trip() {
+    let home = std::env::temp_dir().join(format!("cursus-abi-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    // Before any thread: data_dir() follows XDG_DATA_HOME on Linux.
+    std::env::set_var("XDG_DATA_HOME", &home);
+    cursus_init();
+    let mut dump = Vec::new();
+
+    let info = call("appInfo", json!({}), &mut dump);
+    assert_eq!(info["setupComplete"], false);
+    assert!(info["dataDir"].as_str().unwrap().starts_with(home.to_str().unwrap()));
+
+    let st = call("selfTest", json!({}), &mut dump);
+    assert_eq!(st["user"], "Self test");
+
+    let user = call("open", json!({
+        "password": "abi-test-password", "displayName": "Abi", "encryptLocalFiles": true, "saveAccount": true,
+    }), &mut dump);
+    assert_eq!(user["displayName"], "Abi");
+    assert_eq!(call("appInfo", json!({}), &mut dump)["setupComplete"], true);
+
+    let chats = call("listChats", json!({}), &mut dump);
+    let notes = chats.as_array().unwrap().iter().find(|c| c["type"] == "local").cloned();
+    if let Some(notes) = notes {
+        let r = notes["ref"].as_str().unwrap().to_string();
+        call("sendText", json!({ "chat": r, "text": "hello *bold* https://example.com" }), &mut dump);
+        let msgs = call("listMessages", json!({ "chat": r, "count": 20 }), &mut dump);
+        let last = msgs.as_array().unwrap().last().unwrap().clone();
+        assert_eq!(last["outgoing"], true);
+        assert!(last["segments"].as_array().unwrap().iter().any(|s| s["style"] == "bold"));
+        // (Reactions are not supported in notes — core rule.)
+        let info = call("messageInfo", json!({ "chat": r, "itemId": last["id"] }), &mut dump);
+        assert!(info["text"].as_str().unwrap().starts_with("hello"));
+        assert!(info["time"].is_string());
+        call("forward", json!({ "chat": r, "to": r, "itemIds": [last["id"]] }), &mut dump);
+        // Tracking codes never leave this device ("Remove tracking from links").
+        call("sendText", json!({ "chat": r, "text": "see https://shop.example/p?id=7&utm_source=x&fbclid=y" }), &mut dump);
+        let msgs = call("listMessages", json!({ "chat": r, "count": 20 }), &mut dump);
+        let sent = msgs.as_array().unwrap().last().unwrap()["text"].as_str().unwrap().to_string();
+        assert_eq!(sent, "see https://shop.example/p?id=7");
+                call("updateText", json!({ "chat": r, "itemId": last["id"], "text": "edited" }), &mut dump);
+        call("listMessages", json!({ "chat": r, "count": 20 }), &mut dump);
+        call("deleteItems", json!({ "chat": r, "itemIds": [last["id"]], "forEveryone": false }), &mut dump);
+    } else {
+        println!("no notes chat in this core version; skipped message round trip");
+    }
+    let updated = call("updateProfile", json!({ "displayName": "Abi2", "shortDescr": "bio" }), &mut dump);
+    assert_eq!(updated["displayName"], "Abi2");
+    call("setDeliveryReceipts", json!({ "groups": false, "on": false }), &mut dump);
+    // Group info panel: create → alias → members (just me) → listChats shape.
+    let group = call("createGroup", json!({ "name": "Abi group" }), &mut dump);
+    let group_ref = group.as_str().unwrap().to_string();
+    let group_id: i64 = group_ref.trim_start_matches('#').parse().unwrap();
+    call("setAlias", json!({ "chat": group_ref, "alias": "Mine" }), &mut dump);
+    let members = call("listMembers", json!({ "groupId": group_id }), &mut dump);
+    let me = members.as_array().unwrap().iter().find(|m| m["isMe"] == true).cloned().expect("own member row");
+    assert_eq!(me["role"], "owner");
+    let chats = call("listChats", json!({}), &mut dump);
+    let g = chats.as_array().unwrap().iter().find(|c| c["ref"] == group_ref.as_str()).cloned().unwrap();
+    assert_eq!(g["alias"], "Mine");
+    assert_eq!(g["title"], "Mine");
+    assert_eq!(g["name"], "Abi group");
+    // Chat settings: each field changes alone, the others are kept.
+    let find = |dump: &mut Vec<Value>| {
+        let chats = call("listChats", json!({}), dump);
+        chats.as_array().unwrap().iter().find(|c| c["ref"] == group_ref.as_str()).cloned().unwrap()
+    };
+    call("setChatSettings", json!({ "chat": group_ref, "favorite": true }), &mut dump);
+    call("setChatSettings", json!({ "chat": group_ref, "notifications": "mentions" }), &mut dump);
+    call("setChatSettings", json!({ "chat": group_ref, "sendReceipts": false }), &mut dump);
+    let g = find(&mut dump);
+    assert_eq!(g["favorite"], true);
+    assert_eq!(g["notifications"], "mentions");
+    assert_eq!(g["sendReceipts"], false);
+    call("setChatSettings", json!({ "chat": group_ref, "sendReceipts": null }), &mut dump);
+    assert_eq!(find(&mut dump)["sendReceipts"], Value::Null, "back to the default");
+    call("setChatTtl", json!({ "chat": group_ref, "seconds": 86400 }), &mut dump);
+    assert_eq!(find(&mut dump)["chatItemTtl"], 86400);
+    call("setChatTtl", json!({ "chat": group_ref, "seconds": null }), &mut dump);
+    // Group profile and features (owner).
+    call("updateGroupProfile", json!({ "groupId": group_id, "shortDescr": "bio", "welcome": "Hi!" }), &mut dump);
+    call("setGroupPref", json!({ "groupId": group_id, "key": "reactions", "on": true }), &mut dump);
+    call("setGroupPref", json!({ "groupId": group_id, "key": "timedMessages", "on": true, "ttl": 3600 }), &mut dump);
+    call("setMemberReview", json!({ "groupId": group_id, "on": true }), &mut dump);
+    let g = find(&mut dump);
+    assert_eq!(g["shortDescr"], "bio");
+    assert_eq!(g["description"], "Hi!");
+    assert_eq!(g["name"], "Abi group", "name kept");
+    assert_eq!(g["groupPrefs"]["features"]["reactions"]["on"], true);
+    assert_eq!(g["groupPrefs"]["features"]["timedMessages"]["on"], true);
+    assert_eq!(g["groupPrefs"]["timedTtl"], 3600);
+    assert_eq!(g["memberReview"], true);
+    // Lists.
+    let tags = call("createChatTag", json!({ "text": "Work" }), &mut dump);
+    let tag_id = tags.as_array().unwrap().iter().find(|t| t["text"] == "Work").unwrap()["id"].as_i64().unwrap();
+    call("setChatTags", json!({ "chat": group_ref, "tagIds": [tag_id] }), &mut dump);
+    assert_eq!(find(&mut dump)["tagIds"], json!([tag_id]));
+    call("leaveGroup", json!({ "groupId": group_id }), &mut dump);
+    // Needs the network (SMP server).
+    match std::env::var("CURSUS_ABI_OFFLINE") {
+        Ok(_) => {}
+        Err(_) => {
+            let link = call("createInvitation", json!({}), &mut dump);
+            assert!(link["full"].as_str().unwrap().contains("simplex"));
+        }
+    }
+    let ev = cursus_next_event(200);
+    if !ev.is_null() {
+        let text = unsafe { CStr::from_ptr(ev) }.to_str().unwrap().to_string();
+        unsafe { cursus_free(ev) };
+        dump.push(json!({ "method": "event", "reply": { "ok": serde_json::from_str::<Value>(&text).unwrap() } }));
+    }
+    // Errors come back as {"error": …}, never a crash.
+    let bad = CString::new(r#"{"method":"listMessages","params":{"chat":"nope"}}"#).unwrap();
+    let raw = unsafe { cursus_call(bad.as_ptr()) };
+    let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_string();
+    unsafe { cursus_free(raw) };
+    assert!(text.contains("bad chat reference"), "{text}");
+
+    call("setDownloadPolicy", json!({ "autoDownload": false, "protectIp": true }), &mut dump);
+    call("close", json!({}), &mut dump);
+    // The database is closed when `close` returns: unlocking again at once
+    // works, and keeps the name the user gave their profile since (the
+    // welcome name is only for a new database).
+    let again = call("open", json!({ "password": "abi-test-password", "displayName": "Abi" }), &mut dump);
+    assert_eq!(again["displayName"], "Abi2");
+    assert!(call("verifyPassword", json!({ "password": "abi-test-password" }), &mut dump).as_bool().unwrap());
+    assert!(!call("verifyPassword", json!({ "password": "wrong" }), &mut dump).as_bool().unwrap());
+    call("close", json!({}), &mut dump);
+    if let Ok(path) = std::env::var("CURSUS_ABI_DUMP") {
+        std::fs::write(path, serde_json::to_string_pretty(&dump).unwrap()).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&home);
+}

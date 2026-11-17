@@ -6,7 +6,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 |---|---|---|---|---|
 | `chats.svg` | [svgrepo/50042](https://www.svgrepo.com/svg/50042/chat-messages) | SVG Vector collection (via SVG Repo) | SVG Repo default open license (commercial app use allowed; do not resell as an icon pack). Attribution appreciated. | Yes |
 | `channels.svg` | [svgrepo/438285](https://www.svgrepo.com/svg/438285/antenna) | CFPB Design System Icons | **Public Domain (PD)** | Yes |
-| `calls.svg` | [svgrepo/524804](https://www.svgrepo.com/svg/524804/phone-rounded) | Solar Linear Icons / Solar Icons (480 Design) | **CC BY 4.0** — attribution required | Yes (with credit) |
+| `calls.svg`, `call_*.svg` | [Solar handset](https://www.svgrepo.com/svg/524804/phone-rounded), [supplied Jtb reference family](https://www.svgrepo.com/svg/472750/phone) | Solar / 480 Design handset; Cursus status marks | **CC BY 4.0** handset; MIT supplied reference family | Yes (with credit) |
 | `settings.svg` | [svgrepo/524954](https://www.svgrepo.com/svg/524954/settings) | Solar Linear Icons / Solar Icons (480 Design) | **CC BY 4.0** — attribution required | Yes (with credit) |
 | `send.svg` | [svgrepo/533306](https://www.svgrepo.com/svg/533306/send) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |
 | `star.svg`, `star-filled.svg` | [Line MD](https://github.com/cyberalien/line-md) `star` / `star-filled` | Line MD / Vjacheslav Trushkin | **MIT License** — notice in `licenses/MIT-Line-MD.txt` | Yes (with notice) |
@@ -39,7 +39,8 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `link-minimalistic-2.svg` | [svgrepo/529672](https://www.svgrepo.com/svg/529672/link-minimalistic-2) | Solar Broken Line Icons / Solar Icons | **CC Attribution** — attribution required | Yes (with credit) |
 | `history.svg` | [svgrepo/524639](https://www.svgrepo.com/svg/524639/history) | Solar Linear Icons / Solar Icons | **CC Attribution** — attribution required | Yes (with credit) |
 | `review-file.svg` | [svgrepo/521218](https://www.svgrepo.com/svg/521218/review-file) | Iconship Interface Icons / Giovana | **CC Attribution** — attribution required | Yes (with credit) |
-| `lock.svg` | [svgrepo/509149](https://www.svgrepo.com/svg/509149/lock) | Orchid Line Interface Icons / Orchid | **MIT License** | Yes |
+| `lock.svg` | drawn for Cursus (2026-11-17), replacing the Orchid glyph | Cursus | **AGPL-3.0-or-later** (as the app) | Yes |
+| `files.svg` | folder shape after an [SVG Repo](https://www.svgrepo.com) glyph supplied by the maintainer (`files-svgrepo-com.svg`, original licence not recorded), redrawn as strokes | Cursus | redrawn path: **AGPL-3.0-or-later**; confirm the original's licence | See note |
 | `admin.svg` | [svgrepo/501805](https://www.svgrepo.com/svg/501805/admin) | Instructure UI Line Interface Icons / instructure-ui | **MIT License** | Yes |
 | `edit-3.svg` | [svgrepo/522527](https://www.svgrepo.com/svg/522527/edit-3) | Generica Tiny Interface Icons / Vlad Cristea | **CC Attribution** | Yes (with credit) |
 | `reply.svg` | [svgrepo/523002](https://www.svgrepo.com/svg/523002/reply) | Solar Outline Icons / Solar Icons | **CC Attribution** | Yes (with credit) |
@@ -134,3 +135,9 @@ strokes); the artwork itself is the original's. These are modifications of the
 works credited above, under the same licences. `preferences.svg` is no longer
 shipped: preferences use `settings.svg`.
 
+
+Call history family: supplied Jtb phone, incoming, outgoing, missed, rejected and active-call SVGs. Shared 24px sizing; tint is supplied by the app. Android VectorDrawables are generated from these same assets.
+
+Call family revision: Solar Linear / 480 Design handset from the existing phone-rounded asset (https://www.svgrepo.com/svg/524804/phone-rounded), CC BY 4.0; status marks adapted to the roles of the supplied Jtb family. All now use a 24×24 viewBox and approximately 2px rounded monoline strokes.
+
+Call status revision: missed-call returning arrow redrawn for Cursus above the same Solar handset used by the other call symbols, rotated to face down in the same 24px rounded monoline style; declined calls use the cross-marked Solar handset.

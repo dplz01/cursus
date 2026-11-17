@@ -6,8 +6,6 @@
 
 Each platform implements these tokens and structures in its **native** UI toolkit. Native conventions win when they conflict with pixel-perfect matching. Do not ship a web shell inside four OS wrappers.
 
-Older lowercase `design-system.md` redirects here; prefer this file.
-
 ## Product identity
 
 | | |
@@ -25,18 +23,29 @@ Keep the **information architecture identical** on every platform:
 3. **Calls**
 4. **Settings**
 
-The same four destinations, the same primary content models (conversation list → conversation, etc.), and the same responsive *modes* (mobile / compact / desktop).
+The same four destinations, the same primary content models (conversation list → conversation, etc.), and the same two responsive *layouts* (phone / desktop).
 
 Let each platform render **its own native navigation**:
 
-| Platform | Desktop / wide | Compact / mobile |
+| Platform | Desktop / wide | Phone |
 |---|---|---|
 | Linux (Iced) | Vertical nav rail | Bottom destination bar |
 | macOS (SwiftUI) | `NavigationSplitView` / sidebar | Tab bar / stack |
 | Android (Compose) | `NavigationRail` | `NavigationBar` |
 | iOS (SwiftUI) | Sidebar / split | `TabView` + navigation stack |
 
+Android uses one pane below 600dp of available app-window width, and two panes above it. The two-pane shell always keeps its destination dock below the list, with every settings category and chat detail in the right pane; it never adds a rail. Split decisions use actual window constraints, including floating and split-screen windows.
+
 That keeps Cursus recognizable without making it feel like one web app pasted onto four OSes. Shared Rust (`cursus-core` + `libsimplex`) owns session, commands, and models — not pixels.
+
+## Navigation and back
+
+- Show the name under each destination icon in the rail and bottom bar. Keep all four destinations equally easy to find.
+- Header Back, Escape and Android system Back go up one visible layer: sheet → nested page → profile → conversation → list. A root list or locked screen has no parent.
+- Switching destinations dismisses the previous destination's pages and sheets. Chat profiles, group preferences and compose pages render only inside Chats or Channels. Settings and Calls own their detail panes.
+- Leaving a profile commits its existing drafts, just as its header Back does. Escape inside a text editor dismisses that unsaved edit first.
+- Desktop Settings has an explicit Back control. Closing a category leaves the category list and a quiet prompt in the detail pane.
+- Empty detail panes use a centred icon, heading and short sentence, with at most one primary action. Chats and Channels offer a new conversation; Calls points to contacts; Settings points to categories.
 
 ## Color
 
@@ -44,21 +53,24 @@ Exact values live in `linux/src/theme.rs` (`Tokens::light()` / `Tokens::dark()`)
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
-| `bg.app` | `#F4F5F7` | `#12141A` | Window / root background |
-| `bg.sidebar` | `#EBEDF0` | `#181B22` | Nav rail / bottom bar, **text-field fill**, secondary-button fill |
-| `bg.list` | `#FFFFFF` | `#1C2028` | Middle column / lists |
-| `bg.panel` | `#FFFFFF` | `#1C2028` | Conversation pane, settings pages |
-| `bg.elevated` | `#FFFFFF` | `#262B36` | Menus, popups, incoming bubbles |
-| `bg.hover` | `#E2E5EA` | `#262B36` | Hover fill for every quiet control |
+| `bg.app` | `#EEF0F4` | `#0E1015` | Window / root background |
+| `bg.sidebar` | `#FFFFFF` | `#15181E` | Nav rail and sidebar |
+| `bg.list` | `#FFFFFF` | `#15181E` | Middle column / lists |
+| `bg.panel` | `#EEF0F4` | `#0E1015` | Conversation pane, settings pages |
+| `bg.elevated` | `#FFFFFF` | `#1C2028` | Menus, popups, incoming bubbles |
+| `bg.hover` | `#EDEFF3` | `#20242D` | Hover fill for every quiet control |
+| `bg.field` | `#F2F4F7` | `#111318` | Text fields and quiet buttons |
+| `bubble.in` / `bubble.out` | `#FFFFFF` / `#D8E5FF` | `#1C2028` / `#243A63` | Incoming / outgoing messages |
+| `bubble.out.meta` | `#5A6C8F` | `#A7B6D6` | Time and secondary text on outgoing messages |
 | `text.primary` | `#12141A` | `#F2F3F5` | Body / titles |
 | `text.secondary` | `#5C6370` | `#A0A6B3` | Previews, idle icons, placeholders in rounded fields |
 | `text.muted` | `#8B919C` | `#6E7585` | Section labels, hints, disabled labels |
 | `accent` | `#2F6FED` | `#5B8CFF` | Primary actions, selection, links |
 | `accent.hover` / `accent.press` | `#255DD1` / `#1C4CB8` | `#6B99FF` / `#4D7AEB` | Primary button states |
 | `accent.on` | `#FFFFFF` | `#0B1020` | Text / icons on accent |
-| `accent.soft` | accent @ 16% | accent @ 18% | Selected rows, outgoing bubbles, unread badge, link box |
-| `accent.soft.press` | accent @ 36% | accent @ 40% | Pressed soft surfaces |
-| `border` | `#D7DBE2` | `#2E3440` | Hairlines (1px) |
+| `accent.soft` | accent @ 12% | accent @ 16% | Selected rows, unread badge, link box |
+| `accent.soft.press` | accent @ 30% | accent @ 36% | Pressed soft surfaces |
+| `border` | `#DDE1E7` | `#252A33` | Hairlines (1px) |
 | `danger` | `#C62828` | `#FF6B6B` | Destructive labels / icons |
 | `success` | `#2E7D32` | `#6BCB77` | Sent / connected / accept |
 | `gold` (`always`) | `#B58B0F` | `#ECD04F` | Pending / invited status, asymmetric “always” prefs, support badge |
@@ -73,12 +85,13 @@ Rules:
 
 ## Typography
 
-| Role | Desktop | Compact | Mobile | Weight |
-|---|---|---|---|---|
-| App / page title | 18px | 16px | 17px | 600 |
-| Section label | = meta | = meta | = meta | 400, `text.muted` |
-| Chat name / body / message | 14px | 14px | 16px | 400 |
-| Preview / meta / buttons | 12px | 12px | 13px | 400 |
+| Role | Desktop | Phone | Weight |
+|---|---|---|---|
+| App / page title | 18px | 17px | 600 |
+| Profile name | title + 4 | title + 4 | 600 |
+| Section label | = meta | = meta | 600, `accent` |
+| Chat name / body / message | 14px | 16px | 400 |
+| Preview / meta / buttons | 12px | 13px | 400 |
 
 - Font: **Noto Sans** (Regular / Bold / Italic) for all chrome, with **Noto Color Emoji** as fallback (advanced shaping) so emoji never render as monochrome dingbats. Apple: SF Pro; Android: Roboto — but keep the sizes above.
 - A user text-size preference scales title/body/meta together; meta never drops below 10px.
@@ -139,35 +152,55 @@ All editable fields (except passwords) **and the chat composer** offer the **edi
 
 ### Profile header (one component everywhere)
 
-Contact, Group, Channel and Settings → My profile use the same header (Linux: `profile_identity`):
+Contact, group, channel and own-profile pages open with the same centred header (Linux `profile_identity`, Android `ProfileIdentity`):
 
-- 72px avatar on the left; when the picture is editable, the **set photo / remove photo** buttons sit centred *under* the avatar.
-- On the right, stacked name lines: editable names (own name, group name, local name/alias) are rounded fields (radius 12, 6×12 padding, body size); a read-only name is title-size text inset 13px so it lines up with the text inside the fields.
+- Picture, 96, centred; tapping it changes it where that is allowed.
+- Name: title size + 4, bold, centred. Editable lines carry a small pencil right after the text.
+- Under it, centred, `text.secondary`: local name, then the bio / short description.
+- **Quick actions** (Linux `quick_actions`, Android `QuickActions`): a centred row of complete rounded buttons (`bg.elevated`, 1px border, radius 16). Each contains a 24px glyph and its meta label, with 12px vertical padding and an 8px gap between buttons — Call, Star, Mute, Settings. The entire button, including its label and padding, illuminates the glyph on hover. The glyph also turns accent when the state is on. These replace icons in the title bar; the title bar only has Back and the page name.
+- Longer texts (About, Welcome message) follow as a section: label + paragraph at the row inset.
 
-### Preference rows (one component everywhere)
+### Preference panels
 
-App Settings, chat (contact) preferences, group and channel preferences use the same row (Linux: `pref_row`):
+Settings categories and contact / group / channel preferences use the same mobile-first inset panels (Android `PreferenceGroup` / `PreferenceRow`, Linux `preference_ui::group` / `preference_row_content`, macOS `PreferenceGroup` / `PrefRow`).
 
-`[24px icon box] label (body, fills) ……… control [18px peer-glyph column]`
+- Page width: at most 620, centred, with 16px side insets. Groups are 20px apart.
+- Group: `bg.elevated`, 20px corners, quiet `border` at 50% opacity, no shadow. A small secondary heading sits outside the panel, 16px inset and 9px above it. Optional scope / ownership notes sit below it at the same inset.
+- Rows: 16px horizontal insets (12px below 360px), with a title/control line and full-width supporting text underneath. Help is attached to the supporting text instead of taking space from the title. Below 360px, decorative icons are omitted; text gets the available width while switches keep their size. Text wraps naturally; it is never squeezed into a tall column beside several controls.
+- Optional leading glyph: 18px in a 32px `accent.soft` square with 10px corners. App privacy rows omit it; group feature rows include it.
+- Switch: 46×28, 20px white thumb, 4px inset. On: `accent`; off: `text.secondary` at 24%. Disabled controls fade to 45%. Android and macOS animate state changes briefly. The entire switch row toggles once; its help button remains a separate action.
+- Longer explanations and existing confirmations remain available. Inline text answers the everyday question; it does not replace privacy warnings.
+- Group / channel sections: **Messages**, **Media & interaction**, **Members**, then **Just for you** where applicable. Owners see a note that changes affect everyone; other members see an ownership note and disabled controls. Review new members belongs to groups; channels do not offer it.
 
-- Padding 6×8, 10px gaps; controls are a toggler (size 18) or a secondary choice chip (`value ▾`).
-- The icon box is omitted on pages without icons (app Settings); a page that shows the peer-allow glyph reserves its column on every row so controls stay aligned.
-- Section label (`pref_section`): meta, `text.muted`, 14px above (none for the first), 4px below; optional note (`pref_note`) in `text.secondary`.
+### Pages: flat sections, one row (the Cursus look)
 
-### Cards and pages (the Cursus look)
+Profile overviews, the Settings category list, Invite and New keep the same flat rows as the chat list. Preference pages use the inset panels above, giving related controls a shared surface. (Until 2026-11 these pages were stacks of cards; the component names `card` / `CursusCard` / `Card` remain in code and now mean "section".)
 
-Every non-chat page — Settings, contact / group / channel pages, preferences, Invite, New — is a column of **cards** (Linux: `card`, `card_title`, `nav_row`, `page_scroll`):
-
-- Card: `bg.elevated`, 1px `border`, radius 12, 10px padding; 14px between cards (`PAGE_GAP`).
-- Card title: 36px `accent.soft` icon disc with an accent glyph, title (body) and one-line explanation (meta, `text.secondary`).
-- Navigation row (opens another page): 32px icon disc · title / subtitle · right chevron (or a `+` for create actions); ghost tile, so the shape only shows on hover.
-- Page content is a centred column capped at **760px** so rows never stretch across a wide window.
-- Chat actions (clear / leave / delete) sit in their own card at the bottom of the page.
+- **Page column**: at most 620 wide, centred; 16 side padding; 22 between sections.
+- **Section label**: meta size, bold, `accent`, inset 12, 4 above its rows. No icon.
+- **Row** — navigation and actions on flat pages:
+  - inset 12 left and right, 10 above and below; radius 12 hover / press tint (`ghost tile`);
+  - leading glyph 20 in a 24 box, **no disc behind it**; 14 gap to the label;
+  - label in body size; optional one-line meta subtitle;
+  - trailing: chevron, switch, value chip or count.
+- **Switch**: use the shared 46×28 preference switch described above. Tapping the setting's name toggles it too; ⓘ stays its own button.
+- **Destructive actions** (clear / leave / delete) are ordinary rows in red at the bottom of the page, never tiles.
+- Everything on a page starts at the same inset: labels, rows, paragraphs, link boxes.
 
 ### Settings layout
 
-- Desktop: the list column shows a profile summary (avatar, name, bio) and the four categories (Profile, Address, Appearance, Desktop) as rows with icon discs; the selected one is `accent.soft`. The selected category opens as a card in the main pane.
-- Mobile / compact: one scrolling page with all four cards.
+Settings are a list of categories, each opening its own page (as on Android): beside the list when there are two columns, over it (with Back) when there is one. The list's header is your profile (picture, name, bio) and opens the profile page. Each row is an icon and a title — no subtitle.
+
+| Page | Contains |
+|---|---|
+| Profile | picture, name, bio, description |
+| Your address | create / show / hide, share on profile, auto-accept, delete |
+| Privacy | on screen (previews, blur, screenshots on Android) · what contacts see (delivery receipts) · links (remove tracking) |
+| Security | app lock, lock after, lock now · unlocking at start |
+| Files and network | downloads (automatic download, protect IP) · on this device (encrypt stored files) |
+| Notifications | alerts, hide message text · background (tray on Linux, background service on Android) |
+| Appearance | theme, text size · typing (Linux) |
+| About | version, source code, licences |
 
 ### Panes
 
@@ -188,21 +221,23 @@ Desktop panes are separated by a single 1px `border` hairline between the list a
 
 Destinations: Chats (bubble), Channels (antenna), Calls (handset), Settings (gear).
 
-## Layout breakpoints (logical pixels)
+## Layout (logical pixels)
 
-Breakpoints are defined in **logical / density-independent pixels** (DIP), never framebuffer / physical pixels.
+Sizes are **logical / density-independent pixels**, never framebuffer pixels.
 
-On a 2× Retina or HiDPI Linux display, a window that is 600×800 *logical* is still **mobile**, even if the GPU buffer is 1200×1600. Scale factor is diagnostic only; layout math must not multiply by it.
+The window's width alone decides how many columns fit — the Telegram Desktop model (Linux `layout.rs`):
 
-Centralize thresholds per platform UI module (Linux: `linux/src/layout.rs`). Keep the numbers aligned across platforms:
+| Width | Columns |
+|---|---|
+| under 600 | **one**: the list, or the open chat / page over it; destinations in a floating bar at the bottom |
+| from 600 | **two**: list + chat; the destinations bar sits under the list |
+| from 900 | the destinations move to a **rail** on the left |
+| chat would keep ≥ 380 next to a 340 info column (about 1130 with the rail) | **three**: list + chat + info — an open contact / group page sits beside its chat instead of replacing it |
 
-| Name | Logical width | Layout |
-|---|---|---|
-| `mobile` | `< 650` | Full-screen destinations, platform bottom/tab nav, conversation is a push |
-| `compact` | `650`–`950` | Bottom/tab nav + list; conversation replaces list with back |
-| `desktop` | `> 950` | Persistent nav + list + conversation |
-
-Width is primary; aspect ratio may nudge tall windows toward mobile. Resize, rotation, and safe-area changes must switch layouts **live** without restart, preserving section, selection, and session.
+- The list is 27% of the width, between 260 and 340.
+- One column uses touch sizes (body 16, bar 54); two and three columns use desktop sizes (body 14).
+- Pages (profile, settings) are at most 620 wide, centred; a wide one-column list at most 720.
+- Everything must still work at 280 wide: rows wrap their labels, the four quick actions share the width equally.
 
 ### Desktop structure
 
@@ -210,7 +245,7 @@ Width is primary; aspect ratio may nudge tall windows toward mobile. Resize, rot
 2. **List** — conversations / channels / calls / settings groups (~280–320 logical px)
 3. **Main** — selected conversation or empty state
 
-### Compact / mobile structure
+### Phone structure
 
 - Platform bottom / tab navigation for the four sections
 - List fills remaining area
@@ -250,3 +285,44 @@ Light and dark from day one on desktop. Follow OS preference by default; Setting
 5. Would the screen still feel like Cursus if the OS chrome were swapped?
 6. Is every button one of the kinds in the button table (and only one primary)?
 7. Do editable fields offer Select all / Cut / Copy / Paste?
+
+### Navigation clicks
+
+Back and other page-changing header controls complete an owned press-and-release before navigating. A release arriving after a view changes must never activate the newly exposed conversation header. Composer controls may still act on press to keep the on-screen keyboard usable.
+
+### Touch menus and modal state
+
+- A stationary long press opens the same menu as desktop right-click: on a message, the bubble menu; on a conversation preview, the chat menu. The touched widget owns the timer; no prior hover event is required. Swipes, cancelled touches and the lift after a hold do not activate the underlying content.
+- Opening a modal keeps the background widget tree and scroll position intact. Background mouse, touch and keyboard input is suspended until dismissal; an opening member menu cancels any inertial fling.
+- Layout reference: [Signal Android shared rows](https://github.com/signalapp/Signal-Android/blob/main/core/ui/src/main/java/org/signal/core/ui/compose/Rows.kt) uses a weighted text column and a dedicated switch; [Signal Desktop preferences](https://github.com/signalapp/Signal-Desktop/blob/main/stylesheets/components/Preferences.scss) reflows narrow rows at a container breakpoint. Cursus uses full-width supporting text and removes decorative icons when narrow.
+
+- Android header Back uses the AndroidX back dispatcher, shared with system Back and keyboard Escape; all chat/profile headers keep the same 56dp height and leading inset.
+- Linux supports both native touch holds and mouse-emulated holds. Icon hits glow across the full target without hover boxes; the bottom dock keeps its existing hover style. Hover fills inside grouped cards stay inset from their borders, with visible contrast in both themes.
+- Pasting an image into the composer creates a removable draft preview; Send submits it. Text remains available as a separate draft. Linux supports Ctrl+V, Shift+Insert and the edit menu; Android uses the native rich-content receiver for clipboard and keyboard images.
+- Tapping a downloaded image opens an in-app viewer on Android and Linux: Back/Escape closes it, pinch or wheel zooms, and swiping changes images while at normal zoom. Zoomed images pan within the viewer.
+
+- Chat settings use compact grouped surfaces: Notifications for receipts, Chat permissions for negotiated features. Rows without supporting text use 8px vertical padding; longer descriptions retain a full-width support line.
+- The Invite page separates “Share an invite” from “Invite contacts”. The link is a neutral two-line preview with one full-width Copy action, secondary format/role controls and a quiet destructive Revoke action. The contact picker has search and complete 56px rows.
+- The call list uses the same Jtb phone family on both platforms: green incoming, blue outgoing, red missed/declined/failed. Android's history is read-only; activating a record opens its chat.
+- Linux scrollables translate finger coordinates at their content boundary, including end-anchored history. Any viewport travel cancels a pending hold. Live dragging stays native; inertia is widget-local and uses elapsed-time exponential deceleration, with no app rebuild on each animation frame.
+- Linux media uses Iced's native image viewer for zoom/pan. Wheel zoom anchors at the cursor; pinch zoom and translation follow the finger midpoint. Swiping changes photos only at fit scale, and neither arrows nor swipes wrap at the first/last photo. Names are ellipsized in the header without changing file paths.
+
+- Touch input suppresses all Linux hover styling from press through lift. Cursor positions remain available for hit testing; only genuine mouse movement restores hover. Styles read the live input mode so views built before the touch cannot retain a glow.
+- Dark grouped surfaces share a brighter elevated token and a visible solid border on Android and Linux. Compact receipt rows have one 48dp minimum hit target and no duplicate copy beneath their group.
+- Gallery titles use message attachment names, never decrypted cache basenames. Gallery decode runs in workers at Android's 2048px preview limit, with at most two workers and three neighbouring images resident. The covered chat page retains its widget tree but skips construction, layout and rendering until Back restores it.
+- Call symbols use the existing Solar handset and matching rounded monoline status marks in a 24×24 viewBox. Status marks scale with the secondary text; names are the primary line and dates are quieter.
+- Sliding gallery animation is postponed: Iced 0.14 exposes the native zoom/pan viewer, but no native paged-gallery transition. A custom pager/physics layer would need separate work. API checked: https://docs.rs/iced/0.14.0/iced/widget/index.html .
+
+- Cancelled touch drags clear both the gesture wrapper and its pressed child control before consuming the lift. A subsequent tap must work without navigating or rebuilding the page. New kinetic presses start a session rather than toggling stale state. Deferred touch presses use their finger position for hit testing when redraws have no hover cursor.
+- Group/channel profiles, settings and invite panes share the same 56px header and Back-button position. Missed calls use the shared Solar handset rotated down, with a returning arrow above it; declined calls use the cross-marked handset on both platforms.
+
+- Touch cancellation is measured before scroll translation. The scrollable receives a cancelled release after any drag, including slow swipes ending on the starting control; its outer kinetic tracker still receives the physical lift. Deferred controls also cancel when the viewport moves.
+- Calls retain their loaded history across navigation and invalidate it on call/clear/delete events. The first cold-load page is published immediately; refreshing keeps existing rows until the scan finishes. A contact-id index replaces per-record chat-list searches on both platforms. The shared scanner respects its exact item budget.
+
+- Profile field editors share SimpleX markdown parsing and a formatting preview on Android and Linux. Source markup and literal shortcodes are preserved; profile fields do not autocomplete or expand emoji shortcodes. Profile names, aliases, bios and descriptions render through that same parser with a bounded cache.
+- Message reactions display all eight supported emojis directly, wrapping on narrow screens without an additional picker. The bundled SimpleX core permits eight emoji reactions (`MREmojiChar`); arbitrary emoji cannot be sent as reactions without a protocol-core change. The UI does not substitute quoted messages or pretend unsupported reactions succeeded.
+- Multi-state preference buttons and their choice menus retain the earlier boxed-value styling.
+
+- SimpleX naming validation still applies to public names: the first character must be a letter, number or supported emoji, and some punctuation is prohibited. The editor explains this and offers inline bold/italic formatting after the first word; descriptions and local aliases are not restricted by those public-name rules.
+
+- Group/channel short descriptions use the same multiline editor, sizing, scrolling and rich-text preview as welcome messages. Existing short-description length limits remain in force.

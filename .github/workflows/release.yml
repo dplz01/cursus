@@ -22,6 +22,10 @@ jobs:
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
       options: --privileged
+      # SDK updates rename deployment directories. Keep them off Docker's
+      # overlay layers; the volume is seeded with the image's installed SDKs.
+      volumes:
+        - flatpak-system:/var/lib/flatpak
     strategy:
       fail-fast: false
       matrix:
@@ -36,7 +40,7 @@ jobs:
           bundle: cursus-${{ matrix.arch }}.flatpak
           arch: ${{ matrix.arch }}
           upload-artifact: false
-          cache-key: flatpak-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}
+          cache-key: flatpak-${{ matrix.arch }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'flatpak/**') }}
       - uses: actions/upload-artifact@v4
         with:
           name: cursus-${{ matrix.arch }}.flatpak
@@ -98,6 +102,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          # The action defaults to "tools platform-tools"; Google removed tools.
+          packages: platform-tools
       - name: Install Android build tools
         run: |
           sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018'

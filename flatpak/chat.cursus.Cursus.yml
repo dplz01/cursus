@@ -41,6 +41,8 @@ build-options:
   env:
     CARGO_HOME: /run/build/cursus/cargo
     CARGO_NET_OFFLINE: 'true'
+    # audiopus_sys searches <prefix>/lib, while the SDK can default to lib64.
+    CMAKE_TOOLCHAIN_FILE: /run/build/cursus/flatpak/cmake-toolchain.cmake
 
 modules:
   - name: cursus

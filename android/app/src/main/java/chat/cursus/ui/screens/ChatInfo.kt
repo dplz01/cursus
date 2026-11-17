@@ -35,6 +35,8 @@ import androidx.compose.ui.unit.dp
 import chat.cursus.AppModel
 import chat.cursus.R
 import chat.cursus.core.Chat
+import chat.cursus.core.Core
+import chat.cursus.ui.components.RoundedField
 import chat.cursus.core.ConnLink
 import chat.cursus.core.Member
 import chat.cursus.ui.components.IconTool
@@ -172,7 +174,7 @@ private fun ContactPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
                 if (chat.muted) R.drawable.ic_notifications_off else R.drawable.ic_notifications_off_outline,
                 if (chat.muted) "Muted" else "Mute", chat.muted,
             ) { model.setMuted(chat, !chat.muted) },
-            QuickAction(R.drawable.ic_settings, "Preferences") { prefs = true },
+            QuickAction(R.drawable.ic_settings, "Settings") { prefs = true },
         )
         if (chat.description.isNotBlank()) AboutBlock("About", chat.description)
         ButtonCard {
@@ -217,9 +219,11 @@ private fun ContactPreferencesPage(model: AppModel, chat: Chat, onBack: () -> Un
     val c = Cursus.colors
     var menu by remember { mutableStateOf<String?>(null) }
     val prefs = chat.contactPrefs
-    PageScaffold("Preferences", onBack) {
-        CursusCard {
-            CardTitle(R.drawable.ic_settings, "Chat features", "Peer icon: red / green / gold. Changes save immediately.")
+    PageScaffold("Settings", onBack) {
+        PreferenceGroup("Notifications") {
+            PrefRow("Send receipts", R.drawable.ic_check_read) { ChoiceChip(receiptsLabel(chat.sendReceipts), { menu = "receipts" }) }
+        }
+        PreferenceGroup("Chat permissions", "Your choices for this chat. The contact icon shows what the other person allows.") {
             for ((key, label) in CONTACT_FEATURES) {
                 val f = prefs?.features?.get(key)
                 PrefRow(label, FEATURE_ICONS[key]) {
@@ -295,7 +299,7 @@ private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenCh
     when (pane) {
         GroupPane.Overview -> GroupOverview(model, chat, onClose, onOpenPane = { pane = it }, onMember = { memberId = it; pane = GroupPane.MemberInfo })
         GroupPane.AddMember -> PageScaffold("Invite", back) { AddMemberPane(model, chat) }
-        GroupPane.Preferences -> PageScaffold("Group preferences", back) { GroupPreferencesPane(model, chat) }
+        GroupPane.Preferences -> PageScaffold("Group settings", back) { GroupPreferencesPane(model, chat) }
         GroupPane.MemberInfo -> PageScaffold("Member", back) {
             val m = model.members.firstOrNull { it.id == memberId }
             if (m == null) Text("Member not found.", style = Cursus.type.body, color = Cursus.colors.textMuted)
@@ -377,7 +381,7 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
                 if (chat.muted) R.drawable.ic_notifications_off else R.drawable.ic_notifications_off_outline,
                 if (chat.muted) "Muted" else "Mute", chat.muted,
             ) { model.setMuted(chat, !chat.muted) },
-            QuickAction(R.drawable.ic_settings, "Preferences") { onOpenPane(GroupPane.Preferences) },
+            QuickAction(R.drawable.ic_settings, "Settings") { onOpenPane(GroupPane.Preferences) },
         )
         if (!owner && chat.description.isNotBlank()) AboutBlock("Welcome message", chat.description)
         if (chat.isChannel) ChannelLinkCard(model, chat)
@@ -564,38 +568,47 @@ private fun AddMemberPane(model: AppModel, chat: Chat) {
         CursusCard { Text("Only admins can manage the invite link.", style = Cursus.type.body, color = c.textSecondary) }
         return
     }
-    CursusCard {
-        CardTitle(R.drawable.ic_link_minimalistic_2, "Group link", "Anyone with this link can ask to join.")
-        Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    var search by remember { mutableStateOf("") }
+    var preferShort by remember { mutableStateOf(true) }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    LaunchedEffect(chat.ref) {
+        link = runCatching { Core.call<ConnLink?>("existingGroupLink", mapOf("groupId" to chat.apiId)) }.getOrNull()
+    }
+    PreferenceGroup("Share an invite") {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Anyone with this link can ask to join.", style = Cursus.type.meta, color = c.textSecondary)
             val l = link
             if (l == null) {
-                PrimaryButton("Create link", { scope.launch { link = model.groupLink(chat, linkRole) } }, Modifier.fillMaxWidth())
+                PrimaryButton("Create invite link", { scope.launch { link = model.groupLink(chat, linkRole) } }, Modifier.fillMaxWidth())
             } else {
-                PrefRow("Join as") { ChoiceChip(linkRole, { menu = "link" }) }
-                LinkBox(l.short ?: l.full) { model.notice = "Link copied" }
-                ActionTile(R.drawable.ic_trash_delete, "Delete link", { model.deleteGroupLink(chat); link = null }, danger = true)
+                val display = if (preferShort) l.short ?: l.full else l.full
+                Text(display, style = Cursus.type.meta, color = c.textSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth().clip(Radius.md).background(c.bgField).padding(12.dp))
+                PrimaryButton("Copy invite link", { clipboard.setText(androidx.compose.ui.text.AnnotatedString(display)); model.notice = "Link copied" }, Modifier.fillMaxWidth())
+                PrefRow("Link format") { ChoiceChip(if (preferShort) "Short" else "Full", { preferShort = !preferShort }) }
+                PrefRow("Join as") { ChoiceChip(linkRole.replaceFirstChar { it.titlecase() }, { menu = "link" }) }
+                Text("Revoke invite link", style = Cursus.type.meta, color = c.danger,
+                    modifier = Modifier.clip(Radius.md).clickable { model.deleteGroupLink(chat); link = null }.padding(8.dp))
             }
         }
     }
     val inGroup = model.members.mapNotNull { it.contactId }.toSet()
     val contacts = model.chats.filter { it.isContact && !it.isRequest && it.apiId !in inGroup }
-    CursusCard {
-        CardTitle(R.drawable.ic_user_plus_alt_1, "Invite contacts", "They receive an invitation in your direct chat.")
-        PrefRow("Invite as") { ChoiceChip(inviteRole, { menu = "invite" }) }
-        if (contacts.isEmpty()) {
-            Text("Everyone you know is already here", style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.padding(8.dp))
-            Text("Connect with someone in Chats to invite them.", style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(horizontal = 12.dp))
-        } else {
-            for (contact in contacts) {
-                Row(
-                    Modifier.fillMaxWidth().clip(Radius.lg).clickable { model.addMember(chat, contact, inviteRole) }.padding(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Avatar(contact.title, contact.image, 40.dp)
-                    Text(contact.title, style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    IconDisc(R.drawable.ic_plus)
-                }
+    val filtered = contacts.filter { it.title.contains(search, ignoreCase = true) }
+    PreferenceGroup("Invite contacts") {
+        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Send an invitation in a direct chat.", style = Cursus.type.meta, color = c.textSecondary)
+            PrefRow("Invite as") { ChoiceChip(inviteRole.replaceFirstChar { it.titlecase() }, { menu = "invite" }) }
+            RoundedField(search, { search = it }, "Search contacts", modifier = Modifier.fillMaxWidth())
+            if (filtered.isEmpty()) Text(if (contacts.isEmpty()) "Everyone you know is already here." else "No matching contacts.",
+                style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(16.dp))
+            for (contact in filtered) Row(
+                Modifier.fillMaxWidth().clip(Radius.md).clickable { model.addMember(chat, contact, inviteRole) }.padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Avatar(contact.title, contact.image, 40.dp)
+                Text(contact.title, style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Icon(painterResource(R.drawable.ic_user_plus_alt_1), null, Modifier.size(24.dp), tint = c.textSecondary)
             }
         }
     }

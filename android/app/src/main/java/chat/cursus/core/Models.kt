@@ -266,3 +266,11 @@ data class MessageInfo(val time: String? = null, val status: String? = null, val
 
 @Serializable
 data class EmojiHit(val shortcode: String, val glyph: String)
+
+@Serializable
+data class CallRecord(
+    val itemId: Long, val contactId: Long, val peerName: String = "Contact",
+    val outgoing: Boolean = false, val status: String = "", val durationSecs: Long = 0, val ts: String? = null,
+) {
+    val missed: Boolean get() = !outgoing && status in setOf("missed", "pending")
+}

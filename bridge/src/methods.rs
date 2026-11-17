@@ -273,6 +273,10 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             Ok(dto::user(&u))
         }
         "setProfileAddress" => Ok(dto::user(&s.set_profile_address(bool_param(p, "on")?).map_err(err)?)),
+        "callHistory" => Ok(Value::Array(s.call_history(100, 300).map_err(err)?.iter().map(|call| json!({
+            "itemId": call.item_id, "contactId": call.contact_id, "peerName": call.peer_name,
+            "outgoing": call.outgoing, "status": call.status, "durationSecs": call.duration_secs, "ts": call.ts,
+        })).collect())),
         "listChats" => Ok(Value::Array(s.list_chats().map_err(err)?.iter().map(dto::chat).collect())),
         "listMessages" => {
             let count = p.get("count").and_then(Value::as_u64).unwrap_or(100).min(5000) as u32;
@@ -514,6 +518,7 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             done(s.update_group_profile(gid, &profile))
         }
         // Group / channel link (created on first use). Joiners: member / observer.
+        "existingGroupLink" => Ok(s.existing_group_link(i64_param(p, "groupId")?).map_err(err)?.as_ref().map(dto::link).unwrap_or(Value::Null)),
         "groupLink" => {
             let role = opt_str(p, "role").filter(|r| *r == "observer").unwrap_or("member");
             Ok(dto::link(&s.group_invite_link(i64_param(p, "groupId")?, role).map_err(err)?))

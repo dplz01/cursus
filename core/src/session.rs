@@ -743,6 +743,12 @@ impl Session {
         self.send(&Commands::update_group_profile(group_id, &profile))
     }
 
+    /// Read an existing invite without creating one on page entry.
+    pub fn existing_group_link(&self, group_id: i64) -> Result<Option<ConnLink>> {
+        let response = self.send(&Commands::get_group_link(group_id))?;
+        Ok(parse::group_link(&response).or_else(|| parse::channel_link(&response)))
+    }
+
     /// The link people join with, created for a private group that has none
     /// (`member_role`: what joiners become). A channel only ever has the
     /// `/c#` link it was created with: a `/_create link` one would be a

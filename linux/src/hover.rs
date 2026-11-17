@@ -48,6 +48,7 @@ struct HoverState {
     /// Touch is owned by this widget, not a hover target in an App subscription.
     touch_hold: Option<(touch::Finger, iced::Point, std::time::Instant)>,
     hold_fired: bool,
+    press_viewport: Option<iced::Point>,
     mouse_hold: Option<(iced::Point, std::time::Instant)>,
 }
 
@@ -70,6 +71,7 @@ pub struct HoverArea<'a, Message, Theme, Renderer> {
     /// Show the hand cursor over the area (desktop) when content has none.
     pointer: bool,
     center_hover: bool,
+    glow_y: Option<f32>,
 }
 
 impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
@@ -88,6 +90,7 @@ impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
             radius: 10.0,
             pointer: false,
             center_hover: false,
+            glow_y: None,
         }
     }
 
@@ -204,6 +207,14 @@ where
         let state = tree.state.downcast_mut::<HoverState>();
         let mut fire_hold = None;
         let mut swallow_lift = false;
+        // Scrolling can keep the same content point under a moving finger.
+        // Cancel against viewport travel too, so slow drags cannot become holds.
+        if (state.touch_hold.is_some() || state.mouse_hold.is_some())
+            && state.press_viewport.is_some_and(|origin| origin.distance(viewport.position()) > 2.0) {
+            state.touch_hold = None;
+            state.mouse_hold = None;
+            state.press_moved = true;
+        }
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
                 if cursor.is_over(layout.bounds())
@@ -211,6 +222,7 @@ where
             {
                 let at = std::time::Instant::now();
                 state.mouse_hold = cursor.position().map(|p| (p, at));
+                state.press_viewport = Some(viewport.position());
                 state.hold_fired = false;
                 if self.on_long_press.is_some() {
                     shell.request_redraw_at(
@@ -242,6 +254,7 @@ where
             {
                 let at = std::time::Instant::now();
                 state.touch_hold = Some((*id, *position, at));
+                state.press_viewport = Some(viewport.position());
                 state.hold_fired = false;
                 state.press_at = Some(at);
                 state.press_x = position.x;
@@ -343,7 +356,7 @@ where
             return;
         }
         let child_cursor = if self.center_hover && cursor.is_over(layout.bounds()) {
-            mouse::Cursor::Available(layout.bounds().center())
+            mouse::Cursor::Available(iced::Point::new(layout.bounds().center_x(), self.glow_y.map_or(layout.bounds().center_y(), |y| layout.bounds().y + y)))
         } else {
             cursor
         };
@@ -655,6 +668,12 @@ pub fn icon_glow<'a>(
     content: impl Into<Element<'a, crate::Message>>,
 ) -> Element<'a, crate::Message> {
     HoverArea::new(content).icon_glow().into()
+}
+
+pub fn action_glow<'a>(content: impl Into<Element<'a, crate::Message>>, glyph_y: f32) -> Element<'a, crate::Message> {
+    let mut area = HoverArea::new(content).icon_glow();
+    area.glow_y = Some(glyph_y);
+    area.into()
 }
 
 #[cfg(test)]

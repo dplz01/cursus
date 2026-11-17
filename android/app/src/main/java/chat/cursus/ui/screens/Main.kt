@@ -127,7 +127,7 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
         when (model.section) {
             Section.Chats, Section.Channels -> ChatListPane(model, channels = model.section == Section.Channels,
                 onNew = { page = Page.NewChat }, onSelect = { ref -> page = null; model.select(ref) })
-            Section.Calls -> CallsPane()
+            Section.Calls -> CallsPane(model)
             Section.Settings -> SettingsListPane(model, (page as? Page.Settings)?.section) { page = Page.Settings(it) }
         }
     }
@@ -266,14 +266,48 @@ fun EmptyPane(text: String) {
 }
 
 @Composable
-fun CallsPane() {
+fun CallsPane(model: AppModel) {
+    var calls by remember { mutableStateOf<List<chat.cursus.core.CallRecord>?>(null) }
+    var failure by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        runCatching { chat.cursus.core.Core.call<List<chat.cursus.core.CallRecord>>("callHistory") }
+            .onSuccess { calls = it }.onFailure { failure = it.message }
+    }
+    val c = Cursus.colors
     Column(Modifier.fillMaxSize()) {
         PaneHeader("Calls")
-        Box(Modifier.weight(1f).padding(16.dp), contentAlignment = Alignment.Center) {
-            Text(
-                "Audio calls are coming to Cursus for Android.",
-                style = Cursus.type.body, color = Cursus.colors.textMuted,
-            )
+        when {
+            failure != null -> EmptyPane(failure ?: "Could not load calls.")
+            calls == null -> EmptyPane("Loading calls…")
+            calls!!.isEmpty() -> EmptyPane("Your recent calls will appear here.")
+            else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f)) {
+                items(calls!!.size, key = { calls!![it].itemId }) { index ->
+                    val call = calls!![index]
+                    val contact = model.chats.firstOrNull { it.isContact && it.apiId == call.contactId }
+                    val icon = when {
+                        call.missed -> chat.cursus.R.drawable.ic_call_missed
+                        call.status in setOf("rejected", "error") -> chat.cursus.R.drawable.ic_call_rejected
+                        call.status in setOf("accepted", "negotiated", "progress") -> chat.cursus.R.drawable.ic_call_active
+                        call.outgoing -> chat.cursus.R.drawable.ic_call_outgoing
+                        else -> chat.cursus.R.drawable.ic_call_incoming
+                    }
+                    val tint = when { call.missed || call.status in setOf("rejected", "error") -> c.danger; call.outgoing -> c.accent; else -> c.success }
+                    Row(Modifier.fillMaxWidth().clickable(enabled = contact != null) {
+                        model.section = Section.Chats; model.select(contact?.ref)
+                    }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        chat.cursus.ui.components.Avatar(contact?.title ?: call.peerName, contact?.image, 40.dp)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(contact?.title ?: call.peerName, style = Cursus.type.body, color = c.textPrimary, maxLines = 1)
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(painterResource(icon), null, Modifier.size(18.dp), tint = tint)
+                                val label = when { call.missed -> "Missed"; call.status == "rejected" -> "Declined"; call.status == "error" -> "Failed"; call.outgoing -> "Outgoing"; else -> "Incoming" }
+                                Text(if (call.durationSecs > 0) "$label · ${formatDuration(call.durationSecs)}" else label, style = Cursus.type.meta, color = tint)
+                            }
+                        }
+                        Text(chat.cursus.core.Stamps.list(call.ts), style = Cursus.type.meta, color = c.textMuted)
+                    }
+                }
+            }
         }
     }
 }

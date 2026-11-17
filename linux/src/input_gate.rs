@@ -7,6 +7,7 @@ pub(crate) fn freeze<'a>(
     content: impl Into<Element<'a, Message>>,
     blocked: bool,
 ) -> Element<'a, Message> {
+    if blocked { crate::kinetic::stop_all(); }
     Element::new(InputGate {
         content: content.into(),
         blocked,

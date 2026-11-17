@@ -1,5 +1,6 @@
 package chat.cursus.ui.components
 
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -193,21 +195,27 @@ fun HeroLine(text: String) {
 /** One of the actions under a profile's name (Linux `quick_actions`). */
 class QuickAction(val icon: Int, val label: String, val active: Boolean = false, val onClick: () -> Unit)
 
-/** Rounded squares with a glyph and a short label below, centred in a row. */
+/** One complete action surface: icon and label share its hit target. */
 @Composable
 fun QuickActions(vararg actions: QuickAction) {
     val c = Cursus.colors
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)) {
-        for (a in actions) {
-            Column(
-                Modifier.clip(RowShape).clickable(onClick = a.onClick).padding(vertical = 6.dp).widthIn(min = 76.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Box(Modifier.size(width = 52.dp, height = 44.dp).clip(RowShape).background(c.bgElevated), contentAlignment = Alignment.Center) {
-                    Icon(painterResource(a.icon), null, Modifier.size(22.dp), tint = if (a.active) c.accent else c.textSecondary)
+    Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
+        Row(Modifier.widthIn(max = (92 * actions.size).dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (a in actions) {
+                val interactions = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                val hovered by interactions.collectIsHoveredAsState()
+                val tint = if (a.active || hovered) c.accent else c.textSecondary
+                Column(
+                    Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
+                        .background(if (hovered) c.accentSoft else c.bgElevated)
+                        .border(1.dp, if (hovered) c.accent else c.border, RoundedCornerShape(16.dp))
+                        .clickable(interactions, indication = androidx.compose.foundation.LocalIndication.current, onClick = a.onClick).padding(horizontal = 4.dp, vertical = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(painterResource(a.icon), null, Modifier.size(24.dp), tint = tint)
+                    Text(a.label, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Text(a.label, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1)
             }
         }
     }

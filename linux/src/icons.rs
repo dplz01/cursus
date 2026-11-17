@@ -380,6 +380,17 @@ pub fn user_alt_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 }
 
 /// Phone / calls — Solar Linear Icons (CC BY via SVG Repo); same asset as nav Calls.
+pub fn call_history_icon<'a>(outgoing: bool, status: &str, size: f32, color: Color) -> Element<'a, Message> {
+    let handle = match (outgoing, status) {
+        (false, "missed" | "pending") => svg_handle!("../assets/icons/call_missed.svg"),
+        (_, "rejected" | "error") => svg_handle!("../assets/icons/call_rejected.svg"),
+        (_, "accepted" | "negotiated" | "progress") => svg_handle!("../assets/icons/call_active.svg"),
+        (true, _) => svg_handle!("../assets/icons/call_outgoing.svg"),
+        _ => svg_handle!("../assets/icons/call_incoming.svg"),
+    };
+    tinted(handle, color, size)
+}
+
 pub fn phone_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
         svg_handle!("../assets/icons/calls.svg"),
@@ -501,6 +512,7 @@ fn handle_for(kind: NavIcon) -> svg::Handle {
 }
 
 fn glow_color(idle: Color) -> Color {
+    if idle.a < 0.5 { return idle; }
     if idle == theme::t().danger {
         theme::t().danger_hover
     } else {
@@ -619,6 +631,14 @@ pub fn mic_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
 /// Header chrome tools — same optical size / stroke as the main-page settings gear.
 pub fn back_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(svg_handle!("../assets/icons/back.svg"), color, size)
+}
+
+pub fn next_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    svg(svg_handle!("../assets/icons/back.svg"))
+        .width(size).height(size)
+        .rotation(iced::Radians(std::f32::consts::PI))
+        .style(move |_, status| svg::Style { color: Some(if crate::POINTER_GATE.hover_ok.load(std::sync::atomic::Ordering::Relaxed) && matches!(status, svg::Status::Hovered) { glow_color(color) } else { color }) })
+        .into()
 }
 
 pub fn back_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
@@ -903,15 +923,6 @@ pub fn chevron_right<'a>(size: f32, color: Color) -> Element<'a, Message> {
         .center_x(size)
         .center_y(size)
         .into()
-}
-
-/// Plain tinted gear (no hover states) for icon discs.
-pub fn settings_icon_plain<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg_handle!("../assets/icons/settings.svg"),
-        color,
-        size,
-    )
 }
 
 /// “My address” — Dazzle Line Icons address-card (CC BY).

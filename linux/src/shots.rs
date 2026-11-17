@@ -1786,3 +1786,91 @@ fn shots_image_viewer_and_paste() {
     }
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn profile_action_labels_hover_and_click_as_part_of_the_button() {
+    use iced::{mouse, Event, Point, Rectangle};
+    use iced::advanced::widget::Operation;
+    struct Locate(Option<Rectangle>);
+    impl Operation for Locate {
+        fn traverse(&mut self, op: &mut dyn FnMut(&mut dyn Operation)) { op(self); }
+        fn text(&mut self, _: Option<&iced::widget::Id>, bounds: Rectangle, text: &str) { if text == "Settings" { self.0 = Some(bounds); } }
+    }
+    load_fonts();
+    let size = Size::new(400.0, 900.0);
+    let mut app = demo_app(true, size.width, size.height);
+    select(&mut app, 0); let _ = app.open_contact_profile();
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(iced::Font::with_name("Noto Sans"), iced::Pixels(16.0), Some("tiny-skia"))).unwrap();
+    let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), size, Cache::default(), &mut renderer);
+    let mut locate = Locate(None); ui.operate(&renderer, &mut locate);
+    let bounds = locate.0.expect("profile Settings action");
+    // The bottom padding is deliberately outside both the SVG and the label.
+    let point = Point::new(bounds.center_x(), bounds.y + bounds.height + 6.0);
+    let mut messages = vec![];
+    let _ = ui.update(&[Event::Mouse(mouse::Event::CursorMoved { position: point }), Event::Window(iced::window::Event::RedrawRequested(std::time::Instant::now()))], mouse::Cursor::Available(point), &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
+    let theme = app.iced_theme();
+    ui.draw(&mut renderer, &theme, &iced::advanced::renderer::Style { text_color: iced::Color::WHITE }, mouse::Cursor::Available(point));
+    let pixels = renderer.screenshot(Size::new(400, 900), 1.0, iced::Color::BLACK);
+    let mut glowing = 0;
+    for y in (bounds.y as usize).saturating_sub(32)..bounds.y as usize {
+        for x in (bounds.center_x() as usize).saturating_sub(15)..(bounds.center_x() as usize + 15).min(400) {
+            let i = (y * 400 + x) * 4;
+            if pixels[i + 2] > 220 && pixels[i + 1] > 120 && pixels[i + 1] < 185 && pixels[i] < 145 { glowing += 1; }
+        }
+    }
+    assert!(glowing > 3, "hovering the button padding must illuminate its icon");
+    let _ = ui.update(&[Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)), Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))], mouse::Cursor::Available(point), &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
+    drop(ui);
+    for message in messages { let _ = app.update(message); }
+    assert_eq!(app.contact_profile.as_ref().unwrap().pane, crate::ContactProfilePane::Preferences);
+}
+
+#[test]
+fn gallery_navigation_stops_at_both_ends() {
+    let mut app = demo_app(true, 800.0, 760.0); select(&mut app, 0);
+    let folder = std::env::temp_dir().join(format!("cursus-gallery-bounds-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let paths: Vec<_> = ["first.png", "second.png"].iter().map(|name| folder.join(name)).collect();
+    app.messages = paths.iter().enumerate().map(|(index, path)| {
+        image::RgbaImage::new(2, 2).save(path).unwrap();
+        let mut message = msg(index as i64 + 1, "", false, "09:06");
+        message.file = Some(cursus_core::FileInfo { file_id: index as i64 + 1, file_name: path.file_name().unwrap().to_string_lossy().into(), file_size: 100, state: cursus_core::FileTransferState::Complete, kind: cursus_core::FileKind::Image, duration_secs: None, local_path: Some(path.clone()), encrypted: false, crypto_key: None, crypto_nonce: None, transferred: None, transfer_total: None, error_detail: None, preview: None });
+        message
+    }).collect::<Vec<_>>().into();
+    app.image_viewer = Some((paths[0].clone(), 2.0));
+    let _ = app.update(Message::ImageStep(-1));
+    assert_eq!(app.image_viewer.as_ref().unwrap(), &(paths[0].clone(), 2.0), "edge navigation must preserve the current photo and zoom");
+    let _ = app.update(Message::ImageStep(1));
+    assert_eq!(app.image_viewer.as_ref().unwrap().0, paths[1]);
+    let _ = app.update(Message::ImageStep(1));
+    assert_eq!(app.image_viewer.as_ref().unwrap().0, paths[1]);
+    let _ = app.update(Message::ImageStep(-1));
+    assert_eq!(app.image_viewer.as_ref().unwrap().0, paths[0]);
+    for path in paths { std::fs::remove_file(path).unwrap(); }
+    std::fs::remove_dir(folder).unwrap();
+}
+
+#[test]
+#[ignore = "writes audit design screenshots"]
+fn shots_audit_design() {
+    for dark in [false, true] {
+        let tone = if dark { "dark" } else { "light" };
+        let size = Size::new(400.0, 900.0);
+        let mut app = demo_app(dark, size.width, size.height);
+        select(&mut app, 0); let _ = app.open_contact_profile();
+        render(&app, size, &format!("audit-profile-{tone}"));
+        let _ = app.update(Message::OpenContactPreferences);
+        render(&app, size, &format!("audit-chat-settings-{tone}"));
+        group_page(&mut app, GroupSettingsPane::AddMember);
+        app.contact_profile = None;
+        app.group_settings.as_mut().unwrap().apply_links(cursus_core::ConnLink { full: "https://simplex.chat/invitation-for-a-long-group-name".into(), short: Some("https://simplex.chat/g/example".into()), display: "https://simplex.chat/g/example".into() });
+        render(&app, size, &format!("audit-invite-{tone}"));
+        let _ = app.update(Message::Navigate(NavSection::Calls));
+        app.call.set_history_for_test(vec![
+            cursus_core::CallRecord { item_id: 1, contact_id: 1, peer_name: "Alice".into(), outgoing: false, status: "missed".into(), duration_secs: 0, ts: Some("2026-11-17T12:00:00Z".into()) },
+            cursus_core::CallRecord { item_id: 2, contact_id: 1, peer_name: "Alice".into(), outgoing: false, status: "ended".into(), duration_secs: 82, ts: Some("2026-11-17T11:00:00Z".into()) },
+            cursus_core::CallRecord { item_id: 3, contact_id: 1, peer_name: "Alice".into(), outgoing: true, status: "ended".into(), duration_secs: 34, ts: Some("2026-11-17T10:00:00Z".into()) },
+        ]);
+        render(&app, size, &format!("audit-calls-{tone}"));
+    }
+}

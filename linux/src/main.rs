@@ -31,6 +31,7 @@ mod single_instance;
 mod tap;
 mod theme;
 mod touch_mouse;
+mod touch_content;
 mod trail_row;
 mod ui;
 use std::collections::{HashMap, HashSet};
@@ -521,6 +522,7 @@ pub struct GroupSettingsOverlay {
     pub link_member_role: String,
     /// Role used when inviting a contact from AddMember.
     pub invite_role: String,
+    pub invite_search: String,
     pub my_role: String,
     pub alias: String,
     pub alias_dirty: bool,
@@ -1180,6 +1182,7 @@ pub enum Message {
     SetGroupLinkShort(bool),
     SetGroupLinkRole(String),
     SetGroupInviteRole(String),
+    GroupInviteSearch(String),
     CopyGroupLink,
     GroupLinkRoleCycle,
     GroupLinkRoleSet(Result<(), String>),
@@ -1236,15 +1239,7 @@ pub enum Message {
     },
     StopVoicePlayback,
     VoiceTick,
-    /// GTK-style inertial fling after a touch scroll.
-    ScrollFlingStart {
-        id: String,
-        velocity_y: f32,
-    },
-    ScrollFlingCancel {
-        id: String,
-    },
-    ScrollFlingTick,
+    /// Decoded waveform for a voice message.
     WaveformReady {
         path: PathBuf,
         peaks: Result<Vec<f32>, String>,
@@ -1550,7 +1545,6 @@ struct App {
     /// Settings → My profile draft.
     own_profile: OwnProfileDraft,
     /// Active inertial fling after a touch scroll (GTK-style kinetic feel).
-    scroll_fling: Option<ScrollFling>,
     /// Bumps on each message history request; stale `MessagesLoaded` are ignored.
     messages_load_gen: u64,
     /// Bumps on each scheduled chat-list refresh; only the latest debounce fires.
@@ -1604,13 +1598,6 @@ struct VoicePlayback {
     duration_secs: u32,
     started: Instant,
     child: Child,
-}
-
-/// Inertial scroll after finger-up (GTK ScrolledWindow kinetic equivalent).
-struct ScrollFling {
-    id: String,
-    /// Pixels per second along iced AbsoluteOffset.y.
-    velocity_y: f32,
 }
 
 impl App {
@@ -1757,7 +1744,6 @@ impl App {
                     },
                     dirty: false,
                 },
-                scroll_fling: None,
                 contact_profile: None,
                 create_chat: None,
                 group_settings: None,
@@ -1911,13 +1897,6 @@ impl App {
             Subscription::none()
         };
 
-        let fling_tick = if self.scroll_fling.is_some() {
-            iced::time::every(std::time::Duration::from_millis(16))
-                .map(|_| Message::ScrollFlingTick)
-        } else {
-            Subscription::none()
-        };
-
         let tray_tick = if let Some(tray) = self.tray.as_ref() {
             let show = tray.show_id.clone();
             let hide = tray.hide_id.clone();
@@ -1944,7 +1923,7 @@ impl App {
             window,
             events,
             voice_tick,
-            fling_tick,
+
             tray_tick,
             lock_tick,
             relaunch,
@@ -2381,18 +2360,14 @@ impl App {
                 Task::none()
             }
             Message::ImageZoom(factor) => {
-                if let Some((_, zoom)) = &mut self.image_viewer {
-                    *zoom = (*zoom * factor).clamp(1.0, 5.0);
-                }
-                Task::none()
+                if self.image_viewer.is_some() { crate::image_gestures::zoom(factor) } else { Task::none() }
             }
             Message::ImageStep(step) => {
                 let paths = self.gallery_paths();
                 if let Some((path, zoom)) = &mut self.image_viewer {
                     if let Some(index) = paths.iter().position(|p| p == path) {
-                        let next = (index as i32 + step).rem_euclid(paths.len() as i32) as usize;
-                        *path = paths[next].clone();
-                        *zoom = 1.0;
+                        let next = (index as i32 + step).clamp(0, paths.len() as i32 - 1) as usize;
+                        if next != index { *path = paths[next].clone(); *zoom = 1.0; }
                     }
                 }
                 Task::none()
@@ -4291,7 +4266,7 @@ impl App {
                 Task::none()
             }
             Message::OpenMemberRoleMenu(member_id) => {
-                self.scroll_fling = None;
+                crate::kinetic::stop_all();
                 if let Some(g) = self.group_settings.as_mut() {
                     if g.member_dropdown == Some(MemberDropdown::Role)
                         && g.selected_member_id == Some(member_id)
@@ -4305,7 +4280,7 @@ impl App {
                 Task::none()
             }
             Message::OpenMemberActionMenu(member_id) => {
-                self.scroll_fling = None;
+                crate::kinetic::stop_all();
                 if let Some(g) = self.group_settings.as_mut() {
                     if g.member_dropdown == Some(MemberDropdown::Actions)
                         && g.selected_member_id == Some(member_id)
@@ -4730,6 +4705,7 @@ impl App {
                     Message::GroupLinkRoleSet,
                 )
             }
+            Message::GroupInviteSearch(value) => { if let Some(g) = self.group_settings.as_mut() { g.invite_search = value; } Task::none() }
             Message::SetGroupInviteRole(role) => {
                 self.pref_menu = None;
                 if let Some(g) = self.group_settings.as_mut() {
@@ -5353,35 +5329,6 @@ impl App {
             Message::StopVoicePlayback => {
                 self.stop_voice_playback();
                 Task::none()
-            }
-            Message::ScrollFlingStart { id, velocity_y } => {
-                self.scroll_fling = Some(ScrollFling { id, velocity_y });
-                Task::none()
-            }
-            Message::ScrollFlingCancel { id } => {
-                if self.scroll_fling.as_ref().is_some_and(|f| f.id == id) {
-                    self.scroll_fling = None;
-                }
-                Task::none()
-            }
-            Message::ScrollFlingTick => {
-                let Some(fling) = self.scroll_fling.as_mut() else {
-                    return Task::none();
-                };
-                const DT: f32 = 1.0 / 60.0;
-                // Slightly snappier stop than GTK default — avoids runaway coasts.
-                const FRICTION: f32 = 0.86;
-                let dy = fling.velocity_y * DT;
-                fling.velocity_y *= FRICTION;
-                if fling.velocity_y.abs() < 40.0 {
-                    self.scroll_fling = None;
-                    return Task::none();
-                }
-                let id = iced::widget::Id::from(fling.id.clone());
-                iced::widget::operation::scroll_by(
-                    id,
-                    iced::widget::scrollable::AbsoluteOffset { x: 0.0, y: dy },
-                )
             }
             Message::VoiceTick => {
                 if let Some(play) = self.voice_playback.as_mut() {
@@ -7971,6 +7918,7 @@ impl App {
             link_prefer_short: true,
             link_member_role: "member".into(),
             invite_role: "member".into(),
+            invite_search: String::new(),
             my_role: my_role.clone(),
             alias: chat.local_alias.clone(),
             alias_dirty: false,

@@ -67,7 +67,7 @@ fun PreferenceRow(
         Column(
             Modifier.fillMaxWidth().defaultMinSize(minHeight = 68.dp)
                 .then(if (checked != null && onToggle != null) Modifier.toggleable(checked, enabled = enabled, role = Role.Switch, onValueChange = onToggle) else Modifier)
-                .padding(horizontal = inset, vertical = 13.dp),
+                .padding(horizontal = inset, vertical = if (subtitle == null) 8.dp else 12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

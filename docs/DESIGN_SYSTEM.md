@@ -157,7 +157,7 @@ Contact, group, channel and own-profile pages open with the same centred header 
 - Picture, 96, centred; tapping it changes it where that is allowed.
 - Name: title size + 4, bold, centred. Editable lines carry a small pencil right after the text.
 - Under it, centred, `text.secondary`: local name, then the bio / short description.
-- **Quick actions** (Linux `quick_actions`, Android `QuickActions`): a centred row of 52×44 rounded squares (`bg.elevated`, radius 12) with a 22px glyph and a meta label below — Call, Star, Mute, Preferences. The glyph turns accent when the state is on. These replace icons in the title bar; the title bar only has Back and the page name.
+- **Quick actions** (Linux `quick_actions`, Android `QuickActions`): a centred row of complete rounded buttons (`bg.elevated`, 1px border, radius 16). Each contains a 24px glyph and its meta label, with 12px vertical padding and an 8px gap between buttons — Call, Star, Mute, Settings. The entire button, including its label and padding, illuminates the glyph on hover. The glyph also turns accent when the state is on. These replace icons in the title bar; the title bar only has Back and the page name.
 - Longer texts (About, Welcome message) follow as a section: label + paragraph at the row inset.
 
 ### Preference panels
@@ -300,3 +300,9 @@ Back and other page-changing header controls complete an owned press-and-release
 - Linux supports both native touch holds and mouse-emulated holds. Icon hits glow across the full target without hover boxes; the bottom dock keeps its existing hover style. Hover fills inside grouped cards stay inset from their borders, with visible contrast in both themes.
 - Pasting an image into the composer creates a removable draft preview; Send submits it. Text remains available as a separate draft. Linux supports Ctrl+V, Shift+Insert and the edit menu; Android uses the native rich-content receiver for clipboard and keyboard images.
 - Tapping a downloaded image opens an in-app viewer on Android and Linux: Back/Escape closes it, pinch or wheel zooms, and swiping changes images while at normal zoom. Zoomed images pan within the viewer.
+
+- Chat settings use compact grouped surfaces: Notifications for receipts, Chat permissions for negotiated features. Rows without supporting text use 8px vertical padding; longer descriptions retain a full-width support line.
+- The Invite page separates “Share an invite” from “Invite contacts”. The link is a neutral two-line preview with one full-width Copy action, secondary format/role controls and a quiet destructive Revoke action. The contact picker has search and complete 56px rows.
+- The call list uses the same Jtb phone family on both platforms: green incoming, blue outgoing, red missed/declined/failed. Android's history is read-only; activating a record opens its chat.
+- Linux scrollables translate finger coordinates at their content boundary, including end-anchored history. Any viewport travel cancels a pending hold. Live dragging stays native; inertia is widget-local and uses elapsed-time exponential deceleration, with no app rebuild on each animation frame.
+- Linux media uses Iced's native image viewer for zoom/pan. Wheel zoom anchors at the cursor; pinch zoom and translation follow the finger midpoint. Swiping changes photos only at fit scale, and neither arrows nor swipes wrap at the first/last photo. Names are ellipsized in the header without changing file paths.

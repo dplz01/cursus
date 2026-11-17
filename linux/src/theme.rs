@@ -826,3 +826,14 @@ pub fn icon_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> b
         }
     }
 }
+
+pub fn profile_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let c = t();
+        let hot = hover_ok && matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style { background: Some(if hot { c.accent_soft } else { c.bg_elevated }.into()),
+            text_color: c.text_secondary,
+            border: Border { radius: 16.0.into(), width: 1.0, color: if hot { c.accent } else { c.border } },
+            ..Default::default() }
+    }
+}

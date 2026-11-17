@@ -101,7 +101,8 @@ impl Widget<Message, Theme, iced::Renderer> for PreferenceRow<'_> {
         } else {
             0.0
         };
-        let center = |h: f32| 13.0 + (height - h) / 2.0;
+        let pad = if self.has_support { 12.0 } else { 8.0 };
+        let center = |h: f32| pad + (height - h) / 2.0;
         let icon_y = center(icon.size().height);
         let title_y = center(title.size().height);
         let control_y = center(control.size().height);
@@ -111,7 +112,7 @@ impl Widget<Message, Theme, iced::Renderer> for PreferenceRow<'_> {
         let nodes = vec![
             icon.move_to(Point::new(inset, icon_y)),
             title.move_to(Point::new(inset + leading, title_y)),
-            support.move_to(Point::new(inset + leading, 13.0 + height + 4.0)),
+            support.move_to(Point::new(inset + leading, pad + height + 4.0)),
             control.move_to(Point::new(control_x, control_y)),
             trail.move_to(Point::new(trail_x, trail_y)),
         ];
@@ -119,7 +120,7 @@ impl Widget<Message, Theme, iced::Renderer> for PreferenceRow<'_> {
             limits.resolve(
                 Length::Fill,
                 Length::Shrink,
-                Size::new(width, height + support_height + 26.0),
+                Size::new(width, height + support_height + pad * 2.0),
             ),
             nodes,
         )

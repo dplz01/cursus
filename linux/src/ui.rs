@@ -179,16 +179,11 @@ fn kinetic_scroll<'a>(
     id: &'static str,
     content: impl Into<Element<'a, Message>>,
 ) -> Element<'a, Message> {
-    let scroller = scrollable(content)
+    let scroller = scrollable(crate::touch_content::content(content))
         .id(iced::widget::Id::new(id))
         .height(Length::Fill)
         .direction(Direction::Vertical(no_bar()));
-    crate::kinetic::track(id, scroller, |fling| match fling {
-        crate::kinetic::FlingMessage::Start { id, velocity_y } => {
-            Message::ScrollFlingStart { id, velocity_y }
-        }
-        crate::kinetic::FlingMessage::Cancel { id } => Message::ScrollFlingCancel { id },
-    })
+    crate::kinetic::track(id, scroller)
 }
 
 /// Text with Advanced shaping so emoji can fall back to Noto Color Emoji.
@@ -2128,16 +2123,11 @@ fn message_history_shell<'a>(
     // the whole chat view (major scroll lag).
     let history = crate::kinetic::track_end_anchored(
         "chat-history",
-        scrollable(col)
+        scrollable(crate::touch_content::content(col))
             .id(iced::widget::Id::new("chat-history"))
             .height(Length::Fill)
             .direction(Direction::Vertical(no_bar().anchor(Anchor::End))),
-        |fling| match fling {
-            crate::kinetic::FlingMessage::Start { id, velocity_y } => {
-                Message::ScrollFlingStart { id, velocity_y }
-            }
-            crate::kinetic::FlingMessage::Cancel { id } => Message::ScrollFlingCancel { id },
-        },
+
     );
 
     // Telegram-style “jump to latest” FAB when scrolled up into history.
@@ -5803,30 +5793,19 @@ const PROFILE_HEADER_ICON: f32 = 22.0;
 /// The actions under a profile's name: a rounded square with the glyph and
 /// a short label below it, centred in a row (call, favourite, mute, …).
 fn quick_actions(actions: Vec<(Element<'static, Message>, &'static str, Message)>, d: Density, hover: bool) -> Element<'static, Message> {
-    // Each action takes an equal share, at most 82 wide, so four still fit
-    // in the narrowest window.
     let count = actions.len() as f32;
-    let mut row = Row::new().spacing(4);
+    let mut row = Row::new().spacing(8);
     for (icon, label, on_press) in actions {
-        let tile = container(icon).width(52).height(44).center_x(52).center_y(44).style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().bg_elevated)),
-            border: iced::Border { radius: 12.0.into(), ..Default::default() },
-            ..container::Style::default()
-        });
-        row = row.push(
-            button(
-                column![tile, ellipsis_text(label.to_string(), d.meta, theme::t().text_secondary, 1)]
-                    .spacing(6)
-                    .align_x(Alignment::Center)
-                    .width(Length::Fill),
-            )
-            .on_press(on_press)
-            .padding(Padding::from([6, 0]))
-            .width(Length::Fill)
-            .style(theme::icon_action(hover)),
-        );
+        let face = column![
+            icons::centered_hit(icon, 24.0),
+            ellipsis_text(label.to_string(), d.meta, theme::t().text_secondary, 1),
+        ].spacing(6).align_x(Alignment::Center).width(Length::Fill);
+        row = row.push(crate::hover::action_glow(
+            button(face).on_press(on_press).padding(Padding::from([12, 4])).width(Length::Fill)
+                .style(theme::profile_action(hover)), 24.0,
+        ));
     }
-    container(container(row).max_width(82.0 * count)).padding(Padding::from([0, 8])).center_x(Length::Fill).into()
+    container(container(row).max_width(92.0 * count)).padding(Padding::from([0, 8])).center_x(Length::Fill).into()
 }
 
 /// A centred secondary line of a profile header (bio, full name).
@@ -5967,30 +5946,18 @@ fn contact_preferences_page<'a>(
     let d = app.density();
     let hover = app.hover_ok();
     // Same header with or without a parent pane: the page always has Back.
-    let leading = page_title("Preferences", Some(Message::CloseContactPreferences), d, hover);
+    let leading = page_title("Settings", Some(Message::CloseContactPreferences), d, hover);
     let header = profile_header_bar(leading, Space::new().width(0).into(), d, true);
 
-    let mut body = Column::new().spacing(0).width(Length::Fill);
-    body = body.push(card_title(
-        icons::settings_icon_plain(18.0, theme::t().accent),
-        "Chat features",
-        "Peer icon: red / green / gold. Changes save immediately.",
-        d,
-    ));
-    body = body.push(pref_row(
-        Some(icons::check_read(20.0, theme::t().text_secondary)),
-        "Send receipts",
-        choice_chip(
-            RcptChoice::from_opt(p.send_rcpts).label(app.receipts().0),
-            Message::OpenPrefMenu(PrefMenu::ContactRcpts),
-            d,
-            hover,
-        ),
-        PrefTrail::Reserve,
-        d,
-    ));
-    body = body.push(contact_feature_prefs(p, d, hover));
-    let body = card(body);
+    let receipts = pref_row(
+        Some(icons::check_read(20.0, theme::t().accent)), "Send receipts",
+        choice_chip(RcptChoice::from_opt(p.send_rcpts).label(app.receipts().0), Message::OpenPrefMenu(PrefMenu::ContactRcpts), d, hover),
+        PrefTrail::Reserve, d,
+    );
+    let body = column![
+        crate::preference_ui::group(Some("Notifications"), None, receipts, d),
+        crate::preference_ui::group(Some("Chat permissions"), Some("Your choices for this chat. The contact icon shows what the other person allows."), contact_feature_prefs(p, d, hover), d),
+    ].spacing(20);
 
     column![
         header,
@@ -6613,7 +6580,7 @@ fn call_history_row<'a>(
         .unwrap_or_else(|| rec.peer_name.clone());
     let image = chat.and_then(|c| c.peer_profile.image.as_deref());
     let missed = rec.is_missed();
-    let tint = if missed { t.danger } else { t.text_muted };
+    let tint = if missed || matches!(rec.status.as_str(), "rejected" | "error") { t.danger } else if rec.outgoing { t.accent } else { t.success };
     let when = format_list_time(rec.ts.as_deref()).unwrap_or_default();
     let info = row![
         profile_avatar_fallback(image, &name, 40.0, AvatarFallback::ContactIcon),
@@ -6623,7 +6590,7 @@ fn call_history_row<'a>(
                 .wrapping(Wrapping::None)
                 .color(if missed { t.danger } else { t.text_primary }),
             row![
-                icons::phone_icon(12.0, tint),
+                icons::call_history_icon(rec.outgoing, &rec.status, 18.0, tint),
                 text(call_record_label(rec))
                     .size(d.meta)
                     .wrapping(Wrapping::None)
@@ -6916,7 +6883,7 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
 
     let (heading, close_msg): (&str, Message) = match g.pane {
         GroupSettingsPane::AddMember => ("Invite", Message::CloseAddGroupMember),
-        GroupSettingsPane::Preferences => ("Group preferences", Message::CloseGroupPreferences),
+        GroupSettingsPane::Preferences => ("Group settings", Message::CloseGroupPreferences),
         GroupSettingsPane::MemberInfo => ("Member", Message::CloseGroupMember),
         GroupSettingsPane::ConfirmLeave => ("Leave group", Message::CloseGroupSettings),
         GroupSettingsPane::ConfirmDelete => ("Delete group", Message::CloseGroupSettings),
@@ -8238,18 +8205,6 @@ fn link_copy_box<'a>(
     .into()
 }
 
-fn role_chip<'a>(role: &str, d: Density) -> Element<'a, Message> {
-    row![
-        icons::role_icon(&role.to_ascii_lowercase(), 16.0, theme::t().text_secondary),
-        text(role_label(role))
-            .size(d.meta)
-            .color(theme::t().text_primary),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center)
-    .into()
-}
-
 /// Channel overview: share-only `/c#` link card (official: no delete / role / format).
 fn channel_link_section<'a>(
     g: &'a crate::GroupSettingsOverlay,
@@ -8345,166 +8300,50 @@ fn group_add_member_pane<'a>(
         .into();
     }
     let admin = can_manage_members(&g.my_role);
-    let mut page = Column::new().spacing(14).width(Length::Fill);
-
-    // ── Group link card ─────────────────────────────────────────────────
-    let mut link_col = Column::new().spacing(4).width(Length::Fill);
-    link_col = link_col.push(card_title(
-        icons::link_icon(18.0, theme::t().accent),
-        "Group link",
-        "Anyone with this link can ask to join.",
-        d,
-    ));
-    if let Some(link) = g.link.as_ref() {
-        link_col = link_col.push(pref_row(
-            None,
-            "Link format",
-            choice_chip(
-                if g.link_prefer_short { "Short" } else { "Full" },
-                Message::OpenPrefMenu(PrefMenu::GroupLinkKind),
-                d,
-                hover,
-            ),
-            PrefTrail::None,
-            d,
-        ));
+    let mut sharing = Column::new().spacing(10).padding(12).width(Length::Fill);
+    sharing = sharing.push(text("Anyone with this link can ask to join.").size(d.meta).color(theme::t().text_secondary));
+    if let Some(link) = &g.link {
+        let display = link;
+        sharing = sharing.push(container(ellipsis_text(display.to_string(), d.meta, theme::t().text_secondary, 2))
+            .padding(12).width(Length::Fill).clip(true).style(|_| container::Style {
+                background: Some(theme::t().bg_field.into()), border: iced::Border { radius: 12.0.into(), ..Default::default() }, ..Default::default()
+            }));
+        sharing = sharing.push(button(row![icons::copy_icon(18.0, theme::t().accent_on), text("Copy invite link").size(d.body)]
+            .spacing(8).align_y(Alignment::Center)).on_press(Message::CopyGroupLink).padding(12).width(Length::Fill).style(theme::primary_action(hover)));
+        let options = pref_row(None, "Link format", choice_chip(if g.link_prefer_short { "Short" } else { "Full" }, Message::OpenPrefMenu(PrefMenu::GroupLinkKind), d, hover), PrefTrail::None, d);
+        sharing = sharing.push(options);
         if admin {
-            link_col = link_col.push(pref_row(
-                None,
-                "Join as",
-                button(
-                    row![role_chip(&g.link_member_role, d), icons::chevron_down(12.0)]
-                        .spacing(6)
-                        .align_y(Alignment::Center),
-                )
-                .on_press(Message::OpenPrefMenu(PrefMenu::GroupLinkRole))
-                .padding(Padding::from([6, 10]))
-                .style(theme::secondary_action(hover))
-                .into(),
-                PrefTrail::None,
-                d,
-            ));
+            sharing = sharing.push(pref_row(None, "Join as", choice_chip(role_label(&g.link_member_role), Message::OpenPrefMenu(PrefMenu::GroupLinkRole), d, hover), PrefTrail::None, d));
+            sharing = sharing.push(button(text("Revoke invite link").size(d.meta).color(theme::t().danger))
+                .on_press(Message::DeleteGroupLink).padding(8).style(theme::ghost_danger(hover)));
         }
-        let mut link_row = Row::new()
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .push(link_copy_box(link, Message::CopyGroupLink, d, hover));
-        if admin {
-            link_row = link_row.push(
-                button(icons::centered_hit(
-                    icons::trash_icon(18.0, theme::t().danger),
-                    PROFILE_HEADER_ICON,
-                ))
-                .on_press(Message::DeleteGroupLink)
-                .padding(4)
-                .style(theme::ghost_danger(hover)),
-            );
-        }
-        link_col = link_col.push(container(link_row).padding(Padding::from([6, 8])));
     } else if admin {
-        link_col = link_col.push(
-            container(
-                button(
-                    row![
-                        icons::link_icon(16.0, theme::t().accent_on),
-                        text("Create link").size(d.meta),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                )
-                .on_press(Message::EnsureGroupLink)
-                .padding(Padding::from([8, 14]))
-                .style(theme::primary_action(hover)),
-            )
-            .padding(Padding::from([6, 8])),
-        );
-    }
-    page = page.push(card(link_col));
-
-    // ── Invite contacts card ────────────────────────────────────────────
-    let mut inv = Column::new().spacing(4).width(Length::Fill);
-    inv = inv.push(card_title(
-        icons::user_plus_icon(18.0, theme::t().accent),
-        "Invite contacts",
-        "They receive an invitation in your direct chat.",
-        d,
-    ));
-    inv = inv.push(pref_row(
-        None,
-        "Invite as",
-        button(
-            row![role_chip(&g.invite_role, d), icons::chevron_down(12.0)]
-                .spacing(6)
-                .align_y(Alignment::Center),
-        )
-        .on_press(Message::OpenPrefMenu(PrefMenu::GroupInviteRole))
-        .padding(Padding::from([6, 10]))
-        .style(theme::secondary_action(hover))
-        .into(),
-        PrefTrail::None,
-        d,
-    ));
+        sharing = sharing.push(button(text("Create invite link").size(d.body)).on_press(Message::EnsureGroupLink)
+            .padding(12).width(Length::Fill).style(theme::primary_action(hover)));
+    } else { sharing = sharing.push(text("Only admins can create an invite link.").size(d.meta).color(theme::t().text_muted)); }
+    let query = g.invite_search.to_lowercase();
     let contacts = app.contacts_to_add_to_group();
-    if contacts.is_empty() {
-        inv = inv.push(
-            container(
-                column![
-                    icons::user_group_icon(28.0, theme::t().text_muted),
-                    text("Everyone you know is already here")
-                        .size(d.body)
-                        .color(theme::t().text_secondary),
-                    text("Connect with someone in Chats to invite them.")
-                        .size(d.meta)
-                        .color(theme::t().text_muted),
-                ]
-                .spacing(6)
-                .align_x(Alignment::Center),
-            )
-            .width(Length::Fill)
-            .center_x(Length::Fill)
-            .padding(Padding::from([16, 8])),
-        );
-    } else {
-        let mut list = Column::new().spacing(0).width(Length::Fill);
-        for chat in contacts {
-            let contact_id = chat.id.api_id;
-            let mut names = Column::new().spacing(1).width(Length::Fill).push(
-                txt(chat.title.clone())
-                    .size(d.body)
-                    .color(theme::t().text_primary)
-                    .wrapping(Wrapping::WordOrGlyph),
-            );
-            if !chat.peer_profile.short_descr.is_empty() {
-                names = names.push(
-                    txt(chat.peer_profile.short_descr.clone())
-                        .size(d.meta)
-                        .color(theme::t().text_secondary)
-                        .wrapping(Wrapping::WordOrGlyph),
-                );
-            }
-            list = list.push(
-                row![
-                    profile_avatar(
-                        chat.peer_profile.image.as_deref(),
-                        &chat.title,
-                        MEMBER_AVATAR
-                    ),
-                    names,
-                    composer_hit(
-                        icons::user_plus_tool(PROFILE_HEADER_ICON, hover),
-                        PROFILE_HEADER_ICON,
-                        Message::AddGroupMember(contact_id),
-                    ),
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center)
-                .padding(Padding::from([4, 8])),
-            );
-        }
-        inv = inv.push(list);
+    let filtered: Vec<_> = contacts.iter().filter(|chat| chat.title.to_lowercase().contains(&query)).collect();
+    let mut people = Column::new().spacing(8).padding(8).width(Length::Fill)
+        .push(text("Send an invitation in a direct chat.").size(d.meta).color(theme::t().text_secondary))
+        .push(pref_row(None, "Invite as", choice_chip(role_label(&g.invite_role), Message::OpenPrefMenu(PrefMenu::GroupInviteRole), d, hover), PrefTrail::None, d))
+        .push(text_input("Search contacts", &g.invite_search).on_input(Message::GroupInviteSearch).padding(10).style(theme::rounded_field()));
+    if filtered.is_empty() {
+        people = people.push(container(text(if contacts.is_empty() { "Everyone you know is already here." } else { "No matching contacts." })
+            .size(d.meta).color(theme::t().text_secondary)).padding(16));
     }
-    page = page.push(card(inv));
-    page.into()
+    for chat in filtered {
+        people = people.push(button(row![
+            profile_avatar(chat.peer_profile.image.as_deref(), &chat.title, 40.0),
+            container(ellipsis_text(chat.title.clone(), d.body, theme::t().text_primary, 1)).width(Length::Fill).clip(true),
+            icons::user_plus_tool(24.0, hover),
+        ].spacing(12).align_y(Alignment::Center))
+            .on_press(Message::AddGroupMember(chat.id.api_id)).padding(8).width(Length::Fill).style(theme::ghost_tile(hover)));
+    }
+    column![
+        crate::preference_ui::group(Some("Share an invite"), None, sharing, d),
+        crate::preference_ui::group(Some("Invite contacts"), None, people, d),
+    ].spacing(20).into()
 }
 
 fn group_pref_icon(key: &str) -> Element<'static, Message> {
@@ -9915,9 +9754,7 @@ fn image_gallery(app: &App) -> Element<'_, Message> {
         .into_owned();
     let header = row![
         tool(icons::cancel_icon(20.0, iced::Color::WHITE), Message::CloseImage),
-        text(title)
-            .color(iced::Color::WHITE)
-            .width(Length::Fill),
+        container(crate::ellipsis::ellipsis_text(title, 16.0, iced::Color::WHITE, 1)).width(Length::Fill).clip(true),
         tool(
             icons::minus_icon(20.0, iced::Color::WHITE),
             Message::ImageZoom(0.8)
@@ -9931,36 +9768,16 @@ fn image_gallery(app: &App) -> Element<'_, Message> {
     .padding(8)
     .align_y(Alignment::Center)
     .height(56);
-    let picture = iced::widget::image(iced::widget::image::Handle::from_path(path))
-        .width((app.width - 32.0).max(1.0) * zoom)
-        .height((app.height - 120.0).max(1.0) * zoom)
-        .content_fit(ContentFit::Contain);
-    let body = scrollable(
-        container(picture)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill),
-    )
-    .direction(iced::widget::scrollable::Direction::Both {
-        vertical: Default::default(),
-        horizontal: Default::default(),
-    })
-    .width(Length::Fill)
-    .height(Length::Fill);
-    let footer = row![
-        tool(
-            icons::back_icon(20.0, iced::Color::WHITE),
-            Message::ImageStep(-1)
-        ),
-        text(format!("{} / {}", index + 1, paths.len().max(1))).color(iced::Color::WHITE),
-        button(text("Next").color(iced::Color::WHITE))
-                .on_press(Message::ImageStep(1))
-                .style(theme::ghost_tile(app.hover_ok())),
-    ]
+    let previous = button(icons::centered_hit(icons::back_icon(20.0, iced::Color { a: if index > 0 { 1.0 } else { 0.3 }, ..iced::Color::WHITE }), 36.0))
+        .on_press_maybe((index > 0).then_some(Message::ImageStep(-1))).padding(0).style(theme::icon_action(app.hover_ok()));
+    let next = button(icons::centered_hit(icons::next_icon(20.0, iced::Color { a: if index + 1 < paths.len() { 1.0 } else { 0.3 }, ..iced::Color::WHITE }), 36.0))
+        .on_press_maybe((index + 1 < paths.len()).then_some(Message::ImageStep(1))).padding(0).style(theme::icon_action(app.hover_ok()));
+    let footer = row![previous, text(format!("{} / {}", index + 1, paths.len().max(1))).color(iced::Color::WHITE), next]
     .spacing(16)
     .align_y(Alignment::Center);
     container(column![
         header,
-        crate::image_gestures::view(body, *zoom),
+        crate::image_gestures::view(path, *zoom),
         container(footer).center_x(Length::Fill).padding(8)
     ])
     .width(Length::Fill)

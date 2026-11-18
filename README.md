@@ -15,7 +15,8 @@ It uses a **shared Rust core** on top of the official SimpleX chat library (`lib
 
 Linux and Android support messaging, groups, channels, attachments, voice messages,
 reactions, profiles and settings, with layouts for phones and larger screens.
-Audio calls currently work on Linux; Android has call history only.
+Audio calls work on Linux and Android through the shared native WebRTC engine.
+The macOS app now shares that controller, with native audio and call UI pending Mac device validation.
 macOS has an experimental native SwiftUI client; iOS remains a scaffold.
 
 The v0.1.2 checkpoint includes an Android preview APK. See the

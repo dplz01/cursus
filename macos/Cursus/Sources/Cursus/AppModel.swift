@@ -77,6 +77,7 @@ enum ComposeMode: Equatable {
 
 @MainActor
 final class AppModel: ObservableObject {
+    let calls = MacCalls()
     @Published var phase: Phase = .starting
     @Published var info: AppInfo?
     @Published var user: User?
@@ -255,6 +256,7 @@ final class AppModel: ObservableObject {
             }
             info = try? await Core.call("appInfo", as: AppInfo.self)
             phase = .ready
+            calls.startMonitoring(model: self)
             Prefs.syncDownloadPolicy()
             idleLock.start()
             Notifier.requestAuthorization()
@@ -276,6 +278,7 @@ final class AppModel: ObservableObject {
     }
 
     func lock() {
+        calls.stopForLock()
         // Unlock waits (busy) until the database is really closed.
         busy = true
         Task {
@@ -295,6 +298,7 @@ final class AppModel: ObservableObject {
 
     /// Forget everything on this Mac (forgotten password).
     func wipeAll() async {
+        calls.stopForLock()
         do {
             try await Core.run("wipeLocalData")
             Keychain.delete()
@@ -932,6 +936,7 @@ final class AppModel: ObservableObject {
     // MARK: - Voice messages
 
     func startRecording() async {
+        guard calls.state.active == nil, !calls.busy else { errorMessage = "End the call before recording a voice message."; return }
         guard activeRef != nil, voiceDraft == nil else { return }
         VoicePlayer.shared.stop()
         do {

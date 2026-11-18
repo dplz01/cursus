@@ -85,6 +85,7 @@ class MainActivity : ComponentActivity() {
     /** A notification opens its chat; a simplex: link opens the connect flow. */
     private fun handle(intent: Intent?) {
         intent ?: return
+        if (intent.getBooleanExtra("showCall", false)) model.calls.expanded = true
         intent.getStringExtra(Notifier.EXTRA_CHAT)?.let { model.pendingChat = it }
         if (intent.action == Intent.ACTION_VIEW) intent.dataString?.let { model.pendingLink = it }
     }

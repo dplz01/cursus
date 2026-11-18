@@ -5,7 +5,7 @@ Native Kotlin + Jetpack Compose app over the shared Rust core.
 ```text
 Compose UI (app/src/main/java/chat/cursus)      screens, theme, notifications, Keystore
    │  Native.call(json) / Native.nextEvent()
-android/jni  (libcursus_android.so)             4 JNI functions, logcat logging
+android/jni  (libcursus_android.so)             JSON + PCM audio, logcat logging
    │
 bridge/      (cursus-bridge)                    JSON API — the same one the macOS app uses
    │
@@ -81,11 +81,27 @@ files, text size, "Load earlier messages", the sender's inline preview for
 photos not downloaded yet, "Delete after (this device only)", closing a
 member's support chat, live transfer progress.
 
-Next: calls. `cursus-call` is shared, but it still has to be built for
-Android (its bundled libopus needs the NDK's CMake toolchain), given an
-`AudioDevice` (AAudio / AudioRecord with the voice-communication preset)
-and a call state machine in the bridge — today that lives in the Linux
-app (`linux/src/call_flow.rs`).
+Audio calls: outgoing invitations, incoming answer/decline, mute, speaker routing,
+duration, call history and ongoing-call notifications. Calls use the same
+native WebRTC/Opus engine and encrypted SimpleX signaling as Linux. Android
+AudioRecord/AudioTrack provide 48 kHz mono PCM; the voice-communication preset
+and available Android echo/noise effects handle device audio. A microphone
+foreground service keeps an accepted call alive when the activity is hidden.
+Back minimizes the controls; Hang up ends the call. Notifications open the
+app to answer so microphone permission and Android background restrictions
+are respected. Incoming calls in the background require receiving messages
+in the background to be enabled. Video and system Telecom integration are
+not implemented.
+
+The Gradle native task provides `cmake/android.toolchain.cmake` to cargo-ndk
+for bundled Opus. It uses the selected NDK, arm64-v8a, API 26 and a `lib`
+installation directory. No downloaded Android Opus binaries or WebView are
+needed.
+
+Validation: local encrypted PCM transport/mute/teardown tests and controller
+lifecycle tests, Android lint/unit tests and APK builds. Two-device audio,
+echo quality, Bluetooth routing and OEM background behavior need device
+verification; no interoperability or hardware result is implied by a build.
 
 UI rule: every screen follows the Linux app's structure, cards and
 wording (see `docs/DESIGN_SYSTEM.md` and `linux/src/ui.rs`).

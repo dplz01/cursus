@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
 
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <application
         android:name=".CursusApplication"
         android:allowBackup="false"
@@ -41,6 +45,10 @@
             android:name=".CursusService"
             android:exported="false"
             android:foregroundServiceType="remoteMessaging" />
+
+        <activity android:name=".calls.AnswerCallActivity" android:exported="false" />
+        <service android:name=".calls.CallService" android:exported="false" android:foregroundServiceType="microphone" />
+        <receiver android:name=".calls.CallActionReceiver" android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

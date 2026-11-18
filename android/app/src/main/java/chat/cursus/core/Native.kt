@@ -15,6 +15,10 @@ object Native {
     /** `{"method": …, "params": {…}}` → `{"ok": …}` or `{"error": "…"}`. Blocks. */
     external fun call(request: String): String
 
+    /** 20 ms, 48 kHz mono PCM, called on dedicated audio threads. */
+    external fun captureCallAudio(samples: ShortArray)
+    external fun playCallAudio(samples: ShortArray)
+
     /** Next core event as JSON, or null after [timeoutMs] without one. Blocks. */
     external fun nextEvent(timeoutMs: Int): String?
 }

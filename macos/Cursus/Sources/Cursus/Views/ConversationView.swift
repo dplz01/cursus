@@ -45,6 +45,10 @@ struct ConversationView: View {
                             }
                         }
                     }
+                    if chat.isDirect {
+                        IconTool(icon: "calls", help: "Audio call", size: 20) { model.calls.start(chat) }
+                            .disabled(model.calls.state.active != nil || model.calls.busy)
+                    }
                     if canOpenProfile {
                         IconTool(icon: "info-circle", help: chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)",
                                  size: 20) { model.toggleInfo() }
@@ -764,6 +768,7 @@ struct FileRow: View {
 /// Plays one voice message at a time.
 final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     static let shared = VoicePlayer()
+    @Published var callActive = false
     @Published private(set) var playingId: Int64?
     /// 0…1 of the message playing (waveform fill).
     @Published private(set) var progress: Double = 0
@@ -771,6 +776,7 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var timer: Timer?
 
     func toggle(id: Int64, url: URL) {
+        guard !callActive else { return }
         if playingId == id {
             stop()
             return

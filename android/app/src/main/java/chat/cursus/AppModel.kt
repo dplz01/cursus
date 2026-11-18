@@ -66,6 +66,10 @@ sealed interface ComposeMode {
  * bridge); this only keeps what the screens show and calls the core.
  */
 class AppModel(app: Application) : AndroidViewModel(app) {
+    val calls = chat.cursus.calls.AndroidCalls(app, viewModelScope,
+        locked = { appLocked }, ready = { phase == Phase.Ready },
+        beforeCall = { chat.cursus.media.VoicePlayer.stop(); discardRecording() },
+        report = { error = it })
     private val passwords = PasswordStore(app)
     val prefs = Prefs(app)
 
@@ -315,6 +319,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     // endregion
 
     fun lock() {
+        calls.end()
         dropPlaintext()
         busy = true
         viewModelScope.launch {
@@ -336,6 +341,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     /** Forget everything on this phone (forgotten password). */
     fun wipeAll() {
+        calls.end()
         viewModelScope.launch {
             try {
                 Core.run("wipeLocalData")
@@ -367,6 +373,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     // region Events
 
     private fun startPump() {
+        calls.monitor()
         if (pumpStarted) return
         pumpStarted = true
         Thread({
@@ -753,6 +760,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun startRecording() {
+        if (calls.state.active != null || calls.starting) { error = "End the call before recording a voice message."; return }
         if (recording) return
         VoicePlayer.stop()
         try {
@@ -839,6 +847,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     fun playVoice(file: FileInfo) = act {
         val path = plainPath(file) ?: return@act
+        if (calls.state.active != null || calls.starting) { error = "End the call before playing a voice message."; return@act }
         VoicePlayer.toggle(file.id, path)
     }
 

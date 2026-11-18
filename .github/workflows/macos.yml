@@ -9,9 +9,9 @@ name: macOS
 on:
   push:
     branches: [main, master, "feature/macos"]
-    paths: ["macos/**", "bridge/**", "core/**", "Cargo.lock", ".github/workflows/macos.yml"]
+    paths: ["macos/**", "bridge/**", "core/**", "call/**", "Cargo.toml", "Cargo.lock", ".cargo/**", ".github/workflows/macos.yml"]
   pull_request:
-    paths: ["macos/**", "bridge/**", "core/**", "Cargo.lock", ".github/workflows/macos.yml"]
+    paths: ["macos/**", "bridge/**", "core/**", "call/**", "Cargo.toml", "Cargo.lock", ".cargo/**", ".github/workflows/macos.yml"]
   workflow_dispatch:
 
 permissions:
@@ -31,10 +31,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Rust bridge tests
-        run: cargo test --locked -p cursus-bridge
       - name: Build Cursus.app
         run: ./macos/build.sh
+      - name: Rust call controller and PCM tests
+        run: |
+          cargo test --locked -p cursus-bridge --features calls
+          cargo test --locked -p cursus-call pcm
       - name: Zip
         run: ditto -c -k --keepParent macos/build/Cursus.app Cursus-macos-${{ matrix.arch }}.zip
       - uses: actions/upload-artifact@v4

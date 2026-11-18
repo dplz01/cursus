@@ -3,6 +3,8 @@
 //! interface each platform implements — Linux with its sound-server tools,
 //! macOS with AVAudioEngine (both with echo cancellation).
 
+pub mod pcm;
+
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};

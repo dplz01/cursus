@@ -96,6 +96,8 @@ fn role_param(p: &Value, key: &str) -> Result<String, String> {
 }
 
 pub fn dispatch(method: &str, p: &Value) -> Result<Value, String> {
+    #[cfg(feature = "calls")]
+    if let Some(result) = crate::calls::dispatch(method, p) { return result; }
     match method {
         "appInfo" => Ok(app_info()),
         "open" => open(p),

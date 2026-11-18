@@ -77,3 +77,28 @@ fn take(raw: *mut c_char) -> Option<String> {
     unsafe { cursus_bridge::cursus_free(raw) };
     Some(text)
 }
+
+/// Fixed-size PCM frames avoid JSON/base64 allocations on the real-time path.
+#[no_mangle]
+pub extern "system" fn Java_chat_cursus_core_Native_captureCallAudio(
+    mut env: JNIEnv, _class: JClass, samples: jni::objects::JShortArray,
+) {
+    let mut pcm = [0i16; 960];
+    let result = if env.get_array_length(&samples).ok() != Some(960) {
+        Err("Expected 960 microphone samples".to_string())
+    } else { env.get_short_array_region(&samples, 0, &mut pcm).map_err(|e| e.to_string())
+        .and_then(|_| cursus_bridge::calls::capture(&pcm)) };
+    if let Err(e) = result { let _ = env.throw_new("java/lang/IllegalStateException", e); }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_chat_cursus_core_Native_playCallAudio(
+    mut env: JNIEnv, _class: JClass, samples: jni::objects::JShortArray,
+) {
+    let mut pcm = [0i16; 960];
+    let result = if env.get_array_length(&samples).ok() != Some(960) {
+        Err("Expected 960 speaker samples".to_string())
+    } else { cursus_bridge::calls::playback(&mut pcm)
+        .and_then(|_| env.set_short_array_region(&samples, 0, &pcm).map_err(|e| e.to_string())) };
+    if let Err(e) = result { let _ = env.throw_new("java/lang/IllegalStateException", e); }
+}

@@ -8,17 +8,19 @@ struct MainView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        HStack(spacing: 0) {
-            NavRail()
-            Hairline(vertical: true)
-            NavigationView {
-                middle
-                    .frame(minWidth: 260, idealWidth: 300)
-                detail
-                    .frame(minWidth: 380)
+        VStack(spacing: 0) {
+            CallBannerView(calls: model.calls)
+            HStack(spacing: 0) {
+                NavRail()
+                Hairline(vertical: true)
+                NavigationView {
+                    middle.frame(minWidth: 260, idealWidth: 300)
+                    detail.frame(minWidth: 380)
+                }
             }
         }
         .background(Theme.app)
+        .background(CallPresentation(calls: model.calls).environmentObject(model))
         .onExitCommand {
             if model.showInfo { model.showInfo = false }
             else if model.support != nil { model.closeSupport() }
@@ -42,7 +44,7 @@ struct MainView: View {
         case .chats, .channels:
             ChatListView()
         case .calls:
-            CallsView()
+            CallsView(calls: model.calls)
         case .settings:
             SettingsListView()
         }
@@ -53,7 +55,7 @@ struct MainView: View {
         case .settings:
             SettingsDetailView()
         case .calls:
-            Placeholder(icon: "calls", text: "Voice calls are coming to Cursus for Mac.")
+            CallDetailView(calls: model.calls)
         case .chats, .channels:
             if let chat = model.selectedChat {
                 // The profile is a page of its own (as on Linux), not a strip
@@ -332,19 +334,5 @@ struct ChatRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(GhostTileStyle(selected: selected))
-    }
-}
-
-struct CallsView: View {
-    var body: some View {
-        VStack(spacing: 0) {
-            PaneHeader(title: "Calls", background: Theme.list)
-            VStack(spacing: 12) {
-                IconDisc(icon: "calls", size: 44)
-                Text("No calls yet.").font(.cBody).foregroundColor(Theme.secondaryText)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .background(Theme.list)
     }
 }

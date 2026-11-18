@@ -1,6 +1,8 @@
 //! JSON API over `cursus-core` for the native apps: the macOS app links this
 //! C ABI directly; Android wraps the same four functions in JNI
 //! (`android/jni`). Requests, replies and events are identical on both.
+//! The optional `calls` feature adds the shared call controller and two fixed-frame
+//! PCM C functions used by macOS; Android also uses the PCM adapter through JNI.
 //!
 //! Deliberately tiny so the app side needs no generated bindings (Swift builds
 //! with the Swift 5.7 toolchain of the last Xcode that runs on Monterey):
@@ -16,6 +18,9 @@
 //! (they go through libsimplex), so Swift makes them off the main thread;
 //! the session is shared and thread-safe. Chats are addressed by their core
 //! command reference (`@3`, `#9`, `#9(_support:4)`, `*1`) — see [`dto`].
+
+#[cfg(feature = "calls")]
+pub mod calls;
 
 mod dto;
 mod methods;
@@ -37,7 +42,7 @@ fn runtime() -> &'static tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("cursus-core")
-            .enable_time()
+            .enable_all()
             .build()
             .expect("tokio runtime")
     })
@@ -87,6 +92,8 @@ pub(crate) fn install_session(session: Session) -> Result<Arc<Session>, String> 
 /// is gone; once ours is the last one, dropping it here stops the chat and
 /// closes the store on this thread.
 pub(crate) fn drop_session() {
+    #[cfg(feature = "calls")]
+    calls::close();
     let session = SESSION.lock().ok().and_then(|mut s| s.take());
     if let Ok(mut events) = EVENTS.lock() {
         *events = None;
@@ -159,6 +166,8 @@ pub extern "C" fn cursus_next_event(timeout_ms: i32) -> *mut c_char {
     }));
     match got {
         Ok(Some(event)) => {
+            #[cfg(feature = "calls")]
+            calls::on_event(&event);
             // As the official clients: small images / voice / video download
             // without a tap — when the user's settings allow it. Files on
             // unknown servers are left for the user to approve.

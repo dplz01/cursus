@@ -1233,6 +1233,7 @@ dependencies = [
 name = "cursus-bridge"
 version = "0.1.2"
 dependencies = [
+ "cursus-call",
  "cursus-core",
  "serde_json",
  "tokio",

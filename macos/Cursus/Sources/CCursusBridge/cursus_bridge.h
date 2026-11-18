@@ -16,4 +16,10 @@ char *cursus_next_event(int32_t timeout_ms);
 
 void cursus_free(char *s);
 
+/* 48 kHz mono signed PCM, exactly 960 samples (20 ms).
+ * Return 0 on success, -1 on invalid input or codec failure. These run on
+ * audio threads; they do not send JSON or wait for signaling. */
+int32_t cursus_call_capture(const int16_t *samples, int32_t count);
+int32_t cursus_call_playback(int16_t *samples, int32_t count);
+
 #endif

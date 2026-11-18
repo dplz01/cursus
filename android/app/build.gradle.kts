@@ -59,6 +59,7 @@ val cargoBuild by tasks.registering(Exec::class) {
     // cargo-ndk hard-links the library into jniLibs and keeps an existing
     // file, so a debug build's copy would survive into a release APK.
     doFirst { delete(rootDir.resolve("app/src/main/jniLibs/arm64-v8a/libcursus_android.so")) }
+    environment("CMAKE_TOOLCHAIN_FILE_aarch64_linux_android", rootDir.resolve("cmake/android.toolchain.cmake").absolutePath)
     commandLine(listOfNotNull(
         "cargo", "ndk", "-t", "arm64-v8a", "--platform", "26",
         "-o", rootDir.resolve("app/src/main/jniLibs").absolutePath,

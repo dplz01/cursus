@@ -65,6 +65,7 @@ fun Root(model: AppModel) {
         Phase.Ready -> if (model.appLocked) AppLockScreen(model) else MainScreen(model)
         is Phase.Failed -> FailedScreen(phase.message)
     }
+    if (model.phase == Phase.Ready && !model.appLocked) CallSurface(model)
     model.error?.let { text ->
         AlertDialog(
             onDismissRequest = { model.error = null },
@@ -81,10 +82,11 @@ fun Root(model: AppModel) {
 
 @Composable
 fun MainScreen(model: AppModel) {
-    androidx.compose.foundation.layout.BoxWithConstraints(
-        Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
-    ) {
-        MainContent(model, twoPane = PaneLayout.isSplit(maxWidth.value), listWidth = PaneLayout.listWidth(maxWidth.value).dp)
+    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+        CallBanner(model)
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            MainContent(model, twoPane = PaneLayout.isSplit(maxWidth.value), listWidth = PaneLayout.listWidth(maxWidth.value).dp)
+        }
     }
 }
 
@@ -164,7 +166,7 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
                 current != null -> pageContent(current)
                 inChatSection -> conversation()
                 model.section == Section.Settings -> EmptyPane("Choose a settings category.")
-                else -> EmptyPane("Audio calls are coming to Cursus for Android.")
+                else -> CallsDetail(model)
             }
         }
     }
@@ -269,14 +271,14 @@ fun EmptyPane(text: String) {
 fun CallsPane(model: AppModel) {
     var calls by remember { mutableStateOf<List<chat.cursus.core.CallRecord>?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(model.calls.historyRevision) {
         runCatching { chat.cursus.core.Core.call<List<chat.cursus.core.CallRecord>>("callHistory") }
             .onSuccess { calls = it }.onFailure { failure = it.message }
     }
     val c = Cursus.colors
     val contactsById = model.chats.filter { it.isContact }.associateBy { it.apiId }
     Column(Modifier.fillMaxSize()) {
-        PaneHeader("Calls")
+        PaneHeader("Calls", actions = { NewCallButton(model) })
         when {
             failure != null -> EmptyPane(failure ?: "Could not load calls.")
             calls == null -> EmptyPane("Loading calls…")

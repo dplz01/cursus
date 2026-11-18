@@ -93,6 +93,7 @@ import java.time.LocalDate
 @Composable
 fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () -> Unit) {
     val c = Cursus.colors
+    val callPermission = rememberCallPermission(model)
     Column(Modifier.fillMaxSize().background(c.bgPanel).windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         // Header and composer are bars (sidebar tone); the history sits on the panel.
         Row(
@@ -123,6 +124,9 @@ fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () 
                     if (chat.canModerate) onInfo() else model.select("${chat.ref}(_support)")
                 }
             }
+            if (chat.isContact) IconTool(R.drawable.ic_calls, "Audio call", {
+                callPermission { model.calls.start(chat.apiId, chat.title) }
+            }, enabled = model.calls.state.active == null && !model.calls.starting)
             IconTool(R.drawable.ic_info_circle, "Info", onInfo)
         }
         Box(Modifier.fillMaxWidth().background(c.border).heightIn(min = 1.dp, max = 1.dp))

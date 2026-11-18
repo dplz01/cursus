@@ -6,7 +6,7 @@ newer**, Intel and Apple Silicon.
 
 ```
 SwiftUI app (macos/Cursus)        views, Keychain, notifications, Dock badge
-        │  4 C functions, JSON in/out
+        │  JSON commands/events + two PCM audio functions
 Rust bridge (../bridge)           static library over cursus-core
         │
 cursus-core  →  libsimplex.dylib  (Contents/Frameworks)
@@ -21,7 +21,7 @@ the macOS 12 SDK (Xcode 13.1 – 14.2 run on Monterey). JSON shapes live in
 ## Build
 
 You need Xcode **or** just the Command Line Tools (`xcode-select --install`),
-and Rust (<https://rustup.rs>).
+Rust (<https://rustup.rs>) and CMake (`brew install cmake`) for bundled Opus.
 
 ```sh
 ./macos/build.sh          # → macos/build/Cursus.app (release, ad-hoc signed)
@@ -98,4 +98,26 @@ Same features as the Linux app, implemented natively; shared rules live in
 | C. Chat flow | "New messages" divider (new arrivals, and opening a chat with unread), follow only your own sends, `:emoji:` suggestions + live expansion, ↑ edits your last message | Done |
 | D. Media | voice recording (draft: listen, discard, send), waveforms, video posters + playback, photo / video gallery | Done |
 | E. Groups | "Chat with admins" (members) and "Chats with members" (moderators: threads, join requests with accept / remove, delete thread), private chat from a member page | Done |
-| F. Calls | WebRTC engine moves from the Linux app into the core, then a native call UI | Next |
+| F. Calls | Shared native WebRTC/Opus, incoming/outgoing audio calls, mute, history and notifications | Implemented; Mac device validation pending |
+## Audio calls
+
+The Mac build enables the bridge's `calls` feature. It uses the same call
+controller, frame encryption and Opus PCM adapter as Android. AVAudioEngine
+converts the selected system input/output devices to 48 kHz mono PCM; voice
+processing is enabled when the device supports it. Microphone permission
+is requested before starting or accepting a call. Audio settings opens the
+system's device controls; no iOS-only AVAudioSession APIs are used.
+
+Start from a direct chat header or Calls → New audio call. Incoming calls
+have Answer/Decline controls and actionable notifications. Escape/Back
+minimizes the call; Hang up ends it. Closing a chat window keeps the call
+running. Closing/locking the account and quitting end it. Existing automatic
+account-lock settings still apply. Calls disable idle system sleep and App
+Nap while active. Video and system CallKit integration are not included.
+
+The app self-test checks the PCM C ABI and arbitrary-buffer capture framing
+without opening a microphone. CI builds Intel and Apple Silicon bundles and
+runs the shared controller/PCM regressions. This Linux development machine
+cannot compile Apple frameworks or validate microphone, echo cancellation,
+notifications, device changes or interoperability on a Mac; those checks
+remain necessary on macOS 12 and a current macOS release.

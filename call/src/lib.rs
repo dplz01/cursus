@@ -696,6 +696,46 @@ pub(crate) mod tests {
         caller.close().await;
     }
 
+    /// Android's actual PCM adapter, both directions through encrypted RTP,
+    /// followed by mute and teardown. No fake encoded-packet injection.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pcm_devices_carry_audio_mute_and_stop() {
+        use audio::pcm::PcmDevice;
+        let a_device = Arc::new(PcmDevice::default());
+        let b_device = Arc::new(PcmDevice::default());
+        let (a, mut a_events) = CallEngine::new(Some(&key()), a_device.clone()).await.unwrap();
+        let (b, mut b_events) = CallEngine::new(Some(&key()), b_device.clone()).await.unwrap();
+        let offer = a.create_offer().await.unwrap();
+        let answer = b.accept_offer(&offer.rtc_session, &offer.rtc_ice_candidates).await.unwrap();
+        a.apply_answer(&answer.rtc_session, &answer.rtc_ice_candidates).await.unwrap();
+        let (ar, br) = tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::join!(wait_connected(&mut a_events), wait_connected(&mut b_events))
+        }).await.expect("local media connection");
+        ar.unwrap(); br.unwrap();
+        let tone: Vec<i16> = (0..audio::FRAME).map(|n| ((n as f32 * 0.08).sin() * 8000.0) as i16).collect();
+        let mut at_a = [0i16; audio::FRAME];
+        let mut at_b = [0i16; audio::FRAME];
+        let (mut loud_a, mut loud_b) = (0i16, 0i16);
+        for _ in 0..30 {
+            a_device.capture(&tone).unwrap(); b_device.capture(&tone).unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            a_device.playback(&mut at_a).unwrap(); b_device.playback(&mut at_b).unwrap();
+            loud_a = loud_a.max(at_a.iter().map(|x| x.saturating_abs()).max().unwrap());
+            loud_b = loud_b.max(at_b.iter().map(|x| x.saturating_abs()).max().unwrap());
+        }
+        assert!(loud_a > 1000 && loud_b > 1000, "PCM must travel both ways");
+        a.set_muted(true);
+        for _ in 0..30 {
+            a_device.capture(&tone).unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            b_device.playback(&mut at_b).unwrap();
+        }
+        assert!(at_b.iter().all(|x| x.saturating_abs() < 100), "mute must silence the remote microphone");
+        a.close().await; b.close().await;
+        a_device.playback(&mut at_a).unwrap(); b_device.playback(&mut at_b).unwrap();
+        assert!(at_a.iter().chain(at_b.iter()).all(|x| *x == 0));
+    }
+
     /// A peer with a different key can't decode our frames.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wrong_key_yields_no_audio() {

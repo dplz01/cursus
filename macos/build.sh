@@ -28,6 +28,7 @@ need() {
 
 [[ "$(uname -s)" == "Darwin" ]] || { echo "Run this on a Mac." >&2; exit 1; }
 need swift "Install Xcode or the Command Line Tools: xcode-select --install"
+need cmake "Install CMake (for bundled Opus): brew install cmake"
 need cargo "Install Rust: https://rustup.rs (then open a new terminal)"
 need curl ""
 need unzip ""
@@ -58,7 +59,7 @@ fi
 
 # 2. Rust bridge (static library).
 say "Building the Rust core bridge"
-CARGO_FLAGS=(--target "$TRIPLE" -p cursus-bridge --locked)
+CARGO_FLAGS=(--target "$TRIPLE" -p cursus-bridge --features calls --locked)
 [[ "$CONFIG" == "release" ]] && CARGO_FLAGS+=(--release)
 (cd "$ROOT" && cargo build "${CARGO_FLAGS[@]}")
 RUST_LIB_DIR="$ROOT/target/$TRIPLE/$CONFIG"

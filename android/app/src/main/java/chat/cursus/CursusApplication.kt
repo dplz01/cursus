@@ -16,6 +16,7 @@ class CursusApplication : Application() {
         // Before anything else touches the core: private storage for the
         // database, files and libsimplex's temp dir.
         Native.init(filesDir.resolve("cursus").absolutePath)
+        chat.cursus.calls.CallNotifications.createChannels(this)
         Notifier.createChannel(this)
         CursusService.createChannel(this)
     }

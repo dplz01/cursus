@@ -382,7 +382,7 @@ struct WindowChrome: NSViewRepresentable {
             if window.styleMask.contains(.fullSizeContentView) {
                 window.styleMask.remove(.fullSizeContentView)
             }
-            window.titlebarAppearsTransparent = false
+            window.titlebarAppearsTransparent = true
             window.titlebarSeparatorStyle = .none
         }
     }

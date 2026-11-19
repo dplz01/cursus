@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import AVKit
+import ImageIO
 import SwiftUI
 
 // Voice recording, waveforms, video posters and the media gallery — native
@@ -368,20 +369,43 @@ struct VideoThumbnail: View {
         .frame(maxWidth: 300, maxHeight: 320)
         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .task(id: file.path) {
-            guard let url = await model.readablePath(file) else { return }
-            poster = await Self.poster(url)
+            guard let url = await model.readablePath(file), !Task.isCancelled else { return }
+            let image = await Self.poster(url)
+            guard !Task.isCancelled else { return }
+            poster = image
         }
     }
 
+    @MainActor
     static func poster(_ url: URL) async -> NSImage? {
-        await Task.detached(priority: .utility) { () -> NSImage? in
-            let generator = AVAssetImageGenerator(asset: AVAsset(url: url))
+        // AppKit image objects stay on the UI actor on every supported macOS.
+        // Only immutable encoded bytes cross the worker boundary.
+        let bytes: Data? = await Task.detached(priority: .utility) { () -> Data? in
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: 600, height: 600)
-            guard let cg = try? generator.copyCGImage(at: CMTime(seconds: 0.3, preferredTimescale: 600), actualTime: nil)
-            else { return nil }
-            return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+            let time = CMTime(seconds: 0.3, preferredTimescale: 600)
+            let cg: CGImage
+            #if compiler(>=5.7) && CURSUS_MODERN_SHELL
+            if #available(macOS 13.0, *) {
+                guard let frame = try? await generator.image(at: time) else { return nil }
+                cg = frame.image
+            } else {
+                guard let frame = try? generator.copyCGImage(at: time, actualTime: nil) else { return nil }
+                cg = frame
+            }
+            #else
+            guard let frame = try? generator.copyCGImage(at: time, actualTime: nil) else { return nil }
+            cg = frame
+            #endif
+            let bytes = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(bytes, "public.png" as CFString, 1, nil) else { return nil }
+            CGImageDestinationAddImage(destination, cg, nil)
+            guard CGImageDestinationFinalize(destination) else { return nil }
+            return bytes as Data
         }.value
+        guard !Task.isCancelled, let bytes = bytes else { return nil }
+        return NSImage(data: bytes)
     }
 }
 

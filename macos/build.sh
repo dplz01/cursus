@@ -68,6 +68,14 @@ RUST_LIB_DIR="$ROOT/target/$TRIPLE/$CONFIG"
 # 3. SwiftUI app.
 say "Building the SwiftUI app"
 SWIFT_FLAGS=(-c "$CONFIG" --package-path "$MAC/Cursus" -Xlinker -L -Xlinker "$RUST_LIB_DIR")
+# SDK + compiler gates keep glass available on both Intel and Apple Silicon
+# without making older SDKs or older Intel operating systems unbuildable.
+if [[ "${SDK%%.*}" -ge 13 ]]; then
+  SWIFT_FLAGS+=(-Xswiftc -DCURSUS_MODERN_SHELL)
+fi
+if [[ "${SDK%%.*}" -ge 26 ]]; then
+  SWIFT_FLAGS+=(-Xswiftc -DCURSUS_GLASS)
+fi
 swift build "${SWIFT_FLAGS[@]}"
 BIN_DIR="$(swift build "${SWIFT_FLAGS[@]}" --show-bin-path)"
 

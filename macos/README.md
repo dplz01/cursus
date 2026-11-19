@@ -121,3 +121,20 @@ runs the shared controller/PCM regressions. This Linux development machine
 cannot compile Apple frameworks or validate microphone, echo cancellation,
 notifications, device changes or interoperability on a Mac; those checks
 remain necessary on macOS 12 and a current macOS release.
+
+## Current macOS design
+
+The same Cursus blue, light/dark surfaces, icon set and grouped preference
+rows remain shared with Linux and Android. On a current SDK, the Mac app
+uses NavigationSplitView, a unified compact toolbar, native switches and
+an inset rounded destination rail. With a macOS 26+ SDK/compiler and runtime,
+the rail uses system Liquid Glass. Message history and settings stay opaque
+for readability. Reduce Transparency or Increase Contrast selects an opaque
+bordered rail. Older SDKs/runtimes retain the same layout with a native
+HSplitView and solid rail; both Intel and Apple Silicon use these same rules.
+
+`build.sh` selects `CURSUS_MODERN_SHELL` and `CURSUS_GLASS` from the installed
+SDK. To get the new glass appearance, select Xcode 26 or later with
+`xcode-select` before building. This does not raise the minimum supported
+runtime above macOS 12. CI builds both architectures with the macOS 26 SDK
+and also compiles the fallback UI without these flags.

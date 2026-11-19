@@ -16,6 +16,30 @@ private struct Hovering<Content: View>: View {
     }
 }
 
+/// Glass belongs to navigation chrome; message and settings surfaces retain
+/// the shared opaque Cursus palette. Old SDKs never resolve new API symbols.
+struct NavigationChrome: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    @ViewBuilder func body(content: Content) -> some View {
+        #if compiler(>=6.2) && CURSUS_GLASS
+        if #available(macOS 26.0, *), !reduceTransparency, contrast != .increased {
+            content.glassEffect(.regular.tint(Theme.sidebar.opacity(0.25)),
+                                in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        } else { opaque(content) }
+        #else
+        opaque(content)
+        #endif
+    }
+
+    private func opaque(_ content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Theme.elevated))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+    }
+}
+
 // MARK: - Buttons
 
 /// The one main action of a screen: accent fill, radius 10.
@@ -127,6 +151,7 @@ struct GhostTileStyle: ButtonStyle {
                     .background(
                         RoundedRectangle(cornerRadius: style.radius, style: .continuous)
                             .fill(style.tileFill(hover: hover && enabled, pressed: configuration.isPressed)))
+                    .clipShape(RoundedRectangle(cornerRadius: style.radius, style: .continuous))
             }
         }
     }
@@ -532,6 +557,7 @@ struct PrefRow<Control: View>: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(label).font(.cBody).foregroundColor(Theme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let note = note, !note.isEmpty {
                     Text(note).font(.cMeta).foregroundColor(Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -793,7 +819,8 @@ struct PreferenceGroup<Content: View>: View {
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Theme.elevated))
-                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Theme.border.opacity(0.5), lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
             if let note = note {
                 Text(note).font(.cMeta).foregroundColor(Theme.secondaryText).padding(.horizontal, 16)
             }
@@ -801,25 +828,12 @@ struct PreferenceGroup<Content: View>: View {
     }
 }
 
+/// Native switches pick up the current macOS control design, with Cursus blue.
 struct PreferenceToggleStyle: ToggleStyle {
-    @Environment(\.isEnabled) private var enabled
-
     func makeBody(configuration: Configuration) -> some View {
-        Button { configuration.isOn.toggle() } label: {
-            HStack {
-                configuration.label
-                Spacer(minLength: 0)
-                Capsule()
-                    .fill(configuration.isOn ? Theme.accent : Theme.secondaryText.opacity(0.24))
-                    .frame(width: 46, height: 28)
-                    .overlay(Circle().fill(Color.white).frame(width: 20, height: 20)
-                        .offset(x: configuration.isOn ? 9 : -9))
-                    .opacity(enabled ? 1 : 0.45)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityValue(configuration.isOn ? "On" : "Off")
-        .animation(.easeOut(duration: 0.15), value: configuration.isOn)
+        Toggle(isOn: configuration.$isOn) { configuration.label }
+            .toggleStyle(SwitchToggleStyle())
+            .tint(Theme.accent)
+            .controlSize(.small)
     }
 }

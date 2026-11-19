@@ -155,7 +155,7 @@ struct PendingLinksSheet: View {
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
-        .background(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).fill(Theme.field))
+        .background(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).fill(Theme.fieldFill))
         .overlay(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
     }
 

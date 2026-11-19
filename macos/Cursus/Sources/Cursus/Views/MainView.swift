@@ -12,11 +12,7 @@ struct MainView: View {
             CallBannerView(calls: model.calls)
             HStack(spacing: 0) {
                 NavRail()
-                Hairline(vertical: true)
-                NavigationView {
-                    middle.frame(minWidth: 260, idealWidth: 300)
-                    detail.frame(minWidth: 380)
-                }
+                columns
             }
         }
         .background(Theme.app)
@@ -36,6 +32,31 @@ struct MainView: View {
         }
         .sheet(isPresented: $model.showPendingLinks) {
             PendingLinksSheet().environmentObject(model)
+        }
+    }
+
+    @ViewBuilder private var columns: some View {
+        #if compiler(>=5.7) && CURSUS_MODERN_SHELL
+        if #available(macOS 13.0, *) {
+            NavigationSplitView {
+                middle
+                    .navigationSplitViewColumnWidth(min: 260, ideal: 310, max: 400)
+            } detail: {
+                detail.frame(minWidth: 360)
+            }
+            .navigationSplitViewStyle(.balanced)
+        } else { legacyColumns }
+        #else
+        legacyColumns
+        #endif
+    }
+
+    private var legacyColumns: some View {
+        // Older Intel Macs retain a native resizable split without resolving
+        // symbols missing from their SDK, or an architecture-specific UI fork.
+        HSplitView {
+            middle.frame(minWidth: 260, idealWidth: 310, maxWidth: 400)
+            detail.frame(minWidth: 360)
         }
     }
 
@@ -102,11 +123,12 @@ struct NavRail: View {
             Spacer(minLength: 8)
             NavDestinationButton(dest: .settings, badge: 0)
         }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 8)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 6)
         .frame(width: 76)
         .frame(maxHeight: .infinity)
-        .background(Theme.sidebar)
+        .modifier(NavigationChrome())
+        .padding(10)
     }
 
     private func badge(for dest: Destination) -> Int {

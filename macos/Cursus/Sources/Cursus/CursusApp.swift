@@ -109,6 +109,7 @@ struct CursusApp: App {
                 .accentColor(Theme.accent)
                 .tint(Theme.accent)
         }
+        .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat…") { model.showNewChat = true }

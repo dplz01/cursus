@@ -326,3 +326,14 @@ Back and other page-changing header controls complete an owned press-and-release
 - SimpleX naming validation still applies to public names: the first character must be a letter, number or supported emoji, and some punctuation is prohibited. The editor explains this and offers inline bold/italic formatting after the first word; descriptions and local aliases are not restricted by those public-name rules.
 
 - Group/channel short descriptions use the same multiline editor, sizing, scrolling and rich-text preview as welcome messages. Existing short-description length limits remain in force.
+
+## macOS chrome
+
+Mac navigation uses the shared Cursus colors and glyphs inside an inset,
+rounded rail beside a native resizable list/detail split. Modern SDKs use
+NavigationSplitView and a unified compact toolbar. Liquid Glass is limited
+to navigation chrome on macOS 26+ with a compatible SDK; content, message
+bubbles and preference cards remain opaque. Reduce Transparency and
+Increase Contrast use a solid bordered navigation surface. Intel and Apple
+Silicon follow identical availability rules; older systems use HSplitView.
+Native macOS switches retain the Cursus accent and grouped-row geometry.

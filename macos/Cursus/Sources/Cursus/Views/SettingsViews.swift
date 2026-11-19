@@ -98,7 +98,7 @@ struct ToggleRow: View {
 
     var body: some View {
         PrefRow(label: label, note: note) {
-            Toggle("", isOn: $isOn).labelsHidden().controlSize(.small)
+            Toggle("", isOn: $isOn).labelsHidden().controlSize(.small).accessibilityLabel(Text(label))
         }
     }
 }

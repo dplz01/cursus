@@ -1,9 +1,8 @@
 # macOS app: build Cursus.app on an Intel and an Apple Silicon runner with
 # macos/build.sh (which also self-tests libsimplex), upload a zipped app.
 #
-# The runners have a newer Xcode than Monterey's last (14.2 / Swift 5.7); the
-# package's tools version and macOS 12 deployment target keep the code within
-# what that toolchain accepts, but only a build on the Mac itself proves it.
+# Build modern macOS chrome on Intel and Apple Silicon, then compile the
+# fallback UI without modern SDK flags. The minimum runtime remains macOS 12.
 name: macOS
 
 on:
@@ -25,14 +24,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: x86_64, runner: macos-15-intel }
-          - { arch: arm64, runner: macos-15 }
+          - { arch: x86_64, target: x86_64-apple-darwin, runner: macos-26-intel }
+          - { arch: arm64, target: aarch64-apple-darwin, runner: macos-26 }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build Cursus.app
         run: ./macos/build.sh
+      - name: Compile fallback UI
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '12.0'
+        run: swift build -c release --package-path macos/Cursus -Xlinker -L -Xlinker "$GITHUB_WORKSPACE/target/${{ matrix.target }}/release"
       - name: Rust call controller and PCM tests
         run: |
           cargo test --locked -p cursus-bridge --features calls

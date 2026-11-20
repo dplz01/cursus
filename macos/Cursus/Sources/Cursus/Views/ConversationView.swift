@@ -705,9 +705,13 @@ struct MessageMenu: View {
 enum RichText {
     /// `reveal`: show secret spans (highlighted) instead of dots.
     static func attributed(_ message: Message, reveal: Bool = false) -> AttributedString {
-        guard !message.segments.isEmpty else { return AttributedString(message.text) }
+        attributed(message.segments, plain: message.text, reveal: reveal)
+    }
+
+    static func attributed(_ segments: [Segment], plain: String, reveal: Bool = false) -> AttributedString {
+        guard !segments.isEmpty else { return AttributedString(plain) }
         var out = AttributedString()
-        for seg in message.segments {
+        for seg in segments {
             var text = seg.text
             if seg.style == "secret" && !reveal {
                 text = String(repeating: "•", count: max(3, min(seg.text.count, 24)))

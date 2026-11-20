@@ -1259,14 +1259,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func createGroup(name: String) async {
+    func createGroup(name: String) async -> Bool {
         do {
             let ref = try await Core.call("createGroup", ["name": name], as: String.self)
             await reloadChats()
             destination = .chats
             selection = ref
+            return true
         } catch {
             report(error)
+            return false
         }
     }
 

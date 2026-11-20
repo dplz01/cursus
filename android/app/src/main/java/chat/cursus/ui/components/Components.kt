@@ -266,7 +266,7 @@ fun LinkBox(link: String, onCopied: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(link, style = Cursus.type.meta, color = c.accent, modifier = Modifier.weight(1f), maxLines = 4, overflow = TextOverflow.Ellipsis)
+        Text(link, style = Cursus.type.meta, color = c.accent, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         Icon(painterResource(R.drawable.ic_copy), "Copy", Modifier.size(20.dp), tint = c.accent)
     }
 }

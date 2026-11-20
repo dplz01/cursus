@@ -229,6 +229,61 @@ pub struct TextSegment {
     pub simplex: Option<SimplexLinkKind>,
 }
 
+/// Adapt Cursus markup to the pinned core's older single-star bold parser.
+/// The source stays untouched on the wire and in editors.
+fn markdown_for_parser(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut pos = 0;
+    while pos < raw.len() {
+        let rest = &raw[pos..];
+        let ch = rest.chars().next().unwrap();
+        if ch == '`' {
+            if let Some(end) = rest[1..].find('`') {
+                let len = end + 2;
+                out.push_str(&rest[..len]);
+                pos += len;
+                continue;
+            }
+        }
+        if ch == '\\' {
+            let len = 1 + rest[1..].chars().next().map_or(0, char::len_utf8);
+            out.push_str(&rest[..len]);
+            pos += len;
+            continue;
+        }
+        if rest.starts_with("https://") || rest.starts_with("http://") {
+            let len = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            out.push_str(&rest[..len]);
+            pos += len;
+            continue;
+        }
+        let boundary = pos == 0 || !raw[..pos].chars().next_back().unwrap().is_alphanumeric();
+        if ch == '*' && boundary {
+            let count = rest.bytes().take_while(|b| *b == b'*').count();
+            if count <= 2 {
+                let delimiter = if count == 2 { "**" } else { "*" };
+                if let Some(end) = rest[count..].find(delimiter) {
+                    let body = &rest[count..count + end];
+                    let tail = &rest[count + end + count..];
+                    if !body.is_empty() && !body.starts_with(char::is_whitespace)
+                        && !body.ends_with(char::is_whitespace) && !body.contains('\n')
+                        && !body.contains('*') && !tail.starts_with('*') {
+                        let marker = if count == 2 { '*' } else { '_' };
+                        out.push(marker);
+                        out.push_str(body);
+                        out.push(marker);
+                        pos += count + end + count;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(ch);
+        pos += ch.len_utf8();
+    }
+    out
+}
+
 /// Format editable profile text through SimpleX, with a bounded in-memory cache.
 /// The source markup is preserved for editing and sending to peers.
 pub fn profile_text(raw: &str) -> Vec<TextSegment> {
@@ -240,7 +295,7 @@ pub fn profile_text(raw: &str) -> Vec<TextSegment> {
         return hit.clone();
     }
     let mut segments = crate::ffi::LibSimplex::shared(None)
-        .and_then(|lib| lib.parse_markdown(raw))
+        .and_then(|lib| lib.parse_markdown(&markdown_for_parser(raw)))
         .map(|v| parse_formatted_text(v.get("formattedText")))
         .unwrap_or_default();
     if segments.is_empty() {
@@ -805,6 +860,15 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn double_star_bold_and_single_star_italic() {
+        assert_eq!(markdown_for_parser("**bold** *italic* _italic_"), "*bold* _italic_ _italic_");
+        assert_eq!(markdown_for_parser("`**code** *code*` https://example.org/a*b*"),
+                   "`**code** *code*` https://example.org/a*b*");
+        assert_eq!(markdown_for_parser("*unclosed and **unclosed"), "*unclosed and **unclosed");
+        assert_eq!(markdown_for_parser("**🌍** *café*"), "*🌍* _café_");
+    }
+
+    #[test]
     fn short_emoji_detection() {
         assert!(is_short_emoji("🙂"));
         assert!(is_short_emoji("👍👍"));
@@ -817,14 +881,16 @@ mod tests {
     #[test]
     fn profile_fields_format_markdown_without_expanding_shortcodes() {
         let _lib = crate::ffi::LibSimplex::shared(None).expect("libsimplex parser");
-        let raw = "*Profile* _description_ :rocket:";
+        let raw = "**Profile** *single* _description_ :rocket:";
         let formatted = profile_text(raw);
         assert!(formatted
             .iter()
             .any(|s| s.text == "Profile" && s.style == TextStyle::Bold));
+        assert!(formatted.iter().any(|s| s.text == "single" && s.style == TextStyle::Italic));
         assert!(formatted
             .iter()
             .any(|s| s.text == "description" && s.style == TextStyle::Italic));
+        assert!(formatted.iter().any(|s| s.text == "single" && s.style == TextStyle::Italic));
         assert!(formatted.iter().any(|s| s.text.contains(":rocket:")));
         assert_eq!(
             formatted,

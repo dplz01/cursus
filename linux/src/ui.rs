@@ -882,7 +882,8 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
     // Calls/Settings match the Chats/Channels "title row with button" box.
     let trailing: Element<'_, Message> = if show_compose {
         let plus = button(icons::centered_hit(
-            icons::plus_icon(20.0, theme::t().accent),
+            if app.nav() == NavSection::Calls { icons::phone_icon(20.0, theme::t().accent) }
+            else { icons::plus_icon(20.0, theme::t().accent) },
             36.0,
         ))
         .on_press(if app.nav() == NavSection::Calls { Message::CallContacts(true) } else { Message::OpenCompose })
@@ -3839,7 +3840,7 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
     let header: Element<'_, Message> = if with_back {
         row![
             mobile_back_btn(Message::CloseCompose, hover),
-            text("New")
+            text("New conversation")
                 .size(d.title).font(BOLD)
                 .color(theme::t().text_primary)
                 .width(Length::Fill),
@@ -3855,7 +3856,7 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
         .into()
     } else {
         // Desktop: no Close button — Esc (or picking another section) closes.
-        row![text("New")
+        row![text("New conversation")
             .size(d.title).font(BOLD)
             .color(theme::t().text_primary)
             .width(Length::Fill),]
@@ -3886,6 +3887,8 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
         .padding(Padding::from([4, 4])),
     );
     connect = connect.push(pref_section("Copy one-time link", false, d));
+    connect = connect.push(container(text("Share privately with one person. The link expires after they connect.")
+        .size(d.meta).color(theme::t().text_secondary)).padding(Padding::from([4, 12])));
     let link_box: Element<'_, Message> = match app.invitation() {
         Some(inv) => link_copy_box(&inv.link.display, Message::CopyInviteLink, d, hover),
         None => container(
@@ -3910,7 +3913,7 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
     let regenerate = button(
         container(
             row![
-                icons::repeat_once_icon(16.0, theme::t().accent_on),
+                icons::repeat_once_icon(16.0, theme::t().accent),
                 text("New link").size(d.meta),
             ]
             .spacing(8)
@@ -3922,7 +3925,7 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
     .on_press_maybe((!app.invitation_busy()).then_some(Message::RegenerateInvitation))
     .padding(Padding::from([9, 18]))
     .width(if narrow { Length::Fill } else { Length::Shrink })
-    .style(theme::primary_action(hover));
+    .style(theme::secondary_action(hover));
     connect = connect.push(
         container(regenerate)
             .width(Length::Fill)
@@ -3968,6 +3971,8 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
     .width(if narrow { Length::Fill } else { Length::Shrink })
     .style(theme::primary_action(hover));
     connect = connect.push(pref_section("Join with a link", false, d));
+    connect = connect.push(container(text("Paste a contact, group or channel link to connect.")
+        .size(d.meta).color(theme::t().text_secondary)).padding(Padding::from([4, 12])));
     let join: Element<'_, Message> = if narrow {
         column![field_row, connect_btn].spacing(8).into()
     } else {
@@ -5939,11 +5944,11 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
                 hover,
             ),
         ];
-        for value in [&p.fields.full_name, &p.fields.short_descr] {
-            if !value.is_empty() {
-                lines.push(hero_line(value.clone(), d));
-            }
+        if !p.fields.full_name.is_empty() {
+            lines.push(container(text(p.fields.full_name.clone()).size(d.body).color(theme::t().text_secondary))
+                .padding(Padding::from([0, 12])).center_x(Length::Fill).into());
         }
+        if !p.fields.short_descr.is_empty() { lines.push(hero_line(p.fields.short_descr.clone(), d)); }
         body = body.push(profile_identity(
             profile_avatar(p.fields.image.as_deref(), &display, PROFILE_AVATAR),
             None,
@@ -7649,12 +7654,7 @@ fn group_members_list<'a>(
             };
             let mut names = Column::new().spacing(1).width(Length::Fill).push(name_line);
             if let Some(bio) = m.short_descr.as_ref() {
-                names = names.push(ellipsis_text(
-                    bio.clone(),
-                    d.meta,
-                    theme::t().text_secondary,
-                    1,
-                ));
+                names = names.push(profile_rich(bio, d.meta, theme::t().text_secondary, false));
             }
             let leading = Row::new()
                 .spacing(10)
@@ -7719,7 +7719,7 @@ const PROFILE_AVATAR: f32 = 96.0;
 /// Read-only name line, inset to line up with the text inside the fields.
 fn profile_name_text<'a>(name: String, d: Density) -> Element<'a, Message> {
     container(
-        profile_rich(&name, d.title + 4.0, theme::t().text_primary, true)
+        text(name).size(d.title + 4.0).font(BOLD).color(theme::t().text_primary)
             .align_x(Alignment::Center)
             .wrapping(Wrapping::WordOrGlyph),
     )
@@ -7760,12 +7760,14 @@ fn editable_line<'a>(
         LineStyle::Sub => (d.body, theme::t().text_secondary),
         LineStyle::Body => (d.body, theme::t().text_secondary),
     };
-    let label = profile_rich(
-        &shown,
-        size,
-        if empty { theme::t().text_muted } else { color },
-        matches!(style, LineStyle::Name) && !empty,
-    );
+    let plain_name = matches!(field, crate::EditField::OwnName | crate::EditField::GroupName |
+        crate::EditField::GroupAlias | crate::EditField::ContactAlias);
+    let label: Element<'a, Message> = if plain_name {
+        text(shown.clone()).size(size).color(if empty { theme::t().text_muted } else { color })
+            .font(if matches!(style, LineStyle::Name) { BOLD } else { Font::DEFAULT }).into()
+    } else {
+        profile_rich(&shown, size, if empty { theme::t().text_muted } else { color }, false).into()
+    };
     let pencil = button(icons::edit_icon(16.0, theme::t().text_muted))
         .on_press(Message::OpenFieldEditor(field))
         .padding(6)
@@ -7883,26 +7885,25 @@ fn field_editor_overlay(app: &App) -> Element<'_, Message> {
     let mut content = column![header, field].spacing(14).width(Length::Fill);
     let raw = editor.text();
     if editor.field.required() {
-        content = content.push(text("Names must start with a letter, number or emoji. Put formatting after the first word.").size(d.meta).color(theme::t().text_secondary));
+        content = content.push(text("Names are plain text and must start with a letter, number or emoji.").size(d.meta).color(theme::t().text_secondary));
     }
     content = content.push(
         text(if editor.field.required() {
-            "Format: *bold* · _italic_"
+            "Names are displayed exactly as typed."
         } else {
-            "Format: *bold* · _italic_ · ~strike~ · `code`"
+            "Format: **bold** · *italic* · _italic_ · ~strike~ · `code`"
         })
         .size(d.meta)
         .color(theme::t().text_secondary),
     );
     if !raw.trim().is_empty() {
         content = content.push(text("Preview").size(d.meta).color(theme::t().text_muted));
-        content = content.push(
-            container(
-                scrollable(profile_rich(&raw, d.body, theme::t().text_primary, false))
-                    .height(Length::Shrink),
-            )
-            .max_height(120),
-        );
+        let preview: Element<'_, Message> = if matches!(editor.field,
+            crate::EditField::OwnName | crate::EditField::GroupName |
+            crate::EditField::GroupAlias | crate::EditField::ContactAlias) {
+            text(raw.clone()).size(d.body).color(theme::t().text_primary).into()
+        } else { profile_rich(&raw, d.body, theme::t().text_primary, false).into() };
+        content = content.push(container(scrollable(preview).height(Length::Shrink)).max_height(120));
     }
     if let Some(err) = editor.error.as_ref() {
         content = content.push(text(err.clone()).size(d.meta).color(theme::t().danger));
@@ -8243,11 +8244,7 @@ fn link_copy_box<'a>(
 ) -> Element<'a, Message> {
     button(
         row![
-            txt(link.to_string())
-                .size(d.meta)
-                .color(theme::t().accent)
-                .wrapping(Wrapping::Glyph)
-                .width(Length::Fill),
+            container(ellipsis_text(link.to_string(), d.meta, theme::t().accent, 1)).width(Length::Fill),
             icons::copy_icon(18.0, theme::t().accent),
         ]
         .spacing(10)
@@ -8816,6 +8813,9 @@ fn group_member_info_pane(
             .font(BOLD)
             .color(theme::t().text_primary),
     );
+    if let Some(bio) = m.short_descr.as_deref().filter(|bio| !bio.trim().is_empty()) {
+        col = col.push(profile_rich(bio, d.body, theme::t().text_secondary, false));
+    }
     col = col.push(
         text(format!("Role: {}", m.role))
             .size(d.body)

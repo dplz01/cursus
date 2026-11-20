@@ -56,7 +56,7 @@ enum class LineStyle { Name, Sub, Body }
 
 /** Plain text with a pencil; tapping opens the editor sheet (Linux `editable_line`). */
 @Composable
-fun EditableLine(value: String, emptyText: String, style: LineStyle, onEdit: () -> Unit) {
+fun EditableLine(value: String, emptyText: String, style: LineStyle, rich: Boolean = style != LineStyle.Name, onEdit: () -> Unit) {
     val c = Cursus.colors
     val textStyle = when (style) {
         LineStyle.Name -> Cursus.type.title
@@ -72,7 +72,7 @@ fun EditableLine(value: String, emptyText: String, style: LineStyle, onEdit: () 
         horizontalArrangement = if (centred) Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally) else Arrangement.spacedBy(6.dp),
     ) {
         ProfileText(
-            value.ifBlank { emptyText },
+            value.ifBlank { emptyText }, rich = rich,
             style = if (style == LineStyle.Name) textStyle.copy(fontSize = textStyle.fontSize * 1.25f) else textStyle,
             color = when {
                 value.isBlank() -> c.textMuted
@@ -96,6 +96,7 @@ fun FieldEditor(field: EditField, initial: String, onDismiss: () -> Unit, onSave
     var value by rememberSaveable { mutableStateOf(initial) }
     val focus = remember { FocusRequester() }
     val canSave = !field.required || value.isNotBlank()
+    val literalName = field in setOf(EditField.OwnName, EditField.GroupName, EditField.GroupAlias, EditField.ContactAlias)
     CursusOverlay(onDismiss) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -123,11 +124,11 @@ fun FieldEditor(field: EditField, initial: String, onDismiss: () -> Unit, onSave
                     modifier = Modifier.fillMaxWidth().focusRequester(focus),
                 )
             }
-            if (field.required) Text("Names must start with a letter, number or emoji. Put formatting after the first word.", style = Cursus.type.meta, color = c.textSecondary)
-            Text(if (field.required) "Format: *bold* · _italic_" else "Format: *bold* · _italic_ · ~strike~ · `code`", style = Cursus.type.meta, color = c.textSecondary)
+            if (field.required) Text("Names are plain text and must start with a letter, number or emoji.", style = Cursus.type.meta, color = c.textSecondary)
+            Text(if (literalName) "Names are displayed exactly as typed." else "Format: **bold** · *italic* · _italic_ · ~strike~ · `code`", style = Cursus.type.meta, color = c.textSecondary)
             if (value.isNotBlank()) {
                 Text("Preview", style = Cursus.type.meta, color = c.textMuted)
-                ProfileText(value, style = Cursus.type.body, color = c.textPrimary, maxLines = 6, overflow = TextOverflow.Ellipsis)
+                ProfileText(value, rich = !literalName, style = Cursus.type.body, color = c.textPrimary, maxLines = 6, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -186,7 +187,7 @@ private fun SheetItem(icon: Int, label: String, color: androidx.compose.ui.graph
 fun ProfileName(name: String) {
     val title = Cursus.type.title
     ProfileText(
-        name, style = title.copy(fontSize = title.fontSize * 1.25f), color = Cursus.colors.textPrimary, fontWeight = FontWeight.SemiBold,
+        name, rich = false, style = title.copy(fontSize = title.fontSize * 1.25f), color = Cursus.colors.textPrimary, fontWeight = FontWeight.SemiBold,
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), maxLines = 2, overflow = TextOverflow.Ellipsis,
     )

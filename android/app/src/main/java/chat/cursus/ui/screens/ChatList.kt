@@ -86,14 +86,14 @@ fun PaneHeader(
 
 /** Linux list header "+": secondary button, 36px, accent glyph. */
 @Composable
-fun HeaderPlus(description: String, onClick: () -> Unit) {
+fun HeaderPlus(description: String, icon: Int = R.drawable.ic_plus, onClick: () -> Unit) {
     val c = Cursus.colors
     Box(
         Modifier.padding(end = 8.dp).size(36.dp).clip(Radius.md).background(c.bgField)
             .border(1.dp, c.border, Radius.md).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(painterResource(R.drawable.ic_plus), description, Modifier.size(20.dp), tint = c.accent)
+        Icon(painterResource(icon), description, Modifier.size(20.dp), tint = c.accent)
     }
 }
 
@@ -109,7 +109,7 @@ fun ChatListPane(model: AppModel, channels: Boolean, onNew: () -> Unit, onSelect
             if (model.pendingInvitations.isNotEmpty()) {
                 PendingLinksButton(model.pendingInvitations.size) { pendingOpen = true }
             }
-            HeaderPlus(if (channels) "New channel" else "New chat", onNew)
+            HeaderPlus(if (channels) "New channel" else "New chat", onClick = onNew)
         }
         if (pendingOpen) PendingLinksOverlay(model) { pendingOpen = false }
         if (chats.isEmpty()) {

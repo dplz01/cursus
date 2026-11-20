@@ -56,9 +56,10 @@ private struct CreationGlass: ViewModifier {
 }
 struct CreationButton: View {
     let help: String
+    var icon = "plus"
     let action: () -> Void
     var body: some View {
-        Button(action: action) { CIcon("plus", size: 19, color: Theme.accent).frame(width: 34, height: 34) }
+        Button(action: action) { CIcon(icon, size: 19, color: Theme.accent).frame(width: 34, height: 34) }
             .buttonStyle(CreationActionStyle()).help(help).accessibilityLabel(help)
     }
 }
@@ -692,7 +693,7 @@ struct LinkBox: View {
                 Text(copied ? "Copied to clipboard" : text)
                     .font(.cMeta.monospaced())
                     .foregroundColor(Theme.accent)
-                    .lineLimit(3)
+                    .lineLimit(1)
                     .truncationMode(.middle)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -862,5 +863,37 @@ struct PreferenceToggleStyle: ToggleStyle {
             .toggleStyle(SwitchToggleStyle())
             .tint(Theme.accent)
             .controlSize(.small)
+    }
+}
+
+/// Profile prose shares the core parser with messages; names stay literal Text.
+struct ProfileText: View {
+    let value: String
+    @State private var formatted = AttributedString()
+    @State private var source: String?
+
+    init(_ value: String) { self.value = value }
+
+    var body: some View {
+        Text(source == value ? formatted : AttributedString(value))
+            .task(id: value) {
+                let result = await ProfileFormatting.render(value)
+                guard !Task.isCancelled else { return }
+                formatted = result
+                source = value
+            }
+    }
+}
+
+@MainActor private enum ProfileFormatting {
+    private static var cache: [String: AttributedString] = [:]
+
+    static func render(_ source: String) async -> AttributedString {
+        if let value = cache[source] { return value }
+        let segments = (try? await Core.call("formatProfileText", ["text": source], as: [Segment].self)) ?? []
+        let value = RichText.attributed(segments, plain: source, reveal: true)
+        if cache.count >= 256 { cache.removeAll(keepingCapacity: true) }
+        cache[source] = value
+        return value
     }
 }

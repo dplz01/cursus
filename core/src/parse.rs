@@ -345,7 +345,14 @@ pub(crate) fn message(item: &Value) -> Option<ChatMessage> {
     let text = expand_emoji_shortcodes(text.strip_prefix('📎').map(str::trim).unwrap_or(&text));
     let text = if is_announcement { announcement_text(item, text) } else { text };
 
-    let mut segments = parse_formatted_text(item.get("formattedText"));
+    // Metadata may already have had its original markers stripped by the
+    // pinned core. Apply Cursus syntax to the sender's actual source instead.
+    let source = item.str_at("/content/msgContent/text").unwrap_or(&text);
+    let mut segments = if source.contains('*') && !is_announcement {
+        crate::rich_text::profile_text(source)
+    } else {
+        parse_formatted_text(item.get("formattedText"))
+    };
     for seg in segments.iter_mut().filter(|s| s.style == TextStyle::Plain) {
         seg.text = expand_emoji_shortcodes(&seg.text);
     }
@@ -848,6 +855,21 @@ mod tests {
         assert!(auto_receive_candidates(&offer("directRcv", "image", small + 1)).is_empty());
         assert!(auto_receive_candidates(&offer("directRcv", "file", 1024)).is_empty());
         assert!(auto_receive_candidates(&offer("directSnd", "image", small)).is_empty());
+    }
+
+    #[test]
+    fn message_star_styles_use_source_instead_of_the_core_summary() {
+        let item = json!({
+            "meta": {"itemId": 123, "itemText": "bold italic"},
+            "chatDir": {"type": "directRcv"},
+            "content": {"type": "rcvMsgContent", "msgContent": {
+                "type": "text", "text": "**bold** *italic*"
+            }},
+            "formattedText": [{"text": "bold italic", "format": {"type": "bold"}}]
+        });
+        let parsed = message(&item).unwrap();
+        assert!(parsed.segments.iter().any(|s| s.text == "bold" && s.style == TextStyle::Bold));
+        assert!(parsed.segments.iter().any(|s| s.text == "italic" && s.style == TextStyle::Italic));
     }
 
     /// The core's summary ("voice message (00:03)") is for previews; the

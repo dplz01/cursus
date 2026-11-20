@@ -124,7 +124,7 @@ fun NewCallButton(model: AppModel) {
     var choosing by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
     val permission = rememberCallPermission(model)
-    HeaderPlus("New audio call") { if (model.calls.state.active == null && !model.calls.starting) { search = ""; choosing = true } }
+    HeaderPlus("New audio call", icon = R.drawable.ic_calls) { if (model.calls.state.active == null && !model.calls.starting) { search = ""; choosing = true } }
     if (choosing) CursusOverlay({ choosing = false }) {
         val c = Cursus.colors
         Text("New audio call", style = Cursus.type.title, color = c.textPrimary)

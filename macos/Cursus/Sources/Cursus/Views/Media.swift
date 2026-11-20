@@ -466,9 +466,9 @@ struct MediaGallery: View {
                     Text("This file can't be shown.").foregroundColor(.white.opacity(0.7))
                 }
                 HStack {
-                    step(-1, icon: "chevron.left", key: .leftArrow)
+                    step(-1, icon: "chevron.left")
                     Spacer()
-                    step(1, icon: "chevron.right", key: .rightArrow)
+                    step(1, icon: "chevron.right")
                 }
                 .padding(.horizontal, 10)
             }
@@ -476,13 +476,17 @@ struct MediaGallery: View {
         }
         .frame(minWidth: 640, idealWidth: 900, minHeight: 480, idealHeight: 680)
         .background(Color.black)
+        .background(GalleryKeys { code in
+            if code == 123 { move(-1) }
+            else { move(1) }
+        })
         .task(id: index) { await load() }
         .onDisappear { player?.pause() }
     }
 
-    private func step(_ delta: Int, icon: String, key: KeyEquivalent) -> some View {
+    private func step(_ delta: Int, icon: String) -> some View {
         let target = index + delta
-        return Button { index = target } label: {
+        return Button { move(delta) } label: {
             Image(systemName: icon)
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundColor(.white)
@@ -490,24 +494,33 @@ struct MediaGallery: View {
                 .background(Circle().fill(Color.white.opacity(0.15)))
         }
         .buttonStyle(.plain)
-        .keyboardShortcut(key, modifiers: [])
         .opacity(items.indices.contains(target) ? 1 : 0)
         .disabled(!items.indices.contains(target))
     }
 
+    private func move(_ delta: Int) {
+        let next = index + delta
+        if items.indices.contains(next) { index = next }
+    }
+
     private func load() async {
+        guard !Task.isCancelled else { return }
+        let requestedIndex = index
         player?.pause()
         player = nil
         image = nil
         loading = true
-        defer { loading = false }
-        guard let file = current?.file, let url = await model.readablePath(file) else { return }
+        defer { if !Task.isCancelled && index == requestedIndex { loading = false } }
+        guard let message = current, let file = message.file,
+              let url = await model.readablePath(file), !Task.isCancelled, current?.id == message.id else { return }
         if file.kind == "video" {
             let p = AVPlayer(url: url)
             player = p
             p.play()
         } else {
-            image = NSImage(contentsOf: url)
+            let data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: url) }.value
+            guard !Task.isCancelled, current?.id == message.id else { return }
+            image = data.flatMap { NSImage(data: $0) }
         }
     }
 
@@ -523,4 +536,32 @@ struct GalleryState: Identifiable {
     let id = UUID()
     let items: [Message]
     let index: Int
+}
+
+/// Keep arrow navigation registered while media/player views replace focus.
+private struct GalleryKeys: NSViewRepresentable {
+    let move: (UInt16) -> Void
+    func makeNSView(context: Context) -> KeyView { KeyView(move: move) }
+    func updateNSView(_ view: KeyView, context: Context) { view.move = move }
+    static func dismantleNSView(_ view: KeyView, coordinator: ()) { view.stop() }
+
+    final class KeyView: NSView {
+        var move: (UInt16) -> Void
+        private var monitor: Any?
+        init(move: @escaping (UInt16) -> Void) { self.move = move; super.init(frame: .zero) }
+        required init?(coder: NSCoder) { fatalError("Use init(move:)") }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stop()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self = self, self.window?.isKeyWindow == true,
+                      event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+                      event.keyCode == 123 || event.keyCode == 124 else { return event }
+                self.move(event.keyCode)
+                return nil
+            }
+        }
+        func stop() { if let monitor = monitor { NSEvent.removeMonitor(monitor) }; monitor = nil }
+    }
 }

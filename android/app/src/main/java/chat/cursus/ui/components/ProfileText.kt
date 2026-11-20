@@ -29,14 +29,15 @@ fun ProfileText(
     maxLines: Int = Int.MAX_VALUE,
     overflow: TextOverflow = TextOverflow.Clip,
     textAlign: TextAlign? = null,
+    rich: Boolean = true,
 ) {
     val c = Cursus.colors
-    val segments by rememberLoaded<List<Segment>>(emptyList(), value) {
-        runCatching { Core.call<List<Segment>>("formatProfileText", mapOf("text" to value)) }.getOrDefault(emptyList())
+    val segments by rememberLoaded<List<Segment>>(emptyList(), value, rich) {
+        if (!rich) emptyList() else runCatching { Core.call<List<Segment>>("formatProfileText", mapOf("text" to value)) }.getOrDefault(emptyList())
     }
     val formatted = buildAnnotatedString {
-        if (segments.isEmpty()) append(value)
-        for (segment in segments) {
+        if (segments.isEmpty() || !rich) append(value)
+        for (segment in if (rich) segments else emptyList()) {
             val span = when (segment.style) {
                 "bold" -> SpanStyle(fontWeight = FontWeight.Bold)
                 "italic" -> SpanStyle(fontStyle = FontStyle.Italic)

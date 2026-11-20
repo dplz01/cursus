@@ -213,7 +213,7 @@ private struct InfoOverview: View {
                     EditableLine(text: publicName, placeholder: "Name", style: .name,
                                  editable: ownsGroup) { editing = .groupName }
                     if chat.pendingRequestId == nil {
-                        EditableLine(text: chat.alias ?? "", placeholder: "Add a local name", style: .sub,
+                        EditableLine(text: chat.alias ?? "", placeholder: "Add a local name", style: .sub, rich: false,
                                      editable: true, help: "Only you see this name") { editing = .alias }
                     }
                     if !chat.fullName.isEmpty && chat.fullName != publicName {
@@ -244,7 +244,7 @@ private struct InfoOverview: View {
     }
 
     private func about(_ text: String) -> some View {
-        Text(text)
+        ProfileText(text)
             .font(.cBody)
             .foregroundColor(Theme.secondaryText)
             .textSelection(.enabled)
@@ -390,6 +390,7 @@ struct EditableLine: View {
     let text: String
     let placeholder: String
     let style: Style
+    var rich = true
     var editable = true
     var help: String? = nil
     let edit: () -> Void
@@ -399,7 +400,11 @@ struct EditableLine: View {
     var body: some View {
         if editable || !empty {
             HStack(alignment: .center, spacing: 2) {
-                Text(empty ? placeholder : text)
+                Group {
+                    if style == .name || empty || !rich {
+                        Text(empty ? placeholder : text)
+                    } else { ProfileText(text) }
+                }
                     .font(font)
                     .foregroundColor(empty ? Theme.mutedText : color)
                     .textSelection(.enabled)
@@ -626,7 +631,7 @@ private struct MemberRow: View {
                         }
                     }
                     if let bio = member.shortDescr, !bio.isEmpty {
-                        Text(bio).font(.cMeta).foregroundColor(Theme.secondaryText).lineLimit(1)
+                        ProfileText(bio).font(.cMeta).foregroundColor(Theme.secondaryText).lineLimit(1)
                     }
                 }
                 Spacer(minLength: 6)

@@ -553,14 +553,16 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     fun joinGroup(groupId: Long) = act { Core.run("joinGroup", mapOf("groupId" to groupId)) }
 
-    fun createGroup(name: String, channel: Boolean, done: (String) -> Unit) = act {
-        val ref = if (channel) {
-            Core.call<chat.cursus.core.CreatedChannel>("createChannel", mapOf("name" to name)).ref
-        } else {
-            Core.call<String>("createGroup", mapOf("name" to name))
-        }
-        reloadChats()
-        done(ref)
+    fun createGroup(name: String, channel: Boolean, finished: () -> Unit = {}, done: (String) -> Unit) = act {
+        try {
+            val ref = if (channel) {
+                Core.call<chat.cursus.core.CreatedChannel>("createChannel", mapOf("name" to name)).ref
+            } else {
+                Core.call<String>("createGroup", mapOf("name" to name))
+            }
+            reloadChats()
+            done(ref)
+        } finally { finished() }
     }
 
     // endregion
@@ -1122,11 +1124,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         error = e.message; null
     }
 
-    fun connect(link: String, incognito: Boolean = false, done: () -> Unit = {}) = act {
-        Core.run("connect", mapOf("link" to link, "incognito" to incognito))
-        notice = "Connecting… the chat appears in your list."
-        reloadChats()
-        done()
+    fun connect(link: String, incognito: Boolean = false, finished: () -> Unit = {}, done: () -> Unit = {}) = act {
+        try {
+            Core.run("connect", mapOf("link" to link, "incognito" to incognito))
+            notice = "Connecting… the chat appears in your list."
+            reloadChats()
+            done()
+        } finally { finished() }
     }
 
     /** A link tapped in a message: SimpleX links connect, others open if safe. */

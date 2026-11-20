@@ -442,3 +442,22 @@ duration at bottom-left and the stamp at bottom-right; Android continues to
 open the existing external player. Mac sidebar headers use 44pt height and
 unified-compact window chrome. The dark navigation lens uses a subtle white tint
 and optical rim, while text stays above the glass and selected hover stays off.
+
+Connect uses the same three choices on every platform: Connect, New group and
+New channel. The form distinguishes a private one-time invitation from joining
+with a pasted link; New link is secondary and Connect is primary. Link copy
+controls show one ellipsized line while copying the complete value. Mac and
+Android keep invitation and form drafts for the page lifetime, guard concurrent
+submissions and delete unshared links even if creation finishes after closing.
+Calls use a phone glyph for their new-call action.
+
+Public and local display names render literally, including in editor previews.
+Bios, member bios, group/channel descriptions and welcome text retain rich text
+and Unicode emoji. Cursus markup uses **bold**, *italic* or _italic_, ~strike~
+and `code`. The shared parser adapts star markers for the pinned SimpleX core;
+stored and transmitted source text stays unchanged. Code and URL tokens retain
+their literal asterisks. Mac profile prose uses a bounded async formatting cache.
+
+The Mac media gallery registers arrow handling for the gallery window lifetime,
+independent of player/button focus. Navigation reads the current index on every
+press; cancelled media loads cannot replace newer content or its loading state.

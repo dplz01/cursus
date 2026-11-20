@@ -24,7 +24,7 @@ struct SettingsListView: View {
                             Avatar(image: user.image, name: user.displayName, size: 52)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(user.displayName).font(.cTitle).foregroundColor(Theme.primaryText).lineLimit(1)
-                                Text(user.shortDescr.isEmpty ? "Your profile" : user.shortDescr)
+                                ProfileText(user.shortDescr.isEmpty ? "Your profile" : user.shortDescr)
                                     .font(.cMeta)
                                     .foregroundColor(Theme.secondaryText)
                                     .lineLimit(2)

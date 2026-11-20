@@ -178,7 +178,7 @@ struct MemberPage: View {
             }
             if let bio = member.shortDescr, !bio.isEmpty {
                 SectionLabel("Bio")
-                Text(bio).font(.cBody).foregroundColor(Theme.secondaryText)
+                ProfileText(bio).font(.cBody).foregroundColor(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 8)
             }

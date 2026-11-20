@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import chat.cursus.ui.components.ProfileText
 import chat.cursus.AppModel
 import chat.cursus.R
 import chat.cursus.core.Chat
@@ -163,7 +164,7 @@ private fun ContactPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
     PageScaffold("Contact", onClose) {
         ProfileIdentity(chat.name, chat.image) {
             ProfileName(chat.name)
-            EditableLine(chat.alias, "Add a local name", LineStyle.Sub) { editing = EditField.ContactAlias }
+            EditableLine(chat.alias, "Add a local name", LineStyle.Sub, rich = false) { editing = EditField.ContactAlias }
             if (chat.shortDescr.isNotBlank()) HeroLine(chat.shortDescr)
         }
         QuickActions(
@@ -368,7 +369,7 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
             ProfileIdentity(chat.name, chat.image, group = true, photo = photo) {
                 if (owner) EditableLine(chat.name, "Name", LineStyle.Name) { editing = EditField.GroupName }
                 else ProfileName(chat.name)
-                EditableLine(chat.alias, "Add a local name", LineStyle.Sub) { editing = EditField.GroupAlias }
+                EditableLine(chat.alias, "Add a local name", LineStyle.Sub, rich = false) { editing = EditField.GroupAlias }
                 // The short description is the line under the name, for everyone.
                 if (owner) EditableLine(chat.shortDescr, "Add a short description", LineStyle.Sub) { editing = EditField.GroupShortDescr }
                 else if (chat.shortDescr.isNotBlank()) HeroLine(chat.shortDescr)
@@ -514,7 +515,7 @@ private fun MembersList(members: List<Member>, trailing: @Composable (Member) ->
                         }
                     }
                     if (m.shortDescr.isNotBlank()) {
-                        Text(m.shortDescr, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        ProfileText(m.shortDescr, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 Text(m.role, style = Cursus.type.meta, color = c.textMuted)
@@ -532,7 +533,7 @@ private fun MemberInfoPane(model: AppModel, chat: Chat, m: Member, onOpenChat: (
         ProfileIdentity(m.name, m.image) {
             ProfileName(if (m.isMe) "YOU (${m.publicName.ifBlank { m.name }})" else m.name)
             if (m.shortDescr.isNotBlank()) {
-                Text(m.shortDescr, style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(horizontal = 12.dp))
+                ProfileText(m.shortDescr, style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(horizontal = 12.dp))
             }
         }
         Column(Modifier.padding(top = 8.dp, start = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {

@@ -1082,7 +1082,7 @@ mod live_tests {
     }
 
     #[test]
-    fn inline_rich_profile_names_are_accepted_by_the_real_core() {
+    fn display_names_preserve_literal_markers_in_the_real_core() {
         let _startup = crate::LIBSIMPLEX_STARTUP
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -1098,9 +1098,7 @@ mod live_tests {
             .update_profile(fields)
             .expect("save inline markdown in a valid SimpleX name");
         assert_eq!(user.profile.display_name, "Team *Cursus* 🚀");
-        assert!(crate::profile_text(&user.profile.display_name)
-            .iter()
-            .any(|s| s.text == "Cursus" && s.style == crate::TextStyle::Bold));
+        assert_eq!(user.profile.short_descr, "Build _nice_ things");
         drop(session);
         let _ = std::fs::remove_dir_all(dir);
     }

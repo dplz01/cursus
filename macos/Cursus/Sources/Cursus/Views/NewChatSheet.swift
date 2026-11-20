@@ -15,9 +15,11 @@ struct NewChatSheet: View {
 
     var body: some View {
         VStack(spacing: 16) {
+            Text("New conversation").font(.cTitle).foregroundColor(Theme.primaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
                 ForEach(Tab.allCases) { choice in
-                    Button { tab = choice } label: {
+                    Button { NSApp.keyWindow?.makeFirstResponder(nil); tab = choice } label: {
                         VStack(spacing: 6) {
                             CIcon(choice == .connect ? "link-minimalistic-2" : choice == .group ? "user-group" : "channels",
                                   size: 22, color: Theme.accent)
@@ -29,12 +31,16 @@ struct NewChatSheet: View {
                 }
             }
 
-            Group {
-                switch tab {
-                case .connect: ConnectTab(done: { dismiss() })
-                case .group: GroupTab(done: { dismiss() })
-                case .channel: ChannelTab()
-                }
+            ZStack(alignment: .top) {
+                ScrollView { ConnectTab(done: { dismiss() }) }
+                    .opacity(tab == .connect ? 1 : 0).allowsHitTesting(tab == .connect)
+                    .accessibilityHidden(tab != .connect)
+                ScrollView { GroupTab(done: { dismiss() }) }
+                    .opacity(tab == .group ? 1 : 0).allowsHitTesting(tab == .group)
+                    .accessibilityHidden(tab != .group)
+                ScrollView { ChannelTab() }
+                    .opacity(tab == .channel ? 1 : 0).allowsHitTesting(tab == .channel)
+                    .accessibilityHidden(tab != .channel)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
@@ -46,7 +52,7 @@ struct NewChatSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 460, height: 540)
+        .frame(width: 480, height: 560)
         .background(Theme.panel)
     }
 }
@@ -67,6 +73,7 @@ private struct ConnectTab: View {
     @State private var working = false
     @State private var showInfo = false
     @State private var confirmNew = false
+    @State private var active = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -78,6 +85,8 @@ private struct ConnectTab: View {
                     .popover(isPresented: $showInfo, arrowEdge: .bottom) { ConnectInfo() }
             }
             SectionLabel("Copy one-time link")
+            Text("Share privately with one person. The link expires after they connect.")
+                .font(.cMeta).foregroundColor(Theme.secondaryText)
             HStack(spacing: 6) {
                 if let invitation = invitation {
                     LinkBox(text: invitation.link.display, onCopy: { copied = true })
@@ -91,21 +100,24 @@ private struct ConnectTab: View {
                 }
                 IconTool(icon: incognito ? "incognito-filled" : "incognito",
                          help: incognito ? "Incognito on: they'll see a random profile" : "Incognito off: they'll see your profile",
-                         active: incognito, size: 20, action: toggleIncognito)
+                         active: incognito, size: 20, action: toggleIncognito).disabled(busy)
             }
             HStack {
                 Spacer()
-                // Same look as Connect below.
+                // Secondary action keeps joining as the main action.
                 Button(action: { if invitation == nil { create() } else { confirmNew = true } }) {
                     HStack(spacing: 6) {
                         CIcon("repeat-once", size: 14)
                         Text("New link")
                     }
                 }
-                .buttonStyle(PrimaryButtonStyle())
+                .buttonStyle(SecondaryButtonStyle())
                 .disabled(busy)
             }
+            Divider().padding(.vertical, 6)
             SectionLabel("Join with a link")
+            Text("Paste a contact, group or channel link to connect.")
+                .font(.cMeta).foregroundColor(Theme.secondaryText)
             HStack(spacing: 4) {
                 CursusField(placeholder: "Invite or address link…", text: $link, onSubmit: connect)
                 IconTool(icon: "paste", help: "Paste") {
@@ -119,8 +131,11 @@ private struct ConnectTab: View {
                     .disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || working)
             }
         }
-        .onAppear(perform: create)
-        .onDisappear(perform: dropUnshared)
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: Radius.control).fill(Theme.elevated))
+        .overlay(RoundedRectangle(cornerRadius: Radius.control).strokeBorder(Theme.border, lineWidth: 1))
+        .onAppear { active = true; if invitation == nil { create() } }
+        .onDisappear { active = false; dropUnshared() }
         .alert("Create a new link?", isPresented: $confirmNew) {
             Button("Cancel", role: .cancel) {}
             Button("Delete and create new", role: .destructive, action: regenerate)
@@ -134,7 +149,9 @@ private struct ConnectTab: View {
         busy = true
         copied = false
         Task {
-            invitation = await model.newInvitation(incognito: incognito)
+            let result = await model.newInvitation(incognito: incognito)
+            if active { invitation = result }
+            else if let result = result { await model.deleteInvitation(connId: result.connId, quiet: true) }
             busy = false
         }
     }
@@ -142,10 +159,10 @@ private struct ConnectTab: View {
     private func regenerate() {
         guard !busy else { return }
         busy = true
-        copied = false
         Task {
             if let inv = await model.regenerateInvitation(previous: invitation?.connId, incognito: incognito) {
-                invitation = inv
+                if active { invitation = inv }
+                else { await model.deleteInvitation(connId: inv.connId, quiet: true) }
             }
             busy = false
         }
@@ -219,6 +236,8 @@ private struct GroupTab: View {
     @EnvironmentObject private var model: AppModel
     let done: () -> Void
     @State private var name = ""
+    @State private var creating = false
+    @State private var creating = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -229,14 +248,17 @@ private struct GroupTab: View {
             HStack {
                 Spacer()
                 Button("Create group") {
+                    guard !creating else { return }
                     let trimmed = name.trimmingCharacters(in: .whitespaces)
+                    creating = true
                     Task {
                         await model.createGroup(name: trimmed)
+                        creating = false
                         done()
                     }
                 }
                 .buttonStyle(PrimaryButtonStyle())
-                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(creating || name.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
     }

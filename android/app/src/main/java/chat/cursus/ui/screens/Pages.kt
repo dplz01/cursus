@@ -78,19 +78,58 @@ import chat.cursus.ui.components.SectionLabel
 import chat.cursus.ui.components.SwitchRow
 import chat.cursus.ui.theme.Cursus
 import chat.cursus.ui.theme.Radius
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
 private enum class CreateKind { Group, Channel }
+
+/** One invitation per page lifetime, including operations finishing after close. */
+private class ConnectDraft {
+    val invitation = mutableStateOf<Invitation?>(null)
+    val copied = mutableStateOf(false)
+    val busy = mutableStateOf(false)
+    var active = true
+
+    suspend fun create(model: AppModel, regenerate: Boolean = false) {
+        if (busy.value) return
+        busy.value = true
+        try {
+            withContext(NonCancellable) {
+                val result = if (regenerate) model.regenerateInvitation(invitation.value?.connId) else model.newInvitation()
+                if (!active) {
+                    result?.let { model.deleteInvitation(it.connId, quiet = true) }
+                } else if (result != null) {
+                    invitation.value = result
+                    copied.value = false
+                }
+            }
+        } finally { busy.value = false }
+    }
+}
 
 /** Linux "New" page: Connect card + Create card; New group / channel open the name overlay. */
 @Composable
 fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOpened: (String) -> Unit) {
     val c = Cursus.colors
     var link by rememberSaveable { mutableStateOf(initialLink ?: "") }
-    var create by remember { mutableStateOf<CreateKind?>(null) }
+    var create by rememberSaveable { mutableStateOf<CreateKind?>(null) }
+    val draft = remember { ConnectDraft() }
+    val scope = rememberCoroutineScope()
+    var groupName by rememberSaveable { mutableStateOf("") }
+    var channelName by rememberSaveable { mutableStateOf("") }
+    var creating by remember { mutableStateOf(false) }
+    LaunchedEffect(draft) { draft.create(model) }
+    androidx.compose.runtime.DisposableEffect(draft) {
+        onDispose {
+            draft.active = false
+            draft.invitation.value?.takeUnless { draft.copied.value }?.let { model.deleteInvitation(it.connId, quiet = true) }
+        }
+    }
 
     Column(Modifier.fillMaxSize().background(c.bgPanel)) {
-        PaneHeader("New", onBack = onClose)
+        PaneHeader("New conversation", onBack = onClose)
         Column(Modifier.verticalScroll(rememberScrollState())) {
             PageColumn {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -109,20 +148,22 @@ fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOp
                         }
                     }
                 }
-                if (create == null) ConnectCard(model, link, { link = it }, onClose)
+                if (create == null) ConnectCard(model, link, { link = it }, onClose, draft, scope)
                 else {
-                    var name by rememberSaveable(create) { mutableStateOf("") }
+                    val name = if (create == CreateKind.Group) groupName else channelName
                     CursusCard {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text(if (create == CreateKind.Group) "New group" else "New channel", style = Cursus.type.title, color = c.textPrimary)
-                            CursusField(name, { name = it }, if (create == CreateKind.Group) "Group name" else "Channel name")
-                            PrimaryButton("Create", {
+                            CursusField(name, { if (create == CreateKind.Group) groupName = it else channelName = it }, if (create == CreateKind.Group) "Group name" else "Channel name")
+                            PrimaryButton(if (creating) "Creating…" else if (create == CreateKind.Group) "Create group" else "Create channel", {
+                                if (creating) return@PrimaryButton
+                                creating = true
                                 val channel = create == CreateKind.Channel
-                                model.createGroup(name.trim(), channel = channel) {
+                                model.createGroup(name.trim(), channel = channel, finished = { creating = false }) {
                                     model.section = if (channel) chat.cursus.Section.Channels else chat.cursus.Section.Chats
                                     onOpened(it)
                                 }
-                            }, enabled = name.isNotBlank())
+                            }, enabled = name.isNotBlank() && !creating)
                         }
                     }
                 }
@@ -140,28 +181,17 @@ fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOp
  * under the gold button beside "+". The reusable address is in Settings.
  */
 @Composable
-private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit, onClose: () -> Unit) {
+private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit, onClose: () -> Unit,
+                        draft: ConnectDraft, scope: CoroutineScope) {
     val c = Cursus.colors
     val clipboard = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
-    var invitation by remember { mutableStateOf<Invitation?>(null) }
-    var copied by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(true) }
+    var invitation by draft.invitation
+    var copied by draft.copied
+    var busy by draft.busy
     var info by remember { mutableStateOf(false) }
     var confirmNew by remember { mutableStateOf(false) }
+    var connecting by remember { mutableStateOf(false) }
     val incognito = model.prefs.incognito
-    LaunchedEffect(Unit) {
-        invitation = model.newInvitation()
-        busy = false
-    }
-    // Never copied: nobody can have it, so don't leave it behind.
-    val latest by androidx.compose.runtime.rememberUpdatedState(invitation to copied)
-    androidx.compose.runtime.DisposableEffect(Unit) {
-        onDispose {
-            val (inv, wasCopied) = latest
-            if (inv != null && !wasCopied) model.deleteInvitation(inv.connId, quiet = true)
-        }
-    }
     CursusCard {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -169,6 +199,8 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
                 IconTool(R.drawable.ic_info_circle, "What do these do?", { info = true }, tint = c.textMuted)
             }
             SectionLabel("Copy one-time link")
+            Text("Share privately with one person. The link expires after they connect.",
+                style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(horizontal = 12.dp))
             Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Box(Modifier.weight(1f)) {
                     val inv = invitation
@@ -203,26 +235,33 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
                         }
                     },
                     tint = if (incognito) c.accent else c.textSecondary,
+                    enabled = !busy,
                 )
             }
             // Same look as the Connect button below (full width on phones).
             Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-                PrimaryButton("New link", {
+                SecondaryButton("New link", {
                     if (invitation != null) {
                         confirmNew = true
                     } else {
-                        busy = true
-                        scope.launch { invitation = model.newInvitation(); copied = false; busy = false }
+                        scope.launch { draft.create(model) }
                     }
                 }, Modifier.fillMaxWidth(), enabled = !busy)
             }
             SectionLabel("Join with a link")
+            Text("Paste a contact, group or channel link to connect.",
+                style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(horizontal = 12.dp))
             Column(Modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     RoundedField(link, onLink, "Invite or address link…", Modifier.weight(1f))
                     IconTool(R.drawable.ic_paste, "Paste", { clipboard.getText()?.let { onLink(it.text.trim()) } })
                 }
-                PrimaryButton("Connect", { model.connect(link.trim(), incognito) { onClose() } }, Modifier.fillMaxWidth(), enabled = link.isNotBlank())
+                PrimaryButton(if (connecting) "Connecting…" else "Connect", {
+                    if (!connecting) {
+                        connecting = true
+                        model.connect(link.trim(), incognito, finished = { connecting = false }) { onClose() }
+                    }
+                }, Modifier.fillMaxWidth(), enabled = link.isNotBlank() && !connecting)
             }
         }
     }
@@ -237,11 +276,7 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
                 SecondaryButton("Cancel", { confirmNew = false })
                 DangerButton("Delete and create new", {
                     confirmNew = false
-                    busy = true
-                    scope.launch {
-                        model.regenerateInvitation(invitation?.connId)?.let { invitation = it; copied = false }
-                        busy = false
-                    }
+                    scope.launch { draft.create(model, regenerate = true) }
                 })
             }
         }

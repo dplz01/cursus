@@ -141,7 +141,8 @@ struct NavDock: View {
     @ViewBuilder private var glassContainer: some View {
         #if compiler(>=6.2) && CURSUS_GLASS
         if #available(macOS 26.0, *) {
-            GlassEffectContainer(spacing: 8) { selectionTrack }
+            // Include nonadjacent tabs in the native morphing range.
+            GlassEffectContainer(spacing: 400) { selectionTrack }
         } else { selectionTrack }
         #else
         selectionTrack
@@ -157,8 +158,7 @@ struct NavDock: View {
                     .frame(height: 54)
                     .background {
                         if model.destination == dest {
-                            DockSelection(glass: glass)
-                                .matchedGeometryEffect(id: "destination", in: movement)
+                            DockSelection(glass: glass, movement: movement)
                         }
                     }
             }
@@ -171,7 +171,8 @@ struct NavDock: View {
             ForEach(Destination.allCases) { dest in
                 Button { model.destination = dest } label: {
                     VStack(spacing: 4) {
-                        CIcon(dest.icon, size: 21)
+                        CIcon(dest.icon, size: 21,
+                              color: model.destination == dest ? Theme.accent : Theme.secondaryText)
                         Text(dest.title).font(.system(size: 10, weight: model.destination == dest ? .semibold : .regular))
                             .lineLimit(1)
                     }
@@ -209,24 +210,27 @@ struct NavDock: View {
 
 private struct DockSelection: View {
     let glass: Namespace.ID
+    let movement: Namespace.ID
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
 
     @ViewBuilder var body: some View {
         #if compiler(>=6.2) && CURSUS_GLASS
         if #available(macOS 26.0, *), !reduceTransparency, contrast != .increased {
-            Capsule().fill(Theme.accent.opacity(0.06))
+            Color.clear
                 .glassEffect(.clear, in: Capsule())
                 .glassEffectID("destination", in: glass)
-        } else { opaque }
+                .glassEffectTransition(.matchedGeometry)
+        } else { fallback }
         #else
-        opaque
+        fallback
         #endif
     }
 
-    private var opaque: some View {
+    private var fallback: some View {
         Capsule().fill(Theme.accent.opacity(0.16))
             .overlay(Capsule().strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
+            .matchedGeometryEffect(id: "destination", in: movement)
     }
 }
 

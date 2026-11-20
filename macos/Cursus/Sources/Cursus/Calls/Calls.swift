@@ -36,6 +36,19 @@ struct CallRecord: Decodable, Identifiable {
     let ts: String?
     var id: Int64 { itemId }
     var missed: Bool { !outgoing && ["missed", "pending"].contains(status) }
+    /// Shared Solar glyphs and status precedence used by Linux and Android.
+    var icon: String {
+        if missed { return "call_missed" }
+        switch status {
+        case "rejected", "error": return "call_rejected"
+        case "accepted", "negotiated", "progress": return "call_active"
+        default: return outgoing ? "call_outgoing" : "call_incoming"
+        }
+    }
+    var color: Color {
+        if missed || ["rejected", "error"].contains(status) { return Theme.danger }
+        return outgoing ? Theme.accent : Theme.success
+    }
     var label: String {
         if missed { return "Missed" }
         if status == "rejected" { return "Declined" }

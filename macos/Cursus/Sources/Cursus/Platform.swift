@@ -165,7 +165,10 @@ enum Icons {
         switch name {
         case "chats": return "bubble.left"
         case "channels": return "antenna.radiowaves.left.and.right"
-        case "calls": return "phone"
+        case "calls", "call_active": return "phone"
+        case "call_incoming": return "phone.arrow.down.left"
+        case "call_outgoing": return "phone.arrow.up.right"
+        case "call_missed", "call_rejected": return "phone.down"
         case "settings": return "gearshape"
         case "send", "paperplane": return "paperplane"
         case "star": return "star"

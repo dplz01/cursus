@@ -334,8 +334,12 @@ spring animation only when the selected destination changes. Pointer hover
 retains the ordinary Cursus hover fill without moving or blurring the selection.
 The dock surface and moving clear-glass lens render in separate background
 layers below all buttons, keeping icons, labels and unread badges sharp.
-Native glass identities morph
-the highlight on macOS 26; Reduce Motion disables the sliding animation. Modern SDKs use
+On macOS 26, the dock samples a live AppKit behind-window backdrop rather
+than an opaque list fill. Clear native Liquid Glass supplies refraction and
+edge lighting without an opaque accent tint. The selection uses the native
+glass matched-geometry transition, including jumps between nonadjacent tabs;
+ordinary matched geometry is reserved for the fallback. Reduce Motion disables
+the sliding animation. Modern SDKs use
 NavigationSplitView and a unified compact toolbar. Liquid Glass is limited
 to navigation chrome on macOS 26+ with a compatible SDK; content, message
 bubbles and preference cards remain opaque. Reduce Transparency and
@@ -347,3 +351,8 @@ The optional macOS menu-bar item is controlled from Notifications → Menu bar.
 It offers Open Cursus, Settings, Lock and Quit. Changing its visibility takes
 effect immediately and persists across launches; closing the main window keeps
 the existing background-receiving behavior, with or without the item.
+
+Mac call history uses the same Solar incoming, outgoing, missed, declined and
+active-call glyphs as Linux and Android. Missed/declined/failed calls are red,
+outgoing calls use the accent and incoming calls use the success color. Call
+controls also include action icons without changing their existing behavior.

@@ -56,18 +56,29 @@ struct CallControlsView: View {
                 }
                 if call?.phase == "incoming" {
                     HStack(spacing: 12) {
-                        Button("Decline") { calls.end(reject: true) }.buttonStyle(SecondaryButtonStyle())
-                        Button("Answer") { calls.accept() }.buttonStyle(PrimaryButtonStyle(stretch: true)).disabled(calls.busy)
+                        Button { calls.end(reject: true) } label: {
+                            Label { Text("Decline") } icon: { CIcon("call_rejected", size: 16) }
+                        }.buttonStyle(SecondaryButtonStyle())
+                        Button { calls.accept() } label: {
+                            Label { Text("Answer") } icon: { CIcon("call_incoming", size: 16) }
+                        }.buttonStyle(PrimaryButtonStyle(stretch: true)).disabled(calls.busy)
                     }
                 } else {
                     HStack(spacing: 12) {
-                        Button(call?.muted == true ? "Unmute" : "Mute") { calls.mute() }
+                        Button { calls.mute() } label: {
+                            Label(call?.muted == true ? "Unmute" : "Mute",
+                                  systemImage: call?.muted == true ? "mic.slash" : "mic")
+                        }
                             .buttonStyle(SecondaryButtonStyle()).disabled(call == nil || calls.busy)
-                        Button("Audio settings…") {
+                        Button {
                             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.sound") { NSWorkspace.shared.open(url) }
+                        } label: {
+                            Label("Audio settings…", systemImage: "speaker.wave.2")
                         }.buttonStyle(SecondaryButtonStyle())
                     }
-                    Button("Hang up") { calls.end() }.buttonStyle(DangerButtonStyle())
+                    Button { calls.end() } label: {
+                        Label { Text("Hang up") } icon: { CIcon("call_rejected", size: 16) }
+                    }.buttonStyle(DangerButtonStyle())
                 }
                 Text("Back returns to your chats. The call stays active.")
                     .font(.cMeta).foregroundColor(Theme.mutedText).multilineTextAlignment(.center)
@@ -118,9 +129,9 @@ struct CallsView: View {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(contact?.title ?? call.peerName).font(.cBodyBold).foregroundColor(Theme.primaryText).lineLimit(1)
                                         HStack(spacing: 5) {
-                                            CIcon("calls", size: 13, color: call.missed || call.status == "error" ? Theme.danger : Theme.accent)
+                                            CIcon(call.icon, size: 14, color: call.color)
                                             Text(call.durationSecs > 0 ? "\(call.label) · \(Format.duration(call.durationSecs))" : call.label)
-                                                .font(.cMeta).foregroundColor(call.missed ? Theme.danger : Theme.secondaryText)
+                                                .font(.cMeta).foregroundColor(call.color)
                                         }
                                     }
                                     Spacer(minLength: 4)

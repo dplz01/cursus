@@ -25,8 +25,13 @@ struct NavigationChrome: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         #if compiler(>=6.2) && CURSUS_GLASS
         if #available(macOS 26.0, *), !reduceTransparency, contrast != .increased {
-            content.glassEffect(.regular.tint(Theme.sidebar.opacity(0.25)),
-                                in: Capsule())
+            content
+                .background {
+                    // Sample the desktop rather than the list's flat opaque
+                    // fill, as native macOS glass panels do.
+                    DockBackdrop().clipShape(Capsule())
+                }
+                .glassEffect(.clear, in: Capsule())
         } else { opaque(content) }
         #else
         opaque(content)
@@ -38,6 +43,20 @@ struct NavigationChrome: ViewModifier {
             .background(Capsule().fill(Theme.elevated))
             .overlay(Capsule().strokeBorder(Theme.border, lineWidth: 1))
     }
+}
+
+/// A live system backdrop, never a screenshot or a blurred copy of the tabs.
+/// The native clear-glass surface above it supplies refraction and lighting.
+private struct DockBackdrop: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .underWindowBackground
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 // MARK: - Buttons

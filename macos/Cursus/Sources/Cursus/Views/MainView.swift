@@ -122,19 +122,48 @@ struct NavDock: View {
     @Namespace private var glass
 
     var body: some View {
-        glassContainer
-            .modifier(NavigationChrome())
-            .animation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.78), value: model.destination)
+        // Glass renders only behind the controls. Applying it to the entire
+        // dock nests the selection's glass inside another effect, which can
+        // sample and blur the selected tab's own icon and label.
+        ZStack {
+            Color.clear.modifier(NavigationChrome())
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            glassContainer
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            tabs
+        }
+        .frame(height: 64)
+        .animation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.78), value: model.destination)
     }
 
     @ViewBuilder private var glassContainer: some View {
         #if compiler(>=6.2) && CURSUS_GLASS
         if #available(macOS 26.0, *) {
-            GlassEffectContainer(spacing: 8) { tabs }
-        } else { tabs }
+            GlassEffectContainer(spacing: 8) { selectionTrack }
+        } else { selectionTrack }
         #else
-        tabs
+        selectionTrack
         #endif
+    }
+
+    /// Separate background track: the moving lens never contains tab content.
+    private var selectionTrack: some View {
+        HStack(spacing: 2) {
+            ForEach(Destination.allCases) { dest in
+                Color.clear
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 54)
+                    .background {
+                        if model.destination == dest {
+                            DockSelection(glass: glass)
+                                .matchedGeometryEffect(id: "destination", in: movement)
+                        }
+                    }
+            }
+        }
+        .padding(5)
     }
 
     private var tabs: some View {
@@ -158,15 +187,6 @@ struct NavDock: View {
                     }
                 }
                 .buttonStyle(GhostTileStyle(radius: 27))
-                // Keep the moving selection outside the button style's clip.
-                // Hover is the ordinary Cursus fill and never moves the glass.
-                .background {
-                    if model.destination == dest {
-                        DockSelection(glass: glass)
-                            .matchedGeometryEffect(id: "destination", in: movement)
-                            .allowsHitTesting(false)
-                    }
-                }
                 .help(dest.title)
                 .accessibilityLabel(dest.title)
                 .accessibilityValue(model.destination == dest ? "Selected" : "")
@@ -195,8 +215,8 @@ private struct DockSelection: View {
     @ViewBuilder var body: some View {
         #if compiler(>=6.2) && CURSUS_GLASS
         if #available(macOS 26.0, *), !reduceTransparency, contrast != .increased {
-            Capsule().fill(Theme.accent.opacity(0.08))
-                .glassEffect(.clear.tint(Theme.accent.opacity(0.12)), in: Capsule())
+            Capsule().fill(Theme.accent.opacity(0.06))
+                .glassEffect(.clear, in: Capsule())
                 .glassEffectID("destination", in: glass)
         } else { opaque }
         #else

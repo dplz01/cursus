@@ -332,6 +332,8 @@ capsule dock below the list in a native resizable list/detail split. A shared
 selection capsule slides between Chats, Channels, Calls and Settings with a
 spring animation only when the selected destination changes. Pointer hover
 retains the ordinary Cursus hover fill without moving or blurring the selection.
+The dock surface and moving clear-glass lens render in separate background
+layers below all buttons, keeping icons, labels and unread badges sharp.
 Native glass identities morph
 the highlight on macOS 26; Reduce Motion disables the sliding animation. Modern SDKs use
 NavigationSplitView and a unified compact toolbar. Liquid Glass is limited

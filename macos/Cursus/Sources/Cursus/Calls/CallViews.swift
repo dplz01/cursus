@@ -108,14 +108,14 @@ struct CallsView: View {
     var body: some View {
         let contacts = Dictionary(uniqueKeysWithValues: model.chats.filter { $0.isDirect }.map { ($0.apiId, $0) })
         return VStack(spacing: 0) {
-            PaneHeader(title: "Calls", background: Theme.list) {
+            PaneHeader(title: "Calls", background: .clear) {
                 CreationButton(help: "New audio call") { showContacts = true }
                     .disabled(calls.state.active != nil || calls.busy)
             }
             if calls.loadingHistory && calls.history.isEmpty {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if calls.history.isEmpty {
-                Placeholder(icon: "calls", text: "Your recent calls will appear here.")
+                Placeholder(icon: "calls", text: "Your recent calls will appear here.", background: .clear)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 2) {
@@ -150,7 +150,7 @@ struct CallsView: View {
                         .padding(.bottom, NavDock.clearance)
                 }
             }
-        }.background(Theme.list)
+        }.background(Color.clear)
             .task { await calls.loadHistory() }
             .sheet(isPresented: $showContacts, onDismiss: {
                 if let contact = pendingContact { pendingContact = nil; calls.start(contact) }

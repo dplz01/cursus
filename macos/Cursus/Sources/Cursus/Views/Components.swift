@@ -21,8 +21,8 @@ private struct Hovering<Content: View>: View {
 struct NavigationChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.elevated))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Theme.elevated))
+            .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
     }
 }
 
@@ -42,16 +42,16 @@ private struct CreationGlass: ViewModifier {
         #if compiler(>=6.2) && CURSUS_GLASS
         if #available(macOS 26.0, *), glass {
             content.glassEffect(.regular.tint(Theme.accent.opacity(pressed ? 0.18 : 0.04)).interactive(),
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
         } else { fallback(content) }
         #else
         fallback(content)
         #endif
     }
     private func fallback(_ content: Content) -> some View {
-        content.background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+        content.background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
             .fill(pressed ? Theme.accentSoftPress : Theme.fieldFill))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
     }
 }
 struct CreationButton: View {
@@ -200,8 +200,9 @@ struct IconToolStyle: ButtonStyle {
                 .foregroundColor(active ? Theme.accent : hover ? Theme.primaryText : Theme.secondaryText)
                 .frame(width: 32, height: 32)
                 .background(
-                    Circle().fill(configuration.isPressed ? Theme.accentSoft : hover ? Theme.hover : Color.clear))
-                .contentShape(Circle())
+                    RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                        .fill(configuration.isPressed ? Theme.accentSoft : hover ? Theme.hover : Color.clear))
+                .contentShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
         }
     }
 }
@@ -577,7 +578,7 @@ struct PrefRow<Control: View>: View {
             if let icon = icon {
                 CIcon(icon, size: 18, color: Theme.accent)
                     .frame(width: 32, height: 32)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Theme.accentSoft))
+                    .background(RoundedRectangle(cornerRadius: Radius.control).fill(Theme.accentSoft))
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(label).font(.cBody).foregroundColor(Theme.primaryText)
@@ -842,9 +843,9 @@ struct PreferenceGroup<Content: View>: View {
             VStack(alignment: .leading, spacing: 0) { content }
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Theme.elevated))
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+                .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Theme.elevated))
+                .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
             if let note = note {
                 Text(note).font(.cMeta).foregroundColor(Theme.secondaryText).padding(.horizontal, 16)
             }

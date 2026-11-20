@@ -124,9 +124,11 @@ enum Theme {
 /// Shapes (DESIGN_SYSTEM.md → Spacing, radius and shape). Use these, never
 /// inline numbers.
 enum Radius {
-    static let sm: CGFloat = 8
-    static let md: CGFloat = 10
-    static let lg: CGFloat = 12
+    // Custom controls share one curvature, alongside native window corners.
+    static let control: CGFloat = 12
+    static let sm = control
+    static let md = control
+    static let lg = control
     static let bubble: CGFloat = 16
 }
 
@@ -394,12 +396,49 @@ struct WindowChrome: NSViewRepresentable {
     }
 }
 
-/// A title-bar drag target; native controls above it retain their own events.
-struct WindowDragArea: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { DragView() }
-    func updateNSView(_ nsView: NSView, context: Context) {}
+/// Native sidebar items acquire the floating sidebar material on macOS 26.
+/// Older systems retain AppKit's standard sidebar and split-view behavior.
+struct SidebarSplit<Sidebar: View, Detail: View>: NSViewControllerRepresentable {
+    let sidebar: Sidebar
+    let detail: Detail
 
-    private final class DragView: NSView {
-        override var mouseDownCanMoveWindow: Bool { true }
+    func makeNSViewController(context: Context) -> Controller {
+        Controller(sidebar: sidebar, detail: detail)
+    }
+
+    func updateNSViewController(_ controller: Controller, context: Context) {
+        controller.sidebarHost.rootView = sidebar
+        controller.detailHost.rootView = detail
+    }
+
+    final class Controller: NSSplitViewController {
+        let sidebarHost: NSHostingController<Sidebar>
+        let detailHost: NSHostingController<Detail>
+
+        init(sidebar: Sidebar, detail: Detail) {
+            sidebarHost = NSHostingController(rootView: sidebar)
+            detailHost = NSHostingController(rootView: detail)
+            super.init(nibName: nil, bundle: nil)
+        }
+
+        required init?(coder: NSCoder) { fatalError("Use init(sidebar:detail:)") }
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            splitView.isVertical = true
+            let sidebar = NSSplitViewItem(sidebarWithViewController: sidebarHost)
+            sidebar.minimumThickness = 260
+            sidebar.maximumThickness = 400
+            let detail = NSSplitViewItem(viewController: detailHost)
+            detail.minimumThickness = 360
+            #if compiler(>=6.2) && CURSUS_GLASS
+            if #available(macOS 26.0, *) {
+                detail.automaticallyAdjustsSafeAreaInsets = true
+            }
+            #endif
+            addSplitViewItem(sidebar)
+            addSplitViewItem(detail)
+            splitView.setPosition(310, ofDividerAt: 0)
+        }
     }
 }

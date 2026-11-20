@@ -935,7 +935,7 @@ struct ComposerView: View {
                     Button(action: send) {
                         CIcon("send", size: 18, color: canSend ? Theme.accentOn : Theme.mutedText)
                             .frame(width: 34, height: 34)
-                            .background(Circle().fill(canSend ? Theme.accent : Theme.disabledFill))
+                            .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(canSend ? Theme.accent : Theme.disabledFill))
                     }
                     .buttonStyle(.plain)
                     .disabled(!canSend)

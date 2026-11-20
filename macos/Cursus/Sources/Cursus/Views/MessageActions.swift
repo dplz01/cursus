@@ -196,8 +196,8 @@ struct ReactionChip: View {
                 .foregroundColor(reaction.mine ? Theme.accent : Theme.primaryText)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(RoundedRectangle(cornerRadius: 14).fill(reaction.mine ? Theme.accentSoft : Theme.elevated))
-                .overlay(RoundedRectangle(cornerRadius: 14)
+                .background(RoundedRectangle(cornerRadius: Radius.control).fill(reaction.mine ? Theme.accentSoft : Theme.elevated))
+                .overlay(RoundedRectangle(cornerRadius: Radius.control)
                     .strokeBorder(reaction.mine ? Theme.accent : Theme.border, lineWidth: 1))
         }
         .buttonStyle(.plain)

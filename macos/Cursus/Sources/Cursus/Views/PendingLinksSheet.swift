@@ -12,7 +12,7 @@ struct AttentionButton: View {
         Button(action: action) {
             CIcon(icon, size: 16, color: Theme.onAttention)
                 .frame(width: 28, height: 28)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.attention))
+                .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Theme.attention))
                 .overlay(CountBadge(count: count)
                             .alignmentGuide(.trailing) { $0[HorizontalAlignment.center] }
                             .alignmentGuide(.top) { $0[VerticalAlignment.center] },

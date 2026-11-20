@@ -24,7 +24,7 @@ struct NewChatSheet: View {
                             Text(choice.rawValue).font(.cMeta)
                         }.frame(maxWidth: .infinity).padding(.vertical, 10)
                     }.buttonStyle(CreationActionStyle())
-                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tab == choice ? Theme.accent : .clear, lineWidth: 1))
+                        .overlay(RoundedRectangle(cornerRadius: Radius.control).strokeBorder(tab == choice ? Theme.accent : .clear, lineWidth: 1))
                         .accessibilityValue(tab == choice ? "Selected" : "")
                 }
             }

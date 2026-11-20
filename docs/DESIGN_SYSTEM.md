@@ -345,9 +345,13 @@ A small animated glyph displacement peaks as a moving lens edge crosses each
 tab and returns exactly to the unmodified rendering at rest. Hover does not
 trigger that displacement.
 Reduce Motion disables sliding. Reduce Transparency, Increase Contrast and
-older systems use a bordered accent selection below the controls. Modern SDKs
-use NavigationSplitView and a unified compact toolbar; older systems use
-HSplitView. Intel and Apple Silicon follow identical availability rules.
+older systems use a bordered accent selection below the controls. macOS uses
+NSSplitViewController with a native sidebar item: macOS 26 supplies the floating
+glass surface and older systems supply their standard sidebar. Sidebar content
+has transparent backgrounds so it does not obscure the system material. AppKit
+owns the sidebar safe area, window-control region and resizing. Custom Mac
+buttons share the 12pt control corner token; native window corners remain
+system-managed. Intel and Apple Silicon follow identical availability rules.
 Native macOS switches retain the Cursus accent and grouped-row geometry.
 
 The optional macOS menu-bar item is controlled from Notifications → Menu bar.

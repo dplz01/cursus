@@ -9,10 +9,10 @@ struct SettingsListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PaneHeader(title: "Settings", background: Theme.list)
+            PaneHeader(title: "Settings", background: .clear)
             list
         }
-        .background(Theme.list)
+        .background(Color.clear)
     }
 
     private var list: some View {
@@ -46,7 +46,7 @@ struct SettingsListView: View {
             .padding(8)
             .padding(.bottom, NavDock.clearance)
         }
-        .background(Theme.list)
+        .background(Color.clear)
     }
 }
 

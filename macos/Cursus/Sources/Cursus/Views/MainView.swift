@@ -4,8 +4,6 @@ import SwiftUI
 /// A floating sidebar with native window controls and the destination dock.
 struct MainView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var sidebarWidth: CGFloat = 310
-    @State private var resizeOrigin: CGFloat?
 
     var body: some View {
         columns
@@ -35,61 +33,21 @@ struct MainView: View {
     }
 
     private var columns: some View {
-        GeometryReader { geometry in
-            let width = min(sidebarWidth, max(260, geometry.size.width - 366))
-            HStack(spacing: 0) {
-                middle
-                    .padding(.leading, 8)
-                    .padding(.vertical, 8)
-                    .frame(width: width)
-                // Resize in the gap, without a full-height split-view rule.
-                Color.clear
-                    .frame(width: 6)
-                    .contentShape(Rectangle())
-                    .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named("shell"))
-                        .onChanged { value in
-                            if resizeOrigin == nil { resizeOrigin = width }
-                            sidebarWidth = min(400, max(260,
-                                min(geometry.size.width - 366,
-                                    (resizeOrigin ?? width) + value.translation.width)))
-                        }
-                        .onEnded { _ in resizeOrigin = nil })
-                    .accessibilityLabel("Sidebar width")
-                    .accessibilityAdjustableAction { direction in
-                        switch direction {
-                        case .increment: sidebarWidth = min(400, width + 20)
-                        case .decrement: sidebarWidth = max(260, width - 20)
-                        @unknown default: break
-                        }
-                    }
-                VStack(spacing: 0) {
-                    CallBannerView(calls: model.calls)
-                    detail
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .coordinateSpace(name: "shell")
-        }
+        SidebarSplit(
+            sidebar: middle.environmentObject(model),
+            detail: VStack(spacing: 0) {
+                CallBannerView(calls: model.calls)
+                detail
+            }.environmentObject(model))
     }
 
     private var middle: some View {
-        // Keep the dock as a stable sibling of the changing page. An overlay
-        // attached to the conditional page can recreate it on section changes,
-        // losing the previous lens position (Chats/Channels share one branch).
-        VStack(spacing: 0) {
-            // Native traffic lights remain above the content. This area also
-            // provides a drag target without making chat rows draggable.
-            WindowDragArea().frame(height: 36).accessibilityHidden(true)
-            ZStack(alignment: .bottom) {
-                listContent.frame(maxHeight: .infinity)
-                NavDock().padding(10)
-            }
+        // Leave the sidebar transparent: NSSplitViewController supplies its
+        // floating glass, window-control region and native resizing behavior.
+        ZStack(alignment: .bottom) {
+            listContent.frame(maxHeight: .infinity)
+            NavDock().padding(10)
         }
-        .background(Theme.list)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .strokeBorder(Theme.border.opacity(0.6), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.08), radius: 10, x: 0, y: 3)
     }
 
     @ViewBuilder private var listContent: some View {
@@ -134,6 +92,7 @@ struct MainView: View {
 struct Placeholder: View {
     let icon: String
     let text: String
+    var background: Color = Theme.panel
 
     var body: some View {
         VStack(spacing: 12) {
@@ -141,7 +100,7 @@ struct Placeholder: View {
             Text(text).font(.cBody).foregroundColor(Theme.secondaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.panel)
+        .background(background)
     }
 }
 
@@ -220,7 +179,7 @@ struct NavDock: View {
                     .animation(slideAnimation, value: model.destination)
                     .frame(maxWidth: .infinity)
                     .frame(height: 54)
-                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
                     .overlay(alignment: .topTrailing) {
                         if badge(for: dest) > 0 {
                             UnreadPill(count: badge(for: dest))
@@ -228,7 +187,7 @@ struct NavDock: View {
                         }
                     }
                 }
-                .buttonStyle(GhostTileStyle(radius: 12, hoverEnabled: model.destination != dest))
+                .buttonStyle(GhostTileStyle(radius: Radius.control, hoverEnabled: model.destination != dest))
                 .help(dest.title)
                 .accessibilityLabel(dest.title)
                 .accessibilityValue(model.destination == dest ? "Selected" : "")
@@ -288,14 +247,14 @@ private struct DockSelection: View {
                 // remain legible. Keep the existing dark material untouched.
                 Color.clear
                     .glassEffect(.clear.tint(Theme.accent.opacity(0.10)),
-                                 in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                 in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
                         .strokeBorder(LinearGradient(
                             colors: [.white.opacity(0.95), Theme.accent.opacity(0.28), .white.opacity(0.75)],
                             startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
                     .shadow(color: Theme.accent.opacity(0.14), radius: 3, x: 0, y: 1)
             } else {
-                Color.clear.glassEffect(.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Color.clear.glassEffect(.clear, in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
             }
         } else { fallback }
         #else
@@ -304,8 +263,8 @@ private struct DockSelection: View {
     }
 
     private var fallback: some View {
-        RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.accent.opacity(0.16))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
+        RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Theme.accent.opacity(0.16))
+            .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
     }
 }
 
@@ -324,7 +283,7 @@ struct ChatListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PaneHeader(title: model.destination.title, background: Theme.list) {
+            PaneHeader(title: model.destination.title, background: .clear) {
                 if !model.pendingInvitations.isEmpty {
                     PendingLinksButton(count: model.pendingInvitations.count) { model.showPendingLinks = true }
                 }
@@ -335,7 +294,7 @@ struct ChatListView: View {
                 .padding(.vertical, 8)
             list
         }
-        .background(Theme.list)
+        .background(Color.clear)
     }
 
     private var list: some View {
@@ -352,7 +311,7 @@ struct ChatListView: View {
             .padding(.vertical, 6)
             .padding(.bottom, NavDock.clearance)
         }
-        .background(Theme.list)
+        .background(Color.clear)
         .overlay {
             if model.visibleChats.isEmpty {
                 VStack(spacing: 12) {

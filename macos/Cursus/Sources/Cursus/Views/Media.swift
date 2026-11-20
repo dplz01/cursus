@@ -196,10 +196,16 @@ final class VoiceRecorder: NSObject, ObservableObject {
         levels = []
         elapsed = 0
         recording = true
-        // A selector timer runs on this main run loop. Its weak target avoids
-        // a retain cycle and transferring the recorder into a Sendable closure.
-        timer = Timer.scheduledTimer(timeInterval: 0.1, target: MeterTarget(self),
-                                     selector: #selector(MeterTarget.fire), userInfo: nil, repeats: true)
+        startMetering()
+    }
+
+    @MainActor private func startMetering() {
+        // Schedule synchronously on the main run loop, including while menus
+        // track. The timer target holds the recorder weakly.
+        let timer = Timer(timeInterval: 0.1, target: MeterTarget(self),
+                          selector: #selector(MeterTarget.fire), userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     private final class MeterTarget: NSObject {

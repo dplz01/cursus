@@ -237,7 +237,6 @@ private struct GroupTab: View {
     let done: () -> Void
     @State private var name = ""
     @State private var creating = false
-    @State private var creating = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -252,9 +251,9 @@ private struct GroupTab: View {
                     let trimmed = name.trimmingCharacters(in: .whitespaces)
                     creating = true
                     Task {
-                        await model.createGroup(name: trimmed)
+                        let success = await model.createGroup(name: trimmed)
                         creating = false
-                        done()
+                        if success { done() }
                     }
                 }
                 .buttonStyle(PrimaryButtonStyle())

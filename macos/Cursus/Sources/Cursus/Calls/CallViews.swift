@@ -108,7 +108,7 @@ struct CallsView: View {
     var body: some View {
         let contacts = Dictionary(uniqueKeysWithValues: model.chats.filter { $0.isDirect }.map { ($0.apiId, $0) })
         return VStack(spacing: 0) {
-            PaneHeader(title: "Calls", background: .clear) {
+            PaneHeader(title: "Calls", background: .clear, compact: true) {
                 CreationButton(help: "New audio call") { showContacts = true }
                     .disabled(calls.state.active != nil || calls.busy)
             }

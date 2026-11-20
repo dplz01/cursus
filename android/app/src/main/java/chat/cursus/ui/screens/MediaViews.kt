@@ -89,10 +89,11 @@ private fun statusLine(f: FileInfo, outgoing: Boolean): String {
 }
 
 @Composable
-fun FileBody(model: AppModel, m: Message, f: FileInfo, onLongPress: () -> Unit) {
+fun FileBody(model: AppModel, m: Message, f: FileInfo, onLongPress: () -> Unit, showReceipt: Boolean = true) {
     when {
         f.kind == "voice" -> VoiceRow(model, m, f, onLongPress)
-        f.kind == "image" && f.state == "complete" -> ImageThumb(model, f, onLongPress)
+        f.kind == "image" && f.state == "complete" -> ImageThumb(model, m, f, onLongPress, showReceipt)
+        f.kind == "video" && f.state == "complete" -> VideoThumb(model, m, f, onLongPress, showReceipt)
         else -> {
             InlinePreview(f)
             FileRow(model, m, f, onLongPress)
@@ -114,23 +115,67 @@ private fun InlinePreview(f: FileInfo) {
 }
 
 @Composable
-private fun ImageThumb(model: AppModel, f: FileInfo, onLongPress: () -> Unit) {
-    val path = model.plainFiles[f.id] ?: return FileRowPlaceholder(f)
-    // "Blur photos and videos": blurred until tapped. A tiny decode scaled
-    // up blurs on every Android version; Modifier.blur adds to it on 12+.
+private fun ImageThumb(model: AppModel, message: Message, f: FileInfo, onLongPress: () -> Unit, showReceipt: Boolean) {
+    val path = model.plainFiles[f.id]
     val blurred = model.prefs.blurMedia && f.id !in model.revealedMedia
     val bitmap by rememberLoaded<ImageBitmap?>(null, path, blurred) {
-        withContext(Dispatchers.IO) { decodeScaled(path, if (blurred) 24 else 720) }
+        path?.let { withContext(Dispatchers.IO) { decodeScaled(it, if (blurred) 24 else 720) } }
     }
-    bitmap?.let {
-        Image(
-            it, f.name,
-            Modifier.padding(bottom = 4.dp).widthIn(max = 296.dp).heightIn(max = 360.dp).clip(Radius.lg)
-                .then(if (blurred) Modifier.blur(16.dp) else Modifier)
-                .combinedClickable(onClick = { if (blurred) model.revealedMedia.add(f.id) else model.gallery = f.id }, onLongClick = onLongPress),
-            contentScale = ContentScale.Fit,
-        )
-    } ?: FileRowPlaceholder(f)
+    Box(
+        Modifier.widthIn(max = 296.dp).heightIn(max = 360.dp).clip(Radius.lg)
+            .combinedClickable(
+                onClick = {
+                    if (bitmap != null) {
+                        if (blurred) model.revealedMedia.add(f.id) else model.gallery = f.id
+                    }
+                },
+                onLongClick = onLongPress,
+            ),
+    ) {
+        bitmap?.let {
+            Image(it, f.name,
+                Modifier.then(if (blurred) Modifier.blur(16.dp) else Modifier),
+                contentScale = ContentScale.Fit)
+        } ?: Box(Modifier.size(200.dp, 140.dp).background(Cursus.colors.bgField), contentAlignment = Alignment.Center) {
+            FileRowPlaceholder(f)
+        }
+        if (message.deleted == null) {
+            MessageStamp(message, showReceipt,
+                Modifier.align(Alignment.BottomEnd).padding(end = 6.dp, bottom = 4.dp), onMedia = true)
+        }
+    }
+}
+
+/** Videos keep the same compact media frame and existing external player. */
+@Composable
+private fun VideoThumb(model: AppModel, message: Message, f: FileInfo, onLongPress: () -> Unit, showReceipt: Boolean) {
+    val preview = remember(f.preview) { f.preview?.let { chat.cursus.ui.components.decodeDataUrl(it) } }
+    val hidden = model.prefs.blurMedia && f.id !in model.revealedMedia
+    val width = preview?.width?.toFloat() ?: 260f
+    val height = preview?.height?.toFloat() ?: 160f
+    val scale = minOf(1f, 296f / width.coerceAtLeast(1f), 360f / height.coerceAtLeast(1f))
+    Box(
+        Modifier.size((width * scale).dp, (height * scale).dp).clip(Radius.lg).background(Cursus.colors.bgField)
+            .combinedClickable(onClick = {
+                if (hidden) model.revealedMedia.add(f.id) else model.openFile(f)
+            }, onLongClick = onLongPress),
+    ) {
+        preview?.let {
+            Image(it, f.name, Modifier.fillMaxSize().then(if (hidden) Modifier.blur(16.dp) else Modifier),
+                contentScale = ContentScale.Fit)
+        }
+        Box(Modifier.align(Alignment.Center).size(44.dp).clip(Radius.lg).background(Color.Black.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center) {
+            Icon(painterResource(R.drawable.ic_play), "Play video", Modifier.size(22.dp), tint = Color.White)
+        }
+        f.duration?.let {
+            Text(formatDuration(it), style = Cursus.type.meta,
+                color = Color.White, modifier = Modifier.align(Alignment.BottomStart).padding(start = 6.dp, bottom = 4.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), Radius.sm).padding(horizontal = 6.dp, vertical = 3.dp))
+        }
+        if (message.deleted == null) MessageStamp(message, showReceipt,
+            Modifier.align(Alignment.BottomEnd).padding(end = 6.dp, bottom = 4.dp), onMedia = true)
+    }
 }
 
 @Composable

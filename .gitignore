@@ -32,6 +32,7 @@ repo/
 
 # Android build output (also ignored here so branches without android/ never pick it up)
 android/.gradle/
+android/.kotlin/
 android/build/
 android/app/build/
 android/local.properties

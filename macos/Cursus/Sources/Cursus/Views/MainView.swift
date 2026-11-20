@@ -244,7 +244,7 @@ private struct DockSelection: View {
         if #available(macOS 26.0, *), refractive {
             if colorScheme == .light {
                 // Clear glass on white needs a tint and an optical rim to
-                // remain legible. Keep the existing dark material untouched.
+                // remain legible without covering the foreground controls.
                 Color.clear
                     .glassEffect(.clear.tint(Theme.accent.opacity(0.10)),
                                  in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
@@ -254,7 +254,13 @@ private struct DockSelection: View {
                             startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
                     .shadow(color: Theme.accent.opacity(0.14), radius: 3, x: 0, y: 1)
             } else {
-                Color.clear.glassEffect(.clear, in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+                Color.clear
+                    .glassEffect(.clear.tint(.white.opacity(0.10)),
+                                 in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                        .strokeBorder(LinearGradient(colors: [.white.opacity(0.32), .white.opacity(0.06), .white.opacity(0.18)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.18), radius: 2, x: 0, y: 1)
             }
         } else { fallback }
         #else
@@ -283,7 +289,7 @@ struct ChatListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PaneHeader(title: model.destination.title, background: .clear) {
+            PaneHeader(title: model.destination.title, background: .clear, compact: true) {
                 if !model.pendingInvitations.isEmpty {
                     PendingLinksButton(count: model.pendingInvitations.count) { model.showPendingLinks = true }
                 }

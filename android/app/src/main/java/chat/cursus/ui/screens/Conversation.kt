@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -289,6 +290,8 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
     var whoReacted by remember { mutableStateOf<String?>(null) }
     whoReacted?.let { emoji -> ReactionMembers(model, m, emoji) { whoReacted = null } }
     val groupIncoming = chat.isGroup && !m.outgoing
+    val visualMedia = m.deleted == null && m.file?.kind in setOf("image", "video")
+    val shape = if (visualMedia) Radius.bubble else bubbleShape(m.outgoing, lastOfRun)
     // Selection mode: a tap anywhere on the row adds / removes the message.
     val selecting = model.selected.isNotEmpty()
     val onLongPress = { if (selecting) model.toggleSelected(m) else menu = true }
@@ -307,20 +310,22 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
         Column(horizontalAlignment = if (m.outgoing) Alignment.End else Alignment.Start, modifier = Modifier.widthIn(max = 320.dp)) {
             Box {
                 Column(
-                    Modifier
+                    Modifier.width(IntrinsicSize.Max)
                         // Light mode: a whisper of shadow lifts white bubbles off the grey (Linux).
-                        .then(if (c.isDark) Modifier else Modifier.shadow(1.dp, bubbleShape(m.outgoing, lastOfRun)))
-                        .clip(bubbleShape(m.outgoing, lastOfRun))
+                        .then(if (c.isDark) Modifier else Modifier.shadow(1.dp, shape))
+                        .clip(shape)
                         .background(if (m.outgoing) c.bubbleOut else c.bubbleIn)
                         .combinedClickable(
                             onClick = { if (selecting) model.toggleSelected(m) },
                             onLongClick = onLongPress,
                         )
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = if (visualMedia) 4.dp else 12.dp,
+                            vertical = if (visualMedia) 4.dp else 8.dp),
                 ) {
                     if (groupIncoming && firstOfRun) {
                         Text(
                             m.sender?.name ?: "",
+                            modifier = if (visualMedia) Modifier.padding(horizontal = 8.dp, vertical = 4.dp) else Modifier,
                             style = Cursus.type.meta,
                             color = c.accent,
                             fontWeight = FontWeight.SemiBold,
@@ -329,7 +334,7 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
                     }
                     m.quote?.let { q ->
                         Row(
-                            Modifier.padding(bottom = 6.dp).clip(Radius.sm).background(c.bgField.copy(alpha = 0.7f)),
+                            Modifier.padding(horizontal = if (visualMedia) 8.dp else 0.dp).padding(bottom = 6.dp).clip(Radius.sm).background(c.bgField.copy(alpha = 0.7f)),
                         ) {
                             Box(Modifier.width(3.dp).heightIn(min = 32.dp).background(c.accent))
                             Text(
@@ -342,15 +347,13 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
                             )
                         }
                     }
-                    MessageBody(model, m, onLongPress)
-                    Row(
-                        Modifier.align(Alignment.End).padding(top = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        if (m.edited) Text("edited", style = Cursus.type.meta.copy(fontSize = 11.sp), color = c.textMuted)
-                        Text(Stamps.time(m.createdAt), style = Cursus.type.meta.copy(fontSize = 11.sp), color = if (m.outgoing) c.bubbleOutMeta else c.textMuted)
-                        if (m.outgoing) DeliveryGlyph(m.delivery, c)
+                    val imageStamp = visualMedia && m.file?.state == "complete"
+                    val inlineStamp = !imageStamp && m.deleted == null && m.groupInvitation == null &&
+                        (if (m.file == null) m.text.isNotEmpty() else m.caption.isNotBlank())
+                    MessageBody(model, m, onLongPress, inlineStamp, showReceipt = !chat.isNotes)
+                    if (!inlineStamp && !imageStamp) {
+                        MessageStamp(m, showReceipt = !chat.isNotes,
+                            modifier = Modifier.align(Alignment.End).padding(top = 2.dp))
                     }
                 }
                 if (menu) MessageMenu(model, m) { menu = false }
@@ -398,7 +401,7 @@ private fun bubbleShape(outgoing: Boolean, lastOfRun: Boolean): androidx.compose
 }
 
 @Composable
-private fun DeliveryGlyph(delivery: String, c: CursusColors) {
+internal fun DeliveryGlyph(delivery: String, c: CursusColors) {
     val (icon, tint) = when (delivery) {
         "pending" -> R.drawable.ic_history to c.textMuted
         "delivered" -> R.drawable.ic_check_read to c.bubbleOutTick
@@ -410,7 +413,7 @@ private fun DeliveryGlyph(delivery: String, c: CursusColors) {
 }
 
 @Composable
-private fun MessageBody(model: AppModel, m: Message, onLongPress: () -> Unit) {
+private fun MessageBody(model: AppModel, m: Message, onLongPress: () -> Unit, inlineStamp: Boolean, showReceipt: Boolean) {
     val c = Cursus.colors
     if (m.deleted != null) {
         // Linux wording; a marked-deleted message keeps its text behind "Reveal".
@@ -426,16 +429,22 @@ private fun MessageBody(model: AppModel, m: Message, onLongPress: () -> Unit) {
         return
     }
     m.file?.let { f ->
-        FileBody(model, m, f, onLongPress)
-        if (m.caption.isNotBlank()) RichText(model, m.segments.ifEmpty { listOf(Segment(m.caption)) }, m.emojiOnly)
+        FileBody(model, m, f, onLongPress, showReceipt)
+        if (m.caption.isNotBlank()) {
+            Box(if (f.kind in setOf("image", "video")) Modifier.padding(horizontal = 8.dp, vertical = 4.dp) else Modifier) {
+                RichText(model, m.segments.ifEmpty { listOf(Segment(m.caption)) }, m.emojiOnly,
+                    stamp = m.takeIf { inlineStamp }, showReceipt = showReceipt)
+            }
+        }
         return
     }
-    RichText(model, m.segments.ifEmpty { listOf(Segment(m.text)) }, m.emojiOnly)
+    RichText(model, m.segments.ifEmpty { listOf(Segment(m.text)) }, m.emojiOnly,
+        stamp = m.takeIf { inlineStamp }, showReceipt = showReceipt)
 }
 
 /** SimpleX markdown segments (parsed by the core) → styled text with tappable links. */
 @Composable
-private fun RichText(model: AppModel, segments: List<Segment>, emojiOnly: Boolean) {
+private fun RichText(model: AppModel, segments: List<Segment>, emojiOnly: Boolean, stamp: Message?, showReceipt: Boolean) {
     val c = Cursus.colors
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -477,11 +486,12 @@ private fun RichText(model: AppModel, segments: List<Segment>, emojiOnly: Boolea
             }
         }
     }
-    Text(
-        text,
-        style = if (emojiOnly) Cursus.type.body.copy(fontSize = 32.sp) else Cursus.type.body,
-        color = c.textPrimary,
-    )
+    val textStyle = if (emojiOnly) Cursus.type.body.copy(fontSize = 32.sp, lineHeight = 38.sp) else Cursus.type.body
+    if (stamp != null) {
+        StampedMessageText(text, textStyle, stamp, showReceipt)
+    } else {
+        Text(text, style = textStyle, color = c.textPrimary)
+    }
 }
 
 private fun segmentColor(name: String?, c: CursusColors): Color = when (name) {

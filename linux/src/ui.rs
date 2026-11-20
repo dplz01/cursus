@@ -2446,13 +2446,8 @@ fn message_bubble<'a>(
     let pad = if emoji_only {
         Padding::from([6, 8])
     } else if media_flush {
-        // Image sits flush; keep a little room under for size + time.
-        Padding {
-            top: 4.0,
-            right: 4.0,
-            bottom: 8.0,
-            left: 4.0,
-        }
+        // Concentric 16pt bubble / 12pt preview with an even 4pt bezel.
+        Padding::from(4.0)
     } else {
         Padding::from([8, 12])
     };
@@ -2462,22 +2457,22 @@ fn message_bubble<'a>(
     // Rounded everywhere except the sender's side (right for sent, left for
     // received): its top corner is always small, its bottom corner too on
     // every bubble of a run but the last (`cursus_core::runs`).
-    const R: f32 = 18.0;
+    let r: f32 = if media_flush { 16.0 } else { 18.0 };
     const JOIN: f32 = 6.0;
-    let side_top = JOIN;
-    let side_bottom = if run.joined_next { JOIN } else { R };
+    let side_top = if media_flush { r } else { JOIN };
+    let side_bottom = if !media_flush && run.joined_next { JOIN } else { r };
     let radius = if msg.outgoing {
         iced::border::Radius {
-            top_left: R,
+            top_left: r,
             top_right: side_top,
             bottom_right: side_bottom,
-            bottom_left: R,
+            bottom_left: r,
         }
     } else {
         iced::border::Radius {
             top_left: side_top,
-            top_right: R,
-            bottom_right: R,
+            top_right: r,
+            bottom_right: r,
             bottom_left: side_bottom,
         }
     };

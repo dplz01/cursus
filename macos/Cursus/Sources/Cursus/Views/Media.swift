@@ -350,6 +350,8 @@ struct VideoThumbnail: View {
     @State private var poster: NSImage?
 
     var body: some View {
+        let size = poster?.size ?? NSSize(width: 260, height: 160)
+        let scale = min(1, min(300 / max(1, size.width), 320 / max(1, size.height)))
         ZStack {
             if let poster = poster {
                 Image(nsImage: poster)
@@ -371,11 +373,11 @@ struct VideoThumbnail: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Capsule().fill(Color.black.opacity(0.5)))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                     .padding(8)
             }
         }
-        .frame(maxWidth: 300, maxHeight: 320)
+        .frame(width: size.width * scale, height: size.height * scale)
         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .task(id: file.path) {
             guard let url = await model.readablePath(file), !Task.isCancelled else { return }

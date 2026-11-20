@@ -9,7 +9,7 @@ struct SettingsListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PaneHeader(title: "Settings", background: .clear)
+            PaneHeader(title: "Settings", background: .clear, compact: true)
             list
         }
         .background(Color.clear)

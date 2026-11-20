@@ -332,6 +332,7 @@ struct ChoiceMenu<Value: Hashable>: View {
 /// brings its own content header, as on Linux.
 struct PaneHeader<Leading: View, Actions: View>: View {
     let title: String
+    var compact: Bool
     var subtitle: String?
     var back: (() -> Void)?
     var background: Color
@@ -341,9 +342,10 @@ struct PaneHeader<Leading: View, Actions: View>: View {
     let leading: Leading
     let actions: Actions
 
-    init(title: String, subtitle: String? = nil, back: (() -> Void)? = nil, background: Color = Theme.panel,
+    init(title: String, subtitle: String? = nil, back: (() -> Void)? = nil, background: Color = Theme.panel, compact: Bool = false,
          open: (() -> Void)? = nil, openHelp: String? = nil,
          @ViewBuilder leading: () -> Leading, @ViewBuilder actions: () -> Actions) {
+        self.compact = compact
         self.title = title
         self.subtitle = subtitle
         self.back = back
@@ -376,7 +378,7 @@ struct PaneHeader<Leading: View, Actions: View>: View {
                 HStack(spacing: 4) { actions }
             }
             .padding(.horizontal, 14)
-            .frame(height: 56)
+            .frame(height: compact ? 44 : 56)
             Hairline()
         }
         .background(background)
@@ -402,16 +404,16 @@ struct PaneHeader<Leading: View, Actions: View>: View {
 }
 
 extension PaneHeader where Leading == EmptyView {
-    init(title: String, subtitle: String? = nil, back: (() -> Void)? = nil, background: Color = Theme.panel,
+    init(title: String, subtitle: String? = nil, back: (() -> Void)? = nil, background: Color = Theme.panel, compact: Bool = false,
          @ViewBuilder actions: () -> Actions) {
-        self.init(title: title, subtitle: subtitle, back: back, background: background,
+        self.init(title: title, subtitle: subtitle, back: back, background: background, compact: compact,
                   leading: { EmptyView() }, actions: actions)
     }
 }
 
 extension PaneHeader where Leading == EmptyView, Actions == EmptyView {
-    init(title: String, subtitle: String? = nil, back: (() -> Void)? = nil, background: Color = Theme.panel) {
-        self.init(title: title, subtitle: subtitle, back: back, background: background,
+    init(title: String, subtitle: String? = nil, back: (() -> Void)? = nil, background: Color = Theme.panel, compact: Bool = false) {
+        self.init(title: title, subtitle: subtitle, back: back, background: background, compact: compact,
                   leading: { EmptyView() }, actions: { EmptyView() })
     }
 }

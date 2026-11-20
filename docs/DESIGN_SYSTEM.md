@@ -411,10 +411,34 @@ missing input retries without voice processing, and conversion failures reach
 the UI. The Mac self-test covers 48kHz and 44.1kHz stereo-to-mono capture without
 opening a microphone. Live duplex audio still requires a hardware call test.
 
-Mac window controls use a real unified NSToolbar so AppKit applies its inset
+Mac window controls use a real unified-compact NSToolbar so AppKit applies its inset
 traffic-light placement and toolbar window geometry. Message text and captions
 reserve an unbreakable invisible tail for the clock, edited label and receipt;
 the visible metadata overlays its bottom trailing corner. The text shaper moves
 the whole reservation to a new line when it cannot fit. On macOS 13+, bubble
 contents measure naturally, then stretch the final text to the widest sibling,
 matching Linux's 420pt limit and keeping stamps aligned beneath wider quotes.
+
+Android message text and captions use an empty inline placeholder sized from the
+actual metadata text measurements, receipt icon and gaps. It wraps as one unit
+with the last line; the visible stamp stays at the bubble's bottom-right. The
+placeholder retains the body line height, respects system font scaling and does
+not append hidden timestamp characters to message content. Intrinsic bubble
+width keeps short messages compact while aligning stamps beneath wider quotes
+or attachments. Images put metadata on the preview instead of under the caption. Other media
+without captions, invitations and deleted placeholders keep a separate footer. Private notes omit delivery receipts.
+
+Android and Mac image previews place their metadata inside the actual image
+bounds, inset 6pt/dp from the right and 4pt/dp from the bottom. A compact black
+50%-opacity rounded backing with white text keeps the clock legible over both
+light and dark photos. Receipts retain their delivery state. The badge stays
+sharp when media is blurred, does not intercept gallery/long-press gestures,
+and replaces the separate footer even when the image has a caption.
+
+Image/video bubbles use an even 4pt/dp media bezel, a uniform 16pt/dp outer
+corner and 12pt/dp preview corner. Mac and Android sender labels, replies and
+captions receive their own text inset instead of widening the frame. Completed videos keep
+duration at bottom-left and the stamp at bottom-right; Android continues to
+open the existing external player. Mac sidebar headers use 44pt height and
+unified-compact window chrome. The dark navigation lens uses a subtle white tint
+and optical rim, while text stays above the glass and selected hover stays off.

@@ -402,7 +402,7 @@ struct WindowChrome: NSViewRepresentable {
                 toolbar.showsBaselineSeparator = false
                 window.toolbar = toolbar
             }
-            window.toolbarStyle = .unified
+            window.toolbarStyle = .unifiedCompact
         }
     }
 }

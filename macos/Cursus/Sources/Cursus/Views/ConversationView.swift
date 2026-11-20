@@ -342,7 +342,8 @@ struct MessageRow: View {
     private var revealed: Bool { model.revealedMessages.contains(message.id) }
 
     private var bubbleShape: BubbleShape {
-        BubbleShape(outgoing: message.outgoing, runContinues: message.runContinues)
+        BubbleShape(outgoing: message.outgoing, runContinues: message.runContinues,
+                    small: isVisualMedia ? Radius.bubble : 6)
     }
 
     @ViewBuilder private var bubble: some View {
@@ -362,14 +363,19 @@ struct MessageRow: View {
                                     .help(sender.role.capitalized)
                             }
                         }
+                        .padding(.horizontal, isVisualMedia ? 8 : 0)
+                        .padding(.vertical, isVisualMedia ? 4 : 0)
                     }
                     if let quote = message.quote {
                         QuoteView(quote: quote)
                             .onTapGesture { model.jumpTo(quote.itemId) }
                             .help("Show the original message")
+                            .padding(.horizontal, isVisualMedia ? 8 : 0)
                     }
                     if let file = message.file, message.deleted == nil {
-                        AttachmentView(file: file, messageId: message.id, outgoing: message.outgoing)
+                        AttachmentView(file: file, messageId: message.id, outgoing: message.outgoing) {
+                            if hasVisualStamp { MessageStamp(message: message, inNotes: inNotes, onMedia: true) }
+                        }
                     }
                     if let invite = message.groupInvitation {
                         GroupInviteCard(invite: invite, outgoing: message.outgoing)
@@ -388,7 +394,9 @@ struct MessageRow: View {
                     } else if message.file != nil {
                         // Under an attachment: only the sender's own caption.
                         if !message.caption.isEmpty {
-                            stamped(Text(message.caption))
+                            caption
+                                .padding(.horizontal, isVisualMedia ? 8 : 0)
+                                .padding(.vertical, isVisualMedia ? 4 : 0)
                                 .foregroundColor(Theme.primaryText)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -409,18 +417,34 @@ struct MessageRow: View {
                         }
                     }
                 }
-                if !hasStampedText { footer }
+                if !hasStampedText && !hasVisualStamp {
+                    footer.padding(.horizontal, isVisualMedia ? 8 : 0)
+                        .padding(.bottom, isVisualMedia ? 4 : 0)
+                }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, isVisualMedia ? 4 : 12)
+            .padding(.vertical, isVisualMedia ? 4 : 8)
             .background(
                 bubbleShape.fill(message.outgoing ? Theme.bubbleOut : Theme.bubbleIn)
             )
         }
     }
 
+    private var isVisualMedia: Bool {
+        message.deleted == nil && (message.file?.kind == "image" || message.file?.kind == "video")
+    }
+
+    private var hasVisualStamp: Bool {
+        isVisualMedia && message.file?.isComplete == true
+    }
+
+    @ViewBuilder private var caption: some View {
+        if hasVisualStamp { Text(message.caption).font(.cBody) }
+        else { stamped(Text(message.caption)) }
+    }
+
     private var hasStampedText: Bool {
-        message.deleted == nil && message.groupInvitation == nil &&
+        !hasVisualStamp && message.deleted == nil && message.groupInvitation == nil &&
             (message.file == nil ? !message.text.isEmpty : !message.caption.isEmpty)
     }
 
@@ -463,20 +487,9 @@ struct MessageRow: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 4) {
-            if message.edited {
-                Text("edited")
-            }
-            if let date = message.date {
-                Text(Dates.clock(date))
-            }
-            if message.outgoing && !inNotes {
-                DeliveryMark(delivery: message.delivery)
-            }
-        }
-        .font(.system(size: 11))
-        .foregroundColor(message.outgoing && !message.emojiOnly ? Theme.bubbleOutMeta : Theme.mutedText)
+        MessageStamp(message: message, inNotes: inNotes)
     }
+
 }
 
 /// Match Linux BubbleBody: measure children naturally, then stretch the last
@@ -530,6 +543,32 @@ private struct BubbleContentsLayout: Layout {
     }
 }
 #endif
+
+private struct MessageStamp: View {
+    let message: Message
+    let inNotes: Bool
+    var onMedia = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if message.edited {
+                Text("edited")
+            }
+            if let date = message.date {
+                Text(Dates.clock(date))
+            }
+            if message.outgoing && !inNotes {
+                DeliveryMark(delivery: message.delivery)
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundColor(onMedia ? .white : message.outgoing && !message.emojiOnly ? Theme.bubbleOutMeta : Theme.mutedText)
+        .padding(.horizontal, onMedia ? 6 : 0)
+        .padding(.vertical, onMedia ? 3 : 0)
+        .background(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+            .fill(onMedia ? Color.black.opacity(0.5) : .clear))
+    }
+}
 
 struct DeliveryMark: View {
     let delivery: String
@@ -733,11 +772,12 @@ enum RichText {
 
 // MARK: - Attachments
 
-struct AttachmentView: View {
+struct AttachmentView<Stamp: View>: View {
     @EnvironmentObject private var model: AppModel
     let file: FileAttachment
     let messageId: Int64
     var outgoing = false
+    @ViewBuilder let stamp: () -> Stamp
     @State private var image: NSImage?
     @AppStorage(Prefs.blurMedia) private var blurMedia = false
 
@@ -751,7 +791,8 @@ struct AttachmentView: View {
                     Image(nsImage: image)
                         .resizable()
                         .scaledToFit()
-                        .frame(maxWidth: 300, maxHeight: 320)
+                        .frame(width: image.size.width * min(1, min(300 / max(1, image.size.width), 320 / max(1, image.size.height))),
+                               height: image.size.height * min(1, min(300 / max(1, image.size.width), 320 / max(1, image.size.height))))
                         .blur(radius: hidden ? 24 : 0)
                         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                         .overlay {
@@ -779,6 +820,10 @@ struct AttachmentView: View {
                         .overlay(ProgressView())
                 }
             }
+            .overlay(alignment: .bottomTrailing) {
+                stamp().padding(.trailing, 6).padding(.bottom, 4)
+                    .allowsHitTesting(false)
+            }
             .task(id: file.path) {
                 if let url = await model.readablePath(file) {
                     image = NSImage(contentsOf: url)
@@ -786,6 +831,9 @@ struct AttachmentView: View {
             }
         } else if file.kind == "video" && file.isComplete {
             VideoThumbnail(file: file, messageId: messageId, hidden: hidden)
+                .overlay(alignment: .bottomTrailing) {
+                    stamp().padding(.trailing, 6).padding(.bottom, 4).allowsHitTesting(false)
+                }
                 .onTapGesture {
                     if hidden {
                         model.revealedMessages.insert(messageId)

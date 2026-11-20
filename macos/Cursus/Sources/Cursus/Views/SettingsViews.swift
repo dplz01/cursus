@@ -44,6 +44,7 @@ struct SettingsListView: View {
                 }
             }
             .padding(8)
+            .padding(.bottom, NavDock.clearance)
         }
         .background(Theme.list)
     }

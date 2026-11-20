@@ -140,6 +140,7 @@ struct CallsView: View {
                             }.buttonStyle(GhostTileStyle()).disabled(contact == nil)
                         }
                     }.padding(6)
+                        .padding(.bottom, NavDock.clearance)
                 }
             }
         }.background(Theme.list)

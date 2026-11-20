@@ -328,23 +328,19 @@ Back and other page-changing header controls complete an owned press-and-release
 ## macOS chrome
 
 Mac navigation uses the shared Cursus colors and glyphs inside a floating
-capsule dock below the list in a native resizable list/detail split. A shared
-selection capsule slides between Chats, Channels, Calls and Settings with a
-spring animation only when the selected destination changes. Pointer hover
-retains the ordinary Cursus hover fill without moving or blurring the selection.
-The dock surface and moving clear-glass lens render in separate background
-layers below all buttons, keeping icons, labels and unread badges sharp.
-On macOS 26, the dock samples a live AppKit behind-window backdrop rather
-than an opaque list fill. Clear native Liquid Glass supplies refraction and
-edge lighting without an opaque accent tint. The selection uses the native
-glass matched-geometry transition, including jumps between nonadjacent tabs;
-ordinary matched geometry is reserved for the fallback. Reduce Motion disables
-the sliding animation. Modern SDKs use
-NavigationSplitView and a unified compact toolbar. Liquid Glass is limited
-to navigation chrome on macOS 26+ with a compatible SDK; content, message
-bubbles and preference cards remain opaque. Reduce Transparency and
-Increase Contrast use a solid bordered navigation surface. Intel and Apple
-Silicon follow identical availability rules; older systems use HSplitView.
+capsule dock over the bottom of the list in a native resizable list/detail split.
+The list viewport extends behind the dock. Chats, calls and settings add 84pt
+of scroll-content padding so the last row can scroll completely above it.
+One persistent selection lens moves between the four destinations with an
+explicit spring-animated position; it is not replaced or crossfaded per tab.
+Pointer hover retains the ordinary Cursus hover fill and does not move the lens.
+On macOS 26, the dock's native clear glass samples the list behind it. The
+selection lens renders above the icons and labels so its moving edge can
+refract them, without nesting the whole control inside another glass effect.
+Reduce Motion disables sliding. Reduce Transparency, Increase Contrast and
+older systems use a bordered accent selection below the controls. Modern SDKs
+use NavigationSplitView and a unified compact toolbar; older systems use
+HSplitView. Intel and Apple Silicon follow identical availability rules.
 Native macOS switches retain the Cursus accent and grouped-row geometry.
 
 The optional macOS menu-bar item is controlled from Notifications → Menu bar.

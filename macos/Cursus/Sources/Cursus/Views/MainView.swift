@@ -56,11 +56,12 @@ struct MainView: View {
     }
 
     private var middle: some View {
-        VStack(spacing: 0) {
-            listContent.frame(maxHeight: .infinity)
-            NavDock().padding(10)
-        }
-        .background(Theme.list)
+        listContent
+            .frame(maxHeight: .infinity)
+            .background(Theme.list)
+            .overlay(alignment: .bottom) {
+                NavDock().padding(10)
+            }
     }
 
     @ViewBuilder private var listContent: some View {
@@ -118,52 +119,51 @@ struct Placeholder: View {
 struct NavDock: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var movement
-    @Namespace private var glass
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    /// Scroll content can pass under the dock, but its final row must be able
+    /// to scroll entirely above the 64pt bar and its two 10pt margins.
+    static let clearance: CGFloat = 84
+
+    private var refractive: Bool {
+        #if compiler(>=6.2) && CURSUS_GLASS
+        if #available(macOS 26.0, *) {
+            return !reduceTransparency && contrast != .increased
+        }
+        #endif
+        return false
+    }
 
     var body: some View {
-        // Glass renders only behind the controls. Applying it to the entire
-        // dock nests the selection's glass inside another effect, which can
-        // sample and blur the selected tab's own icon and label.
         ZStack {
             Color.clear.modifier(NavigationChrome())
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
-            glassContainer
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            if !refractive { lens }
             tabs
+            // Clear glass belongs above the glyphs: only then can its moving
+            // edge refract them. The opaque accessibility fallback stays below.
+            if refractive { lens }
         }
         .frame(height: 64)
-        .animation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.78), value: model.destination)
     }
 
-    @ViewBuilder private var glassContainer: some View {
-        #if compiler(>=6.2) && CURSUS_GLASS
-        if #available(macOS 26.0, *) {
-            // Include nonadjacent tabs in the native morphing range.
-            GlassEffectContainer(spacing: 400) { selectionTrack }
-        } else { selectionTrack }
-        #else
-        selectionTrack
-        #endif
-    }
-
-    /// Separate background track: the moving lens never contains tab content.
-    private var selectionTrack: some View {
-        HStack(spacing: 2) {
-            ForEach(Destination.allCases) { dest in
-                Color.clear
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 54)
-                    .background {
-                        if model.destination == dest {
-                            DockSelection(glass: glass, movement: movement)
-                        }
-                    }
-            }
+    /// One persistent surface with an explicitly animated position. Replacing
+    /// per-tab glass views can materialize them instead of sliding the lens.
+    private var lens: some View {
+        GeometryReader { geometry in
+            let count = CGFloat(Destination.allCases.count)
+            let width = max(0, (geometry.size.width - 10 - 2 * (count - 1)) / count)
+            let index = CGFloat(Destination.allCases.firstIndex(of: model.destination) ?? 0)
+            DockSelection(refractive: refractive)
+                .frame(width: width, height: 54)
+                .position(x: 5 + width / 2 + index * (width + 2), y: 32)
+                .animation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82),
+                           value: model.destination)
         }
-        .padding(5)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private var tabs: some View {
@@ -209,18 +209,12 @@ struct NavDock: View {
 }
 
 private struct DockSelection: View {
-    let glass: Namespace.ID
-    let movement: Namespace.ID
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var contrast
+    let refractive: Bool
 
     @ViewBuilder var body: some View {
         #if compiler(>=6.2) && CURSUS_GLASS
-        if #available(macOS 26.0, *), !reduceTransparency, contrast != .increased {
-            Color.clear
-                .glassEffect(.clear, in: Capsule())
-                .glassEffectID("destination", in: glass)
-                .glassEffectTransition(.matchedGeometry)
+        if #available(macOS 26.0, *), refractive {
+            Color.clear.glassEffect(.clear, in: Capsule())
         } else { fallback }
         #else
         fallback
@@ -230,7 +224,6 @@ private struct DockSelection: View {
     private var fallback: some View {
         Capsule().fill(Theme.accent.opacity(0.16))
             .overlay(Capsule().strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
-            .matchedGeometryEffect(id: "destination", in: movement)
     }
 }
 
@@ -275,6 +268,7 @@ struct ChatListView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
+            .padding(.bottom, NavDock.clearance)
         }
         .background(Theme.list)
         .overlay {

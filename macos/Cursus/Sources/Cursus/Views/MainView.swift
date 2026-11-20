@@ -118,17 +118,13 @@ struct Placeholder: View {
 struct NavDock: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var hovered: Destination?
     @Namespace private var movement
     @Namespace private var glass
-
-    private var focus: Destination { hovered ?? model.destination }
 
     var body: some View {
         glassContainer
             .modifier(NavigationChrome())
-            .onChange(of: model.destination) { _ in hovered = nil }
-            .animation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.78), value: focus)
+            .animation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.78), value: model.destination)
     }
 
     @ViewBuilder private var glassContainer: some View {
@@ -154,12 +150,6 @@ struct NavDock: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 54)
                     .contentShape(Capsule())
-                    .background {
-                        if focus == dest {
-                            DockFocus(glass: glass)
-                                .matchedGeometryEffect(id: "destination", in: movement)
-                        }
-                    }
                     .overlay(alignment: .topTrailing) {
                         if badge(for: dest) > 0 {
                             UnreadPill(count: badge(for: dest))
@@ -167,10 +157,15 @@ struct NavDock: View {
                         }
                     }
                 }
-                .buttonStyle(.plain)
-                .onHover { inside in
-                    if inside { hovered = dest }
-                    else if hovered == dest { hovered = nil }
+                .buttonStyle(GhostTileStyle(radius: 27))
+                // Keep the moving selection outside the button style's clip.
+                // Hover is the ordinary Cursus fill and never moves the glass.
+                .background {
+                    if model.destination == dest {
+                        DockSelection(glass: glass)
+                            .matchedGeometryEffect(id: "destination", in: movement)
+                            .allowsHitTesting(false)
+                    }
                 }
                 .help(dest.title)
                 .accessibilityLabel(dest.title)
@@ -192,7 +187,7 @@ struct NavDock: View {
     }
 }
 
-private struct DockFocus: View {
+private struct DockSelection: View {
     let glass: Namespace.ID
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
@@ -201,7 +196,7 @@ private struct DockFocus: View {
         #if compiler(>=6.2) && CURSUS_GLASS
         if #available(macOS 26.0, *), !reduceTransparency, contrast != .increased {
             Capsule().fill(Theme.accent.opacity(0.08))
-                .glassEffect(.regular.tint(Theme.accent.opacity(0.18)).interactive(), in: Capsule())
+                .glassEffect(.clear.tint(Theme.accent.opacity(0.12)), in: Capsule())
                 .glassEffectID("destination", in: glass)
         } else { opaque }
         #else

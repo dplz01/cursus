@@ -330,7 +330,9 @@ Back and other page-changing header controls complete an owned press-and-release
 Mac navigation uses the shared Cursus colors and glyphs inside a floating
 capsule dock below the list in a native resizable list/detail split. A shared
 selection capsule slides between Chats, Channels, Calls and Settings with a
-spring animation, also following pointer hover. Native glass identities morph
+spring animation only when the selected destination changes. Pointer hover
+retains the ordinary Cursus hover fill without moving or blurring the selection.
+Native glass identities morph
 the highlight on macOS 26; Reduce Motion disables the sliding animation. Modern SDKs use
 NavigationSplitView and a unified compact toolbar. Liquid Glass is limited
 to navigation chrome on macOS 26+ with a compatible SDK; content, message

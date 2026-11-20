@@ -389,14 +389,20 @@ struct WindowChrome: NSViewRepresentable {
         func apply() {
             guard let window = window else { return }
             window.title = "Cursus"
-            window.titleVisibility = .visible
-            // The split view's sidebar otherwise runs up under the title bar
-            // and the strip covers only the detail pane.
-            if window.styleMask.contains(.fullSizeContentView) {
-                window.styleMask.remove(.fullSizeContentView)
-            }
+            window.titleVisibility = .hidden
+            window.styleMask.insert(.fullSizeContentView)
             window.titlebarAppearsTransparent = true
             window.titlebarSeparatorStyle = .none
         }
+    }
+}
+
+/// A title-bar drag target; native controls above it retain their own events.
+struct WindowDragArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { DragView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class DragView: NSView {
+        override var mouseDownCanMoveWindow: Bool { true }
     }
 }

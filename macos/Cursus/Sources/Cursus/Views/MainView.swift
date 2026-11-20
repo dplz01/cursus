@@ -1,16 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// A native split view with Cursus's floating destination dock below the list.
+/// A floating sidebar with native window controls and the destination dock.
 struct MainView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            CallBannerView(calls: model.calls)
-            columns
-        }
+        columns
         .background(Theme.app)
+        .ignoresSafeArea(.container, edges: .top)
         .background(CallPresentation(calls: model.calls).environmentObject(model))
         .onChange(of: model.showInfo) { showing in
             // The retained conversation must not keep a hidden composer active.
@@ -34,28 +32,21 @@ struct MainView: View {
         }
     }
 
-    @ViewBuilder private var columns: some View {
-        #if compiler(>=5.7) && CURSUS_MODERN_SHELL
-        if #available(macOS 13.0, *) {
-            NavigationSplitView {
-                middle
-                    .navigationSplitViewColumnWidth(min: 260, ideal: 310, max: 400)
-            } detail: {
-                detail.frame(minWidth: 360)
-            }
-            .navigationSplitViewStyle(.balanced)
-        } else { legacyColumns }
-        #else
-        legacyColumns
-        #endif
-    }
-
-    private var legacyColumns: some View {
-        // Older Intel Macs retain a native resizable split without resolving
-        // symbols missing from their SDK, or an architecture-specific UI fork.
+    private var columns: some View {
+        // One native split on every supported macOS version. The sidebar's
+        // surface includes the title-bar area rather than starting below it.
         HSplitView {
-            middle.frame(minWidth: 260, idealWidth: 310, maxWidth: 400)
-            detail.frame(minWidth: 360)
+            middle
+                .padding(.leading, 8)
+                .padding(.trailing, 4)
+                .padding(.vertical, 8)
+                .frame(minWidth: 260, idealWidth: 310, maxWidth: 400)
+            VStack(spacing: 0) {
+                CallBannerView(calls: model.calls)
+                detail
+            }
+            .padding(.top, 8)
+            .frame(minWidth: 360)
         }
     }
 
@@ -63,11 +54,20 @@ struct MainView: View {
         // Keep the dock as a stable sibling of the changing page. An overlay
         // attached to the conditional page can recreate it on section changes,
         // losing the previous lens position (Chats/Channels share one branch).
-        ZStack(alignment: .bottom) {
-            listContent.frame(maxHeight: .infinity)
-            NavDock().padding(10)
+        VStack(spacing: 0) {
+            // Native traffic lights remain above the content. This area also
+            // provides a drag target without making chat rows draggable.
+            WindowDragArea().frame(height: 36).accessibilityHidden(true)
+            ZStack(alignment: .bottom) {
+                listContent.frame(maxHeight: .infinity)
+                NavDock().padding(10)
+            }
         }
         .background(Theme.list)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
+            .strokeBorder(Theme.border.opacity(0.6), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.08), radius: 10, x: 0, y: 3)
     }
 
     @ViewBuilder private var listContent: some View {
@@ -255,12 +255,26 @@ private struct DockEdgeRefraction: AnimatableModifier {
 }
 
 private struct DockSelection: View {
+    @Environment(\.colorScheme) private var colorScheme
     let refractive: Bool
 
     @ViewBuilder var body: some View {
         #if compiler(>=6.2) && CURSUS_GLASS
         if #available(macOS 26.0, *), refractive {
-            Color.clear.glassEffect(.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            if colorScheme == .light {
+                // Clear glass on white needs a tint and an optical rim to
+                // remain legible. Keep the existing dark material untouched.
+                Color.clear
+                    .glassEffect(.clear.tint(Theme.accent.opacity(0.10)),
+                                 in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(LinearGradient(
+                            colors: [.white.opacity(0.95), Theme.accent.opacity(0.28), .white.opacity(0.75)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
+                    .shadow(color: Theme.accent.opacity(0.14), radius: 3, x: 0, y: 1)
+            } else {
+                Color.clear.glassEffect(.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
         } else { fallback }
         #else
         fallback

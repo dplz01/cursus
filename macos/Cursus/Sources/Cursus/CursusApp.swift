@@ -126,8 +126,7 @@ struct CursusApp: App {
     @StateObject private var model = AppModel()
 
     var body: some Scene {
-        // A plain title bar: traffic lights and "Cursus"; each pane draws its
-        // own Cursus header below it.
+        // Native traffic lights sit inside the floating sidebar surface.
         WindowGroup("Cursus") {
             RootView()
                 .environmentObject(model)
@@ -138,7 +137,7 @@ struct CursusApp: App {
                 .accentColor(Theme.accent)
                 .tint(Theme.accent)
         }
-        .windowToolbarStyle(.unifiedCompact)
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat…") { model.showNewChat = true }

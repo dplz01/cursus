@@ -327,8 +327,8 @@ struct ChoiceMenu<Value: Hashable>: View {
 /// Cursus header at the top of a pane (Linux: list title, chat header,
 /// profile / settings page title): Back (also Esc), optional leading
 /// content (an avatar), title + subtitle, actions on the right; a hairline
-/// below. The window's own title bar only carries the traffic lights and
-/// "Cursus", so every pane brings its header, as on Linux.
+/// below. The sidebar reserves space for native traffic lights; each pane
+/// brings its own content header, as on Linux.
 struct PaneHeader<Leading: View, Actions: View>: View {
     let title: String
     var subtitle: String?

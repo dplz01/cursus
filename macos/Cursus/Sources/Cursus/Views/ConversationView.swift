@@ -352,65 +352,67 @@ struct MessageRow: View {
                 footer
             }
         } else {
-            VStack(alignment: .leading, spacing: 5) {
-                if showSender, let sender = message.sender {
-                    // Name, then the role as its icon only (owner / admin / moderator).
-                    HStack(spacing: 4) {
-                        Text(sender.name)
-                            .font(.cMetaBold)
-                            .foregroundColor(Theme.accent)
-                        if groupRoleRank(sender.role) > groupRoleRank("member") {
-                            CIcon(MemberRoles.icon(sender.role), size: 13, color: Theme.mutedText)
-                                .help(sender.role.capitalized)
+            VStack(alignment: .trailing, spacing: 5) {
+                VStack(alignment: .leading, spacing: 5) {
+                    if showSender, let sender = message.sender {
+                        // Name, then the role as its icon only (owner / admin / moderator).
+                        HStack(spacing: 4) {
+                            Text(sender.name)
+                                .font(.cMetaBold)
+                                .foregroundColor(Theme.accent)
+                            if groupRoleRank(sender.role) > groupRoleRank("member") {
+                                CIcon(MemberRoles.icon(sender.role), size: 13, color: Theme.mutedText)
+                                    .help(sender.role.capitalized)
+                            }
                         }
                     }
-                }
-                if let quote = message.quote {
-                    QuoteView(quote: quote)
-                        .onTapGesture { model.jumpTo(quote.itemId) }
-                        .help("Show the original message")
-                }
-                if let file = message.file, message.deleted == nil {
-                    AttachmentView(file: file, messageId: message.id, outgoing: message.outgoing)
-                }
-                if let invite = message.groupInvitation {
-                    GroupInviteCard(invite: invite, outgoing: message.outgoing)
-                }
-                if let deleted = message.deleted {
-                    Text(deleted == "marked" ? "Marked deleted" : "Message deleted")
-                        .italic()
-                        .foregroundColor(Theme.secondaryText)
-                    if deleted == "marked" && revealed && !message.text.isEmpty {
-                        Text(RichText.attributed(message, reveal: true))
-                            .font(.cBody)
+                    if let quote = message.quote {
+                        QuoteView(quote: quote)
+                            .onTapGesture { model.jumpTo(quote.itemId) }
+                            .help("Show the original message")
+                    }
+                    if let file = message.file, message.deleted == nil {
+                        AttachmentView(file: file, messageId: message.id, outgoing: message.outgoing)
+                    }
+                    if let invite = message.groupInvitation {
+                        GroupInviteCard(invite: invite, outgoing: message.outgoing)
+                    }
+                    if let deleted = message.deleted {
+                        Text(deleted == "marked" ? "Marked deleted" : "Message deleted")
+                            .italic()
                             .foregroundColor(Theme.secondaryText)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                } else if message.file != nil {
-                    // Under an attachment: only the sender's own caption.
-                    if !message.caption.isEmpty {
-                        Text(message.caption)
-                            .font(.cBody)
-                            .foregroundColor(Theme.primaryText)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                } else if !message.text.isEmpty && message.groupInvitation == nil {
-                    if message.hasSecret {
-                        // Secret text: click to reveal / hide (Linux: tap).
-                        Text(RichText.attributed(message, reveal: revealed))
-                            .font(.cBody)
-                            .foregroundColor(Theme.primaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .onTapGesture { model.toggleRevealed(message) }
-                            .help(revealed ? "Hide secret text" : "Show secret text")
-                    } else {
-                        Text(RichText.attributed(message))
-                            .font(.cBody)
-                            .foregroundColor(Theme.primaryText)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
+                        if deleted == "marked" && revealed && !message.text.isEmpty {
+                            Text(RichText.attributed(message, reveal: true))
+                                .font(.cBody)
+                                .foregroundColor(Theme.secondaryText)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else if message.file != nil {
+                        // Under an attachment: only the sender's own caption.
+                        if !message.caption.isEmpty {
+                            Text(message.caption)
+                                .font(.cBody)
+                                .foregroundColor(Theme.primaryText)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else if !message.text.isEmpty && message.groupInvitation == nil {
+                        if message.hasSecret {
+                            // Secret text: click to reveal / hide (Linux: tap).
+                            Text(RichText.attributed(message, reveal: revealed))
+                                .font(.cBody)
+                                .foregroundColor(Theme.primaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .onTapGesture { model.toggleRevealed(message) }
+                                .help(revealed ? "Hide secret text" : "Show secret text")
+                        } else {
+                            Text(RichText.attributed(message))
+                                .font(.cBody)
+                                .foregroundColor(Theme.primaryText)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
                 footer
@@ -437,7 +439,6 @@ struct MessageRow: View {
         }
         .font(.system(size: 11))
         .foregroundColor(message.outgoing && !message.emojiOnly ? Theme.bubbleOutMeta : Theme.mutedText)
-        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }
 
@@ -843,7 +844,11 @@ struct VoiceView: View {
             WaveformView(peaks: peaks ?? Array(repeating: 0.25, count: 48),
                          progress: player.playingId == messageId ? player.progress : 0,
                          rest: outgoing ? Theme.voiceRestOut : Theme.voiceRest)
-                .frame(width: 180, height: 28)
+                .frame(width: 140, height: 28)
+            Text(file.duration.map { Dates.duration(Int64($0)) } ?? "voice")
+                .font(.cMeta)
+                .foregroundColor(Theme.secondaryText)
+                .fixedSize()
         }
         .task(id: file.path) {
             guard let url = await model.readablePath(file) else { return }

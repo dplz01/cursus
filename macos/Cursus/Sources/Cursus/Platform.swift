@@ -369,11 +369,8 @@ enum Format {
 
 // MARK: - Window chrome
 
-/// Configures the hosting NSWindow: a full-width title strip ("Cursus" +
-/// traffic lights, like Telegram) with every column below it and no system
-/// separator line — each pane draws its own Cursus header right below it.
-/// Applied whenever the view joins a window (also a window reopened from
-/// the Dock after closing the last one).
+/// Keep native window controls over the content instead of reserving a
+/// separate title strip. The sidebar supplies the surface underneath them.
 struct WindowChrome: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { ChromeView() }
     func updateNSView(_ nsView: NSView, context: Context) {

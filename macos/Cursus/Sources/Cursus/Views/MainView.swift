@@ -4,6 +4,8 @@ import SwiftUI
 /// A floating sidebar with native window controls and the destination dock.
 struct MainView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var sidebarWidth: CGFloat = 310
+    @State private var resizeOrigin: CGFloat?
 
     var body: some View {
         columns
@@ -33,20 +35,40 @@ struct MainView: View {
     }
 
     private var columns: some View {
-        // One native split on every supported macOS version. The sidebar's
-        // surface includes the title-bar area rather than starting below it.
-        HSplitView {
-            middle
-                .padding(.leading, 8)
-                .padding(.trailing, 4)
-                .padding(.vertical, 8)
-                .frame(minWidth: 260, idealWidth: 310, maxWidth: 400)
-            VStack(spacing: 0) {
-                CallBannerView(calls: model.calls)
-                detail
+        GeometryReader { geometry in
+            let width = min(sidebarWidth, max(260, geometry.size.width - 366))
+            HStack(spacing: 0) {
+                middle
+                    .padding(.leading, 8)
+                    .padding(.vertical, 8)
+                    .frame(width: width)
+                // Resize in the gap, without a full-height split-view rule.
+                Color.clear
+                    .frame(width: 6)
+                    .contentShape(Rectangle())
+                    .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named("shell"))
+                        .onChanged { value in
+                            if resizeOrigin == nil { resizeOrigin = width }
+                            sidebarWidth = min(400, max(260,
+                                min(geometry.size.width - 366,
+                                    (resizeOrigin ?? width) + value.translation.width)))
+                        }
+                        .onEnded { _ in resizeOrigin = nil })
+                    .accessibilityLabel("Sidebar width")
+                    .accessibilityAdjustableAction { direction in
+                        switch direction {
+                        case .increment: sidebarWidth = min(400, width + 20)
+                        case .decrement: sidebarWidth = max(260, width - 20)
+                        @unknown default: break
+                        }
+                    }
+                VStack(spacing: 0) {
+                    CallBannerView(calls: model.calls)
+                    detail
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(.top, 8)
-            .frame(minWidth: 360)
+            .coordinateSpace(name: "shell")
         }
     }
 

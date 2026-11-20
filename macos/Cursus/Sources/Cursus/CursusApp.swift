@@ -132,6 +132,7 @@ struct CursusApp: App {
                 .environmentObject(model)
                 .onAppear { delegate.configureTray(model: model) }
                 .frame(minWidth: 760, minHeight: 500)
+                .ignoresSafeArea(.container, edges: .top)
                 // Native controls (switches, checkboxes, segmented pickers,
                 // focus rings) in Cursus blue rather than the system accent.
                 .accentColor(Theme.accent)

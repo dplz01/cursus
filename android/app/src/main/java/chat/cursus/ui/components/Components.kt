@@ -152,18 +152,18 @@ fun IconDisc(icon: Int, danger: Boolean = false) {
     // The glyph in front of a row: a fixed 24dp box, no backdrop.
     val c = Cursus.colors
     Box(Modifier.size(RowIconBox), contentAlignment = Alignment.Center) {
-        Icon(painterResource(icon), null, Modifier.size(20.dp), tint = if (danger) c.danger else c.accent)
+        Icon(painterResource(icon), null, Modifier.size(24.dp), tint = if (danger) c.danger else c.accent)
     }
 }
 
 /** Every row of a page — navigation, preference, action — shares one inset,
  *  icon box, gap and corner, so labels line up down the whole page (the
  *  same numbers as the Linux app's `ROW_*`). */
-val RowIconBox = 24.dp
+val RowIconBox = 28.dp
 val RowShape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
 fun Modifier.pageRow(onClick: (() -> Unit)? = null): Modifier =
-    fillMaxWidth().clip(RowShape).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-        .padding(horizontal = 12.dp, vertical = 10.dp)
+    fillMaxWidth().defaultMinSize(minHeight = 64.dp).clip(RowShape).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+        .padding(horizontal = 16.dp, vertical = 16.dp)
 
 /** Ghost action tile: icon disc + label, no fill until pressed. */
 @Composable
@@ -221,16 +221,16 @@ fun NavRow(icon: Int, title: String, subtitle: String? = null, badge: Long = 0, 
 @Composable
 fun CursusSwitch(checked: Boolean, onChange: ((Boolean) -> Unit)?, enabled: Boolean = true) {
     val c = Cursus.colors
-    val offset by androidx.compose.animation.core.animateDpAsState(if (checked) 22.dp else 4.dp, label = "switch position")
+    val offset by androidx.compose.animation.core.animateDpAsState(if (checked) 24.dp else 4.dp, label = "switch position")
     val track by androidx.compose.animation.animateColorAsState(if (checked) c.accent else c.textSecondary.copy(alpha = 0.24f), label = "switch fill")
     Box(
-        Modifier.size(width = 46.dp, height = 28.dp)
+        Modifier.size(width = 52.dp, height = 32.dp)
             .then(if (enabled) Modifier else Modifier.alpha(0.45f))
             .clip(Radius.pill).background(track)
             .then(if (onChange != null && enabled) Modifier.toggleable(checked, role = androidx.compose.ui.semantics.Role.Switch, onValueChange = onChange) else Modifier),
         contentAlignment = Alignment.CenterStart,
     ) {
-        Box(Modifier.offset(x = offset).size(20.dp).clip(Radius.pill).background(Color.White))
+        Box(Modifier.offset(x = offset).size(24.dp).clip(Radius.pill).background(Color.White))
     }
 }
 

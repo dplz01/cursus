@@ -295,7 +295,8 @@ private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenCh
     val noun = if (chat.isChannel) "channel" else "group"
     when (pane) {
         GroupPane.Overview -> GroupOverview(model, chat, onClose, onOpenPane = { pane = it }, onMember = { memberId = it; pane = GroupPane.MemberInfo })
-        GroupPane.Link -> PageScaffold(if (chat.isChannel) "Channel link" else "Group link", back) {
+        GroupPane.Link -> PageScaffold(if (chat.isChannel) "Share this channel" else "Share this group", back) {
+            GroupShareAction(model, chat)
             if (chat.isChannel) ChannelLinkCard(model, chat) else AddMemberPane(model, chat, linkOnly = true)
         }
         GroupPane.AddMember -> PageScaffold("Invite a contact", back) { AddMemberPane(model, chat) }
@@ -403,8 +404,7 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
                     }
                 }
                 if (admin || chat.isChannel) {
-                    NavRow(R.drawable.ic_link_minimalistic_2, if (chat.isChannel) "Channel link" else "Group link") { onOpenPane(GroupPane.Link) }
-                    GroupShareAction(model, chat)
+                    NavRow(R.drawable.ic_share_03, if (chat.isChannel) "Share this channel" else "Share this group") { onOpenPane(GroupPane.Link) }
                 }
                 if (chat.isChannel) {
                     NavRow(

@@ -124,7 +124,7 @@ fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () 
                     if (chat.canModerate) onInfo() else model.select("${chat.ref}(_support)")
                 }
             }
-            if (chat.isContact) IconTool(R.drawable.ic_calls, "Audio call", {
+            if (chat.isContact && !chat.isRequest) IconTool(R.drawable.ic_calls, "Audio call", {
                 callPermission { model.calls.start(chat.apiId, chat.title) }
             }, enabled = model.calls.state.active == null && !model.calls.starting)
             IconTool(R.drawable.ic_info_circle, "Info", onInfo)
@@ -183,7 +183,7 @@ private fun SelectionBar(model: AppModel) {
 @Composable
 private fun RequestBar(model: AppModel, chat: Chat) {
     Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("${chat.title} wants to connect with you.", style = Cursus.type.body, color = Cursus.colors.textPrimary)
+        Text(if (chat.memberRequest) "${chat.title} requests a direct message from your group." else "${chat.title} wants to connect with you.", style = Cursus.type.body, color = Cursus.colors.textPrimary)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SecondaryButton("Reject", { model.rejectRequest(chat) }, Modifier.weight(1f))
             PrimaryButton("Accept", { model.acceptRequest(chat) }, Modifier.weight(1f))
@@ -218,7 +218,10 @@ private fun MessageList(model: AppModel, chat: Chat) {
     // viewport unless the history actually advances while following the end.
     LaunchedEffect(model.messages.lastOrNull()?.id) {
         val last = model.messages.lastOrNull()
-        if (last?.id != displayedLast && (state.firstVisibleItemIndex <= 2 || last?.outgoing == true)) {
+        if (displayedLast == null && model.openingReadAnchor != null) {
+            val index = rows.indexOfFirst { it is Row_.Msg && it.message.id == model.openingReadAnchor }
+            if (index >= 0) state.scrollToItem(index)
+        } else if (last?.id != displayedLast && (state.firstVisibleItemIndex <= 2 || last?.outgoing == true)) {
             state.animateScrollToItem(0)
         }
         displayedLast = last?.id

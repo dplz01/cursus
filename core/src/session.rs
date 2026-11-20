@@ -348,6 +348,14 @@ impl Session {
         self.send(&Commands::reject_contact_request(contact_req_id))
     }
 
+    pub fn accept_member_contact(&self, contact_id: i64) -> Result<Value> {
+        self.send(&Commands::accept_member_contact(contact_id))
+    }
+
+    pub fn reject_member_contact(&self, contact_id: i64) -> Result<Value> {
+        self.send(&Commands::reject_member_contact(contact_id))
+    }
+
     pub fn set_contact_alias(&self, contact_id: i64, alias: &str) -> Result<Value> {
         self.send(&Commands::set_contact_alias(contact_id, alias))
     }

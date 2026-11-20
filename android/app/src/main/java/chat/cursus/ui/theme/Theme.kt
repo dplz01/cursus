@@ -144,9 +144,9 @@ object Radius {
 data class CursusType(val title: TextStyle, val body: TextStyle, val meta: TextStyle)
 
 private val MobileType = CursusType(
-    title = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.SemiBold),
-    body = TextStyle(fontSize = 16.sp),
-    meta = TextStyle(fontSize = 13.sp),
+    title = TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold),
+    body = TextStyle(fontSize = 17.sp, lineHeight = 24.sp),
+    meta = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
 )
 
 private val LocalColors = staticCompositionLocalOf { LightTokens }
@@ -191,7 +191,7 @@ fun CursusTheme(mode: ThemeMode, textScale: Float = 1f, content: @Composable () 
     }
     val tokens = if (dark) DarkTokens else LightTokens
     // Settings → Text size scales the whole type table.
-    val scaled = { style: TextStyle -> style.copy(fontSize = style.fontSize * textScale) }
+    val scaled = { style: TextStyle -> style.copy(fontSize = style.fontSize * textScale, lineHeight = style.lineHeight * textScale) }
     val type = CursusType(scaled(MobileType.title), scaled(MobileType.body), scaled(MobileType.meta))
     CompositionLocalProvider(LocalColors provides tokens, LocalType provides type) {
         MaterialTheme(

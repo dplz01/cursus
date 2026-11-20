@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import CCursusBridge
 import SwiftUI
 import UserNotifications
@@ -36,6 +37,27 @@ enum SelfTest {
             samples.withUnsafeBufferPointer { capture.append($0) }
             guard frames.count == 2, frames.allSatisfy({ $0.count == 960 && $0.allSatisfy({ $0 == 8192 }) }) else {
                 throw CoreError(message: "PCM capture framing failed")
+            }
+            // Validate the real microphone resampler for native mono and
+            // 44.1 kHz stereo devices; no input device or permission needed.
+            for rate in [48_000.0, 44_100.0] {
+                guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2),
+                      let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4410) else {
+                    throw CoreError(message: "Cannot allocate capture self-test buffer")
+                }
+                buffer.frameLength = 4410
+                for channel in 0..<2 {
+                    for i in 0..<4410 { buffer.floatChannelData![channel][i] = 0.25 }
+                }
+                var converted = [[Int16]]()
+                var failure: String?
+                let converter = try CallInputConverter(format: format,
+                    send: { converted.append(Array($0)) }, failed: { failure = $0 })
+                converter.append(buffer)
+                guard failure == nil, converter.hasInput, !converted.isEmpty,
+                      converted.allSatisfy({ $0.count == 960 && $0.contains(where: { abs(Int($0)) > 100 }) }) else {
+                    throw CoreError(message: failure ?? "Microphone conversion produced no PCM at \(rate) Hz")
+                }
             }
             print("Cursus self-test OK — libsimplex from \(result.libsDir), profile “\(result.user)”, \(result.chats) chats")
             exit(0)

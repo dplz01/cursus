@@ -436,12 +436,13 @@ struct GroupLinkPage: View {
 
     var body: some View {
         Card(spacing: 8) {
-            CardTitle(icon: "link-minimalistic-2", title: chat.isChannel ? "Channel link" : "Group link",
+            CardTitle(icon: "share-03", title: chat.isChannel ? "Share this channel" : "Share this group",
                       subtitle: chat.isChannel
                         ? "Anyone with this link can subscribe."
                         : "Anyone with this link can join the group.")
             if let link = link {
                 LinkBox(text: link.short ?? link.display, copyText: link.short ?? link.full)
+                ActionTile(icon: "share-03", title: "Share link") { Clipboard.share(link.short ?? link.full) }
             } else if loading {
                 ProgressView().controlSize(.small).padding(8)
             } else if chat.isAdmin {

@@ -59,6 +59,7 @@ fn chat(id: i64, kind: ChatType, title: &str, preview: &str, unread: i64) -> Cha
         tag_ids: Vec::new(),
         chat_item_ttl: None,
         pending_request_id: None,
+        member_request: false,
         peer_profile: profile(title, ""),
         local_alias: String::new(),
         is_channel: false,
@@ -2463,4 +2464,41 @@ fn shots_creation_and_call_overlays() {
         group_page(&mut app, GroupSettingsPane::Overview);
         render(&app, DESKTOP, &format!("group-actions-{tone}"));
     }
+}
+
+#[test]
+fn group_dm_acceptance_keeps_address_requests_with_the_same_id() {
+    let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+    app.chats[0].pending_request_id = Some(42);
+    app.chats[0].member_request = false;
+    app.chats[2].pending_request_id = Some(42);
+    app.chats[2].member_request = true;
+    let _ = app.update(Message::ContactRequestHandled { req_id: 42, member: true, accepted: true, result: Ok("Accepted".into()) });
+    let list = app.chats.clone();
+    let _ = app.update(Message::ChatsLoaded(Ok(list)));
+    assert_eq!(app.chats[0].pending_request_id, Some(42));
+    assert!(app.chats.iter().find(|chat| chat.member_request).unwrap().pending_request_id.is_none());
+}
+
+#[test]
+fn failed_request_action_does_not_replace_another_chats_request() {
+    let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+    app.chats[0].pending_request_id = Some(42);
+    app.chats[2].pending_request_id = Some(77);
+    app.chats[2].member_request = true;
+    select(&mut app, 2);
+    let _ = app.update(Message::ContactRequestHandled { req_id: 42, member: false, accepted: true, result: Err("temporary error".into()) });
+    assert_eq!(app.chats[0].pending_request_id, Some(42));
+    assert_eq!(app.chats[2].pending_request_id, Some(77));
+    assert!(app.chats[2].member_request);
+}
+
+#[test]
+fn rejected_dm_keeps_the_composer_blocked_until_the_chat_is_removed() {
+    let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+    app.chats[0].pending_request_id = Some(42);
+    app.chats[0].member_request = true;
+    let _ = app.update(Message::ContactRequestHandled { req_id: 42, member: true, accepted: false, result: Ok("Rejected".into()) });
+    assert_eq!(app.chats[0].pending_request_id, Some(42));
+    assert!(app.handled_contact_requests.contains(&(true, 42)));
 }

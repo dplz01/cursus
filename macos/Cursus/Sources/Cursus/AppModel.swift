@@ -171,6 +171,7 @@ final class AppModel: ObservableObject {
     private var messagesRefresh: Task<Void, Never>?
     private var drafts: [String: String] = [:]
     private let pageSize = 120
+    private var historyLimit = 120
 
     /// libsimplex inside the app bundle (Contents/Frameworks); nil when run
     /// from the repo (`swift run`), where the core finds third_party/.
@@ -360,6 +361,7 @@ final class AppModel: ObservableObject {
         gallery = nil
         support = nil
         openUnread = selection.flatMap { ref in chats.first { $0.ref == ref }?.unread } ?? 0
+        historyLimit = max(pageSize, min(5000, openUnread * 2 + pageSize))
         guard let ref = selection else { return }
         isLoadingMessages = true
         Task {
@@ -371,7 +373,7 @@ final class AppModel: ObservableObject {
 
     func reloadMessages(for ref: String) async {
         do {
-            let list = try await Core.call("listMessages", ["chat": ref, "count": pageSize], as: [Message].self)
+            let list = try await Core.call("listMessages", ["chat": ref, "count": historyLimit], as: [Message].self)
             guard activeRef == ref else { return }
             let old = messages
             if list != messages { messages = list }
@@ -491,13 +493,16 @@ final class AppModel: ObservableObject {
 
     func acceptRequest(_ chat: Chat) async {
         guard let id = chat.pendingRequestId else { return }
-        await perform { try await Core.run("acceptRequest", ["id": id]) }
+        await perform { try await Core.run("acceptRequest", ["id": id, "member": chat.memberRequest == true]) }
     }
 
     func rejectRequest(_ chat: Chat) async {
         guard let id = chat.pendingRequestId else { return }
-        await perform { try await Core.run("rejectRequest", ["id": id]) }
-        if selection == chat.ref { selection = nil }
+        do {
+            try await Core.run("rejectRequest", ["id": id, "member": chat.memberRequest == true])
+            if selection == chat.ref { selection = nil }
+            await reloadChats()
+        } catch { report(error) }
     }
 
     /// ⌃Tab / ⌃⇧Tab: next / previous conversation in the visible list.

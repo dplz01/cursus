@@ -25,6 +25,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import chat.cursus.ui.theme.Cursus
 
 private val PreferenceShape = RoundedCornerShape(20.dp)
@@ -65,9 +66,9 @@ fun PreferenceRow(
         val showIcon = icon != null && maxWidth >= 360.dp && androidx.compose.ui.platform.LocalDensity.current.fontScale <= 1.3f
         val inset = if (maxWidth < 360.dp) 12.dp else 16.dp
         Column(
-            Modifier.fillMaxWidth().defaultMinSize(minHeight = if (subtitle.isNullOrBlank()) 48.dp else 68.dp)
+            Modifier.fillMaxWidth().defaultMinSize(minHeight = if (subtitle.isNullOrBlank()) 64.dp else 84.dp)
                 .then(if (checked != null && onToggle != null) Modifier.toggleable(checked, enabled = enabled, role = Role.Switch, onValueChange = onToggle) else Modifier)
-                .padding(horizontal = inset, vertical = if (subtitle == null) 8.dp else 12.dp),
+                .padding(horizontal = inset, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

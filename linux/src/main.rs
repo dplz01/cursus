@@ -1160,8 +1160,6 @@ pub enum Message {
     GroupProfileSaved(Result<(), String>),
     GroupMembersLoaded(Result<Vec<GroupMemberInfo>, String>),
     OpenGroupLink,
-    ShareGroupLink,
-    GroupLinkShared(Result<String, String>),
     OpenAddGroupMember,
     CloseAddGroupMember,
     AddGroupMember(i64),
@@ -1284,10 +1282,12 @@ pub enum Message {
     /// Second-phase media warm (image previews) after decrypt/waveforms start.
     WarmChatVisuals,
     ChatMarkedRead(Result<ChatId, String>),
-    AcceptContactRequest(i64),
-    RejectContactRequest(i64),
+    AcceptContactRequest { req_id: i64, member: bool },
+    RejectContactRequest { req_id: i64, member: bool },
     ContactRequestHandled {
         req_id: i64,
+        member: bool,
+        accepted: bool,
         result: Result<String, String>,
     },
     InviteInputChanged(String),
@@ -1462,7 +1462,7 @@ struct App {
     /// Request ids already accepted/rejected this session. Core can keep
     /// `contactRequestId` with `connStatus=new` after Accept, which would
     /// otherwise resurrect the Accept bar on the next chat-list refresh.
-    handled_contact_requests: HashSet<i64>,
+    handled_contact_requests: HashSet<(bool, i64)>,
     chat_menu: Option<ChatContextMenu>,
     /// Widget-local hover feedback without rebuilding the App.
     hover: hover::HoverSlots,
@@ -2132,7 +2132,7 @@ impl App {
                     chat.unread = 0;
                 }
                 self.messages.clear();
-                self.history_count = HISTORY_PAGE;
+                self.history_count = (self.open_unread.clamp(0, 5000) as u32 * 2 + HISTORY_PAGE).clamp(HISTORY_PAGE, 5000);
                 self.pin_history_end = true;
                 self.reply_to = None;
                 self.editing = None;
@@ -3749,6 +3749,7 @@ impl App {
                                     tag_ids: Vec::new(),
                                     chat_item_ttl: None,
                                     pending_request_id: None,
+                                    member_request: false,
                                     peer_profile: peer,
                                     local_alias: String::new(),
                                     is_channel: true,
@@ -4221,18 +4222,6 @@ impl App {
                 if let Some(g) = self.group_settings.as_mut() { g.pane = GroupSettingsPane::Link; }
                 Task::none()
             }
-            Message::ShareGroupLink => {
-                let Some(g) = self.group_settings.as_ref() else { return Task::none(); };
-                if g.link.is_some() { return self.update(Message::CopyGroupLink); }
-                let Some(session) = self.session.clone() else { return Task::none(); };
-                if !can_manage_members(&g.my_role) { return Task::none(); }
-                let id = g.group_id;
-                Task::perform(async move { ensure_group_link(session, id, "member".into()).await.map(|link| link.display) }, Message::GroupLinkShared)
-            }
-            Message::GroupLinkShared(result) => match result {
-                Ok(link) => { self.status = "Link copied — share it to invite people.".into(); iced::clipboard::write(link) }
-                Err(error) => { self.status = error; Task::none() }
-            },
             Message::OpenAddGroupMember => {
                 if let Some(g) = self.group_settings.as_mut() {
                     if g.is_channel {
@@ -5411,7 +5400,7 @@ impl App {
                 self.refresh_pending_links();
                 for chat in &mut chats {
                     if let Some(req_id) = chat.pending_request_id {
-                        if self.handled_contact_requests.contains(&req_id) {
+                        if self.handled_contact_requests.contains(&(chat.member_request, req_id)) {
                             chat.pending_request_id = None;
                         }
                     }
@@ -5514,7 +5503,7 @@ impl App {
                                 let gen = self.new_messages_marker.map_or(0, |(_, g)| g + 1);
                                 self.new_messages_marker =
                                     Some((self.messages[index].item_id, gen));
-                                y = unread_scroll_offset(self.messages.len(), index);
+                                y = unread_scroll_offset(self.messages.len(), index.saturating_sub(1));
                                 timer = Task::perform(
                                     async move {
                                         tokio::time::sleep(NEW_MESSAGES_ON_OPEN_FOR).await;
@@ -5600,59 +5589,68 @@ impl App {
                 tracing::warn!(%err, "mark chat read failed");
                 Task::none()
             }
-            Message::AcceptContactRequest(req_id) => {
+            Message::AcceptContactRequest { req_id, member } => {
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
-                if self.contact_request_busy {
+                if self.contact_request_busy || self.handled_contact_requests.contains(&(member, req_id)) {
                     return Task::none();
                 }
-                // Hide Accept/Reject immediately so a slow/failed-looking reply
-                // can't be double-pressed into SEInvitationNotFound.
-                self.set_pending_request_visible(req_id, false);
+                // Keep the request identity until success. Disable its actions
+                // while pending instead of restoring them onto a different chat.
                 self.contact_request_busy = true;
                 self.status = "Accepting contact request…".into();
-                Task::perform(accept_contact_request(session, req_id), move |result| {
-                    Message::ContactRequestHandled { req_id, result }
+                Task::perform(accept_contact_request(session, req_id, member), move |result| {
+                    Message::ContactRequestHandled { req_id, member, accepted: true, result }
                 })
             }
-            Message::RejectContactRequest(req_id) => {
+            Message::RejectContactRequest { req_id, member } => {
                 let Some(session) = self.session.clone() else {
                     return Task::none();
                 };
-                if self.contact_request_busy {
+                if self.contact_request_busy || self.handled_contact_requests.contains(&(member, req_id)) {
                     return Task::none();
                 }
-                self.set_pending_request_visible(req_id, false);
                 self.contact_request_busy = true;
                 self.status = "Rejecting contact request…".into();
-                Task::perform(reject_contact_request(session, req_id), move |result| {
-                    Message::ContactRequestHandled { req_id, result }
+                Task::perform(reject_contact_request(session, req_id, member), move |result| {
+                    Message::ContactRequestHandled { req_id, member, accepted: false, result }
                 })
             }
             Message::ContactRequestHandled {
                 req_id,
+                member,
+                accepted,
                 result: Ok(summary),
             } => {
                 self.contact_request_busy = false;
-                self.handled_contact_requests.insert(req_id);
+                self.handled_contact_requests.insert((member, req_id));
                 self.status = summary;
-                Task::batch([self.reload_chats(), self.reload_messages()])
+                if accepted {
+                    self.clear_pending_request(req_id, member);
+                    Task::batch([self.reload_chats(), self.reload_messages()])
+                } else {
+                    // Reject deletes the contact. Keep its composer blocked
+                    // until the list removes it, and never query deleted history.
+                    self.reload_chats()
+                }
             }
             Message::ContactRequestHandled {
                 req_id,
+                member,
+                accepted: _,
                 result: Err(err),
             } => {
                 self.contact_request_busy = false;
                 // First accept may have consumed the invitation while the
                 // command still errored — don't leave the bar stuck.
                 if err.contains("SEInvitationNotFound") || err.contains("contactRequestNotFound") {
-                    self.handled_contact_requests.insert(req_id);
+                    self.handled_contact_requests.insert((member, req_id));
+                    self.clear_pending_request(req_id, member);
                     self.status = "Contact request already handled — refreshing…".into();
                     Task::batch([self.reload_chats(), self.reload_messages()])
                 } else {
-                    // Real failure — put the Accept/Reject bar back.
-                    self.set_pending_request_visible(req_id, true);
+                    // The original request remains visible and can be retried.
                     self.status = err;
                     Task::none()
                 }
@@ -6468,7 +6466,7 @@ impl App {
                         .or_else(|| body.get("contactRequestId"))
                         .and_then(|v| v.as_i64())
                     {
-                        self.set_pending_request_visible(req_id, false);
+                        self.clear_pending_request(req_id, false);
                     } else {
                         // Fallback: drop pending on the open chat.
                         if let Some(i) = self.selected {
@@ -6580,17 +6578,9 @@ impl App {
         )
     }
 
-    fn set_pending_request_visible(&mut self, req_id: i64, visible: bool) {
-        if visible {
-            if let Some(selected) = self.selected_id.clone() {
-                if let Some(chat) = self.chats.iter_mut().find(|c| c.id == selected) {
-                    chat.pending_request_id = Some(req_id);
-                }
-            }
-            return;
-        }
+    fn clear_pending_request(&mut self, req_id: i64, member: bool) {
         for chat in &mut self.chats {
-            if chat.pending_request_id == Some(req_id) {
+            if chat.pending_request_id == Some(req_id) && chat.member_request == member {
                 chat.pending_request_id = None;
             }
         }
@@ -10023,10 +10013,10 @@ async fn set_chat_tags(
 async fn accept_contact_request(
     session: Arc<Session>,
     req_id: i64,
+    member: bool,
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let value = session
-            .accept_contact_request(req_id)
+        let value = if member { session.accept_member_contact(req_id) } else { session.accept_contact_request(req_id) }
             .map_err(|e| e.to_string())?;
         let name = value
             .pointer("/contact/localDisplayName")
@@ -10039,10 +10029,9 @@ async fn accept_contact_request(
     .map_err(|e| e.to_string())?
 }
 
-async fn reject_contact_request(session: Arc<Session>, req_id: i64) -> Result<String, String> {
+async fn reject_contact_request(session: Arc<Session>, req_id: i64, member: bool) -> Result<String, String> {
     blocking(move || {
-        session
-            .reject_contact_request(req_id)
+        (if member { session.reject_member_contact(req_id) } else { session.reject_contact_request(req_id) })
             .map(|_| "Contact request rejected.".into())
     })
     .await

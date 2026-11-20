@@ -23,6 +23,57 @@ final class CallCaptureFrames {
     }
 }
 
+/// Owns resampling on the serial input tap. Exposed separately so the Mac
+/// self-test exercises the actual capture conversion without microphone access.
+final class CallInputConverter {
+    private let converter: AVAudioConverter
+    private let output: AVAudioPCMBuffer
+    private let capture: CallCaptureFrames
+    private let failed: (String) -> Void
+    private var reportedError = false
+    private let lock = NSLock()
+    private var capturedSamples = 0
+
+    init(format: AVAudioFormat, send: @escaping (UnsafeBufferPointer<Int16>) -> Void,
+         failed: @escaping (String) -> Void) throws {
+        guard let mono = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1),
+              let converter = AVAudioConverter(from: format, to: mono),
+              let output = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: 8192) else {
+            throw CoreError(message: "Cannot convert microphone audio to call PCM.")
+        }
+        self.converter = converter
+        self.output = output
+        self.capture = CallCaptureFrames(send: send)
+        self.failed = failed
+    }
+
+    var hasInput: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return capturedSamples > 0
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        var supplied = false
+        for _ in 0..<32 {
+            output.frameLength = 0
+            var error: NSError?
+            let status = converter.convert(to: output, error: &error) { _, state in
+                if supplied { state.pointee = .noDataNow; return nil }
+                supplied = true; state.pointee = .haveData; return buffer
+            }
+            if status == .error {
+                if !reportedError { reportedError = true; failed(error?.localizedDescription ?? "Microphone audio conversion failed.") }
+                return
+            }
+            if let data = output.floatChannelData, output.frameLength > 0 {
+                capture.append(UnsafeBufferPointer(start: data[0], count: Int(output.frameLength)))
+                lock.lock(); capturedSamples += Int(output.frameLength); lock.unlock()
+            }
+            if status != .haveData || output.frameLength == 0 { break }
+        }
+    }
+}
+
 /// Separate storage for the output render thread; callbacks may request any
 /// frame count. AVAudioEngine converts this 48 kHz source to the output device.
 private final class CallPlaybackFrames {
@@ -55,14 +106,33 @@ final class MacCallAudio {
         queue.async {
             if self.session?.engine.isRunning == true { return }
             self.session?.stop()
-            let session = Session()
-            do { try session.start(); self.session = session }
-            catch {
-                session.stop(); self.session = nil
-                DispatchQueue.main.async { failed(error.localizedDescription) }
-            }
+            self.session = nil
+            self.open(voiceProcessing: true, failed: failed)
         }
     }
+    private func open(voiceProcessing: Bool, failed: @escaping (String) -> Void) {
+        let current = Session(voiceProcessing: voiceProcessing)
+        do {
+            try current.start(failed: { error in DispatchQueue.main.async { failed(error) } })
+            session = current
+            queue.asyncAfter(deadline: .now() + 3) { [weak self, weak current] in
+                guard let self = self, let current = current, self.session === current,
+                      !current.hasInput else { return }
+                current.stop(); self.session = nil
+                if voiceProcessing {
+                    NSLog("Cursus call: voice processing produced no microphone PCM; retrying normal input")
+                    self.open(voiceProcessing: false, failed: failed)
+                } else {
+                    DispatchQueue.main.async { failed("The microphone is not delivering audio for this call. Check the selected input device.") }
+                }
+            }
+        } catch {
+            current.stop()
+            if voiceProcessing { open(voiceProcessing: false, failed: failed) }
+            else { DispatchQueue.main.async { failed(error.localizedDescription) } }
+        }
+    }
+
     func stop() {
         queue.async { self.session?.stop(); self.session = nil }
     }
@@ -71,39 +141,40 @@ final class MacCallAudio {
         let engine = AVAudioEngine()
         private var tapped = false
         private var source: AVAudioSourceNode?
-        func start() throws {
+        private var sink: AVAudioSinkNode?
+        private var capture: CallInputConverter?
+        private let voiceProcessing: Bool
+        init(voiceProcessing: Bool) { self.voiceProcessing = voiceProcessing }
+        var hasInput: Bool { capture?.hasInput == true }
+
+        func start(failed: @escaping (String) -> Void) throws {
             guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
                 throw CoreError(message: "Microphone permission is unavailable.")
             }
             let input = engine.inputNode
             // On supported devices Apple's voice-processing I/O supplies AEC,
             // noise reduction and gain control. Other devices use normal I/O.
-            try? input.setVoiceProcessingEnabled(true)
+            if voiceProcessing { try input.setVoiceProcessingEnabled(true) }
+            if input.isVoiceProcessingEnabled { input.isVoiceProcessingInputMuted = false }
             let native = input.outputFormat(forBus: 0)
             guard native.sampleRate > 0, native.channelCount > 0,
-                  let mono = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1),
-                  let converter = AVAudioConverter(from: native, to: mono),
-                  let converted = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: 8192) else {
+                  let mono = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1) else {
                 throw CoreError(message: "No usable microphone or speaker is available.")
             }
-            let capture = CallCaptureFrames { samples in
-                _ = cursus_call_capture(samples.baseAddress, 960)
-            }
-            input.installTap(onBus: 0, bufferSize: 1024, format: native) { buffer, _ in
-                var supplied = false
-                var error: NSError?
-                // Drain conversion output even when an input device supplies
-                // a larger-than-requested callback (e.g. a Bluetooth mic).
-                for _ in 0..<8 {
-                    converted.frameLength = 0
-                    let status = converter.convert(to: converted, error: &error) { _, state in
-                        if supplied { state.pointee = .noDataNow; return nil }
-                        supplied = true; state.pointee = .haveData; return buffer
-                    }
-                    guard status != .error, let data = converted.floatChannelData else { return }
-                    capture.append(UnsafeBufferPointer(start: data[0], count: Int(converted.frameLength)))
-                    if status != .haveData || converted.frameLength == 0 { break }
+            let capture = try CallInputConverter(format: native, send: { samples in
+                if cursus_call_capture(samples.baseAddress, 960) != 0 {
+                    NSLog("Cursus call: microphone PCM could not be encoded")
                 }
+            }, failed: failed)
+            self.capture = capture
+            // An explicit sink pulls microphone I/O independently of the
+            // speaker's source node. It never routes the mic to the speakers.
+            let sink = AVAudioSinkNode { _, _, _ in noErr }
+            self.sink = sink
+            engine.attach(sink)
+            engine.connect(input, to: sink, format: native)
+            input.installTap(onBus: 0, bufferSize: 1024, format: native) { buffer, _ in
+                capture.append(buffer)
             }
             tapped = true
             let playback = CallPlaybackFrames()
@@ -122,6 +193,8 @@ final class MacCallAudio {
             engine.stop()
             if tapped { engine.inputNode.removeTap(onBus: 0); tapped = false }
             if let source = source { engine.disconnectNodeOutput(source); engine.detach(source); self.source = nil }
+            if let sink = sink { engine.disconnectNodeInput(sink); engine.detach(sink); self.sink = nil }
+            capture = nil
             engine.reset()
         }
     }

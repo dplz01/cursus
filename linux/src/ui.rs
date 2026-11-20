@@ -1232,6 +1232,7 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
     // Audio call, top right of a direct chat (hidden when calls are off).
     let call_action: Element<'_, Message> = if !in_support
         && app.selected_is_direct()
+        && chat.pending_request_id.is_none()
         && contact_calls_allowed(chat)
     {
         composer_hit(
@@ -1867,21 +1868,22 @@ fn hairline<'a>() -> Element<'a, Message> {
 }
 
 fn contact_request_bar(app: &App, req_id: i64, d: Density) -> Element<'_, Message> {
+    let member = app.selected().and_then(|i| app.chats().get(i)).is_some_and(|chat| chat.member_request);
     container(
         column![
-            text("Incoming contact request")
+            text(if member { "Direct message request" } else { "Incoming contact request" })
                 .size(d.body)
                 .color(theme::t().text_primary),
-            text("Someone connected via your address. Accept to chat, or reject.")
+            text(if member { "A group member wants to message you directly. Accept or decline." } else { "Someone connected via your address. Accept to chat, or reject." })
                 .size(d.meta)
                 .color(theme::t().text_secondary),
             row![
                 button(text("Accept").size(d.body))
-                    .on_press(Message::AcceptContactRequest(req_id))
+                    .on_press_maybe((!app.contact_request_busy).then_some(Message::AcceptContactRequest { req_id, member }))
                     .padding(Padding::from([12, 16]))
                     .style(theme::primary_action(app.hover_ok())),
                 button(text("Reject").size(d.body))
-                    .on_press(Message::RejectContactRequest(req_id))
+                    .on_press_maybe((!app.contact_request_busy).then_some(Message::RejectContactRequest { req_id, member }))
                     .padding(Padding::from([12, 16]))
                     .style(theme::secondary_action(app.hover_ok())),
             ]
@@ -4010,7 +4012,7 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
     let row_button = |content: Element<'static, Message>, section: crate::SettingsSection| {
         button(content)
             .on_press(Message::OpenSettingsSection(section))
-            .padding(Padding::from([12, 12]))
+            .padding(Padding::from([if two_columns { 12.0 } else { 20.0 }, 16.0]))
             .width(Length::Fill)
             .style(theme::list_row(two_columns && app.settings_open() && app.settings_section() == section, hover))
     };
@@ -4443,6 +4445,7 @@ fn preference_row_with_support<'a>(
         control,
         trail,
         d.body,
+        d.list_width == 0.0,
     )
 }
 
@@ -6930,8 +6933,8 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
     };
 
     let (heading, close_msg): (&str, Message) = match g.pane {
-        GroupSettingsPane::Link if g.is_channel => ("Channel link", Message::Back),
-        GroupSettingsPane::Link => ("Group link", Message::Back),
+        GroupSettingsPane::Link if g.is_channel => ("Share this channel", Message::Back),
+        GroupSettingsPane::Link => ("Share this group", Message::Back),
         GroupSettingsPane::AddMember => ("Invite a contact", Message::CloseAddGroupMember),
         GroupSettingsPane::Preferences => ("Group settings", Message::CloseGroupPreferences),
         GroupSettingsPane::MemberInfo => ("Member", Message::CloseGroupMember),
@@ -7455,12 +7458,9 @@ fn group_overview_pane(
         ));
     }
     if admin || g.is_channel {
-        people = people.push(card_row(icons::link_icon(18.0, theme::t().accent),
-            if g.is_channel { "Channel link" } else { "Group link" }, None,
-            Message::OpenGroupLink, None, d, hover));
         people = people.push(card_row(icons::share_icon(18.0, theme::t().accent),
             if g.is_channel { "Share this channel" } else { "Share this group" }, None,
-            Message::ShareGroupLink, None, d, hover));
+            Message::OpenGroupLink, None, d, hover));
     }
     if owner || support_ok || moderate || admin || g.is_channel {
         page = page.push(button_card(people));
@@ -7574,7 +7574,7 @@ fn nav_row_styled<'a>(
         .align_y(Alignment::Center),
     )
     .on_press(on_press)
-    .padding(ROW_PAD)
+    .padding(if d.list_width == 0.0 { Padding::from([20, 16]) } else { ROW_PAD })
     .width(Length::Fill)
     .style(theme::ghost_tile_r(hover, ROW_RADIUS))
     .into()
@@ -7668,7 +7668,7 @@ fn group_members_list<'a>(
                 .push(profile_avatar(
                     m.image.as_deref(),
                     &m.public_name,
-                    MEMBER_AVATAR,
+                    if d.list_width == 0.0 { 48.0 } else { MEMBER_AVATAR },
                 ))
                 .push(names);
             let mut actions = Row::new().spacing(4).align_y(Alignment::Center);
@@ -7710,7 +7710,7 @@ fn group_members_list<'a>(
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center)
-                .padding(Padding::from([4, 4])),
+                .padding(if d.list_width == 0.0 { Padding::from([12, 8]) } else { Padding::from([4, 4]) }),
             );
         }
         col = col.push(list);
@@ -8234,7 +8234,7 @@ fn group_action_tile<'a>(
         .align_y(Alignment::Center),
     )
     .on_press(on_press)
-    .padding(ROW_PAD)
+    .padding(if d.list_width == 0.0 { Padding::from([20, 16]) } else { ROW_PAD })
     .width(Length::Fill)
     .style(style)
 }

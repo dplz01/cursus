@@ -195,6 +195,16 @@ impl Commands {
         format!("/_reject {contact_req_id}")
     }
 
+    pub fn accept_member_contact(contact_id: i64) -> String {
+        format!("/_accept member contact @{contact_id}")
+    }
+
+    /// Declining a group DM silently removes its unaccepted contact, matching
+    /// SimpleX; /_reject addresses a different request-id namespace.
+    pub fn reject_member_contact(contact_id: i64) -> String {
+        format!("/_delete @{contact_id} full notify=off")
+    }
+
     /// Mark chat soft-unread / clear soft-unread (`/_unread chat {ref} on|off`).
     pub fn unread_chat(chat: &ChatId, unread: bool) -> String {
         format!("/_unread chat {} {}", chat.command_ref(), on_off(unread))
@@ -699,4 +709,12 @@ mod tests {
         assert_eq!(Commands::call_end(5), "/_call end @5");
         assert_eq!(Commands::call_status(5, "connected"), "/_call status @5 connected");
     }
+    #[test]
+    fn member_request_commands_are_distinct_from_address_requests() {
+        assert_eq!(Commands::accept_member_contact(42), "/_accept member contact @42");
+        assert_eq!(Commands::reject_member_contact(42), "/_delete @42 full notify=off");
+        assert_eq!(Commands::accept_contact_request(42), "/_accept incognito=off 42");
+        assert_eq!(Commands::reject_contact_request(42), "/_reject 42");
+    }
+
 }

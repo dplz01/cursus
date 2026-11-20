@@ -466,8 +466,18 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
             let incognito = flag(p, "incognito");
             done(s.connect_link(str_param(p, "link")?, incognito))
         }
-        "acceptRequest" => done(s.accept_contact_request(i64_param(p, "id")?)),
-        "rejectRequest" => done(s.reject_contact_request(i64_param(p, "id")?)),
+        "acceptRequest" => {
+            let id = i64_param(p, "id")?;
+            done(if p.get("member").and_then(Value::as_bool).unwrap_or(false) {
+                s.accept_member_contact(id)
+            } else { s.accept_contact_request(id) })
+        },
+        "rejectRequest" => {
+            let id = i64_param(p, "id")?;
+            done(if p.get("member").and_then(Value::as_bool).unwrap_or(false) {
+                s.reject_member_contact(id)
+            } else { s.reject_contact_request(id) })
+        },
         "joinGroup" => done(s.join_group(i64_param(p, "groupId")?)),
         // Local name for a contact or group (empty clears it).
         "setAlias" => {

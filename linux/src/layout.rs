@@ -62,8 +62,8 @@ impl Density {
         match mode {
             LayoutMode::Mobile => Self {
                 title: 17.0,
-                body: 16.0,
-                meta: 13.0,
+                body: 17.0,
+                meta: 14.0,
                 pad: 16.0,
                 pad_tight: 10.0,
                 list_row: 6.0,

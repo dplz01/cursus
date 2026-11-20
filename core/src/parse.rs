@@ -86,6 +86,15 @@ fn chat_preview(chat: &Value) -> Option<ChatPreview> {
             c.peer_profile = profile_fields(contact.get("profile"));
             c.local_alias = alias;
             c.pending_request_id = pending_accept_request_id(contact);
+            let status = contact.pointer("/activeConn/connStatus");
+            let status = status.and_then(|s| s.as_str().or_else(|| s.str_at("/type")));
+            if contact.get("groupDirectInv").is_some_and(Value::is_object)
+                && matches!(status, None | Some("new" | "prepared"))
+                && contact.str_at("/contactStatus").unwrap_or("active") == "active"
+            {
+                c.pending_request_id = contact.i64_at("/contactId");
+                c.member_request = true;
+            }
             c.settings = chat_settings(contact.get("chatSettings"));
             c.tag_ids = tag_ids(contact);
             c.contact_preferences = contact.get("userPreferences").cloned();
@@ -143,7 +152,8 @@ fn chat_preview(chat: &Value) -> Option<ChatPreview> {
     let last_item = chat.array_at("/chatItems").first();
     c.preview = last_item.map(item_preview).unwrap_or_default();
     if c.pending_request_id.is_some() && c.preview.is_empty() {
-        c.preview = "Incoming contact request — accept to chat.".into();
+        c.preview = if c.member_request { "Direct message request from a group member — accept or decline." }
+            else { "Incoming contact request — accept to chat." }.into();
     }
     c.unread = chat.i64_at("/chatStats/unreadCount").unwrap_or(0);
     c.unread_chat = chat.bool_at("/chatStats/unreadChat").unwrap_or(false);
@@ -877,4 +887,28 @@ mod tests {
         let channel = json!({ "groupInfo": { "groupProfile": { "publicGroup": { "groupLink": "https://smp.example/c#xyz" } } } });
         assert_eq!(channel_link(&channel).expect("channel").display, "https://smp.example/c#xyz");
     }
+    #[test]
+    fn group_dm_requests_keep_contact_identity_until_accepted() {
+        let mut contact = json!({"contactId": 42, "contactStatus": "active", "profile": {"displayName": "Member"},
+            "groupDirectInv": {"groupDirectInvLink": "simplex:test", "memberRemoved": false}});
+        let pending = chat_preview(&json!({"chatInfo": {"type": "direct", "contact": contact}})).unwrap();
+        assert_eq!(pending.id, ChatId::new(ChatType::Direct, 42));
+        assert_eq!(pending.pending_request_id, Some(42));
+        assert!(pending.member_request);
+        assert!(pending.preview.contains("Direct message request"));
+        for state in ["new", "prepared", "joined", "sndReady", "ready"] {
+            contact["activeConn"] = json!({"connStatus": {"type": state}});
+            let chat = chat_preview(&json!({"chatInfo": {"type": "direct", "contact": contact}})).unwrap();
+            assert_eq!(chat.member_request, matches!(state, "new" | "prepared"), "{state}");
+            assert_eq!(chat.pending_request_id.is_some(), matches!(state, "new" | "prepared"), "{state}");
+        }
+    }
+    #[test]
+    fn group_dm_events_refresh_the_chat_list() {
+        for name in ["newMemberContactReceivedInv", "memberContactAccepted", "newMemberContactSentInv"] {
+            let event = crate::models::Event::Other { type_name: name.into(), body: json!({}) };
+            assert!(event.refreshes_chats(), "{name}");
+        }
+    }
+
 }

@@ -301,7 +301,7 @@ Back and other page-changing header controls complete an owned press-and-release
 
 - Chat settings use compact grouped surfaces: Notifications for receipts, Chat permissions for negotiated features. Rows without supporting text use 8px vertical padding; longer descriptions retain a full-width support line.
 - The Invite page separates “Share an invite” from “Invite contacts”. The link is a neutral two-line preview with one full-width Copy action, secondary format/role controls and a quiet destructive Revoke action. The contact picker has search and complete 56px rows.
-- The call list uses the same Jtb phone family on both platforms: green incoming, blue outgoing, red missed/declined/failed. Android's history is read-only; activating a record opens its chat.
+- The call list uses the same Jtb phone family on both platforms: green incoming, blue outgoing, red missed/declined/failed. Each history record opens its chat and has a separate call-back action.
 - Linux scrollables translate finger coordinates at their content boundary, including end-anchored history. Any viewport travel cancels a pending hold. Live dragging stays native; inertia is widget-local and uses elapsed-time exponential deceleration, with no app rebuild on each animation frame.
 - Linux media uses Iced's native image viewer for zoom/pan. Wheel zoom anchors at the cursor; pinch zoom and translation follow the finger midpoint. Swiping changes photos only at fit scale, and neither arrows nor swipes wrap at the first/last photo. Names are ellipsized in the header without changing file paths.
 
@@ -374,10 +374,35 @@ The selected Mac navigation tab has no hover fill over its glass lens.
 Mac conversation views stay mounted beneath contact/group profiles to preserve
 scroll position; Android saves the list state during profile visits. Returning
 from a profile does not re-follow an existing outgoing message. Newly opened
-conversations start at the latest message.
+conversations start at the last read message, before the unread boundary.
 
 Group profile actions are ordered Welcome message, Chats with members / Chat
-with admins, Group link, Share this group. Invite a contact sits under Members.
+with admins, Share this group. Invite a contact sits under Members.
 Member pages distinguish Direct message from Chat with member / Chat with admin.
 Member-thread entry points use the shared flag glyph; sharing uses share-03.
 All platforms retain the core's role and feature permissions for these actions.
+
+### Phone readability and contact requests
+
+Phone settings/action rows have at least 64dp touch targets, 17sp primary text,
+14sp supporting text and 24dp icons. Preferences use a 52×32dp switch and
+full-width descriptions below controls. Group members have 48dp avatars with
+12dp vertical insets. Android typography continues to respect the in-app text
+size preference. Linux applies larger row spacing in the mobile layout.
+
+Share this group/channel replaces the Group link action and opens the existing
+link management/sharing page; link creation, copy, roles and revocation remain
+available there. No duplicate link entry appears in the profile.
+
+Group-member DM invitations arrive as direct chats with an Accept/Reject bar.
+They use the contact-id namespace and /_accept member contact; declining silently
+deletes the unaccepted contact. Address requests retain /_accept and /_reject.
+Request kinds stay distinct even when numeric ids coincide, and member-invitation
+events refresh chat lists on every platform. Sending/calling remains blocked
+until the request is accepted.
+
+Mac calling explicitly connects microphone input to a sink while remote audio
+uses its independent source node. Capture is resampled into 48kHz mono PCM;
+missing input retries without voice processing, and conversion failures reach
+the UI. The Mac self-test covers 48kHz and 44.1kHz stereo-to-mono capture without
+opening a microphone. Live duplex audio still requires a hardware call test.

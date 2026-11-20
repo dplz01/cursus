@@ -45,7 +45,7 @@ struct ConversationView: View {
                             }
                         }
                     }
-                    if chat.isDirect {
+                    if chat.isDirect && chat.pendingRequestId == nil {
                         IconTool(icon: "calls", help: "Audio call", size: 20) { model.calls.start(chat) }
                             .disabled(model.calls.state.active != nil || model.calls.busy)
                     }
@@ -95,13 +95,13 @@ struct ConversationView: View {
                 .background(Theme.panel)
                 .onAppear {
                     shownCount = model.messages.count
-                    DispatchQueue.main.async { scrollToBottom(proxy, animated: false) }
+                    DispatchQueue.main.async { scrollToReadPosition(proxy) }
                 }
                 .onChange(of: model.messages.last?.id) { _ in
                     let firstLoad = shownCount == 0
                     shownCount = model.messages.count
                     if firstLoad {
-                        scrollToBottom(proxy, animated: false)
+                        scrollToReadPosition(proxy)
                     } else if model.messages.last?.outgoing == true || atBottom {
                         // Your message, or you're reading the end: follow it.
                         // Otherwise stay put; the divider marks what's new.
@@ -163,6 +163,13 @@ struct ConversationView: View {
         if chat.isChannel { return "Channel" }
         if chat.isGroup { return chat.role.map { "Group · \($0)" } ?? "Group" }
         return chat.fullName.isEmpty ? "" : chat.fullName
+    }
+
+    private func scrollToReadPosition(_ proxy: ScrollViewProxy) {
+        if let firstUnread = model.newMessagesFrom,
+           let index = model.messages.firstIndex(where: { $0.id == firstUnread }) {
+            proxy.scrollTo(model.messages[max(0, index - 1)].id, anchor: .top)
+        } else { scrollToBottom(proxy, animated: false) }
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
@@ -260,7 +267,7 @@ struct RequestBanner: View {
             IconDisc(icon: "user-plus-alt-1", size: 36)
             VStack(alignment: .leading, spacing: 1) {
                 Text(chat.title).font(.cBodyBold).foregroundColor(Theme.primaryText)
-                Text("wants to connect with you").font(.cMeta).foregroundColor(Theme.secondaryText)
+                Text(chat.memberRequest == true ? "requests a direct message from your group" : "wants to connect with you").font(.cMeta).foregroundColor(Theme.secondaryText)
             }
             Spacer()
             Button("Reject") { Task { await model.rejectRequest(chat) } }

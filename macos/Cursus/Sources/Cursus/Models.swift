@@ -51,6 +51,7 @@ struct Chat: Decodable, Identifiable, Equatable {
     let notifications: String
     let favorite: Bool
     let pendingRequestId: Int64?
+    let memberRequest: Bool?
     let image: String?
     /// Public name (title is the local alias when one is set).
     let name: String?

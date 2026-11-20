@@ -188,9 +188,11 @@ pub struct ChatPreview {
     /// Per-chat local “delete messages after” (`chatItemTTL` / APISetChatTTL).
     /// One-way wipe from this device — not negotiated disappearing messages.
     pub chat_item_ttl: Option<i64>,
-    /// Present when this direct chat is still an inbound address request.
-    /// Accept with `/_accept <id>` before sending is allowed.
+    /// Inbound request identity. Address requests use their request id;
+    /// group DMs use the contact id with `member_request` set below.
     pub pending_request_id: Option<i64>,
+    /// The pending id is a member contact id, not an address request id.
+    pub member_request: bool,
     /// Peer / group profile snapshot for list + profile page.
     pub peer_profile: ProfileFields,
     /// Local alias for the contact / group (`/_set alias`); empty when unset.
@@ -232,6 +234,7 @@ impl ChatPreview {
             tag_ids: Vec::new(),
             chat_item_ttl: None,
             pending_request_id: None,
+            member_request: false,
             peer_profile: ProfileFields::default(),
             local_alias: String::new(),
             is_channel: false,
@@ -706,6 +709,10 @@ impl Event {
                     | "receivedContactRequest"
                     | "contactRequestRejected"
                     | "acceptingContactRequest"
+                    | "newMemberContactReceivedInv"
+                    | "memberContactAccepted"
+                    | "newMemberContactSentInv"
+                    | "newMemberContact"
                     | "contactAdded"
                     | "chatAdded"
                     | "groupJoined"

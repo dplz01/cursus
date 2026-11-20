@@ -34,7 +34,7 @@ struct ChatInfoView: View {
         case .preferences: return chat.isDirect ? "Chat preferences" : "\(kindTitle) preferences"
         case .member: return chat.isChannel ? "Subscriber" : "Member"
         case .invite: return "Invite members"
-        case .link: return "\(kindTitle) link"
+        case .link: return "Share this \(kindTitle.lowercased())"
         case .supportList: return "Chats with members"
         }
     }
@@ -284,17 +284,8 @@ private struct InfoOverview: View {
                            flush: true, badge: chat.supportUnread) { model.openSupport(chat) }
                 }
                 if chat.isAdmin || chat.isChannel {
-                    NavRow(icon: "link-minimalistic-2", title: "\(chat.isChannel ? "Channel" : "Group") link",
-                           subtitle: chat.isAdmin ? "Anyone with it can join" : "Share this channel",
-                           flush: true) { page = .link }
                     NavRow(icon: "share-03", title: chat.isChannel ? "Share this channel" : "Share this group",
-                           flush: true) {
-                        Task {
-                            if let link = await model.groupLink(chat, quiet: !chat.isAdmin) {
-                                Clipboard.share(link.short ?? link.full)
-                            }
-                        }
-                    }
+                           flush: true) { page = .link }
                 }
             }
         }

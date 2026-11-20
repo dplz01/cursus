@@ -59,6 +59,7 @@ data class Chat(
     val notifications: String = "all",
     val favorite: Boolean = false,
     val pendingRequestId: Long? = null,
+    val memberRequest: Boolean = false,
     val image: String? = null,
     val name: String = "",
     val alias: String = "",

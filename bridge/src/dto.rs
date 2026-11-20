@@ -93,6 +93,7 @@ pub fn chat(c: &ChatPreview) -> Value {
         "notifications": c.settings.enable_ntfs.as_api(),
         "favorite": c.settings.favorite,
         "pendingRequestId": c.pending_request_id,
+        "memberRequest": c.member_request,
         "image": c.peer_profile.image,
         // Public name (ignoring the local alias), for the info panel.
         "name": if c.peer_profile.display_name.trim().is_empty() { c.title.clone() } else { c.peer_profile.display_name.clone() },
@@ -388,4 +389,15 @@ mod tests {
             assert!(parse_chat_ref(bad).is_err(), "{bad}");
         }
     }
+    #[test]
+    fn member_request_metadata_reaches_native_clients() {
+        let mut preview = ChatPreview::new(ChatId::new(ChatType::Direct, 42), "Member".into());
+        preview.pending_request_id = Some(42);
+        preview.member_request = true;
+        let value = chat(&preview);
+        assert_eq!(value["ref"], "@42");
+        assert_eq!(value["pendingRequestId"], 42);
+        assert_eq!(value["memberRequest"], true);
+    }
+
 }

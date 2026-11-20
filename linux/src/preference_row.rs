@@ -12,6 +12,7 @@ pub(crate) struct PreferenceRow<'a> {
     has_icon: bool,
     has_support: bool,
     body_size: f32,
+    touch: bool,
 }
 
 impl<'a> PreferenceRow<'a> {
@@ -22,6 +23,7 @@ impl<'a> PreferenceRow<'a> {
         control: Element<'a, Message>,
         trail: Element<'a, Message>,
         body_size: f32,
+        touch: bool,
     ) -> Element<'a, Message> {
         let has_icon = icon.is_some();
         let has_support = support.is_some();
@@ -37,6 +39,7 @@ impl<'a> PreferenceRow<'a> {
             has_icon,
             has_support,
             body_size,
+            touch,
         })
     }
 }
@@ -90,7 +93,8 @@ impl Widget<Message, Theme, iced::Renderer> for PreferenceRow<'_> {
             .size()
             .height
             .max(control.size().height)
-            .max(icon.size().height);
+            .max(icon.size().height)
+            .max(if self.touch { 28.0 } else { 0.0 });
         let support = if self.has_support {
             measure(2, available - leading)
         } else {
@@ -101,7 +105,7 @@ impl Widget<Message, Theme, iced::Renderer> for PreferenceRow<'_> {
         } else {
             0.0
         };
-        let pad = if self.has_support { 12.0 } else { 8.0 };
+        let pad = if self.touch { 18.0 } else if self.has_support { 12.0 } else { 8.0 };
         let center = |h: f32| pad + (height - h) / 2.0;
         let icon_y = center(icon.size().height);
         let title_y = center(title.size().height);

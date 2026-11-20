@@ -440,12 +440,18 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    var openingReadAnchor by mutableStateOf<Long?>(null)
+        private set
+    private var openingUnread = 0L
+
     fun select(ref: String?) {
         val old = selection
         if (old == ref) return
         if (old != null) drafts[old] = draft
         discardPastedImage()
         selection = ref
+        openingReadAnchor = null
+        openingUnread = chats.firstOrNull { it.ref == ref }?.unread ?: 0L
         draft = ref?.let { drafts[it] } ?: ""
         composeMode = ComposeMode.New
         discardRecording()
@@ -453,7 +459,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         VoicePlayer.stop()
         selected.clear()
         revealedDeleted.clear()
-        historyCount = HISTORY_PAGE
+        historyCount = (openingUnread.coerceAtMost(HISTORY_MAX.toLong()) * 2 + HISTORY_PAGE).coerceIn(HISTORY_PAGE.toLong(), HISTORY_MAX.toLong()).toInt()
         messages.clear()
         messagesFor = null
         if (ref != null) {
@@ -468,6 +474,10 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             try {
                 val list: List<Message> = Core.call("listMessages", mapOf("chat" to ref, "count" to historyCount))
                 if (selection != ref) return@launch
+                if (messagesFor != ref) {
+                    openingReadAnchor = chat.cursus.core.latestReadAnchor(list, openingUnread)
+                    openingUnread = 0
+                }
                 messages.clear()
                 messages.addAll(list)
                 messagesFor = ref
@@ -530,11 +540,15 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         if (selection == chat.ref) select(null)
     }
 
-    fun acceptRequest(chat: Chat) = act { Core.run("acceptRequest", mapOf("id" to chat.pendingRequestId)) }
+    fun acceptRequest(chat: Chat) = act {
+        Core.run("acceptRequest", mapOf("id" to chat.pendingRequestId, "member" to chat.memberRequest))
+        reloadChats()
+    }
 
     fun rejectRequest(chat: Chat) = act {
-        Core.run("rejectRequest", mapOf("id" to chat.pendingRequestId))
+        Core.run("rejectRequest", mapOf("id" to chat.pendingRequestId, "member" to chat.memberRequest))
         if (selection == chat.ref) select(null)
+        reloadChats()
     }
 
     fun joinGroup(groupId: Long) = act { Core.run("joinGroup", mapOf("groupId" to groupId)) }

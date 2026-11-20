@@ -38,7 +38,7 @@ enum Core {
         return try await withCheckedThrowingContinuation { cont in
             queue.async {
                 do {
-                    cont.resume(returning: try perform(body, as: type))
+                    cont.resume(returning: try perform(body, as: T.self))
                 } catch {
                     cont.resume(throwing: error)
                 }

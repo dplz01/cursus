@@ -845,7 +845,7 @@ struct VoiceView: View {
                          progress: player.playingId == messageId ? player.progress : 0,
                          rest: outgoing ? Theme.voiceRestOut : Theme.voiceRest)
                 .frame(width: 140, height: 28)
-            Text(file.duration.map { Dates.duration(Int64($0)) } ?? "voice")
+            Text(file.duration.map { Format.duration($0) } ?? "voice")
                 .font(.cMeta)
                 .foregroundColor(Theme.secondaryText)
                 .fixedSize()

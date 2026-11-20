@@ -196,7 +196,16 @@ final class VoiceRecorder: NSObject, ObservableObject {
         levels = []
         elapsed = 0
         recording = true
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in self?.tick() }
+        // A selector timer runs on this main run loop. Its weak target avoids
+        // a retain cycle and transferring the recorder into a Sendable closure.
+        timer = Timer.scheduledTimer(timeInterval: 0.1, target: MeterTarget(self),
+                                     selector: #selector(MeterTarget.fire), userInfo: nil, repeats: true)
+    }
+
+    private final class MeterTarget: NSObject {
+        private weak var owner: VoiceRecorder?
+        init(_ owner: VoiceRecorder) { self.owner = owner }
+        @objc func fire() { owner?.tick() }
     }
 
     private func tick() {

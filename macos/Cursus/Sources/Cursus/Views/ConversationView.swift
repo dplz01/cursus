@@ -347,13 +347,10 @@ struct MessageRow: View {
 
     @ViewBuilder private var bubble: some View {
         if message.emojiOnly {
-            VStack(alignment: message.outgoing ? .trailing : .leading, spacing: 0) {
-                Text(message.text).font(.system(size: 42))
-                footer
-            }
+            stampedLabel(Text(message.text), font: .system(size: 42))
         } else {
             VStack(alignment: .trailing, spacing: 5) {
-                VStack(alignment: .leading, spacing: 5) {
+                BubbleContents {
                     if showSender, let sender = message.sender {
                         // Name, then the role as its icon only (owner / admin / moderator).
                         HStack(spacing: 4) {
@@ -391,8 +388,7 @@ struct MessageRow: View {
                     } else if message.file != nil {
                         // Under an attachment: only the sender's own caption.
                         if !message.caption.isEmpty {
-                            Text(message.caption)
-                                .font(.cBody)
+                            stamped(Text(message.caption))
                                 .foregroundColor(Theme.primaryText)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -400,22 +396,20 @@ struct MessageRow: View {
                     } else if !message.text.isEmpty && message.groupInvitation == nil {
                         if message.hasSecret {
                             // Secret text: click to reveal / hide (Linux: tap).
-                            Text(RichText.attributed(message, reveal: revealed))
-                                .font(.cBody)
+                            stamped(Text(RichText.attributed(message, reveal: revealed)))
                                 .foregroundColor(Theme.primaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .onTapGesture { model.toggleRevealed(message) }
                                 .help(revealed ? "Hide secret text" : "Show secret text")
                         } else {
-                            Text(RichText.attributed(message))
-                                .font(.cBody)
+                            stamped(Text(RichText.attributed(message)))
                                 .foregroundColor(Theme.primaryText)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
-                footer
+                if !hasStampedText { footer }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -423,6 +417,49 @@ struct MessageRow: View {
                 bubbleShape.fill(message.outgoing ? Theme.bubbleOut : Theme.bubbleIn)
             )
         }
+    }
+
+    private var hasStampedText: Bool {
+        message.deleted == nil && message.groupInvitation == nil &&
+            (message.file == nil ? !message.text.isEmpty : !message.caption.isEmpty)
+    }
+
+    /// As on Linux, let the text shaper wrap an indivisible, invisible
+    /// reservation. The real stamp stays at the bottom trailing corner, so it
+    /// shares the last line when there is room and moves below it otherwise.
+    @ViewBuilder private func stamped(_ text: Text, font: Font = .cBody) -> some View {
+        #if compiler(>=5.7) && CURSUS_MODERN_SHELL
+        if #available(macOS 13.0, *) {
+            stampedLabel(text, font: font).frame(maxWidth: .infinity, alignment: .leading)
+        } else { stampedLabel(text, font: font) }
+        #else
+        stampedLabel(text, font: font)
+        #endif
+    }
+
+    private func stampedLabel(_ text: Text, font: Font) -> some View {
+        (text + Text(stampReservation).font(.system(size: 11)).foregroundColor(.clear)
+            // A zero-width body-font strut keeps a wrapped stamp line at the
+            // same height as the message (also for large emoji messages).
+            + Text("\u{200B}").font(font).foregroundColor(.clear))
+            .font(font)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(text)
+            .overlay(alignment: .bottomTrailing) { footer.fixedSize() }
+    }
+
+    private var stampReservation: String {
+        var parts: [String] = []
+        if message.edited { parts.append("edited") }
+        if let date = message.date {
+            parts.append(Dates.clock(date).replacingOccurrences(of: " ", with: "\u{00A0}"))
+        }
+        if message.outgoing && !inNotes {
+            // Four meta-font en spaces cover the 13pt receipt and its gap.
+            parts.append(String(repeating: "\u{2002}", count: 4))
+        }
+        // Only the leading ordinary space is a line-break opportunity.
+        return " \u{00A0}" + parts.joined(separator: "\u{00A0}") + "\u{2009}"
     }
 
     private var footer: some View {
@@ -441,6 +478,58 @@ struct MessageRow: View {
         .foregroundColor(message.outgoing && !message.emojiOnly ? Theme.bubbleOutMeta : Theme.mutedText)
     }
 }
+
+/// Match Linux BubbleBody: measure children naturally, then stretch the last
+/// text to the widest quote/attachment/header without widening the bubble.
+private struct BubbleContents<Content: View>: View {
+    let content: Content
+    init(@ViewBuilder content: () -> Content) { self.content = content() }
+
+    @ViewBuilder var body: some View {
+        #if compiler(>=5.7) && CURSUS_MODERN_SHELL
+        if #available(macOS 13.0, *) {
+            BubbleContentsLayout { content }
+        } else { VStack(alignment: .leading, spacing: 5) { content } }
+        #else
+        VStack(alignment: .leading, spacing: 5) { content }
+        #endif
+    }
+}
+
+#if compiler(>=5.7) && CURSUS_MODERN_SHELL
+@available(macOS 13.0, *)
+private struct BubbleContentsLayout: Layout {
+    private let spacing: CGFloat = 5
+
+    private func sizes(_ subviews: Subviews, limit: CGFloat) -> (CGFloat, [CGSize]) {
+        var sizes = subviews.map { view in
+            let ideal = view.sizeThatFits(.unspecified)
+            return view.sizeThatFits(ProposedViewSize(width: min(limit, ideal.width), height: nil))
+        }
+        let width = min(limit, sizes.map(\.width).max() ?? 0)
+        if let last = subviews.indices.last {
+            sizes[last] = subviews[last].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        }
+        return (width, sizes)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let (width, children) = sizes(subviews, limit: min(420, proposal.width ?? 420))
+        return CGSize(width: width,
+                      height: children.reduce(0) { $0 + $1.height } + CGFloat(max(0, children.count - 1)) * spacing)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (_, children) = sizes(subviews, limit: bounds.width)
+        var y = bounds.minY
+        for index in subviews.indices {
+            subviews[index].place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading,
+                                 proposal: ProposedViewSize(width: bounds.width, height: children[index].height))
+            y += children[index].height + spacing
+        }
+    }
+}
+#endif
 
 struct DeliveryMark: View {
     let delivery: String

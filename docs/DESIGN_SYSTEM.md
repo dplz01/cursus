@@ -410,3 +410,11 @@ uses its independent source node. Capture is resampled into 48kHz mono PCM;
 missing input retries without voice processing, and conversion failures reach
 the UI. The Mac self-test covers 48kHz and 44.1kHz stereo-to-mono capture without
 opening a microphone. Live duplex audio still requires a hardware call test.
+
+Mac window controls use a real unified NSToolbar so AppKit applies its inset
+traffic-light placement and toolbar window geometry. Message text and captions
+reserve an unbreakable invisible tail for the clock, edited label and receipt;
+the visible metadata overlays its bottom trailing corner. The text shaper moves
+the whole reservation to a new line when it cannot fit. On macOS 13+, bubble
+contents measure naturally, then stretch the final text to the widest sibling,
+matching Linux's 420pt limit and keeping stamps aligned beneath wider quotes.

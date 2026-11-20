@@ -392,6 +392,17 @@ struct WindowChrome: NSViewRepresentable {
             window.styleMask.insert(.fullSizeContentView)
             window.titlebarAppearsTransparent = true
             window.titlebarSeparatorStyle = .none
+            // A title-only window puts its traffic lights against the edge.
+            // A real unified toolbar gives AppKit the inset control placement
+            // and floating sidebar/title-bar geometry used by Notes.
+            if window.toolbar == nil {
+                let toolbar = NSToolbar(identifier: "CursusMainToolbar")
+                toolbar.displayMode = .iconOnly
+                toolbar.allowsUserCustomization = false
+                toolbar.showsBaselineSeparator = false
+                window.toolbar = toolbar
+            }
+            window.toolbarStyle = .unified
         }
     }
 }

@@ -16,27 +16,13 @@ private struct Hovering<Content: View>: View {
     }
 }
 
-/// Glass belongs to navigation chrome; message and settings surfaces retain
-/// the shared opaque Cursus palette. Old SDKs never resolve new API symbols.
+/// The shared opaque navigation surface. Only the moving selection lens
+/// uses glass; the bar keeps the same solid Cursus palette as Linux.
 struct NavigationChrome: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var contrast
-
-    @ViewBuilder func body(content: Content) -> some View {
-        #if compiler(>=6.2) && CURSUS_GLASS
-        if #available(macOS 26.0, *), !reduceTransparency, contrast != .increased {
-            // The floating surface samples the scrolling list underneath.
-            content.glassEffect(.clear, in: Capsule())
-        } else { opaque(content) }
-        #else
-        opaque(content)
-        #endif
-    }
-
-    private func opaque(_ content: Content) -> some View {
+    func body(content: Content) -> some View {
         content
-            .background(Capsule().fill(Theme.elevated))
-            .overlay(Capsule().strokeBorder(Theme.border, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.elevated))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
     }
 }
 

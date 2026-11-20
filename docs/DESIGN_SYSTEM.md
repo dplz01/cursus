@@ -328,15 +328,22 @@ Back and other page-changing header controls complete an owned press-and-release
 ## macOS chrome
 
 Mac navigation uses the shared Cursus colors and glyphs inside a floating
-capsule dock over the bottom of the list in a native resizable list/detail split.
+rounded dock over the bottom of the list in a native resizable list/detail split.
+The opaque bar has 18pt corners; selection, hover and hit shapes use 12pt
+corners, matching the Linux and Android navigation bars.
 The list viewport extends behind the dock. Chats, calls and settings add 84pt
 of scroll-content padding so the last row can scroll completely above it.
-One persistent selection lens moves between the four destinations with an
-explicit spring-animated position; it is not replaced or crossfaded per tab.
+The dock is a stable sibling of the changing page so all destination pairs
+retain their animation state. One persistent selection lens moves between the
+four destinations with an explicit spring-animated position; it is not replaced
+or crossfaded per tab.
 Pointer hover retains the ordinary Cursus hover fill and does not move the lens.
-On macOS 26, the dock's native clear glass samples the list behind it. The
-selection lens renders above the icons and labels so its moving edge can
-refract them, without nesting the whole control inside another glass effect.
+The dock itself is opaque, using the shared Cursus surface and border as on
+Linux. Only the selection lens uses native clear Liquid Glass on macOS 26.
+The glass stays below the controls so its material cannot blur icons or text.
+A small animated glyph displacement peaks as a moving lens edge crosses each
+tab and returns exactly to the unmodified rendering at rest. Hover does not
+trigger that displacement.
 Reduce Motion disables sliding. Reduce Transparency, Increase Contrast and
 older systems use a bordered accent selection below the controls. Modern SDKs
 use NavigationSplitView and a unified compact toolbar; older systems use

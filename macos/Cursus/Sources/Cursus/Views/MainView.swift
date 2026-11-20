@@ -56,12 +56,14 @@ struct MainView: View {
     }
 
     private var middle: some View {
-        listContent
-            .frame(maxHeight: .infinity)
-            .background(Theme.list)
-            .overlay(alignment: .bottom) {
-                NavDock().padding(10)
-            }
+        // Keep the dock as a stable sibling of the changing page. An overlay
+        // attached to the conditional page can recreate it on section changes,
+        // losing the previous lens position (Chats/Channels share one branch).
+        ZStack(alignment: .bottom) {
+            listContent.frame(maxHeight: .infinity)
+            NavDock().padding(10)
+        }
+        .background(Theme.list)
     }
 
     @ViewBuilder private var listContent: some View {
@@ -135,16 +137,23 @@ struct NavDock: View {
         return false
     }
 
+    private var selectedIndex: CGFloat {
+        CGFloat(Destination.allCases.firstIndex(of: model.destination) ?? 0)
+    }
+
+    private var slideAnimation: Animation? {
+        reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82)
+    }
+
     var body: some View {
         ZStack {
             Color.clear.modifier(NavigationChrome())
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
-            if !refractive { lens }
+            // Keep native glass behind the glyphs so its material never blurs
+            // them. A small edge displacement supplies refraction during travel.
+            lens
             tabs
-            // Clear glass belongs above the glyphs: only then can its moving
-            // edge refract them. The opaque accessibility fallback stays below.
-            if refractive { lens }
         }
         .frame(height: 64)
     }
@@ -155,12 +164,10 @@ struct NavDock: View {
         GeometryReader { geometry in
             let count = CGFloat(Destination.allCases.count)
             let width = max(0, (geometry.size.width - 10 - 2 * (count - 1)) / count)
-            let index = CGFloat(Destination.allCases.firstIndex(of: model.destination) ?? 0)
             DockSelection(refractive: refractive)
                 .frame(width: width, height: 54)
-                .position(x: 5 + width / 2 + index * (width + 2), y: 32)
-                .animation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82),
-                           value: model.destination)
+                .position(x: 5 + width / 2 + selectedIndex * (width + 2), y: 32)
+                .animation(slideAnimation, value: model.destination)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -177,9 +184,14 @@ struct NavDock: View {
                             .lineLimit(1)
                     }
                     .foregroundColor(model.destination == dest ? Theme.accent : Theme.secondaryText)
+                    .modifier(DockEdgeRefraction(
+                        position: selectedIndex, target: selectedIndex,
+                        tab: CGFloat(Destination.allCases.firstIndex(of: dest) ?? 0),
+                        enabled: refractive && !reduceMotion))
+                    .animation(slideAnimation, value: model.destination)
                     .frame(maxWidth: .infinity)
                     .frame(height: 54)
-                    .contentShape(Capsule())
+                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(alignment: .topTrailing) {
                         if badge(for: dest) > 0 {
                             UnreadPill(count: badge(for: dest))
@@ -187,7 +199,7 @@ struct NavDock: View {
                         }
                     }
                 }
-                .buttonStyle(GhostTileStyle(radius: 27))
+                .buttonStyle(GhostTileStyle(radius: 12))
                 .help(dest.title)
                 .accessibilityLabel(dest.title)
                 .accessibilityValue(model.destination == dest ? "Selected" : "")
@@ -208,13 +220,40 @@ struct NavDock: View {
     }
 }
 
+/// Animate the optical displacement independently of the glass material.
+/// Only glyphs crossed by a moving lens edge stretch slightly; at rest this
+/// is exactly the identity transform, with no blur, duplicate text or scaling.
+private struct DockEdgeRefraction: AnimatableModifier {
+    var position: CGFloat
+    let target: CGFloat
+    let tab: CGFloat
+    let enabled: Bool
+
+    var animatableData: CGFloat {
+        get { position }
+        set { position = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let distance = min(abs(tab - position - 0.5), abs(tab - position + 0.5))
+        let proximity = max(0, 1 - distance / 0.28)
+        let edge = proximity * proximity * (3 - 2 * proximity)
+        let moving = min(1, abs(target - position) * 10)
+        let strength = enabled ? edge * moving : 0
+        let direction: CGFloat = tab < position ? -1 : 1
+        content
+            .scaleEffect(x: 1 + 0.055 * strength, y: 1 + 0.025 * strength)
+            .offset(x: direction * 1.2 * strength)
+    }
+}
+
 private struct DockSelection: View {
     let refractive: Bool
 
     @ViewBuilder var body: some View {
         #if compiler(>=6.2) && CURSUS_GLASS
         if #available(macOS 26.0, *), refractive {
-            Color.clear.glassEffect(.clear, in: Capsule())
+            Color.clear.glassEffect(.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         } else { fallback }
         #else
         fallback
@@ -222,8 +261,8 @@ private struct DockSelection: View {
     }
 
     private var fallback: some View {
-        Capsule().fill(Theme.accent.opacity(0.16))
-            .overlay(Capsule().strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
+        RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.accent.opacity(0.16))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
     }
 }
 

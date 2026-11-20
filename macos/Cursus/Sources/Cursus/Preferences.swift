@@ -5,6 +5,7 @@ import SwiftUI
 /// views). Same choices as the Linux app's preferences; what they mean for
 /// links, files and receipts is decided by the core.
 enum Prefs {
+    static let showTray = "showTray"
     static let theme = "theme"
     static let textSize = "textSize"
     static let enterSends = "enterSends"

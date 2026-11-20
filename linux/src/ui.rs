@@ -4073,10 +4073,8 @@ fn settings_section_meta(section: crate::SettingsSection) -> (Element<'static, M
     let a = theme::t().accent;
     match section {
         S::Profile => (icons::user_alt_icon(20.0, a), "Profile"),
-        S::Address => (icons::address_card_icon(20.0, a), "Your address"),
-        S::Privacy => (icons::lock_icon(20.0, a), "Privacy"),
-        S::Security => (icons::shield_icon(20.0, a), "Security"),
-        S::Data => (icons::files_icon(20.0, a), "Files and network"),
+        S::Address => (icons::address_card_icon(20.0, a), "Address"),
+        S::Privacy => (icons::shield_icon(20.0, a), "Privacy & Security"),
         S::Notifications => (icons::notifications_icon(20.0, a), "Notifications"),
         S::Appearance => (icons::image_icon(20.0, a), "Appearance"),
         S::About => (icons::info_icon(20.0, a), "About"),
@@ -4281,10 +4279,7 @@ fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<
             ));
             col = col.section("Links");
             col = col.push(info_toggle("Remove tracking from links", I::CleanLinks, prefs.clean_links, Message::SetCleanLinks, d, hover));
-        }
-        crate::SettingsSection::Security => {
             col = col.section("App access");
-            use crate::SettingInfo as I;
             // Who can open Cursus.
             col = col.push(info_toggle("App lock", I::AppLock, prefs.app_lock, Message::SetAppLock, d, hover));
             if prefs.app_lock {
@@ -4314,9 +4309,7 @@ fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<
                 d,
                 hover,
             ));
-        }
-        crate::SettingsSection::Data => {
-            use crate::SettingInfo as I;
+
             // What reaches other servers and the disk.
             col = col.section("Downloads");
             col = col.push(info_toggle(

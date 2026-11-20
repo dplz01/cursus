@@ -38,7 +38,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         switch self {
         case .profile: return "Profile"
         case .address: return "Address"
-        case .privacy: return "Privacy & security"
+        case .privacy: return "Privacy & Security"
         case .notifications: return "Notifications"
         case .appearance: return "Appearance"
         case .about: return "About"
@@ -48,7 +48,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .profile: return "user-alt-1"
-        case .address: return "link-minimalistic-2"
+        case .address: return "address-card"
         case .privacy: return "shield-check"
         case .notifications: return "notifications"
         case .appearance: return "image-square"

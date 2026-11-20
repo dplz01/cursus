@@ -47,6 +47,12 @@ enum SelfTest {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    private var tray: MacTray?
+
+    @MainActor func configureTray(model: AppModel) {
+        if tray == nil { tray = MacTray(model: model) }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Built as a plain executable: make sure we get a Dock icon + menu
         // bar even when launched outside the bundle (`swift run`).
@@ -103,6 +109,7 @@ struct CursusApp: App {
         WindowGroup("Cursus") {
             RootView()
                 .environmentObject(model)
+                .onAppear { delegate.configureTray(model: model) }
                 .frame(minWidth: 760, minHeight: 500)
                 // Native controls (switches, checkboxes, segmented pickers,
                 // focus rings) in Cursus blue rather than the system accent.

@@ -30,8 +30,8 @@ Let each platform render **its own native navigation**:
 | Platform | Desktop / wide | Phone |
 |---|---|---|
 | Linux (Iced) | Vertical nav rail | Bottom destination bar |
-| macOS (SwiftUI) | `NavigationSplitView` / sidebar | Tab bar / stack |
-| Android (Compose) | `NavigationRail` | `NavigationBar` |
+| macOS (SwiftUI) | Native split with floating bottom destination dock below list | — |
+| Android (Compose) | Bottom destination dock below list | `NavigationBar` |
 | iOS (SwiftUI) | Sidebar / split | `TabView` + navigation stack |
 
 Android uses one pane below 600dp of available app-window width, and two panes above it. The two-pane shell always keeps its destination dock below the list, with every settings category and chat detail in the right pane; it never adds a rail. Split decisions use actual window constraints, including floating and split-screen windows.
@@ -194,11 +194,9 @@ Settings are a list of categories, each opening its own page (as on Android): be
 | Page | Contains |
 |---|---|
 | Profile | picture, name, bio, description |
-| Your address | create / show / hide, share on profile, auto-accept, delete |
-| Privacy | on screen (previews, blur, screenshots on Android) · what contacts see (delivery receipts) · links (remove tracking) |
-| Security | app lock, lock after, lock now · unlocking at start |
-| Files and network | downloads (automatic download, protect IP) · on this device (encrypt stored files) |
-| Notifications | alerts, hide message text · background (tray on Linux, background service on Android) |
+| Address | create / show / hide, share on profile, auto-accept, delete |
+| Privacy & Security | app lock and unlocking at start · on screen (previews, blur, screenshots on Android) · delivery receipts · links · downloads and IP protection · stored-file encryption |
+| Notifications | alerts, hide message text · background (tray on Linux and macOS, background service on Android) |
 | Appearance | theme, text size · typing (Linux) |
 | About | version, source code, licences |
 
@@ -329,11 +327,19 @@ Back and other page-changing header controls complete an owned press-and-release
 
 ## macOS chrome
 
-Mac navigation uses the shared Cursus colors and glyphs inside an inset,
-rounded rail beside a native resizable list/detail split. Modern SDKs use
+Mac navigation uses the shared Cursus colors and glyphs inside a floating
+capsule dock below the list in a native resizable list/detail split. A shared
+selection capsule slides between Chats, Channels, Calls and Settings with a
+spring animation, also following pointer hover. Native glass identities morph
+the highlight on macOS 26; Reduce Motion disables the sliding animation. Modern SDKs use
 NavigationSplitView and a unified compact toolbar. Liquid Glass is limited
 to navigation chrome on macOS 26+ with a compatible SDK; content, message
 bubbles and preference cards remain opaque. Reduce Transparency and
 Increase Contrast use a solid bordered navigation surface. Intel and Apple
 Silicon follow identical availability rules; older systems use HSplitView.
 Native macOS switches retain the Cursus accent and grouped-row geometry.
+
+The optional macOS menu-bar item is controlled from Notifications → Menu bar.
+It offers Open Cursus, Settings, Lock and Quit. Changing its visibility takes
+effect immediately and persists across launches; closing the main window keeps
+the existing background-receiving behavior, with or without the item.

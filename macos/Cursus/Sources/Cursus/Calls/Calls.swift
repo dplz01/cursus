@@ -137,11 +137,7 @@ final class MacCalls: ObservableObject {
     }
     func reveal() {
         expanded = true
-        NSApp.activate(ignoringOtherApps: true)
-        if let window = NSApp.windows.first(where: { $0.canBecomeMain }) { window.makeKeyAndOrderFront(nil) }
-        else if Notifier.available {
-            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
-        }
+        AppWindow.reveal()
     }
     /// Closing the account invalidates in-flight permission/command results.
     /// The bridge closes the remote call as part of `close` / `wipeLocalData`.

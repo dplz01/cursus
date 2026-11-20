@@ -26,7 +26,7 @@ struct NavigationChrome: ViewModifier {
         #if compiler(>=6.2) && CURSUS_GLASS
         if #available(macOS 26.0, *), !reduceTransparency, contrast != .increased {
             content.glassEffect(.regular.tint(Theme.sidebar.opacity(0.25)),
-                                in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                                in: Capsule())
         } else { opaque(content) }
         #else
         opaque(content)
@@ -35,8 +35,8 @@ struct NavigationChrome: ViewModifier {
 
     private func opaque(_ content: Content) -> some View {
         content
-            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Theme.elevated))
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+            .background(Capsule().fill(Theme.elevated))
+            .overlay(Capsule().strokeBorder(Theme.border, lineWidth: 1))
     }
 }
 

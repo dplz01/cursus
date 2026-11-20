@@ -283,10 +283,8 @@ private fun CreateChatOverlay(kind: CreateKind, onDismiss: () -> Unit, onCreate:
  *  the same grouping and wording as the Linux app. */
 enum class SettingsPage(val icon: Int, val title: String) {
     Profile(R.drawable.ic_user_alt_1, "Profile"),
-    Address(R.drawable.ic_address_card, "Your address"),
-    Privacy(R.drawable.ic_lock, "Privacy"),
-    Security(R.drawable.ic_shield_check, "Security"),
-    Data(R.drawable.ic_files, "Files and network"),
+    Address(R.drawable.ic_address_card, "Address"),
+    Privacy(R.drawable.ic_shield_check, "Privacy & Security"),
     Notifications(R.drawable.ic_notifications, "Notifications"),
     Appearance(R.drawable.ic_image_square, "Appearance"),
     About(R.drawable.ic_info_circle, "About"),
@@ -316,7 +314,7 @@ fun SettingsListPane(model: AppModel, selected: SettingsPage?, onOpen: (Settings
                         }
                     }
                     Box(Modifier.size(10.dp))
-                    for (p in SettingsPage.entries.drop(1)) {
+                    for (p in SettingsPage.entries) {
                         Row(
                             Modifier.clip(chat.cursus.ui.theme.Radius.lg)
                                 .background(if (selected == p) c.accentSoft else androidx.compose.ui.graphics.Color.Transparent)
@@ -550,8 +548,7 @@ private fun PrivacyRows(model: AppModel, page: SettingsPage) {
                 "Keep codes") { p.cleanLinks = false }
         }, InfoText.CleanLinks)
             }
-        }
-        SettingsPage.Security -> {
+
             PreferenceGroup("App access") {
             InfoSwitchRow("App lock", p.appLock, { on ->
             if (on) p.appLock = true
@@ -572,8 +569,7 @@ private fun PrivacyRows(model: AppModel, page: SettingsPage) {
                 })
             }
             }
-        }
-        SettingsPage.Data -> {
+
             PreferenceGroup("Downloads") {
             InfoSwitchRow("Download images and voice automatically", p.autoDownload, { on ->
             if (!on) p.autoDownload = false

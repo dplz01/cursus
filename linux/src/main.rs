@@ -601,22 +601,17 @@ pub enum SettingsSection {
     Profile,
     Address,
     Privacy,
-    Security,
-    Data,
     Notifications,
     Appearance,
     About,
 }
 
 impl SettingsSection {
-    /// The settings list, top to bottom (the profile is its header): how
-    /// people reach you, what others see, who can open the app, what goes
-    /// over the network and onto the disk, alerts, looks, about.
-    pub const ALL: [Self; 7] = [
+    /// Shared settings destinations, in the same order on every platform.
+    pub const ALL: [Self; 6] = [
+        Self::Profile,
         Self::Address,
         Self::Privacy,
-        Self::Security,
-        Self::Data,
         Self::Notifications,
         Self::Appearance,
         Self::About,

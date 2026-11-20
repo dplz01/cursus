@@ -332,7 +332,7 @@ private struct AddressPage: View {
     @State private var confirmDelete = false
 
     var body: some View {
-        SettingsSection(icon: "link-minimalistic-2", title: "Your address") {
+        SettingsSection(icon: "address-card", title: "Address") {
             if loading {
                 ProgressView().controlSize(.small).padding(8)
             } else if let link = link {
@@ -416,6 +416,7 @@ private struct AppearancePage: View {
 }
 
 private struct NotificationsPage: View {
+    @AppStorage(Prefs.showTray) private var showTray = false
     @AppStorage(AppModel.notificationsEnabledKey) private var enabled = true
 
     var body: some View {
@@ -429,6 +430,11 @@ private struct NotificationsPage: View {
                                     "Anyone who can see your screen will be able to read incoming messages, and Notification Center keeps them after Cursus closes.",
                                     "Show text"))
                 .disabled(!enabled)
+        }
+        SettingsSection(icon: "chats", title: "Menu bar") {
+            ToggleRow(label: "Show Cursus in menu bar",
+                      note: "Open Cursus from the menu bar, even with its window closed.",
+                      isOn: $showTray)
         }
     }
 }

@@ -1,19 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Cursus's nav rail | the macOS split view (list | detail). The rail is
-/// Cursus's own (four destinations, Settings at the bottom); the split
-/// view, toolbar, search field and menus stay native.
+/// A native split view with Cursus's floating destination dock below the list.
 struct MainView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         VStack(spacing: 0) {
             CallBannerView(calls: model.calls)
-            HStack(spacing: 0) {
-                NavRail()
-                columns
-            }
+            columns
         }
         .background(Theme.app)
         .background(CallPresentation(calls: model.calls).environmentObject(model))
@@ -60,7 +55,15 @@ struct MainView: View {
         }
     }
 
-    @ViewBuilder private var middle: some View {
+    private var middle: some View {
+        VStack(spacing: 0) {
+            listContent.frame(maxHeight: .infinity)
+            NavDock().padding(10)
+        }
+        .background(Theme.list)
+    }
+
+    @ViewBuilder private var listContent: some View {
         switch model.destination {
         case .chats, .channels:
             ChatListView()
@@ -110,25 +113,71 @@ struct Placeholder: View {
     }
 }
 
-// MARK: - Nav rail
+// MARK: - Floating destination dock
 
-struct NavRail: View {
+struct NavDock: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered: Destination?
+    @Namespace private var movement
+    @Namespace private var glass
+
+    private var focus: Destination { hovered ?? model.destination }
 
     var body: some View {
-        VStack(spacing: 8) {
-            ForEach([Destination.chats, .channels, .calls]) { dest in
-                NavDestinationButton(dest: dest, badge: badge(for: dest))
+        glassContainer
+            .modifier(NavigationChrome())
+            .onChange(of: model.destination) { _ in hovered = nil }
+            .animation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.78), value: focus)
+    }
+
+    @ViewBuilder private var glassContainer: some View {
+        #if compiler(>=6.2) && CURSUS_GLASS
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: 8) { tabs }
+        } else { tabs }
+        #else
+        tabs
+        #endif
+    }
+
+    private var tabs: some View {
+        HStack(spacing: 2) {
+            ForEach(Destination.allCases) { dest in
+                Button { model.destination = dest } label: {
+                    VStack(spacing: 4) {
+                        CIcon(dest.icon, size: 21)
+                        Text(dest.title).font(.system(size: 10, weight: model.destination == dest ? .semibold : .regular))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(model.destination == dest ? Theme.accent : Theme.secondaryText)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 54)
+                    .contentShape(Capsule())
+                    .background {
+                        if focus == dest {
+                            DockFocus(glass: glass)
+                                .matchedGeometryEffect(id: "destination", in: movement)
+                        }
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        if badge(for: dest) > 0 {
+                            UnreadPill(count: badge(for: dest))
+                                .scaleEffect(0.8).offset(x: 0, y: -2)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .onHover { inside in
+                    if inside { hovered = dest }
+                    else if hovered == dest { hovered = nil }
+                }
+                .help(dest.title)
+                .accessibilityLabel(dest.title)
+                .accessibilityValue(model.destination == dest ? "Selected" : "")
             }
-            Spacer(minLength: 8)
-            NavDestinationButton(dest: .settings, badge: 0)
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 6)
-        .frame(width: 76)
-        .frame(maxHeight: .infinity)
-        .modifier(NavigationChrome())
-        .padding(10)
+        .padding(5)
     }
 
     private func badge(for dest: Destination) -> Int {
@@ -143,31 +192,26 @@ struct NavRail: View {
     }
 }
 
-private struct NavDestinationButton: View {
-    @EnvironmentObject private var model: AppModel
-    let dest: Destination
-    let badge: Int
+private struct DockFocus: View {
+    let glass: Namespace.ID
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
 
-    private var active: Bool { model.destination == dest }
+    @ViewBuilder var body: some View {
+        #if compiler(>=6.2) && CURSUS_GLASS
+        if #available(macOS 26.0, *), !reduceTransparency, contrast != .increased {
+            Capsule().fill(Theme.accent.opacity(0.08))
+                .glassEffect(.regular.tint(Theme.accent.opacity(0.18)).interactive(), in: Capsule())
+                .glassEffectID("destination", in: glass)
+        } else { opaque }
+        #else
+        opaque
+        #endif
+    }
 
-    var body: some View {
-        Button { model.destination = dest } label: {
-            VStack(spacing: 3) {
-                CIcon(dest.icon, size: 22)
-                Text(dest.title).font(.system(size: 10, weight: active ? .semibold : .regular))
-            }
-            .foregroundColor(active ? Theme.accent : Theme.secondaryText)
-            .frame(width: 60, height: 52)
-            .overlay(alignment: .topTrailing) {
-                if badge > 0 {
-                    UnreadPill(count: badge)
-                        .scaleEffect(0.85)
-                        .offset(x: 2, y: -2)
-                }
-            }
-        }
-        .buttonStyle(GhostTileStyle(selected: active))
-        .help(dest.title)
+    private var opaque: some View {
+        Capsule().fill(Theme.accent.opacity(0.16))
+            .overlay(Capsule().strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
     }
 }
 

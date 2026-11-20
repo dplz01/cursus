@@ -317,16 +317,6 @@ pub fn lock_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     )
 }
 
-/// Folder (after an SVG Repo glyph, redrawn in the set's stroke style):
-/// Files and network settings.
-pub fn files_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(
-        svg_handle!("../assets/icons/files.svg"),
-        color,
-        size,
-    )
-}
-
 pub fn shield_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
         svg_handle!("../assets/icons/shield-check.svg"),

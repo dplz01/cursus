@@ -141,3 +141,6 @@ Call history family: supplied Jtb phone, incoming, outgoing, missed, rejected an
 Call family revision: Solar Linear / 480 Design handset from the existing phone-rounded asset (https://www.svgrepo.com/svg/524804/phone-rounded), CC BY 4.0; status marks adapted to the roles of the supplied Jtb family. All now use a 24×24 viewBox and approximately 2px rounded monoline strokes.
 
 Call status revision: missed-call returning arrow redrawn for Cursus above the same Solar handset used by the other call symbols, rotated to face down in the same 24px rounded monoline style; declined calls use the cross-marked Solar handset.
+
+- `flag-2.svg`: Solar Bold Icons, Solar Icons, CC Attribution. https://www.svgrepo.com/svg/525340/flag-2
+- `share-03.svg`: Ui Oval Interface Icons, SVG Repo, CC0. https://www.svgrepo.com/svg/471879/share-03

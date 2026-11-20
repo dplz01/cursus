@@ -185,7 +185,7 @@ struct MemberPage: View {
         }
         if !member.isMe && !member.gone && (hasChat || (dmAllowed && !chat.isChannel)) {
             Card(spacing: 2) {
-                NavRow(icon: "paperplane", title: hasChat ? "Open chat" : "Send direct message",
+                NavRow(icon: "paperplane", title: "Direct message",
                        subtitle: hasChat ? nil : "Starts a private chat with \(member.name)") {
                     Task { await model.messageMember(chat, member) }
                 }
@@ -193,7 +193,7 @@ struct MemberPage: View {
         }
         if chat.isModerator && !member.isMe && !member.gone {
             Card(padding: 0, spacing: 0) {
-                NavRow(icon: "admin", title: "Private chat",
+                NavRow(icon: "flag-2", title: ["owner", "admin", "moderator"].contains(member.role) ? "Chat with admin" : "Chat with member",
                        flush: true) {
                     model.openSupport(chat, member: member)
                 }
@@ -313,7 +313,7 @@ struct SupportListPage: View {
 
     var body: some View {
         Card(spacing: 6) {
-            CardTitle(icon: "admin", title: "Chats with members",
+            CardTitle(icon: "flag-2", title: "Chats with members",
                       subtitle: "Private threads between a member and the moderators, and join requests.")
             if rows.isEmpty {
                 Text(model.members.isEmpty ? "Loading…" : "No member chats yet.")

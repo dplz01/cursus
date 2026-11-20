@@ -41,6 +41,7 @@ impl App {
         self.group_settings = None;
         self.support = None;
         self.compose_open = false;
+        self.call_contacts_open = false;
         self.create_chat = None;
         self.pref_menu = None;
         self.field_editor = None;
@@ -79,6 +80,10 @@ impl App {
             self.clear_gallery();
             return Task::none();
         }
+        if self.call_contacts_open {
+            self.call_contacts_open = false;
+            return Task::none();
+        }
         // Reverse the stacking order in ui::shell.
         if self.field_editor.take().is_some() {
             return Task::none();
@@ -88,6 +93,9 @@ impl App {
         }
         if self.create_chat.take().is_some() {
             return Task::none();
+        }
+        if self.compose_open {
+            return self.update(Message::CloseCompose);
         }
         if self.reaction_members.take().is_some() {
             return Task::none();
@@ -146,9 +154,6 @@ impl App {
                 return self.update(Message::CloseContactPreferences);
             }
             return self.update(Message::CloseContactProfile);
-        }
-        if self.compose_open {
-            return self.update(Message::CloseCompose);
         }
         if self.editing.take().is_some() {
             self.clear_composer();

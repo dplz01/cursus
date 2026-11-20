@@ -109,7 +109,7 @@ struct CallsView: View {
         let contacts = Dictionary(uniqueKeysWithValues: model.chats.filter { $0.isDirect }.map { ($0.apiId, $0) })
         return VStack(spacing: 0) {
             PaneHeader(title: "Calls", background: Theme.list) {
-                IconTool(icon: "calls", help: "New audio call", size: 20) { showContacts = true }
+                CreationButton(help: "New audio call") { showContacts = true }
                     .disabled(calls.state.active != nil || calls.busy)
             }
             if calls.loadingHistory && calls.history.isEmpty {
@@ -127,7 +127,7 @@ struct CallsView: View {
                                 HStack(spacing: 10) {
                                     Avatar(image: contact?.image, name: contact?.title ?? call.peerName, size: 40, kind: .contact)
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Text(contact?.title ?? call.peerName).font(.cBodyBold).foregroundColor(Theme.primaryText).lineLimit(1)
+                                        Text(contact?.title ?? call.peerName).font(.cBodyBold).foregroundColor(call.missed ? Theme.danger : Theme.primaryText).lineLimit(1)
                                         HStack(spacing: 5) {
                                             CIcon(call.icon, size: 14, color: call.color)
                                             Text(call.durationSecs > 0 ? "\(call.label) · \(Format.duration(call.durationSecs))" : call.label)
@@ -138,6 +138,13 @@ struct CallsView: View {
                                     if let date = call.ts.flatMap(Dates.parse) { Text(Dates.listStamp(date)).font(.cMeta).foregroundColor(Theme.mutedText) }
                                 }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
                             }.buttonStyle(GhostTileStyle()).disabled(contact == nil)
+                                .padding(.trailing, 38)
+                                .overlay(alignment: .trailing) {
+                                    if let contact = contact {
+                                        IconTool(icon: "calls", help: "Call \(contact.title)", size: 18) { calls.start(contact) }
+                                            .disabled(calls.state.active != nil || calls.busy)
+                                    }
+                                }
                         }
                     }.padding(6)
                         .padding(.bottom, NavDock.clearance)

@@ -122,12 +122,14 @@ fun CallsDetail(model: AppModel) {
 @Composable
 fun NewCallButton(model: AppModel) {
     var choosing by remember { mutableStateOf(false) }
+    var search by remember { mutableStateOf("") }
     val permission = rememberCallPermission(model)
-    IconTool(R.drawable.ic_calls, "New audio call", { choosing = true }, enabled = model.calls.state.active == null && !model.calls.starting)
+    HeaderPlus("New audio call") { if (model.calls.state.active == null && !model.calls.starting) { search = ""; choosing = true } }
     if (choosing) CursusOverlay({ choosing = false }) {
         val c = Cursus.colors
         Text("New audio call", style = Cursus.type.title, color = c.textPrimary)
-        val contacts = model.chats.filter { it.isContact && !it.isRequest }.sortedBy { it.title.lowercase() }
+        CursusField(search, { search = it }, "Search contacts")
+        val contacts = model.chats.filter { it.isContact && !it.isRequest && it.title.contains(search, ignoreCase = true) }.sortedBy { it.title.lowercase() }
         if (contacts.isEmpty()) Text("Add a contact to start a call.", color = c.textSecondary, style = Cursus.type.body)
         LazyColumn(Modifier.heightIn(max = 360.dp)) {
             items(contacts, key = { it.ref }) { contact ->

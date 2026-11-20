@@ -249,7 +249,7 @@ pub fn shell(app: &App) -> Element<'_, Message> {
         LayoutMode::Desktop => desktop_shell(app),
         LayoutMode::Mobile => stacked_shell(app),
     }) });
-    let modal = app.chat_menu().is_some()
+    let modal = app.compose_open() || app.call_contacts_open || app.chat_menu().is_some()
         || app.pending_url().is_some()
         || app.privacy_confirm().is_some()
         || app.pending_links_open()
@@ -263,6 +263,15 @@ pub fn shell(app: &App) -> Element<'_, Message> {
         || app.field_editor().is_some()
         || app.image_viewer.is_some();
     let mut stack = Stack::new().width(Length::Fill).height(Length::Fill).push(crate::input_gate::freeze(base, modal));
+    if app.compose_open() {
+        let height = (app.height - 80.0).clamp(180.0, 560.0);
+        let card = container(compose_page(app, true)).width(Length::Fill)
+            .height((height - 2.0 * app.density().pad).max(120.0));
+        stack = stack.push(sheet_overlay(menu_card(card.into(), app.density()), Message::CloseCompose));
+    }
+    if app.call_contacts_open {
+        stack = stack.push(call_contacts_overlay(app));
+    }
     if app.image_viewer.is_some() {
         stack = stack.push(image_gallery(app));
     }
@@ -293,7 +302,7 @@ pub fn shell(app: &App) -> Element<'_, Message> {
     if app.reaction_members().is_some() {
         stack = stack.push(reaction_members_overlay(app));
     }
-    if app.create_chat().is_some() {
+    if app.create_chat().is_some() && !app.compose_open() {
         stack = stack.push(create_chat_overlay(app));
     }
     if app.pref_menu().is_some() {
@@ -650,7 +659,7 @@ fn desktop_shell(app: &App) -> Element<'_, Message> {
 /// room for it next to the conversation it belongs to.
 fn info_column(app: &App) -> Option<Element<'_, Message>> {
     let in_chats = matches!(app.nav(), NavSection::Chats | NavSection::Channels);
-    if app.density().info_width <= 0.0 || !in_chats || app.selected().is_none() || app.compose_open() || app.support().is_some() {
+    if app.density().info_width <= 0.0 || !in_chats || app.selected().is_none() || app.support().is_some() {
         return None;
     }
     if app.group_settings().is_some() {
@@ -706,8 +715,7 @@ fn stacked_shell(app: &App) -> Element<'_, Message> {
             && (app.selected().is_some()
                 || app.contact_profile().is_some()
                 || app.group_settings().is_some()
-                || app.support().is_some()
-                || app.compose_open());
+                || app.support().is_some());
 
     // Exclusive pages: a chat / settings page fully replaces the list and
     // its bar.
@@ -868,7 +876,7 @@ fn nav_destination(
 
 fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
     let d = app.density();
-    let show_compose = matches!(app.nav(), NavSection::Chats | NavSection::Channels)
+    let show_compose = matches!(app.nav(), NavSection::Chats | NavSection::Channels | NavSection::Calls)
         && app.connected();
     // Same header chrome for every section: title + trailing 36px slot so
     // Calls/Settings match the Chats/Channels "title row with button" box.
@@ -877,11 +885,11 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
             icons::plus_icon(20.0, theme::t().accent),
             36.0,
         ))
-        .on_press(Message::OpenCompose)
+        .on_press(if app.nav() == NavSection::Calls { Message::CallContacts(true) } else { Message::OpenCompose })
         .padding(0)
-        .style(theme::icon_action(app.hover_ok()));
+        .style(theme::secondary_action(app.hover_ok()));
         let pending = app.pending_links().len();
-        if pending > 0 {
+        if pending > 0 && app.nav() != NavSection::Calls {
             row![pending_links_button(pending, app.hover_ok()), plus]
                 .spacing(8)
                 .align_y(Alignment::Center)
@@ -1071,14 +1079,6 @@ fn chat_list(app: &App) -> Element<'_, Message> {
 fn content_pane(app: &App, with_back: bool) -> Element<'_, Message> {
     let d = app.density();
     if matches!(app.nav(), NavSection::Chats | NavSection::Channels) {
-        // Compose (new chat / group / channel) replaces the conversation pane.
-        if app.compose_open() {
-            return container(compose_page(app, with_back))
-                .width(Length::Fill)
-                .padding(if with_back { 0.0 } else { d.pad })
-                .style(theme::panel_style())
-                .into();
-        }
         // Group / channel settings replace the conversation pane (same as contact profile).
         if app.group_settings().is_some() {
             return container(group_settings_page(app, true))
@@ -1221,7 +1221,7 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
         };
         if badge > 0 {
             // Unread support messages: the yellow counter button.
-            attention_button(icons::admin_icon(20.0, theme::on_attention()), badge, open, app.hover_ok())
+            attention_button(icons::flag_icon(20.0, theme::on_attention()), badge, open, app.hover_ok())
         } else {
             composer_hit(icons::admin_tool(36.0, false, app.hover_ok()), 36.0, open)
         }
@@ -3981,33 +3981,16 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
     };
     connect = connect.push(container(join).padding(Padding::from([0, 8])));
 
-    let mut create = Column::new().spacing(4).width(Length::Fill);
-    create = create.push(card_title(
-        icons::plus_icon(18.0, theme::t().accent),
-        "Create",
-        "Start a conversation for many people.",
-        d,
-    ));
-    create = create.push(nav_row(
-        icons::user_group_icon(18.0, theme::t().accent),
-        "New group",
-        None,
-        Message::OpenCreateGroup,
-        None,
-        d,
-        hover,
-    ));
-    create = create.push(nav_row(
-        icons::nav_icon(icons::NavIcon::Channels, true, 18.0),
-        "New channel",
-        None,
-        Message::OpenCreateChannel,
-        None,
-        d,
-        hover,
-    ));
-
-    let body = column![card(connect), card(create)].spacing(PAGE_GAP);
+    let choice = |icon, title: &'static str, message| button(column![icon, text(title).size(d.meta)]
+        .spacing(6).align_x(Alignment::Center))
+        .on_press(message).padding(10).width(Length::Fill).style(theme::secondary_action(hover));
+    let choices = row![
+        choice(icons::link_icon(22.0, theme::t().accent), "Connect", Message::CloseCreateChat),
+        choice(icons::user_group_icon(22.0, theme::t().accent), "New group", Message::OpenCreateGroup),
+        choice(icons::nav_icon(icons::NavIcon::Channels, true, 22.0), "New channel", Message::OpenCreateChannel),
+    ].spacing(8);
+    let form = if app.create_chat().is_some() { create_chat_form(app) } else { card(connect) };
+    let body = column![choices, form].spacing(PAGE_GAP);
     column![header, page_scroll(body, d)]
         .height(Length::Fill)
         .into()
@@ -6544,49 +6527,39 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
         }
     }
 
-    let contacts = app.direct_contacts();
-    if contacts.is_empty() {
-        if history.is_empty() {
-            col = col.push(placeholder(
-                "No contacts",
-                "Connect with someone in Chats first, then call them here.",
-                d,
-            ));
-        }
-    } else {
-        col = col.push(calls_section_label("Contacts", d));
-        for (_index, chat) in contacts {
-            let contact_id = chat.id.api_id;
-            col = col.push(
-                row![
-                    profile_avatar_fallback(
-                        chat.peer_profile.image.as_deref(),
-                        &chat.title,
-                        40.0,
-                        AvatarFallback::ContactIcon,
-                    ),
-                    text(chat.title.clone())
-                        .size(d.body)
-                        .color(theme::t().text_primary)
-                        .width(Length::Fill),
-                    round_header_icon_btn(
-                        icons::phone_tool(PROFILE_HEADER_ICON, hover),
-                        Message::StartAudioCall(contact_id),
-                        hover,
-                    ),
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center)
-                .padding(Padding {
-                    top: 6.0,
-                    right: 0.0,
-                    bottom: 6.0,
-                    left: 4.0,
-                }),
-            );
-        }
+    if history.is_empty() && !app.call.history_loading() {
+        col = col.push(placeholder("No recent calls", "Your recent calls will appear here.", d));
     }
     page_scroll_y(col)
+}
+
+fn call_contacts_overlay(app: &App) -> Element<'_, Message> {
+    let d = app.density();
+    let hover = app.hover_ok();
+    let mut contacts = Column::new().spacing(4).width(Length::Fill);
+    let query = app.call_contact_search.to_lowercase();
+    let matches: Vec<_> = app.direct_contacts().into_iter()
+        .filter(|(_, chat)| chat.title.to_lowercase().contains(&query)).collect();
+    let count = matches.len();
+    for (_, chat) in matches {
+        contacts = contacts.push(button(row![
+            profile_avatar(chat.peer_profile.image.as_deref(), &chat.title, 40.0),
+            text(chat.title.clone()).size(d.body).color(theme::t().text_primary),
+        ].spacing(12).align_y(Alignment::Center))
+            .on_press(Message::StartAudioCall(chat.id.api_id)).padding(10).width(Length::Fill)
+            .style(theme::ghost_tile(hover)));
+    }
+    if count == 0 {
+        contacts = contacts.push(text(if query.is_empty() { "Add a contact to start a call." } else { "No matching contacts." }).size(d.meta));
+    }
+    let list_height = (count.max(1) as f32 * 64.0).min(360.0).min((app.height - 240.0).max(64.0));
+    let content = column![
+        text("New audio call").size(d.title).color(theme::t().text_primary),
+        text_input("Search contacts", &app.call_contact_search).on_input(Message::CallContactSearch).padding(10).style(theme::rounded_field()),
+        container(scroll_y(contacts)).height(list_height),
+        button(text("Cancel")).on_press(Message::CallContacts(false)).padding(10).style(theme::secondary_action(hover)),
+    ].spacing(12);
+    sheet_overlay(menu_card(content.into(), d), Message::CallContacts(false))
 }
 
 fn calls_section_label(label: &str, d: Density) -> Element<'static, Message> {
@@ -6957,7 +6930,9 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
     };
 
     let (heading, close_msg): (&str, Message) = match g.pane {
-        GroupSettingsPane::AddMember => ("Invite", Message::CloseAddGroupMember),
+        GroupSettingsPane::Link if g.is_channel => ("Channel link", Message::Back),
+        GroupSettingsPane::Link => ("Group link", Message::Back),
+        GroupSettingsPane::AddMember => ("Invite a contact", Message::CloseAddGroupMember),
         GroupSettingsPane::Preferences => ("Group settings", Message::CloseGroupPreferences),
         GroupSettingsPane::MemberInfo => ("Member", Message::CloseGroupMember),
         GroupSettingsPane::ConfirmLeave => ("Leave group", Message::CloseGroupSettings),
@@ -6985,7 +6960,7 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
     let header = profile_header_bar(leading, overview_actions, d, with_back);
 
     let body: Element<'_, Message> = match g.pane {
-        GroupSettingsPane::AddMember => group_add_member_pane(app, g, d, hover),
+        GroupSettingsPane::Link | GroupSettingsPane::AddMember => group_add_member_pane(app, g, d, hover),
         GroupSettingsPane::Preferences => group_preferences_pane(app, g, d, hover),
         GroupSettingsPane::MemberInfo => group_member_info_pane(g, d, hover),
         GroupSettingsPane::ChannelMembers => {
@@ -7228,8 +7203,8 @@ fn member_dropdown_overlay(
                 items = items.push(
                     button(
                         row![
-                            icons::admin_icon(18.0, tint),
-                            text("Support chat")
+                            icons::flag_icon(18.0, tint),
+                            text(if group_role_rank(&m.role) >= group_role_rank("moderator") { "Chat with admin" } else { "Chat with member" })
                                 .size(d.body)
                                 .color(theme::t().text_primary),
                         ]
@@ -7415,9 +7390,6 @@ fn group_overview_pane(
     page = page.push(card(profile));
 
     // ── Channel link (share-only) ───────────────────────────────────────
-    if g.is_channel {
-        page = page.push(channel_link_section(g, d, hover, admin));
-    }
 
     // ── Support / invite / subscribers ──────────────────────────────────
     let support_ok = group_support_allowed(g.group_preferences.as_ref());
@@ -7454,22 +7426,11 @@ fn group_overview_pane(
             ("Chat with admins", "", Message::OpenUserSupportChat)
         };
         people = people.push(card_row(
-            icons::admin_icon(18.0, theme::t().accent),
+            icons::flag_icon(18.0, theme::t().accent),
             label,
             None::<String>.filter(|_| !sub.is_empty()),
             msg,
             (support_unread > 0).then(|| attention_count(support_unread)),
-            d,
-            hover,
-        ));
-    }
-    if admin && !g.is_channel {
-        people = people.push(card_row(
-            icons::user_plus_icon(18.0, theme::t().accent),
-            "Invite",
-            None,
-            Message::OpenAddGroupMember,
-            Some(icons::plus_icon(18.0, theme::t().accent)),
             d,
             hover,
         ));
@@ -7493,6 +7454,14 @@ fn group_overview_pane(
             hover,
         ));
     }
+    if admin || g.is_channel {
+        people = people.push(card_row(icons::link_icon(18.0, theme::t().accent),
+            if g.is_channel { "Channel link" } else { "Group link" }, None,
+            Message::OpenGroupLink, None, d, hover));
+        people = people.push(card_row(icons::share_icon(18.0, theme::t().accent),
+            if g.is_channel { "Share this channel" } else { "Share this group" }, None,
+            Message::ShareGroupLink, None, d, hover));
+    }
     if owner || support_ok || moderate || admin || g.is_channel {
         page = page.push(button_card(people));
     }
@@ -7511,6 +7480,10 @@ fn group_overview_pane(
             },
             d,
         ));
+        if admin {
+            members = members.push(card_row(icons::user_plus_icon(18.0, theme::t().accent),
+                "Invite a contact", None, Message::OpenAddGroupMember, None, d, hover));
+        }
         members = members.push(group_members_list(g, d, hover, false));
         page = page.push(card(members));
     }
@@ -8375,16 +8348,7 @@ fn group_add_member_pane<'a>(
     hover: bool,
 ) -> Element<'a, Message> {
     if g.is_channel {
-        return column![
-            text("Channels don’t support adding contacts.")
-                .size(d.body)
-                .color(theme::t().text_primary),
-            text("Share the channel link from the channel page instead.")
-                .size(d.meta)
-                .color(theme::t().text_secondary),
-        ]
-        .spacing(10)
-        .into();
+        return channel_link_section(g, d, hover, can_manage_members(&g.my_role));
     }
     let admin = can_manage_members(&g.my_role);
     let mut sharing = Column::new().spacing(10).padding(12).width(Length::Fill);
@@ -8408,6 +8372,9 @@ fn group_add_member_pane<'a>(
         sharing = sharing.push(button(text("Create invite link").size(d.body)).on_press(Message::EnsureGroupLink)
             .padding(12).width(Length::Fill).style(theme::primary_action(hover)));
     } else { sharing = sharing.push(text("Only admins can create an invite link.").size(d.meta).color(theme::t().text_muted)); }
+    if matches!(g.pane, GroupSettingsPane::Link) {
+        return crate::preference_ui::group(Some("Group link"), None, sharing, d);
+    }
     let query = g.invite_search.to_lowercase();
     let contacts = app.contacts_to_add_to_group();
     let filtered: Vec<_> = contacts.iter().filter(|chat| chat.title.to_lowercase().contains(&query)).collect();
@@ -8428,7 +8395,6 @@ fn group_add_member_pane<'a>(
             .on_press(Message::AddGroupMember(chat.id.api_id)).padding(8).width(Length::Fill).style(theme::ghost_tile(hover)));
     }
     column![
-        crate::preference_ui::group(Some("Share an invite"), None, sharing, d),
         crate::preference_ui::group(Some("Invite contacts"), None, people, d),
     ].spacing(20).into()
 }
@@ -8869,7 +8835,7 @@ fn group_member_info_pane(
     }
     if m.contact_id.is_some() {
         col = col.push(
-            button(text("Open direct chat").size(d.meta))
+            button(text("Direct message").size(d.meta))
                 .on_press(Message::OpenMemberDirectChat)
                 .padding(Padding::from([8, 12]))
                 .style(theme::primary_action(hover)),
@@ -8884,8 +8850,8 @@ fn group_member_info_pane(
         col = col.push(
             button(
                 row![
-                    icons::admin_icon(18.0, theme::t().text_secondary),
-                    text("Support chat").size(d.meta),
+                    icons::flag_icon(18.0, theme::t().text_secondary),
+                    text(if group_role_rank(&m.role) >= group_role_rank("moderator") { "Chat with admin" } else { "Chat with member" }).size(d.meta),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
@@ -9000,7 +8966,7 @@ fn group_member_info_pane(
     col.into()
 }
 
-fn create_chat_overlay(app: &App) -> Element<'_, Message> {
+fn create_chat_form(app: &App) -> Element<'_, Message> {
     let d = app.density();
     let hover = app.hover_ok();
     let Some(draft) = app.create_chat() else {
@@ -9052,34 +9018,13 @@ fn create_chat_overlay(app: &App) -> Element<'_, Message> {
         .into(),
         d,
     );
-    let backdrop = mouse_area(
-        container(Space::new().width(Length::Fill).height(Length::Fill))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|_| container::Style {
-                background: Some(iced::Background::Color(Color::from_rgba(
-                    0.0, 0.0, 0.0, 0.45,
-                ))),
-                ..container::Style::default()
-            }),
-    )
-    .on_press(Message::CloseCreateChat);
-    // Opaque card: taps on its empty parts stay on the card (they neither
-    // close the sheet through the backdrop nor reach anything underneath).
-    let sheet = container(iced::widget::opaque(card))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .padding(Padding::from([24, 20]));
-    iced::widget::opaque(
-        Stack::new()
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .push(backdrop)
-            .push(sheet),
-    )
+    card
 }
+
+fn create_chat_overlay(app: &App) -> Element<'_, Message> {
+    sheet_overlay(create_chat_form(app), Message::CloseCreateChat)
+}
+
 
 #[cfg(test)]
 mod stamp_tests {

@@ -283,7 +283,7 @@ private fun NotesPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
 
 // ── group / channel ───────────────────────────────────────────────────
 
-private enum class GroupPane { Overview, AddMember, Preferences, MemberInfo, ChannelMembers, SupportList, ConfirmLeave, ConfirmDelete }
+private enum class GroupPane { Overview, Link, AddMember, Preferences, MemberInfo, ChannelMembers, SupportList, ConfirmLeave, ConfirmDelete }
 
 @Composable
 private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenChat: (String) -> Unit) {
@@ -295,7 +295,10 @@ private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenCh
     val noun = if (chat.isChannel) "channel" else "group"
     when (pane) {
         GroupPane.Overview -> GroupOverview(model, chat, onClose, onOpenPane = { pane = it }, onMember = { memberId = it; pane = GroupPane.MemberInfo })
-        GroupPane.AddMember -> PageScaffold("Invite", back) { AddMemberPane(model, chat) }
+        GroupPane.Link -> PageScaffold(if (chat.isChannel) "Channel link" else "Group link", back) {
+            if (chat.isChannel) ChannelLinkCard(model, chat) else AddMemberPane(model, chat, linkOnly = true)
+        }
+        GroupPane.AddMember -> PageScaffold("Invite a contact", back) { AddMemberPane(model, chat) }
         GroupPane.Preferences -> PageScaffold("Group settings", back) { GroupPreferencesPane(model, chat) }
         GroupPane.MemberInfo -> PageScaffold("Member", back) {
             val m = model.members.firstOrNull { it.id == memberId }
@@ -381,7 +384,6 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
             QuickAction(R.drawable.ic_settings, "Settings") { onOpenPane(GroupPane.Preferences) },
         )
         if (!owner && chat.description.isNotBlank()) AboutBlock("Welcome message", chat.description)
-        if (chat.isChannel) ChannelLinkCard(model, chat)
         // Support / invite / subscribers
         if (owner || supportOk || moderate || admin || chat.isChannel) {
             ButtonCard {
@@ -393,15 +395,16 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
                 }
                 if (supportOk || moderate) {
                     if (moderate) {
-                        NavRow(R.drawable.ic_admin, "Chats with members", badge = chat.membersRequireAttention) { onOpenPane(GroupPane.SupportList) }
+                        NavRow(R.drawable.ic_flag_2, "Chats with members", badge = chat.membersRequireAttention) { onOpenPane(GroupPane.SupportList) }
                     } else {
-                        NavRow(R.drawable.ic_admin, "Chat with admins", badge = chat.supportUnread) {
+                        NavRow(R.drawable.ic_flag_2, "Chat with admins", badge = chat.supportUnread) {
                             model.select("${chat.ref}(_support)"); onClose()
                         }
                     }
                 }
-                if (admin && !chat.isChannel) {
-                    NavRow(R.drawable.ic_user_plus_alt_1, "Invite") { onOpenPane(GroupPane.AddMember) }
+                if (admin || chat.isChannel) {
+                    NavRow(R.drawable.ic_link_minimalistic_2, if (chat.isChannel) "Channel link" else "Group link") { onOpenPane(GroupPane.Link) }
+                    GroupShareAction(model, chat)
                 }
                 if (chat.isChannel) {
                     NavRow(
@@ -417,6 +420,7 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
             CursusCard {
                 val n = model.members.size
                 CardTitle(R.drawable.ic_user_group, "Members", if (n == 1) "1 member" else "$n members")
+                if (admin) NavRow(R.drawable.ic_user_plus_alt_1, "Invite a contact") { onOpenPane(GroupPane.AddMember) }
                 MembersList(model.members, onMember = onMember)
             }
         }
@@ -451,6 +455,21 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
     }
     if (confirmClear) {
         ConfirmDialog("Clear chat?", "All messages are deleted from this phone.", "Clear", { confirmClear = false; model.clear(chat) }, { confirmClear = false })
+    }
+}
+
+@Composable
+private fun GroupShareAction(model: AppModel, chat: Chat) {
+    val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    NavRow(R.drawable.ic_share_03, if (chat.isChannel) "Share this channel" else "Share this group") {
+        scope.launch {
+            model.groupLink(chat, quiet = !chat.canManageMembers)?.let { link ->
+                val intent = android.content.Intent(android.content.Intent.ACTION_SEND)
+                    .setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, link.short ?: link.full)
+                context.startActivity(android.content.Intent.createChooser(intent, "Share link"))
+            }
+        }
     }
 }
 
@@ -524,7 +543,12 @@ private fun MemberInfoPane(model: AppModel, chat: Chat, m: Member, onOpenChat: (
     if (m.isMe) return
     val outranked = chat.assignableRoles.contains(m.role) || m.pending
     ButtonCard {
-        NavRow(R.drawable.ic_chats, "Open direct chat") { model.messageMember(chat, m) { onOpenChat(it) } }
+        NavRow(R.drawable.ic_chats, "Direct message") { model.messageMember(chat, m) { onOpenChat(it) } }
+        if (chat.canModerate && !m.pending && (m.support != null || (chat.groupPrefs?.features?.get("support")?.on == true && m.role !in listOf("owner", "admin", "moderator")))) {
+            NavRow(R.drawable.ic_flag_2, if (m.role in listOf("owner", "admin", "moderator")) "Chat with admin" else "Chat with member") {
+                onOpenChat("${chat.ref}(_support:${m.id})")
+            }
+        }
         if (m.pending && chat.canModerate) {
             ActionTile(R.drawable.ic_check, "Accept as member", { model.acceptMember(chat, m, "member") })
             ActionTile(R.drawable.ic_eye_observer, "Accept as observer", { model.acceptMember(chat, m, "observer") })
@@ -554,7 +578,7 @@ private fun MemberInfoPane(model: AppModel, chat: Chat, m: Member, onOpenChat: (
 }
 
 @Composable
-private fun AddMemberPane(model: AppModel, chat: Chat) {
+private fun AddMemberPane(model: AppModel, chat: Chat, linkOnly: Boolean = false) {
     val c = Cursus.colors
     val scope = rememberCoroutineScope()
     var link by remember { mutableStateOf<ConnLink?>(null) }
@@ -571,7 +595,7 @@ private fun AddMemberPane(model: AppModel, chat: Chat) {
     LaunchedEffect(chat.ref) {
         link = runCatching { Core.call<ConnLink?>("existingGroupLink", mapOf("groupId" to chat.apiId)) }.getOrNull()
     }
-    PreferenceGroup("Share an invite") {
+    if (linkOnly) PreferenceGroup("Group link") {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Anyone with this link can ask to join.", style = Cursus.type.meta, color = c.textSecondary)
             val l = link
@@ -588,6 +612,12 @@ private fun AddMemberPane(model: AppModel, chat: Chat) {
                     modifier = Modifier.clip(Radius.md).clickable { model.deleteGroupLink(chat); link = null }.padding(8.dp))
             }
         }
+    }
+    if (linkOnly) {
+        if (menu == "link") ChoiceMenu("Join as", listOf("observer", "member").map { it to it }, linkRole, { menu = null }) {
+            linkRole = it; menu = null; model.setGroupLinkRole(chat, it)
+        }
+        return
     }
     val inGroup = model.members.mapNotNull { it.contactId }.toSet()
     val contacts = model.chats.filter { it.isContact && !it.isRequest && it.apiId !in inGroup }

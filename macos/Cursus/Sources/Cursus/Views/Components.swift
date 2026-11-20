@@ -26,6 +26,43 @@ struct NavigationChrome: ViewModifier {
     }
 }
 
+/// Shared square header action and the three creation choices.
+struct CreationActionStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.modifier(CreationGlass(pressed: configuration.isPressed,
+            glass: !reduceTransparency && contrast != .increased))
+    }
+}
+private struct CreationGlass: ViewModifier {
+    let pressed: Bool
+    let glass: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        #if compiler(>=6.2) && CURSUS_GLASS
+        if #available(macOS 26.0, *), glass {
+            content.glassEffect(.regular.tint(Theme.accent.opacity(pressed ? 0.18 : 0.04)).interactive(),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else { fallback(content) }
+        #else
+        fallback(content)
+        #endif
+    }
+    private func fallback(_ content: Content) -> some View {
+        content.background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(pressed ? Theme.accentSoftPress : Theme.fieldFill))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+    }
+}
+struct CreationButton: View {
+    let help: String
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) { CIcon("plus", size: 19, color: Theme.accent).frame(width: 34, height: 34) }
+            .buttonStyle(CreationActionStyle()).help(help).accessibilityLabel(help)
+    }
+}
+
 // MARK: - Buttons
 
 /// The one main action of a screen: accent fill, radius 10.
@@ -120,6 +157,7 @@ struct GhostTileStyle: ButtonStyle {
     var danger = false
     var selected = false
     var radius: CGFloat = Radius.lg
+    var hoverEnabled = true
 
     func makeBody(configuration: Configuration) -> some View {
         Inner(configuration: configuration, style: self)
@@ -136,7 +174,7 @@ struct GhostTileStyle: ButtonStyle {
                     .contentShape(Rectangle())
                     .background(
                         RoundedRectangle(cornerRadius: style.radius, style: .continuous)
-                            .fill(style.tileFill(hover: hover && enabled, pressed: configuration.isPressed)))
+                            .fill(style.tileFill(hover: hover && enabled && style.hoverEnabled, pressed: configuration.isPressed)))
                     .clipShape(RoundedRectangle(cornerRadius: style.radius, style: .continuous))
             }
         }

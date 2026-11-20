@@ -424,6 +424,7 @@ pub enum GroupSettingsPane {
     /// Channels: subscribers (owners) / owners (everyone else).
     ChannelMembers,
     AddMember,
+    Link,
     Preferences,
     MemberInfo,
     ConfirmLeave,
@@ -1158,6 +1159,9 @@ pub enum Message {
     FieldEditorCancel,
     GroupProfileSaved(Result<(), String>),
     GroupMembersLoaded(Result<Vec<GroupMemberInfo>, String>),
+    OpenGroupLink,
+    ShareGroupLink,
+    GroupLinkShared(Result<String, String>),
     OpenAddGroupMember,
     CloseAddGroupMember,
     AddGroupMember(i64),
@@ -1219,6 +1223,8 @@ pub enum Message {
     ClearGroupChat,
     GroupChatCleared(Result<String, String>),
     /// Calls (signaling via `/_call …`; media uses peer WebRTC when available).
+    CallContacts(bool),
+    CallContactSearch(String),
     StartAudioCall(i64),
     AcceptIncomingCall,
     RejectIncomingCall,
@@ -1445,8 +1451,10 @@ struct App {
     address_link: Option<Option<String>>,
     /// The address is shown (hidden by default, like a password).
     address_revealed: bool,
-    /// Full-page compose menu (invite / address / new group / channel).
+    /// Creation overlay (connect / new group / new channel).
     compose_open: bool,
+    call_contacts_open: bool,
+    call_contact_search: String,
     /// When false, `Hovered` button styles match idle (fixes sticky touch hover).
     hover_ok: bool,
     /// True while Accept/Reject is in flight — blocks double-submit.
@@ -1693,6 +1701,8 @@ impl App {
                 address_link: None,
                 address_revealed: false,
                 compose_open: false,
+                call_contacts_open: false,
+                call_contact_search: String::new(),
                 hover_ok: true,
                 contact_request_busy: false,
                 handled_contact_requests: HashSet::new(),
@@ -3652,6 +3662,7 @@ impl App {
             }
             Message::CloseCompose => {
                 self.compose_open = false;
+                self.create_chat = None;
                 Task::none()
             }
             Message::OpenCreateGroup => {
@@ -4206,6 +4217,22 @@ impl App {
                 self.status = err;
                 Task::none()
             }
+            Message::OpenGroupLink => {
+                if let Some(g) = self.group_settings.as_mut() { g.pane = GroupSettingsPane::Link; }
+                Task::none()
+            }
+            Message::ShareGroupLink => {
+                let Some(g) = self.group_settings.as_ref() else { return Task::none(); };
+                if g.link.is_some() { return self.update(Message::CopyGroupLink); }
+                let Some(session) = self.session.clone() else { return Task::none(); };
+                if !can_manage_members(&g.my_role) { return Task::none(); }
+                let id = g.group_id;
+                Task::perform(async move { ensure_group_link(session, id, "member".into()).await.map(|link| link.display) }, Message::GroupLinkShared)
+            }
+            Message::GroupLinkShared(result) => match result {
+                Ok(link) => { self.status = "Link copied — share it to invite people.".into(); iced::clipboard::write(link) }
+                Err(error) => { self.status = error; Task::none() }
+            },
             Message::OpenAddGroupMember => {
                 if let Some(g) = self.group_settings.as_mut() {
                     if g.is_channel {
@@ -4884,7 +4911,17 @@ impl App {
                 self.status = err;
                 Task::none()
             }
+            Message::CallContacts(open) => {
+                self.call_contacts_open = open;
+                if open { self.call_contact_search.clear(); }
+                Task::none()
+            }
+            Message::CallContactSearch(search) => {
+                self.call_contact_search = search;
+                Task::none()
+            }
             Message::StartAudioCall(contact_id) => {
+                self.call_contacts_open = false;
                 self.update_call(call_flow::CallMsg::Start(contact_id))
             }
             Message::AcceptIncomingCall => self.update_call(call_flow::CallMsg::Accept),

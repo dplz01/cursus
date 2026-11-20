@@ -120,7 +120,7 @@ fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () 
             }
             // Unread support messages: the yellow counter (Linux header).
             if (chat.isGroup && !chat.isChannel && chat.supportBadge > 0) {
-                AttentionButton(R.drawable.ic_admin, chat.supportBadge, if (chat.canModerate) "Chats with members" else "Chat with admins") {
+                AttentionButton(R.drawable.ic_flag_2, chat.supportBadge, if (chat.canModerate) "Chats with members" else "Chat with admins") {
                     if (chat.canModerate) onInfo() else model.select("${chat.ref}(_support)")
                 }
             }
@@ -213,9 +213,15 @@ private fun MessageList(model: AppModel, chat: Chat) {
         }.asReversed()
     }
     val state = rememberLazyListState()
-    // Newest at the bottom: the list is reversed, item 0 is the latest.
+    var displayedLast by androidx.compose.runtime.saveable.rememberSaveable(chat.ref) { mutableStateOf<Long?>(null) }
+    // Returning from a profile is not a new outgoing message. Keep the saved
+    // viewport unless the history actually advances while following the end.
     LaunchedEffect(model.messages.lastOrNull()?.id) {
-        if (state.firstVisibleItemIndex <= 2 || model.messages.lastOrNull()?.outgoing == true) state.animateScrollToItem(0)
+        val last = model.messages.lastOrNull()
+        if (last?.id != displayedLast && (state.firstVisibleItemIndex <= 2 || last?.outgoing == true)) {
+            state.animateScrollToItem(0)
+        }
+        displayedLast = last?.id
     }
     if (model.messagesFor != chat.ref) return
     if (rows.isEmpty()) {

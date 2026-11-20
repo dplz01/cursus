@@ -12,6 +12,10 @@ struct MainView: View {
         }
         .background(Theme.app)
         .background(CallPresentation(calls: model.calls).environmentObject(model))
+        .onChange(of: model.showInfo) { showing in
+            // The retained conversation must not keep a hidden composer active.
+            if showing { NSApp.keyWindow?.makeFirstResponder(nil) }
+        }
         .onExitCommand {
             if model.showInfo { model.showInfo = false }
             else if model.support != nil { model.closeSupport() }
@@ -87,11 +91,14 @@ struct MainView: View {
             if let chat = model.selectedChat {
                 // The profile is a page of its own (as on Linux), not a strip
                 // beside the chat; Back returns to the conversation.
-                if model.showInfo && !chat.isNotes {
-                    ChatInfoView(chat: chat).id(chat.ref)
-                } else {
-                    // A support thread is its own conversation (fresh scroll state).
+                ZStack {
                     ConversationView(chat: chat).id(model.activeRef ?? chat.ref)
+                        .opacity(model.showInfo && !chat.isNotes ? 0 : 1)
+                        .allowsHitTesting(!model.showInfo)
+                        .accessibilityHidden(model.showInfo)
+                    if model.showInfo && !chat.isNotes {
+                        ChatInfoView(chat: chat).id(chat.ref)
+                    }
                 }
             } else {
                 Placeholder(icon: model.destination == .channels ? "channels" : "chats",
@@ -199,7 +206,7 @@ struct NavDock: View {
                         }
                     }
                 }
-                .buttonStyle(GhostTileStyle(radius: 12))
+                .buttonStyle(GhostTileStyle(radius: 12, hoverEnabled: model.destination != dest))
                 .help(dest.title)
                 .accessibilityLabel(dest.title)
                 .accessibilityValue(model.destination == dest ? "Selected" : "")
@@ -285,7 +292,7 @@ struct ChatListView: View {
                 if !model.pendingInvitations.isEmpty {
                     PendingLinksButton(count: model.pendingInvitations.count) { model.showPendingLinks = true }
                 }
-                IconTool(icon: "plus", help: "New chat (⌘N)", size: 18) { model.showNewChat = true }
+                CreationButton(help: "New chat (⌘N)") { model.showNewChat = true }
             }
             SearchField(text: $search)
                 .padding(.horizontal, 10)

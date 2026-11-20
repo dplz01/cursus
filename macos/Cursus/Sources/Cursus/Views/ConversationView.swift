@@ -39,7 +39,7 @@ struct ConversationView: View {
                     if chat.isGroup && !chat.isChannel {
                         let unread = chat.isModerator ? chat.membersRequireAttention : chat.supportUnread
                         if unread > 0 {
-                            AttentionButton(icon: "admin", count: unread,
+                            AttentionButton(icon: "flag-2", count: unread,
                                             help: chat.isModerator ? "Chats with members" : "Chat with admins") {
                                 if chat.isModerator { model.toggleInfo() } else { model.openSupport(chat) }
                             }
@@ -93,16 +93,15 @@ struct ConversationView: View {
                     atBottom = endY <= viewportHeight + 80
                 }
                 .background(Theme.panel)
+                .onAppear {
+                    shownCount = model.messages.count
+                    DispatchQueue.main.async { scrollToBottom(proxy, animated: false) }
+                }
                 .onChange(of: model.messages.last?.id) { _ in
                     let firstLoad = shownCount == 0
                     shownCount = model.messages.count
                     if firstLoad {
-                        // Opened with unread messages: start at the first one.
-                        if let from = model.newMessagesFrom {
-                            proxy.scrollTo(from, anchor: .top)
-                        } else {
-                            scrollToBottom(proxy, animated: false)
-                        }
+                        scrollToBottom(proxy, animated: false)
                     } else if model.messages.last?.outgoing == true || atBottom {
                         // Your message, or you're reading the end: follow it.
                         // Otherwise stay put; the divider marks what's new.

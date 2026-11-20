@@ -272,25 +272,29 @@ private struct InfoOverview: View {
     @ViewBuilder private var groupActions: some View {
         if ownsGroup || chat.isAdmin || chat.isChannel || chat.isModerator || supportOn {
             Card(padding: 0, spacing: 0) {
-                if chat.isModerator {
-                    NavRow(icon: "admin", title: "Chats with members",
-                           flush: true, badge: chat.membersRequireAttention) { page = .supportList }
-                } else if supportOn && chat.role != nil {
-                    NavRow(icon: "admin", title: "Chat with admins",
-                           flush: true, badge: chat.supportUnread) { model.openSupport(chat) }
-                }
                 if ownsGroup {
                     NavRow(icon: "scripture-scroll", title: "Welcome message", subtitle: welcomePreview,
                            trailing: "edit-3", flush: true) { editing = .welcome }
                 }
-                if chat.isAdmin && !chat.isChannel {
-                    NavRow(icon: "user-plus-alt-1", title: "Invite",
-                           trailing: "plus", flush: true) { page = .invite }
+                if chat.isModerator {
+                    NavRow(icon: "flag-2", title: "Chats with members",
+                           flush: true, badge: chat.membersRequireAttention) { page = .supportList }
+                } else if supportOn && chat.role != nil {
+                    NavRow(icon: "flag-2", title: "Chat with admins",
+                           flush: true, badge: chat.supportUnread) { model.openSupport(chat) }
                 }
                 if chat.isAdmin || chat.isChannel {
                     NavRow(icon: "link-minimalistic-2", title: "\(chat.isChannel ? "Channel" : "Group") link",
                            subtitle: chat.isAdmin ? "Anyone with it can join" : "Share this channel",
                            flush: true) { page = .link }
+                    NavRow(icon: "share-03", title: chat.isChannel ? "Share this channel" : "Share this group",
+                           flush: true) {
+                        Task {
+                            if let link = await model.groupLink(chat, quiet: !chat.isAdmin) {
+                                Clipboard.share(link.short ?? link.full)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -307,6 +311,9 @@ private struct InfoOverview: View {
         Card(spacing: 6) {
             CardTitle(icon: "user-group", title: chat.isChannel ? "Subscribers" : "Members",
                       subtitle: model.members.isEmpty ? "Loading…" : memberCount)
+            if chat.isAdmin && !chat.isChannel {
+                NavRow(icon: "user-plus-alt-1", title: "Invite a contact", flush: true) { page = .invite }
+            }
             VStack(spacing: 0) {
                 ForEach(model.members.filter { !$0.gone }) { member in
                     MemberRow(member: member) { page = .member(member.id) }

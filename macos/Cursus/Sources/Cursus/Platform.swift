@@ -163,6 +163,8 @@ enum Icons {
     static func fallback(_ name: String) -> String {
         if name.hasPrefix("sf:") { return String(name.dropFirst(3)) }
         switch name {
+        case "flag-2": return "flag.fill"
+        case "share-03": return "square.and.arrow.up"
         case "chats": return "bubble.left"
         case "channels": return "antenna.radiowaves.left.and.right"
         case "calls", "call_active": return "phone"
@@ -306,6 +308,14 @@ enum Images {
 }
 
 enum Clipboard {
+    private static var sharingPicker: NSSharingServicePicker?
+    @MainActor static func share(_ text: String) {
+        guard let view = NSApp.keyWindow?.contentView else { copy(text); return }
+        let picker = NSSharingServicePicker(items: [text])
+        sharingPicker = picker
+        picker.show(relativeTo: NSRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1),
+                    of: view, preferredEdge: .minY)
+    }
     static func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)

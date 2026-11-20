@@ -359,3 +359,25 @@ Mac call history uses the same Solar incoming, outgoing, missed, declined and
 active-call glyphs as Linux and Android. Missed/declined/failed calls are red,
 outgoing calls use the accent and incoming calls use the success color. Call
 controls also include action icons without changing their existing behavior.
+
+### Creation, calls and group actions
+
+Chats, Channels and Calls use the same rounded square + header action (10pt
+corners). On Mac, this action and the three creation choices use native Liquid
+Glass where available. Linux and Android use the corresponding opaque Cursus
+field surface and border. Creation opens an overlay with Connect, New group
+and New channel choices and in-place forms, preserving the page underneath.
+Calls show history with a call-back action on every available contact. The +
+action opens a searchable contact picker; missed names and statuses are red.
+
+The selected Mac navigation tab has no hover fill over its glass lens.
+Mac conversation views stay mounted beneath contact/group profiles to preserve
+scroll position; Android saves the list state during profile visits. Returning
+from a profile does not re-follow an existing outgoing message. Newly opened
+conversations start at the latest message.
+
+Group profile actions are ordered Welcome message, Chats with members / Chat
+with admins, Group link, Share this group. Invite a contact sits under Members.
+Member pages distinguish Direct message from Chat with member / Chat with admin.
+Member-thread entry points use the shared flag glyph; sharing uses share-03.
+All platforms retain the core's role and feature permissions for these actions.

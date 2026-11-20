@@ -9,6 +9,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -93,6 +94,7 @@ fun MainScreen(model: AppModel) {
 @Composable
 private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.compose.ui.unit.Dp) {
     val c = Cursus.colors
+    var newChatOverlay by remember(model.section) { mutableStateOf(false) }
     var page by remember(model.section) { mutableStateOf<Page?>(null) }
     var linkToOpen by rememberSaveable(model.section) { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
@@ -128,7 +130,7 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
     val list: @Composable () -> Unit = {
         when (model.section) {
             Section.Chats, Section.Channels -> ChatListPane(model, channels = model.section == Section.Channels,
-                onNew = { page = Page.NewChat }, onSelect = { ref -> page = null; model.select(ref) })
+                onNew = { newChatOverlay = true }, onSelect = { ref -> page = null; model.select(ref) })
             Section.Calls -> CallsPane(model)
             Section.Settings -> SettingsListPane(model, (page as? Page.Settings)?.section) { page = Page.Settings(it) }
         }
@@ -161,10 +163,13 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
     val listTone = if (model.section == Section.Settings) c.bgPanel else c.bgList
     val detail: @Composable () -> Unit = {
         val current = page
-        androidx.compose.runtime.key(current, model.selection) {
+        androidx.compose.runtime.key(model.selection) {
+            // Preserve scroll while visiting this chat's profile, but create
+            // fresh state (latest message) when a different chat is opened.
+            val chatState = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
             when {
-                current != null -> pageContent(current)
-                inChatSection -> conversation()
+                current != null -> androidx.compose.runtime.key(current) { pageContent(current) }
+                inChatSection -> chatState.SaveableStateProvider("conversation") { conversation() }
                 model.section == Section.Settings -> EmptyPane("Choose a settings category.")
                 else -> CallsDetail(model)
             }
@@ -190,6 +195,13 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp))
         ImageGallery(model)
+    }
+    if (newChatOverlay) chat.cursus.ui.components.CursusOverlay({ newChatOverlay = false }) {
+        Box(Modifier.heightIn(max = 560.dp)) {
+            NewChatPage(model, initialLink = null, onClose = { newChatOverlay = false }) { ref ->
+                newChatOverlay = false; page = null; model.select(ref)
+            }
+        }
     }
     FileApprovalDialog(model)
 }
@@ -269,6 +281,7 @@ fun EmptyPane(text: String) {
 
 @Composable
 fun CallsPane(model: AppModel) {
+    val permission = rememberCallPermission(model)
     var calls by remember { mutableStateOf<List<chat.cursus.core.CallRecord>?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(model.calls.historyRevision) {
@@ -300,7 +313,7 @@ fun CallsPane(model: AppModel) {
                     }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         chat.cursus.ui.components.Avatar(contact?.title ?: call.peerName, contact?.image, 40.dp)
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(contact?.title ?: call.peerName, style = Cursus.type.body, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = c.textPrimary, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                            Text(contact?.title ?: call.peerName, style = Cursus.type.body, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = if (call.missed) c.danger else c.textPrimary, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Icon(painterResource(icon), null, Modifier.size(14.dp), tint = tint)
                                 val label = when { call.missed -> "Missed"; call.status == "rejected" -> "Declined"; call.status == "error" -> "Failed"; call.outgoing -> "Outgoing"; else -> "Incoming" }
@@ -308,6 +321,9 @@ fun CallsPane(model: AppModel) {
                             }
                         }
                         Text(chat.cursus.core.Stamps.list(call.ts), style = Cursus.type.meta, color = c.textMuted)
+                        if (contact != null) chat.cursus.ui.components.IconTool(chat.cursus.R.drawable.ic_calls, "Call ${contact.title}", {
+                            permission { model.calls.start(contact.apiId, contact.title) }
+                        }, enabled = model.calls.state.active == null && !model.calls.starting)
                     }
                 }
             }

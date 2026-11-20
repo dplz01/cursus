@@ -15,11 +15,19 @@ struct NewChatSheet: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Picker("", selection: $tab) {
-                ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+            HStack(spacing: 8) {
+                ForEach(Tab.allCases) { choice in
+                    Button { tab = choice } label: {
+                        VStack(spacing: 6) {
+                            CIcon(choice == .connect ? "link-minimalistic-2" : choice == .group ? "user-group" : "channels",
+                                  size: 22, color: Theme.accent)
+                            Text(choice.rawValue).font(.cMeta)
+                        }.frame(maxWidth: .infinity).padding(.vertical, 10)
+                    }.buttonStyle(CreationActionStyle())
+                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tab == choice ? Theme.accent : .clear, lineWidth: 1))
+                        .accessibilityValue(tab == choice ? "Selected" : "")
+                }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
 
             Group {
                 switch tab {

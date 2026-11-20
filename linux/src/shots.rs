@@ -1182,7 +1182,7 @@ fn back_and_escape_pop_one_page_at_a_time() {
             assert!(app.selected.is_none());
 
             for pane in [
-                GroupSettingsPane::Preferences, GroupSettingsPane::AddMember,
+                GroupSettingsPane::Preferences, GroupSettingsPane::AddMember, GroupSettingsPane::Link,
                 GroupSettingsPane::MemberInfo, GroupSettingsPane::ChannelMembers,
                 GroupSettingsPane::ConfirmLeave, GroupSettingsPane::ConfirmDelete,
             ] {
@@ -2128,7 +2128,7 @@ fn swiping_profile_actions_does_not_block_other_rows() {
     let size = Size::new(400.0, 1100.0);
     let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(iced::Font::with_name("Noto Sans"), iced::Pixels(16.0), Some("tiny-skia"))).unwrap();
     for action in ["Mute", "Settings", "Star"] {
-        for target in ["Invite", "Welcome message", "Chats with members"] {
+        for target in ["Invite a contact", "Welcome message", "Chats with members"] {
             let mut app = demo_app(true, size.width, size.height);
             group_page(&mut app, GroupSettingsPane::Overview);
             let cache = Cache::default();
@@ -2154,7 +2154,7 @@ fn swiping_profile_actions_does_not_block_other_rows() {
                 let _ = ui.update(&[Event::Touch(event)], mouse::Cursor::Available(point), &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
             }
             assert!(messages.iter().any(|m| match target {
-                "Invite" => matches!(m, Message::OpenAddGroupMember),
+                "Invite a contact" => matches!(m, Message::OpenAddGroupMember),
                 "Welcome message" => matches!(m, Message::OpenFieldEditor(crate::EditField::GroupWelcome)),
                 _ => matches!(m, Message::OpenSupportChatList),
             }), "{target} must respond immediately after swiping {action}: {messages:?}");
@@ -2219,7 +2219,7 @@ fn group_nested_back_keeps_its_position_and_returns_to_profile() {
                 if pane == GroupSettingsPane::Preferences {
                     "Group settings"
                 } else {
-                    "Invite"
+                    "Invite a contact"
                 },
                 None,
             );
@@ -2406,5 +2406,61 @@ fn shots_reactions_and_rich_profiles() {
         app.group_settings.as_mut().unwrap().short_descr = "Build *nice* things\nTogether".into();
         let _ = app.update(Message::OpenFieldEditor(crate::EditField::GroupShortDescr));
         render(&app, size, &format!("short-description-editor-{tone}"));
+    }
+}
+
+#[test]
+fn creation_and_call_sheets_dismiss_without_changing_the_page_underneath() {
+    let mut app = demo_app(true, DESKTOP.width, DESKTOP.height);
+    group_page(&mut app, GroupSettingsPane::Overview);
+    let selected = app.selected;
+    let _ = app.update(Message::OpenCompose);
+    assert!(app.compose_open);
+    assert_eq!(app.selected, selected);
+    let _ = app.update(Message::OpenCreateGroup);
+    assert!(app.create_chat.is_some());
+    let _ = app.update(Message::Back);
+    assert!(app.create_chat.is_none());
+    assert!(app.compose_open);
+    let _ = app.update(Message::Escape);
+    assert!(!app.compose_open);
+    assert_eq!(app.group_settings.as_ref().unwrap().pane, GroupSettingsPane::Overview);
+    assert_eq!(app.selected, selected);
+
+    let _ = app.update(Message::OpenGroupLink);
+    assert_eq!(app.group_settings.as_ref().unwrap().pane, GroupSettingsPane::Link);
+    let _ = app.update(Message::Back);
+    assert_eq!(app.group_settings.as_ref().unwrap().pane, GroupSettingsPane::Overview);
+
+    let _ = app.update(Message::Navigate(NavSection::Calls));
+    let _ = app.update(Message::CallContacts(true));
+    assert!(app.call_contacts_open);
+    let _ = app.update(Message::Escape);
+    assert!(!app.call_contacts_open);
+    assert_eq!(app.nav, NavSection::Calls);
+    let _ = app.update(Message::CallContacts(true));
+    let _ = app.update(Message::Navigate(NavSection::Chats));
+    assert!(!app.call_contacts_open);
+}
+
+#[test]
+#[ignore = "writes navigation overlay design screenshots"]
+fn shots_creation_and_call_overlays() {
+    for dark in [true, false] {
+        let tone = if dark { "dark" } else { "light" };
+        let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);
+        select(&mut app, 0);
+        let _ = app.update(Message::OpenCompose);
+        render(&app, DESKTOP, &format!("new-connect-{tone}"));
+        let _ = app.update(Message::OpenCreateGroup);
+        render(&app, DESKTOP, &format!("new-group-{tone}"));
+        let _ = app.update(Message::CloseCompose);
+        let _ = app.update(Message::Navigate(NavSection::Calls));
+        let _ = app.update(Message::CallContacts(true));
+        render(&app, DESKTOP, &format!("call-contacts-{tone}"));
+        let _ = app.update(Message::CallContacts(false));
+        let _ = app.update(Message::Navigate(NavSection::Chats));
+        group_page(&mut app, GroupSettingsPane::Overview);
+        render(&app, DESKTOP, &format!("group-actions-{tone}"));
     }
 }

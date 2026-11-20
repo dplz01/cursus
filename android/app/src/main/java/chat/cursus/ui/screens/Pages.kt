@@ -86,8 +86,6 @@ private enum class CreateKind { Group, Channel }
 @Composable
 fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOpened: (String) -> Unit) {
     val c = Cursus.colors
-    val clipboard = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
     var link by rememberSaveable { mutableStateOf(initialLink ?: "") }
     var create by remember { mutableStateOf<CreateKind?>(null) }
 
@@ -95,27 +93,43 @@ fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOp
         PaneHeader("New", onBack = onClose)
         Column(Modifier.verticalScroll(rememberScrollState())) {
             PageColumn {
-                ConnectCard(model, link, { link = it }, onClose)
-                CursusCard {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        CardTitle(R.drawable.ic_plus, "Create", "Start a conversation for many people.")
-                        NavRow(R.drawable.ic_user_group, "New group") {
-                            create = CreateKind.Group
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for ((label, icon, kind) in listOf(
+                        Triple("Connect", R.drawable.ic_link_minimalistic_2, null),
+                        Triple("New group", R.drawable.ic_user_group, CreateKind.Group),
+                        Triple("New channel", R.drawable.ic_channels, CreateKind.Channel),
+                    )) {
+                        Column(Modifier.weight(1f).clip(Radius.md).background(c.bgField)
+                            .border(1.dp, if (create == kind) c.accent else c.border, Radius.md)
+                            .clickable { create = kind }.padding(vertical = 10.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            androidx.compose.material3.Icon(androidx.compose.ui.res.painterResource(icon), null, Modifier.size(22.dp), tint = c.accent)
+                            Text(label, style = Cursus.type.meta, color = c.textPrimary, maxLines = 1)
                         }
-                        NavRow(R.drawable.ic_channels, "New channel") {
-                            create = CreateKind.Channel
+                    }
+                }
+                if (create == null) ConnectCard(model, link, { link = it }, onClose)
+                else {
+                    var name by rememberSaveable(create) { mutableStateOf("") }
+                    CursusCard {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(if (create == CreateKind.Group) "New group" else "New channel", style = Cursus.type.title, color = c.textPrimary)
+                            CursusField(name, { name = it }, if (create == CreateKind.Group) "Group name" else "Channel name")
+                            PrimaryButton("Create", {
+                                val channel = create == CreateKind.Channel
+                                model.createGroup(name.trim(), channel = channel) {
+                                    model.section = if (channel) chat.cursus.Section.Channels else chat.cursus.Section.Chats
+                                    onOpened(it)
+                                }
+                            }, enabled = name.isNotBlank())
                         }
                     }
                 }
             }
         }
     }
-    create?.let { kind ->
-        CreateChatOverlay(kind, onDismiss = { create = null }) { name ->
-            create = null
-            model.createGroup(name, channel = kind == CreateKind.Channel) { onOpened(it) }
-        }
-    }
+
 }
 
 /**
@@ -258,27 +272,6 @@ private val ConnectInfoText = listOf(
 )
 
 /** Linux `create_chat_overlay`. */
-@Composable
-private fun CreateChatOverlay(kind: CreateKind, onDismiss: () -> Unit, onCreate: (String) -> Unit) {
-    val c = Cursus.colors
-    var name by rememberSaveable { mutableStateOf("") }
-    val (title, hint, placeholder) = when (kind) {
-        CreateKind.Group -> Triple("New group", "Private group — invite contacts after creating.", "Group name")
-        CreateKind.Channel -> Triple(
-            "New channel", "Public channel using your enabled chat relays (from SimpleX network settings).", "Channel name",
-        )
-    }
-    CursusOverlay(onDismiss) {
-        Text(title, style = Cursus.type.body, color = c.textPrimary)
-        Text(hint, style = Cursus.type.meta, color = c.textSecondary)
-        CursusField(name, { name = it }, placeholder)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SecondaryButton("Cancel", onDismiss)
-            PrimaryButton("Create", { onCreate(name.trim()) }, enabled = name.isNotBlank())
-        }
-    }
-}
-
 /** The settings pages, in list order (the profile is the list's header):
  *  the same grouping and wording as the Linux app. */
 enum class SettingsPage(val icon: Int, val title: String) {

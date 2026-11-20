@@ -932,3 +932,10 @@ pub fn repeat_once_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 pub fn minus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(svg::Handle::from_memory(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 12h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>"#.as_slice()), color, size)
 }
+
+pub fn flag_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(svg_handle!("../assets/icons/flag-2.svg"), color, size)
+}
+pub fn share_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(svg_handle!("../assets/icons/share-03.svg"), color, size)
+}

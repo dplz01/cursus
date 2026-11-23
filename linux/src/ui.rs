@@ -4503,18 +4503,6 @@ fn pref_section<'a>(label: &'a str, first: bool, d: Density) -> Element<'a, Mess
         .into()
 }
 
-/// Explanatory line under a section label.
-fn pref_note<'a>(note: &'a str, d: Density) -> Element<'a, Message> {
-    container(text(note).size(d.meta).color(theme::t().text_secondary))
-        .padding(Padding {
-            top: 0.0,
-            right: 12.0,
-            bottom: 4.0,
-            left: 12.0,
-        })
-        .into()
-}
-
 fn pref_toggle<'a>(on: bool, enabled: bool) -> Element<'a, Message> {
     let c = theme::t();
     let knob = container(Space::new().width(20).height(20)).style(move |_| container::Style {
@@ -5013,6 +5001,10 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
     // Optional role glyph per row (menus with “svg + name” entries).
     let mut item_icons: Vec<Option<&'static str>> = Vec::new();
     let (title, items): (&str, Vec<(String, bool, Message)>) = match kind {
+        PrefMenu::GroupLinkDelete => ("Delete the group link? Members stay in the group.", vec![
+            ("Cancel".into(), false, Message::ClosePrefMenu),
+            ("Delete link".into(), false, Message::DeleteGroupLink),
+        ]),
         PrefMenu::GroupLinkKind => {
             let short = app.group_settings().map(|g| g.link_prefer_short);
             (
@@ -8257,39 +8249,6 @@ fn link_copy_box<'a>(
     .into()
 }
 
-/// Channel overview: share-only `/c#` link card (official: no delete / role / format).
-fn channel_link_section<'a>(
-    g: &'a crate::GroupSettingsOverlay,
-    d: Density,
-    hover: bool,
-    admin: bool,
-) -> Element<'a, Message> {
-    let mut col = Column::new().spacing(6).width(Length::Fill);
-    col = col.push(card_title(
-        icons::link_icon(18.0, theme::t().accent),
-        "Channel link",
-        "Anyone with this link can join via chat relays.",
-        d,
-    ));
-    if let Some(link) = g.link.as_ref() {
-        col = col.push(
-            container(link_copy_box(link, Message::CopyGroupLink, d, hover))
-                .padding(Padding::from([4, 8])),
-        );
-    } else {
-        col = col.push(pref_note(
-            if admin {
-                "No channel invite link on this channel. SimpleX doesn’t recreate \
-channel links after they’re gone — create a new channel to invite people."
-            } else {
-                "Only the owner can share the channel link."
-            },
-            d,
-        ));
-    }
-    card(col)
-}
-
 /// Rounded card grouping related rows on a page (Invite page sections).
 /// Corner radius of [`card`]; flush buttons inside use it too.
 const CARD_RADIUS: f32 = 16.0;
@@ -8331,6 +8290,40 @@ fn card_title<'a>(
         .into()
 }
 
+/// Shared with the Mac page: link first, sharing, join role, then deletion.
+fn group_share_pane<'a>(g: &'a crate::GroupSettingsOverlay, d: Density, hover: bool) -> Element<'a, Message> {
+    let admin = can_manage_members(&g.my_role);
+    let mut content = Column::new().spacing(8).width(Length::Fill)
+        .push(card_title(icons::share_icon(20.0, theme::t().accent),
+            if g.is_channel { "Share this channel" } else { "Share this group" }, "", d))
+        .push(container(text(if g.is_channel { "Anyone with this link can subscribe." }
+            else { "Anyone with this link can join the group." }).size(d.meta).color(theme::t().text_secondary))
+            .padding(Padding::from([4, 12])));
+    if let Some(link) = &g.link {
+        content = content.push(link_copy_box(link, Message::CopyGroupLink, d, hover));
+        content = content.push(card_row(icons::share_icon(20.0, theme::t().accent),
+            "Copy link to share", None, Message::CopyGroupLink, None, d, hover));
+        if admin && !g.is_channel {
+            content = content.push(pref_row(None, "People joining become",
+                choice_chip(role_label(&g.link_member_role), Message::OpenPrefMenu(PrefMenu::GroupLinkRole), d, hover),
+                PrefTrail::None, d));
+            content = content.push(button(row![icons::trash_icon(20.0, theme::t().danger),
+                text("Delete link").size(d.body).color(theme::t().danger)].spacing(14).align_y(Alignment::Center))
+                .on_press(Message::OpenPrefMenu(PrefMenu::GroupLinkDelete)).padding(ROW_PAD).width(Length::Fill)
+                .style(theme::ghost_danger(hover)));
+        }
+    } else if g.is_channel {
+        content = content.push(container(text("No channel link available. Create a new channel to invite people.")
+            .size(d.meta).color(theme::t().text_muted)).padding(12));
+    } else if admin {
+        content = content.push(button(text("Create link").size(d.body)).on_press(Message::EnsureGroupLink)
+            .padding(Padding::from([10, 16])).style(theme::primary_action(hover)));
+    } else {
+        content = content.push(container(text("No link yet — ask an admin.").size(d.meta).color(theme::t().text_muted)).padding(12));
+    }
+    content.into()
+}
+
 /// Group Invite page: link card (format / join-as / copy / delete) and an
 /// invite-contacts card (role + contact list). Rows reuse [`pref_row`].
 fn group_add_member_pane<'a>(
@@ -8339,33 +8332,8 @@ fn group_add_member_pane<'a>(
     d: Density,
     hover: bool,
 ) -> Element<'a, Message> {
-    if g.is_channel {
-        return channel_link_section(g, d, hover, can_manage_members(&g.my_role));
-    }
-    let admin = can_manage_members(&g.my_role);
-    let mut sharing = Column::new().spacing(10).padding(12).width(Length::Fill);
-    sharing = sharing.push(text("Anyone with this link can ask to join.").size(d.meta).color(theme::t().text_secondary));
-    if let Some(link) = &g.link {
-        let display = link;
-        sharing = sharing.push(container(ellipsis_text(display.to_string(), d.meta, theme::t().text_secondary, 2))
-            .padding(12).width(Length::Fill).clip(true).style(|_| container::Style {
-                background: Some(theme::t().bg_field.into()), border: iced::Border { radius: 12.0.into(), ..Default::default() }, ..Default::default()
-            }));
-        sharing = sharing.push(button(row![icons::copy_icon(18.0, theme::t().accent_on), text("Copy invite link").size(d.body)]
-            .spacing(8).align_y(Alignment::Center)).on_press(Message::CopyGroupLink).padding(12).width(Length::Fill).style(theme::primary_action(hover)));
-        let options = pref_row(None, "Link format", choice_chip(if g.link_prefer_short { "Short" } else { "Full" }, Message::OpenPrefMenu(PrefMenu::GroupLinkKind), d, hover), PrefTrail::None, d);
-        sharing = sharing.push(options);
-        if admin {
-            sharing = sharing.push(pref_row(None, "Join as", choice_chip(role_label(&g.link_member_role), Message::OpenPrefMenu(PrefMenu::GroupLinkRole), d, hover), PrefTrail::None, d));
-            sharing = sharing.push(button(text("Revoke invite link").size(d.meta).color(theme::t().danger))
-                .on_press(Message::DeleteGroupLink).padding(8).style(theme::ghost_danger(hover)));
-        }
-    } else if admin {
-        sharing = sharing.push(button(text("Create invite link").size(d.body)).on_press(Message::EnsureGroupLink)
-            .padding(12).width(Length::Fill).style(theme::primary_action(hover)));
-    } else { sharing = sharing.push(text("Only admins can create an invite link.").size(d.meta).color(theme::t().text_muted)); }
-    if matches!(g.pane, GroupSettingsPane::Link) {
-        return crate::preference_ui::group(Some("Group link"), None, sharing, d);
+    if matches!(g.pane, GroupSettingsPane::Link) || g.is_channel {
+        return group_share_pane(g, d, hover);
     }
     let query = g.invite_search.to_lowercase();
     let contacts = app.contacts_to_add_to_group();
@@ -8806,157 +8774,60 @@ fn group_member_info_pane(
     };
     let admin = can_manage_members(&g.my_role);
     let mod_plus = can_moderate(&g.my_role);
-    let mut col = Column::new().spacing(10).width(Length::Fill);
-    col = col.push(
-        text(m.display_name.clone())
-            .size(d.title)
-            .font(BOLD)
-            .color(theme::t().text_primary),
-    );
+    let pending = member_status_is_pending(&m.status);
+    let mut identity = column![
+        text(if m.is_me { "You".to_owned() } else { m.display_name.clone() }).size(d.title).font(BOLD).color(theme::t().text_primary),
+        row![icons::role_icon(&m.role, 16.0, theme::t().text_secondary),
+            text(format!("{} · {}", role_label(&m.role), m.status)).size(d.meta).color(theme::t().text_secondary)]
+            .spacing(6).align_y(Alignment::Center),
+    ].spacing(4).width(Length::Fill);
+    if !m.public_name.is_empty() && m.public_name != m.display_name {
+        identity = identity.push(text(m.public_name.clone()).size(d.meta).color(theme::t().text_secondary));
+    }
+    let mut col = column![row![profile_avatar(m.image.as_deref(), &m.display_name, 64.0), identity]
+        .spacing(14).align_y(Alignment::Center)].spacing(12).width(Length::Fill);
     if let Some(bio) = m.short_descr.as_deref().filter(|bio| !bio.trim().is_empty()) {
-        col = col.push(profile_rich(bio, d.body, theme::t().text_secondary, false));
+        col = col.push(pref_section("Bio", false, d));
+        col = col.push(container(profile_rich(bio, d.body, theme::t().text_secondary, false)).padding(Padding::from([0, 12])));
     }
-    col = col.push(
-        text(format!("Role: {}", m.role))
-            .size(d.body)
-            .color(theme::t().text_secondary),
-    );
-    if !m.status.is_empty() {
-        col = col.push(
-            text(format!("Status: {}", m.status))
-                .size(d.meta)
-                .color(theme::t().text_muted),
-        );
+    if m.is_me { return col.into(); }
+    if !pending && (m.contact_id.is_some() || (!g.is_channel && group_pref_on(g.group_preferences.as_ref(), "directMessages"))) {
+        col = col.push(card_row(icons::paperplane_icon(20.0, theme::t().accent), "Direct message", None,
+            Message::OpenMemberDirectChat, None, d, hover));
     }
-    if m.contact_id.is_some() {
-        col = col.push(
-            button(text("Direct message").size(d.meta))
-                .on_press(Message::OpenMemberDirectChat)
-                .padding(Padding::from([8, 12]))
-                .style(theme::primary_action(hover)),
-        );
+    if mod_plus && !g.is_channel && (m.support_chat.is_some() ||
+        (group_support_allowed(g.group_preferences.as_ref()) && group_role_rank(&m.role) < group_role_rank("moderator"))) {
+        col = col.push(card_row(icons::flag_icon(20.0, theme::t().accent),
+            if group_role_rank(&m.role) >= group_role_rank("moderator") { "Chat with admin" } else { "Chat with member" },
+            None, Message::OpenMemberSupportChat { member_id, title: m.display_name.clone() }, None, d, hover));
     }
-    if mod_plus
-        && !g.is_channel
-        && (m.support_chat.is_some()
-            || (group_support_allowed(g.group_preferences.as_ref())
-                && group_role_rank(&m.role) < group_role_rank("moderator")))
-    {
-        col = col.push(
-            button(
-                row![
-                    icons::flag_icon(18.0, theme::t().text_secondary),
-                    text(if group_role_rank(&m.role) >= group_role_rank("moderator") { "Chat with admin" } else { "Chat with member" }).size(d.meta),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-            )
-            .on_press(Message::OpenMemberSupportChat {
-                member_id: m.group_member_id,
-                title: m.display_name.clone(),
-            })
-            .padding(Padding::from([8, 12]))
-            .style(theme::secondary_action(hover)),
-        );
-    }
-    if member_status_is_pending(&m.status) && mod_plus {
-        col = col.push(
-            button(text("Accept as member").size(d.meta))
-                .on_press(Message::GroupMemberAccept {
-                    member_id,
-                    role: "member".into(),
-                })
-                .padding(Padding::from([8, 12]))
-                .style(theme::primary_action(hover)),
-        );
-        col = col.push(
-            button(text("Accept as observer").size(d.meta))
-                .on_press(Message::GroupMemberAccept {
-                    member_id,
-                    role: "observer".into(),
-                })
-                .padding(Padding::from([8, 12]))
-                .style(theme::secondary_action(hover)),
-        );
-        col = col.push(
-            button(text("Reject").size(d.meta).color(theme::t().danger))
-                .on_press(Message::GroupMemberRemove {
-                    member_id,
-                    with_messages: false,
-                })
-                .padding(Padding::from([8, 12]))
-                .style(theme::secondary_action(hover)),
-        );
-    }
-    if admin {
-        col = col.push(
-            text("Change role")
-                .size(d.meta)
-                .color(theme::t().text_muted),
-        );
-        // Owners may transfer ownership; other admins stop at admin.
-        let roles: &[&str] = if g.my_role.eq_ignore_ascii_case("owner") {
-            &["observer", "member", "moderator", "admin", "owner"]
-        } else {
-            &["observer", "member", "moderator", "admin"]
-        };
-        for role in roles {
-            if *role == m.role {
-                continue;
-            }
-            col = col.push(
-                button(text(format!("Set {role}")).size(d.meta))
-                    .on_press(Message::GroupMemberSetRole((*role).into()))
-                    .padding(Padding::from([8, 12]))
-                    .style(theme::secondary_action(hover)),
-            );
+    if pending && mod_plus {
+        col = col.push(pref_section("Waiting for review", false, d));
+        for (label, role) in [("Accept as member", "member"), ("Accept as observer", "observer")] {
+            col = col.push(card_row(icons::role_icon(role, 20.0, theme::t().accent), label, None,
+                Message::GroupMemberAccept { member_id, role: role.into() }, None, d, hover));
         }
-        col = col.push(
-            button(text("Remove member").size(d.meta))
-                .on_press(Message::GroupMemberRemove {
-                    member_id,
-                    with_messages: false,
-                })
-                .padding(Padding::from([8, 12]))
-                .style(theme::danger_action(hover)),
-        );
-        col = col.push(
-            button(text("Remove + delete messages").size(d.meta))
-                .on_press(Message::GroupMemberRemove {
-                    member_id,
-                    with_messages: true,
-                })
-                .padding(Padding::from([8, 12]))
-                .style(theme::danger_action(hover)),
-        );
+        col = col.push(card_row(icons::remove_profile_icon(20.0, theme::t().danger), "Reject", None,
+            Message::GroupMemberRemove { member_id, with_messages: false }, None, d, hover));
     }
-    col = col.push(
-        button(
-            text(if m.show_messages {
-                "Hide messages (for me)"
-            } else {
-                "Show messages (for me)"
-            })
-            .size(d.meta),
-        )
-        .on_press(Message::GroupMemberToggleBlockSelf)
-        .padding(Padding::from([8, 12]))
-        .style(theme::secondary_action(hover)),
-    );
+    if admin && !pending {
+        col = col.push(pref_row(None, "Role", choice_chip(role_label(&m.role),
+            Message::OpenMemberRoleMenu(member_id), d, hover), PrefTrail::None, d));
+    }
+    col = col.push(card_row(icons::eye_icon(20.0, theme::t().text_secondary),
+        if m.show_messages { "Hide messages (for me)" } else { "Show messages (for me)" }, None,
+        Message::GroupMemberToggleBlockSelf, None, d, hover));
     if mod_plus {
-        col = col.push(
-            button(
-                text(if m.blocked_by_admin {
-                    "Unblock for all"
-                } else {
-                    "Block for all"
-                })
-                .size(d.meta),
-            )
-            .on_press(Message::GroupMemberToggleBlockAll)
-            .padding(Padding::from([8, 12]))
-            .style(theme::secondary_action(hover)),
-        );
+        col = col.push(card_row(icons::block_prohibited_icon(20.0, theme::t().text_secondary),
+            if m.blocked_by_admin { "Unblock for all" } else { "Block for all" }, None,
+            Message::GroupMemberToggleBlockAll, None, d, hover));
+    }
+    if admin && !pending {
+        col = col.push(pref_section("Manage member", false, d));
+        col = col.push(card_row(icons::remove_profile_icon(20.0, theme::t().danger), "Remove member", None,
+            Message::GroupMemberRemove { member_id, with_messages: false }, None, d, hover));
+        col = col.push(card_row(icons::trash_icon(20.0, theme::t().danger), "Remove + delete messages", None,
+            Message::GroupMemberRemove { member_id, with_messages: true }, None, d, hover));
     }
     col.into()
 }

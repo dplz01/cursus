@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -297,8 +299,7 @@ private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenCh
     when (pane) {
         GroupPane.Overview -> GroupOverview(model, chat, onClose, onOpenPane = { pane = it }, onMember = { memberId = it; pane = GroupPane.MemberInfo })
         GroupPane.Link -> PageScaffold(if (chat.isChannel) "Share this channel" else "Share this group", back) {
-            GroupShareAction(model, chat)
-            if (chat.isChannel) ChannelLinkCard(model, chat) else AddMemberPane(model, chat, linkOnly = true)
+            GroupSharePane(model, chat)
         }
         GroupPane.AddMember -> PageScaffold("Invite a contact", back) { AddMemberPane(model, chat) }
         GroupPane.Preferences -> PageScaffold("Group settings", back) { GroupPreferencesPane(model, chat) }
@@ -459,36 +460,65 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
     }
 }
 
+/** Same hierarchy as the Mac share page: explanation, link, share, join role. */
 @Composable
-private fun GroupShareAction(model: AppModel, chat: Chat) {
+private fun GroupSharePane(model: AppModel, chat: Chat) {
+    val c = Cursus.colors
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
-    NavRow(R.drawable.ic_share_03, if (chat.isChannel) "Share this channel" else "Share this group") {
-        scope.launch {
-            model.groupLink(chat, quiet = !chat.canManageMembers)?.let { link ->
-                val intent = android.content.Intent(android.content.Intent.ACTION_SEND)
-                    .setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, link.short ?: link.full)
-                context.startActivity(android.content.Intent.createChooser(intent, "Share link"))
-            }
-        }
+    var link by remember(chat.ref) { mutableStateOf<ConnLink?>(null) }
+    var loading by remember(chat.ref) { mutableStateOf(true) }
+    var role by remember(chat.ref) { mutableStateOf("member") }
+    var roles by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    suspend fun load() {
+        loading = true
+        try { link = model.groupLink(chat, role, quiet = !chat.canManageMembers) }
+        finally { loading = false }
     }
-}
-
-@Composable
-private fun ChannelLinkCard(model: AppModel, chat: Chat) {
-    val c = Cursus.colors
-    var link by remember { mutableStateOf<ConnLink?>(null) }
-    LaunchedEffect(chat.ref) { if (chat.canManageMembers) link = model.groupLink(chat, quiet = true) }
+    LaunchedEffect(chat.ref) { load() }
     CursusCard {
-        CardTitle(R.drawable.ic_link_minimalistic_2, "Channel link", "Anyone with this link can join via chat relays.")
-        Column(Modifier.padding(top = 8.dp)) {
-            val l = link
-            when {
-                l != null -> LinkBox(l.short ?: l.full) { model.notice = "Link copied" }
-                !chat.canManageMembers -> Text("Only the owner can share the channel link.", style = Cursus.type.meta, color = c.textSecondary)
+        CardTitle(R.drawable.ic_share_03, if (chat.isChannel) "Share this channel" else "Share this group")
+        Text(if (chat.isChannel) "Anyone with this link can subscribe." else "Anyone with this link can join the group.",
+            style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+        when {
+            loading -> CircularProgressIndicator(Modifier.padding(12.dp).size(24.dp), color = c.accent)
+            link != null -> {
+                val value = link!!.short ?: link!!.full
+                LinkBox(value) { model.notice = "Link copied" }
+                NavRow(R.drawable.ic_share_03, "Share link") {
+                    val intent = android.content.Intent(android.content.Intent.ACTION_SEND)
+                        .setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, value)
+                    context.startActivity(android.content.Intent.createChooser(intent, "Share link"))
+                }
             }
+            chat.canManageMembers && !chat.isChannel -> PrimaryButton("Create link", {
+                if (!loading) { loading = true; scope.launch { load() } }
+            }, enabled = !loading)
+            chat.isChannel -> Text("No channel link available. Create a new channel to invite people.",
+                style = Cursus.type.meta, color = c.textMuted, modifier = Modifier.padding(12.dp))
+            else -> Text("No link yet — ask an admin.", style = Cursus.type.meta, color = c.textMuted,
+                modifier = Modifier.padding(12.dp))
+        }
+        if (!chat.isChannel && chat.canManageMembers && link != null) {
+            PrefRow("People joining become") { ChoiceChip(role.replaceFirstChar { it.titlecase() }, { roles = true }) }
+            ActionTile(R.drawable.ic_trash_delete, if (deleting) "Deleting…" else "Delete link", {
+                if (!deleting) confirmDelete = true
+            }, danger = true)
         }
     }
+    if (roles) ChoiceMenu("People joining become", listOf("member" to "Member", "observer" to "Observer"), role, { roles = false }) {
+        role = it; roles = false; model.setGroupLinkRole(chat, it)
+    }
+    if (confirmDelete) ConfirmDialog("Delete the group link?", "Nobody can join with it any more. Members stay in the group.",
+        "Delete link", {
+            confirmDelete = false; deleting = true
+            scope.launch {
+                try { if (model.deleteGroupLink(chat)) link = null }
+                finally { deleting = false }
+            }
+        }, { confirmDelete = false })
 }
 
 /** Linux `group_members_list`: 40px avatar, name (you: YOU (name)), bio, pending clock, role. */
@@ -498,12 +528,13 @@ private fun MembersList(members: List<Member>, trailing: @Composable (Member) ->
     Column {
         for (m in members) {
             Row(
-                Modifier.fillMaxWidth().clip(Radius.lg).clickable { onMember(m.id) }.padding(horizontal = 4.dp, vertical = 4.dp),
+                Modifier.fillMaxWidth().heightIn(min = 72.dp).clip(Radius.lg).clickable { onMember(m.id) }
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Avatar(m.name, m.image, 40.dp)
-                Column(Modifier.weight(1f)) {
+                Avatar(m.name, m.image, 48.dp)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             if (m.isMe) "YOU (${m.publicName.ifBlank { m.name }})" else m.name,
@@ -579,45 +610,13 @@ private fun MemberInfoPane(model: AppModel, chat: Chat, m: Member, onOpenChat: (
 }
 
 @Composable
-private fun AddMemberPane(model: AppModel, chat: Chat, linkOnly: Boolean = false) {
+private fun AddMemberPane(model: AppModel, chat: Chat) {
     val c = Cursus.colors
-    val scope = rememberCoroutineScope()
-    var link by remember { mutableStateOf<ConnLink?>(null) }
-    var linkRole by remember { mutableStateOf("member") }
     var inviteRole by remember { mutableStateOf("member") }
     var menu by remember { mutableStateOf<String?>(null) }
-    if (!chat.canManageMembers) {
-        CursusCard { Text("Only admins can manage the invite link.", style = Cursus.type.body, color = c.textSecondary) }
-        return
-    }
     var search by remember { mutableStateOf("") }
-    var preferShort by remember { mutableStateOf(true) }
-    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-    LaunchedEffect(chat.ref) {
-        link = runCatching { Core.call<ConnLink?>("existingGroupLink", mapOf("groupId" to chat.apiId)) }.getOrNull()
-    }
-    if (linkOnly) PreferenceGroup("Group link") {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Anyone with this link can ask to join.", style = Cursus.type.meta, color = c.textSecondary)
-            val l = link
-            if (l == null) {
-                PrimaryButton("Create invite link", { scope.launch { link = model.groupLink(chat, linkRole) } }, Modifier.fillMaxWidth())
-            } else {
-                val display = if (preferShort) l.short ?: l.full else l.full
-                Text(display, style = Cursus.type.meta, color = c.textSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth().clip(Radius.md).background(c.bgField).padding(12.dp))
-                PrimaryButton("Copy invite link", { clipboard.setText(androidx.compose.ui.text.AnnotatedString(display)); model.notice = "Link copied" }, Modifier.fillMaxWidth())
-                PrefRow("Link format") { ChoiceChip(if (preferShort) "Short" else "Full", { preferShort = !preferShort }) }
-                PrefRow("Join as") { ChoiceChip(linkRole.replaceFirstChar { it.titlecase() }, { menu = "link" }) }
-                Text("Revoke invite link", style = Cursus.type.meta, color = c.danger,
-                    modifier = Modifier.clip(Radius.md).clickable { model.deleteGroupLink(chat); link = null }.padding(8.dp))
-            }
-        }
-    }
-    if (linkOnly) {
-        if (menu == "link") ChoiceMenu("Join as", listOf("observer", "member").map { it to it }, linkRole, { menu = null }) {
-            linkRole = it; menu = null; model.setGroupLinkRole(chat, it)
-        }
+    if (!chat.canManageMembers) {
+        Text("Only admins can invite contacts.", style = Cursus.type.body, color = c.textSecondary)
         return
     }
     val inGroup = model.members.mapNotNull { it.contactId }.toSet()
@@ -641,9 +640,6 @@ private fun AddMemberPane(model: AppModel, chat: Chat, linkOnly: Boolean = false
         }
     }
     when (menu) {
-        "link" -> ChoiceMenu("Join as", listOf("observer", "member").map { it to it }, linkRole, { menu = null }) {
-            linkRole = it; menu = null; model.setGroupLinkRole(chat, it)
-        }
         "invite" -> ChoiceMenu("Invite as", chat.assignableRoles.map { it to it }, inviteRole, { menu = null }) { inviteRole = it; menu = null }
     }
 }

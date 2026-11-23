@@ -461,3 +461,24 @@ their literal asterisks. Mac profile prose uses a bounded async formatting cache
 The Mac media gallery registers arrow handling for the gallery window lifetime,
 independent of player/button focus. Navigation reads the current index on every
 press; cancelled media loads cannot replace newer content or its loading state.
+
+Linux member details use the same profile hierarchy as Mac: 64pt avatar beside
+literal name, public name and role/status, followed by rich bio and grouped
+navigation/action rows. Role changes use the existing selection overlay rather
+than a stack of one-button-per-role actions. Self profiles remain read-only.
+Android member lists use 48dp avatars, 12dp vertical row padding and a minimum
+72dp touch target, with 4dp between name and bio.
+
+Sharing a group/channel uses one link page across platforms: explanation,
+one-line copy box, sharing action and (group admins only) joining role and
+confirmed link deletion. Linux copies the link for sharing; Android and Mac use
+their system share sheets. The Invite a contact page contains only invitations.
+
+Android group/channel sharing follows the Mac page: description, single-line
+copy box, native Share link action, admin-only joining role and confirmed link
+deletion. Linux uses the same hierarchy with a clipboard share action. The
+invite-contact form is separate. Missing channel links remain read-only because
+the protocol cannot recreate them. Android member lists use 48dp avatars, 12dp
+vertical padding and at least 72dp rows. Linux member details use a 64px avatar,
+plain identity and role/status, rich bio, and shared navigation/preference rows
+for messaging, moderation and member management; own-member pages are read-only.

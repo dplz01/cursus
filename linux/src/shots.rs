@@ -1126,6 +1126,15 @@ fn shots_profile_cards() {
                 g.welcome_message = "Welcome to Cursus devs!\nRead the roadmap first, then say hi 👋".into();
             }
             render(&app, size, &format!("cards-group-{name}-{t}"));
+            {
+                let group = app.group_settings.as_mut().unwrap();
+                group.pane = GroupSettingsPane::MemberInfo;
+                group.selected_member_id = Some(2);
+                group.members[1].short_descr = Some("Building **Cursus** with _friends_ 🌍".into());
+            }
+            render(&app, size, &format!("cards-member-{name}-{t}"));
+            app.group_settings.as_mut().unwrap().pane = GroupSettingsPane::Link;
+            render(&app, size, &format!("cards-share-{name}-{t}"));
             let mut app = demo_app(dark, size.width, size.height);
             select(&mut app, 0);
             let _ = app.update(Message::OpenContactProfile);

@@ -33,6 +33,7 @@ import chat.cursus.media.VoiceDraft
 import chat.cursus.media.VoicePlayer
 import chat.cursus.media.VoiceRecorder
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
@@ -978,6 +979,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun groupLink(chat: Chat, role: String = "member", quiet: Boolean = false): ConnLink? = try {
         Core.call("groupLink", mapOf("groupId" to chat.apiId, "role" to role))
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: Exception) {
         if (!quiet) error = e.message
         null
@@ -985,7 +988,15 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     fun setGroupLinkRole(chat: Chat, role: String) = change(chat, "setGroupLinkRole", mapOf("groupId" to chat.apiId, "role" to role))
 
-    fun deleteGroupLink(chat: Chat) = change(chat, "deleteGroupLink", mapOf("groupId" to chat.apiId))
+    suspend fun deleteGroupLink(chat: Chat): Boolean = try {
+        Core.run("deleteGroupLink", mapOf("groupId" to chat.apiId))
+        true
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        error = e.message
+        false
+    }
 
     fun addMember(chat: Chat, contact: Chat, role: String) =
         change(chat, "addMember", mapOf("groupId" to chat.apiId, "contactId" to contact.apiId, "role" to role), members = true)

@@ -637,6 +637,7 @@ pub enum PrefMenu {
     GroupTtl,
     /// Invite page: short vs full link.
     GroupLinkKind,
+    GroupLinkDelete,
     /// Invite page: role granted to link joiners.
     GroupLinkRole,
     /// Invite page: role for contacts invited directly.
@@ -4219,8 +4220,13 @@ impl App {
                 Task::none()
             }
             Message::OpenGroupLink => {
-                if let Some(g) = self.group_settings.as_mut() { g.pane = GroupSettingsPane::Link; }
-                Task::none()
+                let create = if let Some(g) = self.group_settings.as_mut() {
+                    g.pane = GroupSettingsPane::Link;
+                    g.link_prefer_short = true;
+                    if let Some(links) = g.links.clone() { g.apply_links(links); }
+                    g.link.is_none() && matches!(g.my_role.as_str(), "owner" | "admin")
+                } else { false };
+                if create { self.update(Message::EnsureGroupLink) } else { Task::none() }
             }
             Message::OpenAddGroupMember => {
                 if let Some(g) = self.group_settings.as_mut() {
@@ -4629,6 +4635,7 @@ impl App {
                 Task::none()
             }
             Message::DeleteGroupLink => {
+                self.pref_menu = None;
                 let Some(g) = self.group_settings.as_ref() else {
                     return Task::none();
                 };

@@ -38,11 +38,17 @@ struct ContactPreferencesPage: View {
         PrefRow(icon: feature.icon, label: feature.label, note: note(state)) {
             // Disappearing messages: no "always" (that is the per-chat delete
             // timer, not a negotiated preference).
-            ChoiceMenu(options: feature.key == "timedMessages"
-                        ? [Choice("no", "No"), Choice("yes", "Yes")]
-                        : [Choice("no", "No"), Choice("yes", "Yes"), Choice("always", "Always")],
-                       selection: mine) { v in
-                Task { await model.setContactFeature(chat, feature.key, v) }
+            HStack(spacing: 12) {
+                ChoiceMenu(options: feature.key == "timedMessages"
+                            ? [Choice("no", "No"), Choice("yes", "Yes")]
+                            : [Choice("no", "No"), Choice("yes", "Yes"), Choice("always", "Always")],
+                           selection: mine) { v in
+                    Task { await model.setContactFeature(chat, feature.key, v) }
+                }
+                CIcon("user-alt-1", size: 18, color: state?.contact == "yes" ? Theme.success
+                      : state?.contact == "always" ? Theme.gold : Theme.danger)
+                    .help("Contact: \(Features.allowLabel(state?.contact ?? "no"))")
+                    .accessibilityLabel("Contact: \(Features.allowLabel(state?.contact ?? "no"))")
             }
         }
         if feature.key == "timedMessages" && mine != "no" {

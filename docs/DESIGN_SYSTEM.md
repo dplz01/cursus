@@ -482,3 +482,12 @@ the protocol cannot recreate them. Android member lists use 48dp avatars, 12dp
 vertical padding and at least 72dp rows. Linux member details use a 64px avatar,
 plain identity and role/status, rich bio, and shared navigation/preference rows
 for messaging, moderation and member management; own-member pages are read-only.
+
+Phone profile rows use one shared height that accommodates a title and one
+preview line at the current text scale. Linux navigation and destructive rows
+share the same padding and height; member rows match Android's 48px avatars and
+12px vertical inset. Phone member lists show a one-line bio and quiet role label;
+the member page holds role/actions. Long editable bios/descriptions are left
+aligned, keep the pencil at the top and expose the full text in their editor.
+Personal receipt controls sit at the row's outer trailing edge. Only negotiated
+chat-permission choices reserve a separate peer-status icon column.

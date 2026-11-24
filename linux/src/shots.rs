@@ -1124,6 +1124,7 @@ fn shots_profile_cards() {
             if let Some(g) = app.group_settings.as_mut() {
                 g.my_role = "owner".into();
                 g.welcome_message = "Welcome to Cursus devs!\nRead the roadmap first, then say hi 👋".into();
+                g.short_descr = "Build **Cursus** together with friends.\nA clear, readable profile on a small screen.".into();
             }
             render(&app, size, &format!("cards-group-{name}-{t}"));
             {
@@ -1139,6 +1140,8 @@ fn shots_profile_cards() {
             select(&mut app, 0);
             let _ = app.update(Message::OpenContactProfile);
             render(&app, size, &format!("cards-contact-{name}-{t}"));
+            let _ = app.update(Message::OpenContactPreferences);
+            render(&app, size, &format!("cards-contact-settings-{name}-{t}"));
         }
     }
 }

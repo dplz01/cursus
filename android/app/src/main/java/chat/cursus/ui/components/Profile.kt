@@ -65,10 +65,11 @@ fun EditableLine(value: String, emptyText: String, style: LineStyle, rich: Boole
     }
     // Header lines (name, bio) are centred under the picture; paragraphs
     // start at the row inset under their section label.
-    val centred = style != LineStyle.Body
+    val paragraph = style == LineStyle.Body || (rich && (value.contains('\n') || value.length > 64))
+    val centred = !paragraph && style != LineStyle.Body
     Row(
         Modifier.fillMaxWidth().clip(RowShape).clickable(onClick = onEdit).padding(horizontal = 12.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = if (paragraph) Alignment.Top else Alignment.CenterVertically,
         horizontalArrangement = if (centred) Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally) else Arrangement.spacedBy(6.dp),
     ) {
         ProfileText(
@@ -80,12 +81,12 @@ fun EditableLine(value: String, emptyText: String, style: LineStyle, rich: Boole
                 else -> c.textPrimary
             },
             fontWeight = if (style == LineStyle.Name && value.isNotBlank()) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = if (style == LineStyle.Body) 4 else 2,
+            maxLines = if (paragraph) 6 else 2,
             overflow = TextOverflow.Ellipsis,
             textAlign = if (centred) androidx.compose.ui.text.style.TextAlign.Center else null,
             modifier = Modifier.weight(1f, fill = false),
         )
-        Icon(painterResource(R.drawable.ic_edit_3), "Edit", Modifier.size(14.dp), tint = c.textMuted)
+        Icon(painterResource(R.drawable.ic_edit_3), "Edit", Modifier.padding(top = if (paragraph) 4.dp else 0.dp).size(14.dp), tint = c.textMuted)
     }
 }
 
@@ -198,7 +199,8 @@ fun ProfileName(name: String) {
 fun HeroLine(text: String) {
     ProfileText(
         text, style = Cursus.type.body, color = Cursus.colors.textSecondary,
-        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        textAlign = if (text.contains('\n') || text.length > 64) androidx.compose.ui.text.style.TextAlign.Start
+            else androidx.compose.ui.text.style.TextAlign.Center,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
     )
 }

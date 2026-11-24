@@ -224,6 +224,8 @@ private fun ContactPreferencesPage(model: AppModel, chat: Chat, onBack: () -> Un
     val prefs = chat.contactPrefs
     PageScaffold("Settings", onBack) {
         PreferenceGroup("Notifications") {
+            // Personal control stays on the outer edge; peer indicators below
+            // belong only to negotiated chat permissions.
             PrefRow("Send receipts", R.drawable.ic_check_read) { ChoiceChip(receiptsLabel(chat.sendReceipts), { menu = "receipts" }) }
         }
         PreferenceGroup("Chat permissions", "Your choices for this chat. The contact icon shows what the other person allows.") {

@@ -77,10 +77,11 @@ struct ChatInfoView: View {
             case .preferences:
                 if chat.isGroup {
                     GroupPreferencesPage(chat: chat)
+                    ChatSettingsCard(chat: chat)
                 } else {
+                    ChatSettingsCard(chat: chat)
                     ContactPreferencesPage(chat: chat)
                 }
-                ChatSettingsCard(chat: chat)
             case .member(let id):
                 if let member = model.members.first(where: { $0.id == id }) {
                     MemberPage(chat: chat, member: member)

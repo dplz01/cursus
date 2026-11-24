@@ -5831,8 +5831,9 @@ fn quick_actions(
 
 /// A centred secondary line of a profile header (bio, full name).
 fn hero_line<'a>(value: String, d: Density) -> Element<'a, Message> {
+    let paragraph = value.contains('\n') || value.chars().count() > 64;
     container(
-        profile_rich(&value, d.body, theme::t().text_secondary, false).align_x(Alignment::Center),
+        profile_rich(&value, d.body, theme::t().text_secondary, false).align_x(if paragraph { Alignment::Start } else { Alignment::Center }),
     )
     .padding(Padding::from([0, 12]))
     .center_x(Length::Fill)
@@ -5975,7 +5976,7 @@ fn contact_preferences_page<'a>(
     let receipts = pref_row(
         Some(icons::check_read(20.0, theme::t().accent)), "Send receipts",
         choice_chip(RcptChoice::from_opt(p.send_rcpts).label(app.receipts().0), Message::OpenPrefMenu(PrefMenu::ContactRcpts), d, hover),
-        PrefTrail::Reserve, d,
+        PrefTrail::None, d,
     );
     let body = column![
         crate::preference_ui::group(Some("Notifications"), None, receipts, d),
@@ -7557,19 +7558,27 @@ fn nav_row_styled<'a>(
     }
     let _ = flush;
     button(
-        row![
+        container(row![
             icon_disc(icon, ROW_ICON_BOX),
             labels,
             trailing.unwrap_or_else(|| icons::chevron_right(16.0, theme::t().text_muted)),
         ]
         .spacing(ROW_GAP)
-        .align_y(Alignment::Center),
+        .align_y(Alignment::Center))
+        .width(Length::Fill)
+        .center_y(if d.list_width == 0.0 { Length::Fill } else { Length::Shrink }),
     )
     .on_press(on_press)
-    .padding(if d.list_width == 0.0 { Padding::from([20, 16]) } else { ROW_PAD })
+    .padding(if d.list_width == 0.0 { Padding::from([12, 16]) } else { ROW_PAD })
     .width(Length::Fill)
+    .height(if d.list_width == 0.0 { Length::Fixed(profile_phone_row_height(d)) } else { Length::Shrink })
     .style(theme::ghost_tile_r(hover, ROW_RADIUS))
     .into()
+}
+
+/// Room for two scaled text lines, shared by phone profile action rows.
+fn profile_phone_row_height(d: Density) -> f32 {
+    ((d.body + d.meta) * 1.3 + 28.0).max(68.0).ceil()
 }
 
 /// Every row of a page — navigation, preference, action — has the same
@@ -7644,9 +7653,19 @@ fn group_members_list<'a>(
             } else {
                 name_text
             };
-            let mut names = Column::new().spacing(1).width(Length::Fill).push(name_line);
-            if let Some(bio) = m.short_descr.as_ref() {
-                names = names.push(profile_rich(bio, d.meta, theme::t().text_secondary, false));
+            let mut names = Column::new().spacing(if d.list_width == 0.0 { 4 } else { 1 }).width(Length::Fill).push(name_line);
+            if let Some(bio) = m.short_descr.as_deref().filter(|bio| !bio.trim().is_empty()) {
+                let rich = profile_rich(bio, d.meta, theme::t().text_secondary, false);
+                if d.list_width == 0.0 {
+                    let segments = cursus_core::profile_text(bio);
+                    if segments.iter().all(|segment| segment.style == TextStyle::Plain) {
+                        let preview = segments.iter().map(|segment| segment.text.as_str()).collect::<String>();
+                        names = names.push(ellipsis_text(preview, d.meta, theme::t().text_secondary, 1));
+                    } else {
+                        names = names.push(container(rich.wrapping(Wrapping::None))
+                            .height(d.meta * 1.5).width(Length::Fill).clip(true));
+                    }
+                } else { names = names.push(rich); }
             }
             let leading = Row::new()
                 .spacing(10)
@@ -7658,6 +7677,16 @@ fn group_members_list<'a>(
                     if d.list_width == 0.0 { 48.0 } else { MEMBER_AVATAR },
                 ))
                 .push(names);
+            // Phone rows match Android: one generous hit target and a quiet
+            // role label. Role/moderation controls live on the member page.
+            if d.list_width == 0.0 {
+                list = list.push(button(row![leading,
+                    text(role_label(&m.role)).size(d.meta).color(theme::t().text_muted)]
+                    .spacing(12).align_y(Alignment::Center))
+                    .on_press(Message::OpenGroupMember(mid)).padding(Padding::from([12, 8]))
+                    .width(Length::Fill).style(theme::ghost_tile(hover)));
+                continue;
+            }
             let mut actions = Row::new().spacing(4).align_y(Alignment::Center);
             if m.is_me {
                 // Own role, read-only, in the same column as the others' role
@@ -7764,6 +7793,15 @@ fn editable_line<'a>(
         .on_press(Message::OpenFieldEditor(field))
         .padding(6)
         .style(theme::icon_action(hover));
+    let paragraph = matches!(style, LineStyle::Body) ||
+        (matches!(field, crate::EditField::GroupShortDescr | crate::EditField::OwnBio) &&
+         (value.contains('\n') || value.chars().count() > 64));
+    if paragraph {
+        return button(row![container(label).width(Length::Fill), icons::edit_icon(16.0, theme::t().text_muted)]
+            .spacing(12).align_y(Alignment::Start))
+            .on_press(Message::OpenFieldEditor(field)).padding(Padding::from([8, 12])).width(Length::Fill)
+            .style(theme::ghost_tile(hover)).into();
+    }
     let line = crate::trail_row::trail_row(label, pencil, 4.0);
     match style {
         // Paragraphs start at the row inset, under their section label.
@@ -8211,7 +8249,7 @@ fn group_action_tile<'a>(
         theme::t().text_primary
     };
     button(
-        row![
+        container(row![
             icon_disc(icon, ROW_ICON_BOX),
             text(label)
                 .size(d.body)
@@ -8219,11 +8257,14 @@ fn group_action_tile<'a>(
                 .width(Length::Fill),
         ]
         .spacing(ROW_GAP)
-        .align_y(Alignment::Center),
+        .align_y(Alignment::Center))
+        .width(Length::Fill)
+        .center_y(if d.list_width == 0.0 { Length::Fill } else { Length::Shrink }),
     )
     .on_press(on_press)
-    .padding(if d.list_width == 0.0 { Padding::from([20, 16]) } else { ROW_PAD })
+    .padding(if d.list_width == 0.0 { Padding::from([12, 16]) } else { ROW_PAD })
     .width(Length::Fill)
+    .height(if d.list_width == 0.0 { Length::Fixed(profile_phone_row_height(d)) } else { Length::Shrink })
     .style(style)
 }
 
@@ -8785,7 +8826,7 @@ fn group_member_info_pane(
         identity = identity.push(text(m.public_name.clone()).size(d.meta).color(theme::t().text_secondary));
     }
     let mut col = column![row![profile_avatar(m.image.as_deref(), &m.display_name, 64.0), identity]
-        .spacing(14).align_y(Alignment::Center)].spacing(12).width(Length::Fill);
+        .spacing(14).align_y(Alignment::Center)].spacing(if d.list_width == 0.0 { 4 } else { 12 }).width(Length::Fill);
     if let Some(bio) = m.short_descr.as_deref().filter(|bio| !bio.trim().is_empty()) {
         col = col.push(pref_section("Bio", false, d));
         col = col.push(container(profile_rich(bio, d.body, theme::t().text_secondary, false)).padding(Padding::from([0, 12])));

@@ -75,7 +75,7 @@ val LightTokens = CursusColors(
     bgHover = Color(0xFFEDEFF3),
     textPrimary = Color(0xFF12141A),
     textSecondary = Color(0xFF5C6370),
-    textMuted = Color(0xFF8B919C),
+    textMuted = Color(0xFF656D79),
     accent = Accent,
     accentHover = Color(0xFF255DD1),
     accentPress = Color(0xFF1C4CB8),
@@ -104,10 +104,10 @@ val DarkTokens = CursusColors(
     bgList = Color(0xFF15181E),
     bgPanel = Color(0xFF0E1015),
     bgElevated = Color(0xFF252B36),
-    bgHover = Color(0xFF20242D),
+    bgHover = Color(0xFF303746),
     textPrimary = Color(0xFFF2F3F5),
     textSecondary = Color(0xFFA0A6B3),
-    textMuted = Color(0xFF6E7585),
+    textMuted = Color(0xFF8B93A3),
     accent = AccentDark,
     accentHover = Color(0xFF6B99FF),
     accentPress = Color(0xFF4D7AEB),
@@ -123,7 +123,7 @@ val DarkTokens = CursusColors(
     voiceRestOut = Color(0xFF7F93BC),
     disabledFill = Color(0xFF404D66),
     bgField = Color(0xFF111318),
-    bubbleIn = Color(0xFF252B36),
+    bubbleIn = Color(0xFF1C2028),
     bubbleOut = Color(0xFF243A63),
     bubbleOutMeta = Color(0xFFA7B6D6),
     bubbleOutTick = Color(0xFF9CBBFF),
@@ -132,9 +132,15 @@ val DarkTokens = CursusColors(
 
 /** Shapes: only these, only through the components (DESIGN_SYSTEM § Spacing). */
 object Radius {
-    val sm = RoundedCornerShape(8.dp)
-    val md = RoundedCornerShape(10.dp)
-    val lg = RoundedCornerShape(12.dp)
+    // Matches the macOS unified-compact window/control radius.
+    val control = RoundedCornerShape(20.dp)
+    // Concentric with a control surface containing a 4dp inset.
+    val insetControl = RoundedCornerShape(16.dp)
+    val dockSelection = RoundedCornerShape(15.dp)
+    val sm = control
+    val md = control
+    val lg = control
+    val mediaInset = RoundedCornerShape(12.dp)
     val bubble = RoundedCornerShape(16.dp)
     val pill = RoundedCornerShape(percent = 50)
 }
@@ -196,6 +202,10 @@ fun CursusTheme(mode: ThemeMode, textScale: Float = 1f, content: @Composable () 
     CompositionLocalProvider(LocalColors provides tokens, LocalType provides type) {
         MaterialTheme(
             colorScheme = scheme(tokens),
+            shapes = androidx.compose.material3.Shapes(
+                extraSmall = Radius.control, small = Radius.control, medium = Radius.control,
+                large = Radius.control, extraLarge = Radius.control,
+            ),
             typography = Typography(
                 bodyLarge = type.body,
                 bodyMedium = type.body,

@@ -8,7 +8,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.height
@@ -212,8 +211,8 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
 
 private val NavBarHeight = 64.dp
 private val NavInset = 12.dp
-private val NavShape = RoundedCornerShape(18.dp)
-private val NavItemShape = RoundedCornerShape(12.dp)
+private val NavShape = chat.cursus.ui.theme.Radius.control
+private val NavItemShape = chat.cursus.ui.theme.Radius.dockSelection
 
 /**
  * Linux `bottom_nav` + `floating_nav_style`: a rounded elevated card inset
@@ -237,8 +236,8 @@ private fun BottomBar(model: AppModel, modifier: Modifier = Modifier) {
             .clip(NavShape)
             .background(c.bgElevated)
             .border(1.dp, c.border, NavShape)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         for (s in Section.entries) {
             val active = model.section == s

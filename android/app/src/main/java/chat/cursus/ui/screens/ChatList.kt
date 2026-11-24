@@ -288,7 +288,7 @@ private fun ChatListsOverlay(model: AppModel, chat: Chat, onDismiss: () -> Unit)
 /** Linux `pending_links_button`: the yellow counter for unused one-time links. */
 @Composable
 private fun PendingLinksButton(count: Int, onClick: () -> Unit) =
-    AttentionButton(R.drawable.ic_link_minimalistic_2, count.toLong(), "Pending links", onClick)
+    AttentionButton(R.drawable.ic_link_minimalistic_2, count.toLong(), "Unused invitations", onClick)
 
 /** Unused one-time links: copy (short / full), name, delete (asks first).
  *  Anyone holding one can still connect, so they stay visible here. */
@@ -305,7 +305,7 @@ private fun PendingLinksOverlay(model: AppModel, onDismiss: () -> Unit) {
             Box(Modifier.size(36.dp).clip(Radius.pill).background(c.accentSoft), contentAlignment = Alignment.Center) {
                 Icon(painterResource(R.drawable.ic_link_minimalistic_2), null, Modifier.size(18.dp), tint = c.attention)
             }
-            Text("Pending links", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text("Unused invitations", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             IconTool(R.drawable.ic_cancel, "Close", onDismiss)
         }
         Text(
@@ -313,7 +313,7 @@ private fun PendingLinksOverlay(model: AppModel, onDismiss: () -> Unit) {
             style = Cursus.type.meta, color = c.textSecondary,
         )
         if (model.pendingInvitations.isEmpty()) {
-            Text("No pending links.", style = Cursus.type.meta, color = c.textMuted)
+            Text("No unused invitations.", style = Cursus.type.meta, color = c.textMuted)
         }
         Column(
             Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),

@@ -72,8 +72,8 @@ impl Density {
                 list_width: 0.0,
                 info_width: 0.0,
                 icon: 26.0,
-                nav_hit: 46.0,
-                nav_bar_height: 54.0,
+                nav_hit: 56.0,
+                nav_bar_height: 64.0,
             },
             LayoutMode::Desktop => {
                 let rail = if logical_width >= RAIL_MIN_WIDTH { 72.0 } else { 0.0 };
@@ -92,8 +92,8 @@ impl Density {
                     list_width: list,
                     info_width: if chat >= CHAT_MIN_WIDTH + INFO_WIDTH { INFO_WIDTH } else { 0.0 },
                     icon: if rail > 0.0 { 26.0 } else { 22.0 },
-                    nav_hit: if rail > 0.0 { rail - 16.0 } else { 40.0 },
-                    nav_bar_height: if rail > 0.0 { 0.0 } else { 54.0 },
+                    nav_hit: if rail > 0.0 { rail - 16.0 } else { 56.0 },
+                    nav_bar_height: if rail > 0.0 { 0.0 } else { 64.0 },
                 }
             }
         }

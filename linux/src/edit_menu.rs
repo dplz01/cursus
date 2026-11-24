@@ -232,7 +232,7 @@ fn menu_items<'a>(items: [(&'static str, Option<Message>); 4], hover_ok: bool) -
         border: iced::Border {
             color: theme::t().border,
             width: 1.0,
-            radius: 12.0.into(),
+            radius: theme::CONTROL_RADIUS.into(),
         },
         shadow: iced::Shadow {
             color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.25),

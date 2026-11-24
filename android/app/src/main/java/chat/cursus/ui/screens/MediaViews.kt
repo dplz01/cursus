@@ -109,7 +109,7 @@ private fun InlinePreview(f: FileInfo) {
     val bitmap = remember(url) { chat.cursus.ui.components.decodeDataUrl(url) } ?: return
     Image(
         bitmap, null,
-        Modifier.padding(bottom = 6.dp).widthIn(max = 296.dp).heightIn(max = 240.dp).clip(Radius.lg),
+        Modifier.padding(bottom = 6.dp).widthIn(max = 296.dp).heightIn(max = 240.dp).clip(Radius.mediaInset),
         contentScale = ContentScale.Fit,
     )
 }
@@ -122,7 +122,7 @@ private fun ImageThumb(model: AppModel, message: Message, f: FileInfo, onLongPre
         path?.let { withContext(Dispatchers.IO) { decodeScaled(it, if (blurred) 24 else 720) } }
     }
     Box(
-        Modifier.widthIn(max = 296.dp).heightIn(max = 360.dp).clip(Radius.lg)
+        Modifier.widthIn(max = 296.dp).heightIn(max = 360.dp).clip(Radius.mediaInset)
             .combinedClickable(
                 onClick = {
                     if (bitmap != null) {
@@ -155,7 +155,7 @@ private fun VideoThumb(model: AppModel, message: Message, f: FileInfo, onLongPre
     val height = preview?.height?.toFloat() ?: 160f
     val scale = minOf(1f, 296f / width.coerceAtLeast(1f), 360f / height.coerceAtLeast(1f))
     Box(
-        Modifier.size((width * scale).dp, (height * scale).dp).clip(Radius.lg).background(Cursus.colors.bgField)
+        Modifier.size((width * scale).dp, (height * scale).dp).clip(Radius.mediaInset).background(Cursus.colors.bgField)
             .combinedClickable(onClick = {
                 if (hidden) model.revealedMedia.add(f.id) else model.openFile(f)
             }, onLongClick = onLongPress),

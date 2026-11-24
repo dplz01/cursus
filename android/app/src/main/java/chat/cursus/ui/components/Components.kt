@@ -14,6 +14,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -75,6 +76,7 @@ fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
     }
     Box(
         modifier
+            .defaultMinSize(minHeight = 48.dp)
             .clip(Radius.md)
             .background(fill)
             .clickable(enabled = enabled, interactionSource = source, indication = null, onClick = onClick)
@@ -90,6 +92,7 @@ fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modi
     val c = Cursus.colors
     Box(
         modifier
+            .defaultMinSize(minHeight = 48.dp)
             .clip(Radius.md)
             .background(c.bgField)
             .border(1.dp, c.border, Radius.md)
@@ -105,14 +108,14 @@ fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modi
 fun DangerButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val c = Cursus.colors
     Box(
-        modifier.clip(Radius.md).background(c.danger).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier.defaultMinSize(minHeight = 48.dp).clip(Radius.md).background(c.danger).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(text, style = Cursus.type.body, color = Color.White, fontWeight = FontWeight.Medium)
     }
 }
 
-/** Icon-only tool: 20px glyph in a 40px touch hit (mobile ≥ 40). */
+/** Icon-only tool: 20dp glyph in a 48dp touch target. */
 @Composable
 fun IconTool(
     icon: Int,
@@ -123,20 +126,20 @@ fun IconTool(
     enabled: Boolean = true,
 ) {
     Box(
-        modifier.size(40.dp).clip(Radius.pill).clickable(enabled = enabled, onClick = onClick),
+        modifier.size(48.dp).clip(Radius.control).clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(painterResource(icon), description, Modifier.size(20.dp), tint = if (enabled) tint else Cursus.colors.textMuted)
     }
 }
 
-/** Accent action button: rounded square radius 12, like the nav destinations. */
+/** Accent action button: rounded square shared radius, like the nav destinations. */
 @Composable
 fun AccentSquare(icon: Int, description: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
     val c = Cursus.colors
     Box(
         modifier
-            .size(44.dp)
+            .size(48.dp)
             .clip(Radius.lg)
             .background(if (enabled) c.accent else c.disabledFill)
             .clickable(enabled = enabled, onClick = onClick),
@@ -152,15 +155,15 @@ fun IconDisc(icon: Int, danger: Boolean = false) {
     // The glyph in front of a row: a fixed 24dp box, no backdrop.
     val c = Cursus.colors
     Box(Modifier.size(RowIconBox), contentAlignment = Alignment.Center) {
-        Icon(painterResource(icon), null, Modifier.size(24.dp), tint = if (danger) c.danger else c.accent)
+        Icon(painterResource(icon), null, Modifier.size(20.dp), tint = if (danger) c.danger else c.accent)
     }
 }
 
 /** Every row of a page — navigation, preference, action — shares one inset,
  *  icon box, gap and corner, so labels line up down the whole page (the
  *  same numbers as the Linux app's `ROW_*`). */
-val RowIconBox = 28.dp
-val RowShape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+val RowIconBox = 24.dp
+val RowShape = chat.cursus.ui.theme.Radius.control
 fun Modifier.pageRow(onClick: (() -> Unit)? = null): Modifier =
     fillMaxWidth().defaultMinSize(minHeight = 64.dp).clip(RowShape).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
         .padding(horizontal = 16.dp, vertical = 16.dp)
@@ -189,10 +192,10 @@ fun CursusCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.(
 /** Section heading: a small accent label above its rows. */
 @Composable
 fun CardTitle(icon: Int, title: String, subtitle: String? = null) {
-    Text(
-        title, style = Cursus.type.meta, color = Cursus.colors.accent, fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 4.dp),
-    )
+    Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, style = Cursus.type.meta, color = Cursus.colors.accent, fontWeight = FontWeight.SemiBold)
+        if (!subtitle.isNullOrBlank()) Text(subtitle, style = Cursus.type.meta, color = Cursus.colors.textSecondary)
+    }
 }
 
 /** Navigation row: icon disc · title / subtitle · chevron. */
@@ -257,7 +260,7 @@ fun LinkBox(link: String, onCopied: () -> Unit) {
             .fillMaxWidth()
             .clip(Radius.lg)
             .background(c.accentSoft)
-            .border(1.dp, c.accent, Radius.lg)
+            .border(1.dp, c.border, Radius.lg)
             .clickable {
                 clipboard.setText(AnnotatedString(link))
                 onCopied()
@@ -267,11 +270,12 @@ fun LinkBox(link: String, onCopied: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(link, style = Cursus.type.meta, color = c.accent, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Icon(painterResource(R.drawable.ic_copy), "Copy", Modifier.size(20.dp), tint = c.accent)
+        Text("Copy", style = Cursus.type.meta, color = c.accent, fontWeight = FontWeight.Medium)
+        Icon(painterResource(R.drawable.ic_copy), null, Modifier.size(18.dp), tint = c.accent)
     }
 }
 
-/** Standard field: radius 10, `bg.sidebar` fill, 1px border → accent when focused. */
+/** Standard field: shared radius, `bg.sidebar` fill, 1px border → accent when focused. */
 @Composable
 fun CursusField(
     value: String,
@@ -283,10 +287,13 @@ fun CursusField(
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val c = Cursus.colors
+    val interactions = remember { MutableInteractionSource() }
+    val focused by interactions.collectIsFocusedAsState()
     TextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().border(1.dp, if (focused) c.accent else c.border, Radius.control),
+        interactionSource = interactions,
         placeholder = { Text(placeholder, color = c.textSecondary, style = Cursus.type.body) },
         singleLine = singleLine,
         textStyle = Cursus.type.body.copy(color = c.textPrimary),
@@ -354,20 +361,20 @@ fun UnreadBadge(count: Long, muted: Boolean = false) {
     }
 }
 
-/** Page column capped at 760dp, 16dp sides, 14dp between cards. */
+/** Page column capped at 620dp, 16dp insets, 22dp between sections. */
 @Composable
 fun PageColumn(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         Column(
             // Same column on every Cursus app: at most 620 wide, centred.
-            Modifier.widthIn(max = 620.dp).fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            Modifier.widthIn(max = 620.dp).fillMaxWidth().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(22.dp),
             content = content,
         )
     }
 }
 
-/** Rounded inline field: radius 12, 6×12 padding, placeholder in `text.secondary`. */
+/** Rounded inline field: shared radius, 6×12 padding, placeholder in `text.secondary`. */
 @Composable
 fun RoundedField(value: String, onValueChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier, singleLine: Boolean = true) {
     val c = Cursus.colors

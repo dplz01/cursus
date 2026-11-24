@@ -61,7 +61,7 @@ impl Widget<Message, Theme, iced::Renderer> for PreferenceRow<'_> {
         limits: &layout::Limits,
     ) -> layout::Node {
         let width = limits.max().width.min(620.0);
-        let inset = if width < 360.0 { 12.0 } else { 16.0 };
+        let inset = 16.0;
         let available = (width - inset * 2.0).max(0.0);
         let icon_visible = self.has_icon && width >= 360.0 && self.body_size <= 20.0;
         let mut measure = |index: usize, width: f32| {
@@ -105,7 +105,7 @@ impl Widget<Message, Theme, iced::Renderer> for PreferenceRow<'_> {
         } else {
             0.0
         };
-        let pad = if self.touch { 18.0 } else if self.has_support { 12.0 } else { 8.0 };
+        let pad = if self.touch { 16.0 } else if self.has_support { 12.0 } else { 8.0 };
         let center = |h: f32| pad + (height - h) / 2.0;
         let icon_y = center(icon.size().height);
         let title_y = center(title.size().height);

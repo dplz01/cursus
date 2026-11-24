@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,7 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import chat.cursus.ui.theme.Cursus
 
-private val PreferenceShape = RoundedCornerShape(20.dp)
+private val PreferenceShape = chat.cursus.ui.theme.Radius.control
 
 /** A quiet inset surface; headings stay outside so the rows can breathe. */
 @Composable
@@ -37,14 +36,14 @@ fun PreferenceGroup(title: String? = null, note: String? = null, content: @Compo
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
         if (title != null) Text(
             title, style = Cursus.type.meta, fontWeight = FontWeight.SemiBold,
-            color = c.textSecondary, modifier = Modifier.padding(horizontal = 16.dp),
+            color = c.textSecondary, modifier = Modifier.padding(horizontal = 20.dp),
         )
         Column(
             Modifier.fillMaxWidth().clip(PreferenceShape).background(c.bgElevated)
-                .border(1.dp, c.border, PreferenceShape).padding(vertical = 4.dp),
+                .border(1.dp, c.border, PreferenceShape).padding(4.dp),
             content = content,
         )
-        if (note != null) Text(note, style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(horizontal = 16.dp))
+        if (note != null) Text(note, style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(horizontal = 20.dp))
     }
 }
 
@@ -64,16 +63,17 @@ fun PreferenceRow(
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         // At small window widths, decoration must yield space to the label.
         val showIcon = icon != null && maxWidth >= 360.dp && androidx.compose.ui.platform.LocalDensity.current.fontScale <= 1.3f
-        val inset = if (maxWidth < 360.dp) 12.dp else 16.dp
+        val inset = 16.dp
         Column(
-            Modifier.fillMaxWidth().defaultMinSize(minHeight = if (subtitle.isNullOrBlank()) 64.dp else 84.dp)
+            Modifier.fillMaxWidth().clip(chat.cursus.ui.theme.Radius.insetControl)
+                .defaultMinSize(minHeight = if (subtitle.isNullOrBlank()) 64.dp else 84.dp)
                 .then(if (checked != null && onToggle != null) Modifier.toggleable(checked, enabled = enabled, role = Role.Switch, onValueChange = onToggle) else Modifier)
                 .padding(horizontal = inset, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (showIcon) Box(
-                    Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(c.accentSoft),
+                    Modifier.size(32.dp).clip(chat.cursus.ui.theme.Radius.control).background(c.accentSoft),
                     contentAlignment = Alignment.Center,
                 ) { Icon(painterResource(requireNotNull(icon)), null, Modifier.size(18.dp), tint = if (enabled) c.accent else c.textMuted) }
                 Text(label, style = Cursus.type.body, fontWeight = FontWeight.Medium,

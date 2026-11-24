@@ -59,14 +59,14 @@ struct CreationButton: View {
     var icon = "plus"
     let action: () -> Void
     var body: some View {
-        Button(action: action) { CIcon(icon, size: 19, color: Theme.accent).frame(width: 34, height: 34) }
+        Button(action: action) { CIcon(icon, size: 19, color: Theme.accent).frame(width: 36, height: 36) }
             .buttonStyle(CreationActionStyle()).help(help).accessibilityLabel(help)
     }
 }
 
 // MARK: - Buttons
 
-/// The one main action of a screen: accent fill, radius 10.
+/// The one main action of a screen: accent fill, shared radius.
 struct PrimaryButtonStyle: ButtonStyle {
     var small = false
     /// Stretch to the available width.
@@ -218,7 +218,7 @@ struct IconTool: View {
     var body: some View {
         Button(action: action) { CIcon(icon, size: size) }
             .buttonStyle(IconToolStyle(active: active))
-            .help(help)
+            .help(help).accessibilityLabel(help)
     }
 }
 
@@ -235,7 +235,7 @@ struct PencilButton: View {
         }
         .buttonStyle(.plain)
         .foregroundColor(Theme.mutedText)
-        .help(help)
+        .help(help).accessibilityLabel(help)
     }
 }
 
@@ -457,6 +457,7 @@ struct ActionTile: View {
                 }
                 .padding(.vertical, 10)
                 .padding(.horizontal, 12)
+                .frame(minHeight: 44)
             }
             .contentShape(Rectangle())
         }
@@ -514,6 +515,7 @@ struct NavRow: View {
             // One row pitch everywhere (`flush` is kept for call sites).
             .padding(.vertical, 10)
             .padding(.horizontal, 12)
+            .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(GhostTileStyle(selected: selected))
@@ -522,7 +524,7 @@ struct NavRow: View {
 
 // MARK: - Cards and pages
 
-/// `bg.elevated`, 1px border, radius 12. `padding: 0` for a card made only
+/// `bg.elevated`, 1px border, shared radius. `padding: 0` for a card made only
 /// of buttons (flush rows / tiles): the whole card surface is clickable.
 struct Card<Content: View>: View {
     var padding: CGFloat = 12
@@ -547,13 +549,15 @@ struct CardTitle: View {
     var subtitle: String? = nil
 
     var body: some View {
-        // Section heading: a small accent label above its rows (`icon` and
-        // `subtitle` are kept for call sites, not shown).
-        HStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.cMetaBold).foregroundColor(Theme.accent)
-            Spacer(minLength: 0)
+            if let subtitle = subtitle, !subtitle.isEmpty {
+                Text(subtitle).font(.cMeta).foregroundColor(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
     }
 }
 
@@ -577,22 +581,23 @@ struct PrefRow<Control: View>: View {
     @ViewBuilder let control: Control
 
     var body: some View {
-        HStack(spacing: 14) {
-            if let icon = icon {
-                CIcon(icon, size: 18, color: Theme.accent)
-                    .frame(width: 32, height: 32)
-                    .background(RoundedRectangle(cornerRadius: Radius.control).fill(Theme.accentSoft))
-            }
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                if let icon = icon {
+                    CIcon(icon, size: 18, color: Theme.accent)
+                        .frame(width: 32, height: 32)
+                        .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Theme.accentSoft))
+                }
                 Text(label).font(.cBody).foregroundColor(Theme.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                if let note = note, !note.isEmpty {
-                    Text(note).font(.cMeta).foregroundColor(Theme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                control.fixedSize()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            control.fixedSize()
+            if let note = note, !note.isEmpty {
+                Text(note).font(.cMeta).foregroundColor(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, icon == nil ? 0 : 44)
+            }
         }
         .padding(.vertical, 14)
         .padding(.horizontal, 16)
@@ -620,7 +625,7 @@ struct Page<Content: View>: View {
 
 // MARK: - Fields
 
-/// Standard field: radius 10, field fill, border → accent when focused.
+/// Standard field: shared radius, field fill, border → accent when focused.
 struct CursusField: View {
     let placeholder: String
     @Binding var text: String
@@ -649,7 +654,7 @@ struct CursusField: View {
     }
 }
 
-/// Rounded inline field (local name under a profile name): radius 12, 6×12.
+/// Rounded inline field (local name under a profile name): shared radius, 6×12.
 struct RoundedField: View {
     let placeholder: String
     @Binding var text: String
@@ -697,6 +702,7 @@ struct LinkBox: View {
                     .truncationMode(.middle)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                Text(copied ? "Copied" : "Copy").font(.cMeta).foregroundColor(Theme.accent)
                 CIcon(copied ? "check" : "copy", size: 18, color: Theme.accent)
             }
             .padding(.vertical, 10)
@@ -707,11 +713,13 @@ struct LinkBox: View {
             })
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                    .strokeBorder(Theme.accent, lineWidth: 1))
+                    .strokeBorder(Theme.border, lineWidth: 1))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help("Copy link")
+        .accessibilityLabel("Copy link")
+        .accessibilityValue(copied ? "Copied" : text)
     }
 }
 
@@ -841,16 +849,16 @@ struct PreferenceGroup<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             if let title = title {
-                Text(title).font(.cMeta).foregroundColor(Theme.secondaryText).padding(.horizontal, 16)
+                Text(title).font(.cMeta).foregroundColor(Theme.secondaryText).padding(.horizontal, 20)
             }
             VStack(alignment: .leading, spacing: 0) { content }
-                .padding(.vertical, 4)
+                .padding(4)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Theme.elevated))
                 .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
             if let note = note {
-                Text(note).font(.cMeta).foregroundColor(Theme.secondaryText).padding(.horizontal, 16)
+                Text(note).font(.cMeta).foregroundColor(Theme.secondaryText).padding(.horizontal, 20)
             }
         }
     }

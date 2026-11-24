@@ -59,10 +59,10 @@ internal fun StampedMessageText(text: AnnotatedString, style: TextStyle, message
     }
     val measurements = labels.map { measurer.measure(AnnotatedString(it), metaStyle) }
     val receipt = message.outgoing && showReceipt
-    val (stampWidth, lineHeight) = with(density) {
+    val (stampWidth, stampHeight) = with(density) {
         val width = measurements.sumOf { it.size.width } + (if (receipt) 14.dp.toPx() else 0f) +
             (labels.size + (if (receipt) 1 else 0) - 1) * 4.dp.toPx()
-        val height = maxOf(style.lineHeight.toPx(), measurements.maxOf { it.size.height }.toFloat(),
+        val height = maxOf(measurements.maxOf { it.size.height }.toFloat(),
             if (receipt) 14.dp.toPx() else 0f)
         width.coerceAtLeast(1f).toSp() to height.toSp()
     }
@@ -75,7 +75,8 @@ internal fun StampedMessageText(text: AnnotatedString, style: TextStyle, message
         Text(
             reserved, style = style, color = Cursus.colors.textPrimary,
             inlineContent = mapOf("stamp" to InlineTextContent(
-                Placeholder(stampWidth, lineHeight, PlaceholderVerticalAlign.Bottom),
+                // A full body-line reservation would enlarge the line and lift its glyphs.
+                Placeholder(stampWidth, stampHeight, PlaceholderVerticalAlign.TextBottom),
             ) {}),
         )
         MessageStamp(message, showReceipt, Modifier.align(Alignment.BottomEnd))

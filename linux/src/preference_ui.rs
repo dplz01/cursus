@@ -14,20 +14,20 @@ pub(crate) fn group<'a>(
     if let Some(title) = title {
         body = body.push(
             container(text(title).size(d.meta).color(theme::t().text_secondary))
-                .padding(Padding::from([0, 16])),
+                .padding(Padding::from([0, 20])),
         );
     }
     body = body.push(
         container(rows)
             .width(Length::Fill)
-            .padding(5)
+            .padding(4)
             .clip(true)
             .style(|_| {
                 let t = theme::t();
                 container::Style {
                     background: Some(t.bg_elevated.into()),
                     border: iced::Border {
-                        radius: 20.0.into(),
+                        radius: theme::CONTROL_RADIUS.into(),
                         width: 1.0,
                         color: t.border,
                     },
@@ -38,7 +38,7 @@ pub(crate) fn group<'a>(
     if let Some(note) = note {
         body = body.push(
             container(text(note).size(d.meta).color(theme::t().text_secondary))
-                .padding(Padding::from([0, 16])),
+                .padding(Padding::from([0, 20])),
         );
     }
     body.into()

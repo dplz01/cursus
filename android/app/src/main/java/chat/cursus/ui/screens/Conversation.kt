@@ -291,7 +291,7 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
     whoReacted?.let { emoji -> ReactionMembers(model, m, emoji) { whoReacted = null } }
     val groupIncoming = chat.isGroup && !m.outgoing
     val visualMedia = m.deleted == null && m.file?.kind in setOf("image", "video")
-    val shape = if (visualMedia) Radius.bubble else bubbleShape(m.outgoing, lastOfRun)
+    val shape = bubbleShape(m.outgoing, lastOfRun)
     // Selection mode: a tap anywhere on the row adds / removes the message.
     val selecting = model.selected.isNotEmpty()
     val onLongPress = { if (selecting) model.toggleSelected(m) else menu = true }
@@ -382,7 +382,7 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
     }
 }
 
-private val RoundedChip = androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
+private val RoundedChip = chat.cursus.ui.theme.Radius.control
 
 /**
  * Bubbles round off at 16 except on the sender's side (right for sent, left

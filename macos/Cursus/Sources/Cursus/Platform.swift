@@ -63,15 +63,15 @@ enum Theme {
     static let sidebar = dynamic(0xFFFFFF, 0x15181E)
     static let list = dynamic(0xFFFFFF, 0x15181E)
     static let panel = dynamic(0xEEF0F4, 0x0E1015)
-    static let elevated = dynamic(0xFFFFFF, 0x1C2028)
-    static let hover = dynamic(0xEDEFF3, 0x20242D)
+    static let elevated = dynamic(0xFFFFFF, 0x252B36)
+    static let hover = dynamic(0xEDEFF3, 0x303746)
     static let fieldFill = dynamic(0xF2F4F7, 0x111318)
-    static let border = dynamic(0xDDE1E7, 0x252A33)
+    static let border = dynamic(0xDDE1E7, 0x3B4453)
 
     // Text
     static let primaryText = dynamic(0x12141A, 0xF2F3F5)
     static let secondaryText = dynamic(0x5C6370, 0xA0A6B3)
-    static let mutedText = dynamic(0x8B919C, 0x6E7585)
+    static let mutedText = dynamic(0x656D79, 0x8B93A3)
 
     // Accent
     static let accent = dynamic(0x2F6FED, 0x5B8CFF)
@@ -124,11 +124,14 @@ enum Theme {
 /// Shapes (DESIGN_SYSTEM.md → Spacing, radius and shape). Use these, never
 /// inline numbers.
 enum Radius {
-    // Custom controls share one curvature, alongside native window corners.
-    static let control: CGFloat = 12
+    // Match the 20pt Tahoe window corners of our .unifiedCompact toolbar.
+    static let control: CGFloat = 20
     static let sm = control
     static let md = control
     static let lg = control
+    static let dockSelection: CGFloat = control - 5
+    static let composer: CGFloat = 12
+    static let mediaInset: CGFloat = 12
     static let bubble: CGFloat = 16
 }
 

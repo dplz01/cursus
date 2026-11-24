@@ -342,8 +342,7 @@ struct MessageRow: View {
     private var revealed: Bool { model.revealedMessages.contains(message.id) }
 
     private var bubbleShape: BubbleShape {
-        BubbleShape(outgoing: message.outgoing, runContinues: message.runContinues,
-                    small: isVisualMedia ? Radius.bubble : 6)
+        BubbleShape(outgoing: message.outgoing, runContinues: message.runContinues)
     }
 
     @ViewBuilder private var bubble: some View {
@@ -565,7 +564,7 @@ private struct MessageStamp: View {
         .foregroundColor(onMedia ? .white : message.outgoing && !message.emojiOnly ? Theme.bubbleOutMeta : Theme.mutedText)
         .padding(.horizontal, onMedia ? 6 : 0)
         .padding(.vertical, onMedia ? 3 : 0)
-        .background(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+        .background(RoundedRectangle(cornerRadius: Radius.mediaInset, style: .continuous)
             .fill(onMedia ? Color.black.opacity(0.5) : .clear))
     }
 }
@@ -798,7 +797,7 @@ struct AttachmentView<Stamp: View>: View {
                         .frame(width: image.size.width * min(1, min(300 / max(1, image.size.width), 320 / max(1, image.size.height))),
                                height: image.size.height * min(1, min(300 / max(1, image.size.width), 320 / max(1, image.size.height))))
                         .blur(radius: hidden ? 24 : 0)
-                        .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.mediaInset, style: .continuous))
                         .overlay {
                             if hidden {
                                 Text("Click to show")
@@ -1066,9 +1065,9 @@ struct ComposerView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
-                    .background(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).fill(Theme.fieldFill))
+                    .background(RoundedRectangle(cornerRadius: Radius.composer, style: .continuous).fill(Theme.fieldFill))
                     .overlay(
-                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                        RoundedRectangle(cornerRadius: Radius.composer, style: .continuous)
                             .strokeBorder(Theme.border, lineWidth: 1))
                     IconTool(icon: "mic", help: "Record a voice message", size: 20) {
                         Task { await model.startRecording() }

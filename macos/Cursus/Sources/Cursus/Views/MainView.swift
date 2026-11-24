@@ -151,10 +151,10 @@ struct NavDock: View {
     private var lens: some View {
         GeometryReader { geometry in
             let count = CGFloat(Destination.allCases.count)
-            let width = max(0, (geometry.size.width - 10 - 2 * (count - 1)) / count)
+            let width = max(0, (geometry.size.width - 10 - 4 * (count - 1)) / count)
             DockSelection(refractive: refractive)
                 .frame(width: width, height: 54)
-                .position(x: 5 + width / 2 + selectedIndex * (width + 2), y: 32)
+                .position(x: 5 + width / 2 + selectedIndex * (width + 4), y: 32)
                 .animation(slideAnimation, value: model.destination)
         }
         .allowsHitTesting(false)
@@ -162,7 +162,7 @@ struct NavDock: View {
     }
 
     private var tabs: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 4) {
             ForEach(Destination.allCases) { dest in
                 Button { model.destination = dest } label: {
                     VStack(spacing: 4) {
@@ -179,7 +179,7 @@ struct NavDock: View {
                     .animation(slideAnimation, value: model.destination)
                     .frame(maxWidth: .infinity)
                     .frame(height: 54)
-                    .contentShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: Radius.dockSelection, style: .continuous))
                     .overlay(alignment: .topTrailing) {
                         if badge(for: dest) > 0 {
                             UnreadPill(count: badge(for: dest))
@@ -187,7 +187,7 @@ struct NavDock: View {
                         }
                     }
                 }
-                .buttonStyle(GhostTileStyle(radius: Radius.control, hoverEnabled: model.destination != dest))
+                .buttonStyle(GhostTileStyle(radius: Radius.dockSelection, hoverEnabled: model.destination != dest))
                 .help(dest.title)
                 .accessibilityLabel(dest.title)
                 .accessibilityValue(model.destination == dest ? "Selected" : "")
@@ -247,8 +247,8 @@ private struct DockSelection: View {
                 // remain legible without covering the foreground controls.
                 Color.clear
                     .glassEffect(.clear.tint(Theme.accent.opacity(0.10)),
-                                 in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                                 in: RoundedRectangle(cornerRadius: Radius.dockSelection, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.dockSelection, style: .continuous)
                         .strokeBorder(LinearGradient(
                             colors: [.white.opacity(0.95), Theme.accent.opacity(0.28), .white.opacity(0.75)],
                             startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
@@ -256,8 +256,8 @@ private struct DockSelection: View {
             } else {
                 Color.clear
                     .glassEffect(.clear.tint(.white.opacity(0.10)),
-                                 in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                                 in: RoundedRectangle(cornerRadius: Radius.dockSelection, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.dockSelection, style: .continuous)
                         .strokeBorder(LinearGradient(colors: [.white.opacity(0.32), .white.opacity(0.06), .white.opacity(0.18)],
                             startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
                     .shadow(color: .black.opacity(0.18), radius: 2, x: 0, y: 1)
@@ -269,8 +269,8 @@ private struct DockSelection: View {
     }
 
     private var fallback: some View {
-        RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Theme.accent.opacity(0.16))
-            .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
+        RoundedRectangle(cornerRadius: Radius.dockSelection, style: .continuous).fill(Theme.accent.opacity(0.16))
+            .overlay(RoundedRectangle(cornerRadius: Radius.dockSelection, style: .continuous).strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1))
     }
 }
 

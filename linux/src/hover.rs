@@ -87,7 +87,7 @@ impl<'a, Message, Theme, Renderer> HoverArea<'a, Message, Theme, Renderer> {
             selected_bg: None,
             idle_bg: None,
             redraw_on_hover: false,
-            radius: 10.0,
+            radius: crate::theme::CONTROL_RADIUS,
             pointer: false,
             center_hover: false,
             glow_y: None,

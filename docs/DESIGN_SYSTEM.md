@@ -31,7 +31,7 @@ Let each platform render **its own native navigation**:
 |---|---|---|
 | Linux (Iced) | Vertical nav rail | Bottom destination bar |
 | macOS (SwiftUI) | Native split with floating bottom destination dock below list | — |
-| Android (Compose) | Bottom destination dock below list | `NavigationBar` |
+| Android (Compose) | Floating destination dock below list | Floating bottom destination dock |
 | iOS (SwiftUI) | Sidebar / split | `TabView` + navigation stack |
 
 Android uses one pane below 600dp of available app-window width, and two panes above it. The two-pane shell always keeps its destination dock below the list, with every settings category and chat detail in the right pane; it never adds a rail. Split decisions use actual window constraints, including floating and split-screen windows.
@@ -57,23 +57,23 @@ Exact values live in `linux/src/theme.rs` (`Tokens::light()` / `Tokens::dark()`)
 | `bg.sidebar` | `#FFFFFF` | `#15181E` | Nav rail and sidebar |
 | `bg.list` | `#FFFFFF` | `#15181E` | Middle column / lists |
 | `bg.panel` | `#EEF0F4` | `#0E1015` | Conversation pane, settings pages |
-| `bg.elevated` | `#FFFFFF` | `#1C2028` | Menus, popups, incoming bubbles |
-| `bg.hover` | `#EDEFF3` | `#20242D` | Hover fill for every quiet control |
+| `bg.elevated` | `#FFFFFF` | `#252B36` | Menus, popups, preference cards |
+| `bg.hover` | `#EDEFF3` | `#303746` | Hover fill for every quiet control |
 | `bg.field` | `#F2F4F7` | `#111318` | Text fields and quiet buttons |
 | `bubble.in` / `bubble.out` | `#FFFFFF` / `#D8E5FF` | `#1C2028` / `#243A63` | Incoming / outgoing messages |
 | `bubble.out.meta` | `#5A6C8F` | `#A7B6D6` | Time and secondary text on outgoing messages |
 | `text.primary` | `#12141A` | `#F2F3F5` | Body / titles |
 | `text.secondary` | `#5C6370` | `#A0A6B3` | Previews, idle icons, placeholders in rounded fields |
-| `text.muted` | `#8B919C` | `#6E7585` | Section labels, hints, disabled labels |
+| `text.muted` | `#656D79` | `#8B93A3` | Section labels, hints, disabled labels |
 | `accent` | `#2F6FED` | `#5B8CFF` | Primary actions, selection, links |
 | `accent.hover` / `accent.press` | `#255DD1` / `#1C4CB8` | `#6B99FF` / `#4D7AEB` | Primary button states |
 | `accent.on` | `#FFFFFF` | `#0B1020` | Text / icons on accent |
 | `accent.soft` | accent @ 12% | accent @ 16% | Selected rows, unread badge, link box |
 | `accent.soft.press` | accent @ 30% | accent @ 36% | Pressed soft surfaces |
-| `border` | `#DDE1E7` | `#252A33` | Hairlines (1px) |
+| `border` | `#DDE1E7` | `#3B4453` | Hairlines (1px) |
 | `danger` | `#C62828` | `#FF6B6B` | Destructive labels / icons |
 | `success` | `#2E7D32` | `#6BCB77` | Sent / connected / accept |
-| `gold` (`always`) | `#B58B0F` | `#ECD04F` | Pending / invited status, asymmetric “always” prefs, support badge |
+| `gold` (`always`) | `#B58B0F` | `#ECC14F` | Pending / invited status, asymmetric “always” prefs, support badge |
 | `disabled.fill` | `#D1D5DA` | `#404D66` | Disabled primary buttons |
 
 Rules:
@@ -102,9 +102,9 @@ Rules:
 | Token | Value |
 |---|---|
 | `space.1` … `space.6` | 4 / 8 / 12 / 16 / 24 / 32 px |
-| `radius.sm` | 8 — menu items, emoji suggestions |
-| `radius.md` | 10 — primary / secondary / danger buttons, composer field |
-| `radius.lg` | 12 — action tiles, rounded text fields, link box, cards, menus |
+| `radius.sm` | 20 — menu items, emoji suggestions |
+| `radius.md` | 20 — primary / secondary / danger buttons, form fields |
+| `radius.lg` | 20 — action tiles, rounded text fields, link box, cards, menus |
 | `radius.bubble` | 16 — message bubbles |
 | `radius.pill` | 999 — round icon buttons, unread badge, avatars |
 
@@ -120,17 +120,17 @@ Every button in Cursus is one of these. Pick by *role*, never by look.
 
 | Kind | Linux style fn | Shape | Rest | Hover / press | Used for |
 |---|---|---|---|---|---|
-| **Primary** | `primary_action` | radius 10, padding 12×16 (8×12 small) | `accent` fill, `accent.on` text | `accent.hover` / `accent.press` | The one main action of a screen: Connect, Next, Accept, Create link |
-| **Secondary** | `secondary_action` | radius 10, 1px `border` | `bg.sidebar` fill | `bg.hover` | Neutral alternatives: Cancel, menu-choice chips (`Short ▾`, `Member ▾`), header “+” |
-| **Danger (solid)** | `danger_action` | radius 10 | `danger` fill, white text | darker red | Final confirmation of destruction (Leave / Delete confirm) |
-| **Action tile (ghost)** | `ghost_tile` | radius 12, padding 10×8 | **no fill, no border**; 32px `accent.soft` icon disc + body-size label (same sizes as navigation rows) | `bg.hover` / `accent.soft` | Chat actions (Clear, Leave) |
-| **Danger tile (ghost)** | `ghost_danger` | radius 12 | no fill, no border; 32px red-tinted disc (`danger` @ 14%), red body label | `danger` @ 14% / 24% | Delete chat / group / channel / contact |
+| **Primary** | `primary_action` | radius 20, padding 12×16 (8×12 small) | `accent` fill, `accent.on` text | `accent.hover` / `accent.press` | The one main action of a screen: Connect, Next, Accept, Create link |
+| **Secondary** | `secondary_action` | radius 20, 1px `border` | `bg.sidebar` fill | `bg.hover` | Neutral alternatives: Cancel, menu-choice chips (`Short ▾`, `Member ▾`), header “+” |
+| **Danger (solid)** | `danger_action` | radius 20 | `danger` fill, white text | darker red | Final confirmation of destruction (Leave / Delete confirm) |
+| **Action tile (ghost)** | `ghost_tile` | radius 20, padding 10×8 | **no fill, no border**; 32px `accent.soft` icon disc + body-size label (same sizes as navigation rows) | `bg.hover` / `accent.soft` | Chat actions (Clear, Leave) |
+| **Danger tile (ghost)** | `ghost_danger` | radius 20 | no fill, no border; 32px red-tinted disc (`danger` @ 14%), red body label | `danger` @ 14% / 24% | Delete chat / group / channel / contact |
 | **Icon-only tool** | `composer_hit` + `*_tool` icon | 32×32 hit, 20px glyph | glyph `text.secondary` | glyph → `text.primary` | Back, paste, favourite, mute, settings, role, member actions, add contact |
 | **Round icon** | `round_icon` | pill | no fill | `bg.hover` / `accent.soft` | Floating round controls |
-| **Menu item** | `menu_item` | radius 8, padding 10×12, full width | transparent | `bg.hover` / `accent.soft` | Rows inside overlay menus and context menus; disabled = `text.muted` label, no press |
-| **Link box** | `link_box` | radius 12, 1px `accent` border | `accent.soft` fill, `accent` text, copy glyph at the end | `accent.soft.press` | A shareable link — the whole box copies |
-| **Nav destination** | `nav_active` / `nav_idle` | radius 12 | active: `accent.soft` + accent glyph | `bg.hover` | The four destinations |
-| **Chip** | `reaction_chip` | radius 14, 1px border | `bg.elevated` (selected: accent) | `accent.soft` | Reactions |
+| **Menu item** | `menu_item` | radius 20, padding 10×12, full width | transparent | `bg.hover` / `accent.soft` | Rows inside overlay menus and context menus; disabled = `text.muted` label, no press |
+| **Link box** | `link_box` | radius 20, 1px `accent` border | `accent.soft` fill, `accent` text, copy glyph at the end | `accent.soft.press` | A shareable link — the whole box copies |
+| **Nav destination** | `nav_active` / `nav_idle` | radius 20 | active: `accent.soft` + accent glyph | `bg.hover` | The four destinations |
+| **Chip** | `reaction_chip` | radius 20, 1px border | `bg.elevated` (selected: accent) | `accent.soft` | Reactions |
 
 Placement rules: one primary per view; destructive actions are ghost-danger tiles that lead to a confirm step with a solid danger button; icon-only tools are always 32px hits with the same 20px glyph box so nothing looks bigger than the settings gear.
 
@@ -138,16 +138,16 @@ Placement rules: one primary per view; destructive actions are ghost-danger tile
 
 | Kind | Style fn | Shape | Notes |
 |---|---|---|---|
-| Standard field | `composer_input` | radius 10, 1px `border` → `accent` when focused, `bg.sidebar` fill, padding = `composer` | Forms, invite link, group description |
-| Rounded inline field | `rounded_field` | radius 12 (= action tiles), padding 6×12, placeholder in `text.secondary` | Local name / alias under a profile name; side padding ≥ radius so corners never clip the placeholder |
-| Composer | `composer_editor` | radius 10, no border | Message composer |
+| Standard field | `composer_input` | radius 20, 1px `border` → `accent` when focused, `bg.sidebar` fill, padding = `composer` | Forms, invite link, group description |
+| Rounded inline field | `rounded_field` | radius 20 (= action tiles), padding 6×12, placeholder in `text.secondary` | Local name / alias under a profile name; side padding ≥ radius so corners never clip the placeholder |
+| Composer | `composer_editor` | radius 20, no border | Message composer |
 
 All editable fields (except passwords) **and the chat composer** offer the **edit menu**: right-click (desktop) or long-press (touch) → *Select all · Cut · Copy · Paste* backed by the system clipboard. A long-press keeps an existing selection (the finger-down would otherwise clear it). Cut/Copy are disabled without a selection, Paste when the clipboard is empty, Select all when the field is empty. (Linux: `edit_menu::edit_field`, built on `iced_aw::ContextMenu`.) A field that accepts links has an icon-only **paste** tool beside it.
 
 ### Overlays and menus
 
-- **Choice menu** (“nice overlay menu”): centred card (`bg.elevated`, radius 12, max 400px wide) over a 45% black backdrop; title in `text.muted`, options as menu items, the current choice in `accent`. Options that represent roles show the role glyph before the name. Tap outside or Esc closes.
-- **Context menu**: small card at the pointer, radius 12, soft shadow, no backdrop.
+- **Choice menu** (“nice overlay menu”): centred card (`bg.elevated`, radius 20, max 400px wide) over a 45% black backdrop; title in `text.muted`, options as menu items, the current choice in `accent`. Options that represent roles show the role glyph before the name. Tap outside or Esc closes.
+- **Context menu**: small card at the pointer, radius 20, soft shadow, no backdrop.
 - Confirmations live inside the same card (replace the actions with the question + Cancel / solid danger).
 
 ### Profile header (one component everywhere)
@@ -179,7 +179,7 @@ Profile overviews, the Settings category list, Invite and New keep the same flat
 - **Page column**: at most 620 wide, centred; 16 side padding; 22 between sections.
 - **Section label**: meta size, bold, `accent`, inset 12, 4 above its rows. No icon.
 - **Row** — navigation and actions on flat pages:
-  - inset 12 left and right, 10 above and below; radius 12 hover / press tint (`ghost tile`);
+  - inset 12 left and right, 10 above and below; radius 20 hover / press tint (`ghost tile`);
   - leading glyph 20 in a 24 box, **no disc behind it**; 14 gap to the label;
   - label in body size; optional one-line meta subtitle;
   - trailing: chevron, switch, value chip or count.
@@ -491,3 +491,50 @@ the member page holds role/actions. Long editable bios/descriptions are left
 aligned, keep the pencil at the top and expose the full text in their editor.
 Personal receipt controls sit at the row's outer trailing edge. Only negotiated
 chat-permission choices reserve a separate peer-status icon column.
+
+Custom controls and surfaces on Linux and Android use the macOS navigation lens’s 20-point corner radius. Message bubbles and the chat composer retain their dedicated shapes; avatars, switch tracks and circular indicators remain round. Inline message metadata reserves only its measured height, so it cannot increase the body line height or lift the message text.
+
+The shared control radius is 20pt/dp, following the macOS main window’s `.unifiedCompact` toolbar style on Tahoe. The macOS window itself keeps its system-managed geometry. Linux exposes this as `theme::CONTROL_RADIUS`; Android uses `Radius.control`; macOS uses `Radius.control`.
+
+
+## Cross-platform UI audit — November 2026
+
+Shared components cover the conversation and call lists, chat/group/channel and
+member profiles, settings categories and preferences, connection/creation flows,
+link sharing and selection overlays. Platform navigation stays native: Android
+system Back, macOS keyboard/menu/toolbar behavior, and mouse/touch-aware Linux
+controls. The macOS selection lens keeps its native glass treatment.
+
+- Preference cards use a 20pt outer curve, equal 4pt insets and concentric 16pt
+  inner hover/ripple clipping. Headings and supporting notes align with row
+  content. Notes take the width below controls rather than a narrow side column.
+- Floating destination bars use a consistent 64pt/dp height across platforms.
+- Navigation/action rows share 20pt glyphs in 24pt slots with a 14pt gap. Phone
+  primary/secondary actions and header tools have at least 48dp targets. Desktop
+  navigation/action rows have a 44pt minimum while keyboard controls stay compact.
+- Section subtitles are visible, including member counts. Profile quick actions
+  on Android keep active Star/Mute states visibly selected after the touch ends.
+- Shareable links have a one-line preview and an explicit Copy action, a quiet
+  border, and platform copy feedback. Invitation management is labeled “Unused
+  invitations”; replacing a one-time link is labeled “Replace link”. Existing
+  confirmations remain in place. Connect exposes “Use a random profile” as a
+  labeled switch with supporting text rather than an unexplained icon.
+- Android overlays respect system/keyboard insets and scroll on short windows.
+  Form fields show their focus border. Material dialogs use the shared shape
+  tokens. macOS icon tools expose accessibility names as well as hover help.
+- All platforms share the same dark elevated/hover/border surfaces and incoming
+  bubble colors. Ordinary primary, secondary and muted text on standard Linux
+  surfaces must meet 4.5:1 contrast in both themes (covered by a palette test).
+- Chat composers and message bubbles keep dedicated geometry. Every bubble type,
+  including media, has one small sender-side corner, or two when joining the
+  next message. Avatars, switches and round indicators retain their purpose.
+
+Review snapshots are generated by `shots::shots_` tests in `target/shots`.
+Run these sequentially (`--test-threads=1`) because the headless test harness
+shares active theme state. Native macOS appearance still requires a Mac review;
+Swift parsing on Linux is not a native build or visual verification.
+
+Destination docks use an equal 5pt/dp inset on every side, 4pt gaps, and a
+15pt selection radius concentric with the 20pt outer surface. The inset is
+measured from the outer silhouette, including its 1pt border. macOS lens and
+tab hit shapes share the same geometry throughout the sliding animation.

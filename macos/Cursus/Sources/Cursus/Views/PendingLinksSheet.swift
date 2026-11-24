@@ -80,7 +80,7 @@ struct PendingLinksSheet: View {
                 CIcon("link-minimalistic-2", size: 18, color: Theme.attention)
                     .frame(width: 36, height: 36)
                     .background(Circle().fill(Theme.accentSoft))
-                Text("Pending links").font(.cBodyBold).foregroundColor(Theme.primaryText)
+                Text("Unused invitations").font(.cBodyBold).foregroundColor(Theme.primaryText)
                 Spacer(minLength: 0)
             }
             Text("One-time links you created that nobody has used yet. Anyone who has one can still connect \u{2014} delete the ones you no longer need.")
@@ -88,7 +88,7 @@ struct PendingLinksSheet: View {
                 .foregroundColor(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             if model.pendingInvitations.isEmpty {
-                Text("No pending links.").font(.cMeta).foregroundColor(Theme.mutedText)
+                Text("No unused invitations.").font(.cMeta).foregroundColor(Theme.mutedText)
             }
             ScrollView {
                 VStack(spacing: 10) {

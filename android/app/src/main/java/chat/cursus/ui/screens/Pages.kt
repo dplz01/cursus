@@ -175,7 +175,7 @@ fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOp
 
 /**
  * Linux Connect card: title + ⓘ sheet, a one-time link created as the page
- * opens with its incognito switch and "New link" (asks first: the shown link
+ * opens with its incognito switch and "Replace link" (asks first: the shown link
  * is deleted), then joining with a pasted link. Leaving the page deletes the
  * link if it was never copied — nobody can have it; copied ones stay listed
  * under the gold button beside "+". The reusable address is in Settings.
@@ -214,33 +214,23 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
                         )
                     }
                 }
-                IconTool(
-                    if (incognito) R.drawable.ic_incognito_filled else R.drawable.ic_incognito,
-                    if (incognito) "Incognito on" else "Incognito off",
-                    {
-                        val on = !incognito
-                        model.prefs.incognito = on
-                        val inv = invitation
-                        if (inv != null && !busy) {
-                            busy = true
-                            scope.launch {
-                                val state = model.setInvitationIncognito(inv.connId, on)
-                                if (state != null) {
-                                    invitation = inv.copy(incognito = state)
-                                } else {
-                                    invitation = null // used or deleted meanwhile
-                                }
-                                busy = false
-                            }
-                        }
-                    },
-                    tint = if (incognito) c.accent else c.textSecondary,
-                    enabled = !busy,
-                )
             }
+            SwitchRow("Use a random profile", incognito, { on ->
+                model.prefs.incognito = on
+                val inv = invitation
+                if (inv != null && !busy) {
+                    busy = true
+                    scope.launch {
+                        val state = model.setInvitationIncognito(inv.connId, on)
+                        if (state != null) invitation = inv.copy(incognito = state)
+                        else invitation = null // used or deleted meanwhile
+                        busy = false
+                    }
+                }
+            }, note = "Use a random name instead of your profile.", enabled = !busy)
             // Same look as the Connect button below (full width on phones).
             Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-                SecondaryButton("New link", {
+                SecondaryButton("Replace link", {
                     if (invitation != null) {
                         confirmNew = true
                     } else {
@@ -299,7 +289,7 @@ private fun ConnectCard(model: AppModel, link: String, onLink: (String) -> Unit,
 
 /** Same text as the Linux ⓘ sheet (`SettingInfo::Connect`). */
 private val ConnectInfoText = listOf(
-    "One-time link: a new one is made each time you open this page. Send it to one person \u2014 whoever opens it first becomes your contact, then it stops working. \u201cNew link\u201d deletes the shown link and makes a fresh one.",
+    "One-time link: a new one is made each time you open this page. Send it to one person \u2014 whoever opens it first becomes your contact, then it stops working. \u201cReplace link\u201d deletes the shown link and makes a fresh one.",
     "Links you copied that nobody has used yet stay valid: the gold link button next to + lists them, to copy, name or delete. A link you never copied is deleted when you leave this page \u2014 nobody can have it.",
     "Incognito: when on, the person who connects sees a new random name instead of your profile \u2014 a different one for each contact. You can switch it until the link is used. It also applies when you connect with a link below.",
     "Join with a link: paste a link someone sent you \u2014 a one-time link, an address, or a group or channel link \u2014 and tap Connect.",
@@ -335,7 +325,7 @@ fun SettingsListPane(model: AppModel, selected: SettingsPage?, onOpen: (Settings
                         chat.cursus.ui.components.Avatar(user?.displayName ?: "", user?.image, 56.dp)
                         Column(Modifier.weight(1f)) {
                             Text(user?.displayName ?: "", style = Cursus.type.title, color = c.textPrimary, maxLines = 1)
-                            Text(
+                            chat.cursus.ui.components.ProfileText(
                                 user?.shortDescr?.ifBlank { null } ?: "Add a bio",
                                 style = Cursus.type.meta, color = c.textSecondary, maxLines = 1,
                             )

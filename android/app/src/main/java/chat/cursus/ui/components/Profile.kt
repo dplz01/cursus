@@ -1,6 +1,5 @@
 package chat.cursus.ui.components
 
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.rememberScrollState
@@ -219,9 +218,9 @@ fun QuickActions(vararg actions: QuickAction) {
                 val hovered by interactions.collectIsHoveredAsState()
                 val tint = if (a.active || hovered) c.accent else c.textSecondary
                 Column(
-                    Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
-                        .background(if (hovered) c.accentSoft else c.bgElevated)
-                        .border(1.dp, if (hovered) c.accent else c.border, RoundedCornerShape(16.dp))
+                    Modifier.weight(1f).clip(chat.cursus.ui.theme.Radius.control)
+                        .background(if (a.active || hovered) c.accentSoft else c.bgElevated)
+                        .border(1.dp, if (a.active || hovered) c.accent else c.border, chat.cursus.ui.theme.Radius.control)
                         .clickable(interactions, indication = androidx.compose.foundation.LocalIndication.current, onClick = a.onClick).padding(horizontal = 4.dp, vertical = 12.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(6.dp),

@@ -58,7 +58,7 @@ struct NewChatSheet: View {
 }
 
 /// Linux Connect card: a one-time link created as the sheet opens, its
-/// incognito switch and "New link" (asks first: the shown link is deleted),
+/// incognito switch and "Replace link" (asks first: the shown link is deleted),
 /// then joining with a pasted link. Closing the sheet deletes the link if it
 /// was never copied — nobody can have it. Copied links stay listed under the
 /// gold button beside "+". The reusable address is in Settings.
@@ -98,9 +98,10 @@ private struct ConnectTab: View {
                         .padding(.horizontal, 12)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                IconTool(icon: incognito ? "incognito-filled" : "incognito",
-                         help: incognito ? "Incognito on: they'll see a random profile" : "Incognito off: they'll see your profile",
-                         active: incognito, size: 20, action: toggleIncognito).disabled(busy)
+            }
+            PrefRow(label: "Use a random profile", note: "Use a random name instead of your profile.") {
+                Toggle("Use a random profile", isOn: Binding(get: { incognito }, set: { _ in toggleIncognito() }))
+                    .labelsHidden().toggleStyle(PreferenceToggleStyle()).disabled(busy)
             }
             HStack {
                 Spacer()
@@ -108,7 +109,7 @@ private struct ConnectTab: View {
                 Button(action: { if invitation == nil { create() } else { confirmNew = true } }) {
                     HStack(spacing: 6) {
                         CIcon("repeat-once", size: 14)
-                        Text("New link")
+                        Text("Replace link")
                     }
                 }
                 .buttonStyle(SecondaryButtonStyle())
@@ -207,7 +208,7 @@ private struct ConnectTab: View {
 /// What the Connect card's parts do (same text as the Linux ⓘ sheet).
 private struct ConnectInfo: View {
     private let paragraphs = [
-        "One-time link: a new one is made each time you open this page. Send it to one person \u{2014} whoever opens it first becomes your contact, then it stops working. \u{201c}New link\u{201d} deletes the shown link and makes a fresh one.",
+        "One-time link: a new one is made each time you open this page. Send it to one person \u{2014} whoever opens it first becomes your contact, then it stops working. \u{201c}Replace link\u{201d} deletes the shown link and makes a fresh one.",
         "Links you copied that nobody has used yet stay valid: the gold link button next to + lists them, to copy, name or delete. A link you never copied is deleted when you leave this page \u{2014} nobody can have it.",
         "Incognito: when on, the person who connects sees a new random name instead of your profile \u{2014} a different one for each contact. You can switch it until the link is used. It also applies when you connect with a link below.",
         "Join with a link: paste a link someone sent you \u{2014} a one-time link, an address, or a group or channel link \u{2014} and click Connect.",

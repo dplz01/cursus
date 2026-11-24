@@ -418,7 +418,7 @@ fn gate_card<'a>(
         .style(|_| container::Style {
             background: Some(iced::Background::Color(theme::t().bg_elevated)),
             border: iced::Border {
-                radius: 20.0.into(),
+                radius: theme::CONTROL_RADIUS.into(),
                 ..Default::default()
             },
             ..container::Style::default()
@@ -781,10 +781,10 @@ fn nav_rail(app: &App, d: Density) -> Element<'_, Message> {
 fn bottom_nav(app: &App) -> Element<'_, Message> {
     let d = app.density();
     // Equal vertical inset so the bar height hugs the destination buttons.
-    let pad_v = 4.0;
-    let pad_h = 8.0;
+    let pad_v = theme::DOCK_INSET;
+    let pad_h = theme::DOCK_INSET;
     let mut r = Row::new()
-        .spacing(6)
+        .spacing(4)
         .padding(Padding {
             top: pad_v,
             right: pad_h,
@@ -817,7 +817,7 @@ fn nav_destination(
     d: Density,
 ) -> Element<'_, Message> {
     let active = app.nav() == section;
-    let icon = icons::nav_icon(section.icon(), active, d.icon);
+    let icon = icons::nav_icon(section.icon(), active, if vertical { d.icon } else { 22.0 });
     let hover_ok = app.hover_ok();
 
     let (width, height) = if vertical {
@@ -832,7 +832,7 @@ fn nav_destination(
         column![
             icon,
             text(section.label())
-                .size(10)
+                .size(if vertical { 10 } else { 11 })
                 .color(if active { theme::t().accent } else { theme::t().text_secondary }),
         ]
         .spacing(3)
@@ -849,10 +849,11 @@ fn nav_destination(
         .width(width)
         .height(height);
 
+    let radius = if vertical { theme::CONTROL_RADIUS } else { theme::DOCK_SELECTION_RADIUS };
     let styled = if active {
-        btn.style(theme::nav_active(hover_ok))
+        btn.style(theme::nav_active(hover_ok, radius))
     } else {
-        btn.style(theme::nav_idle(hover_ok))
+        btn.style(theme::nav_idle(hover_ok, radius))
     };
 
     // Rail items must stay Shrink. `center_y(Fill)` also sets height to Fill,
@@ -1710,7 +1711,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
                 border: iced::Border {
                     color: theme::t().border,
                     width: 1.0,
-                    radius: 12.0.into(),
+                    radius: theme::CONTROL_RADIUS.into(),
                 },
                 ..container::Style::default()
             });
@@ -1848,7 +1849,7 @@ fn composer_context_bar(
     .style(|_| container::Style {
         background: Some(iced::Background::Color(theme::t().accent_soft)),
         border: iced::Border {
-            radius: 14.0.into(),
+            radius: theme::CONTROL_RADIUS.into(),
             ..Default::default()
         },
         ..container::Style::default()
@@ -2231,7 +2232,7 @@ fn group_invitation_card<'a>(
             border: iced::Border {
                 color: theme::t().border,
                 width: 1.0,
-                radius: 12.0.into(),
+                radius: theme::CONTROL_RADIUS.into(),
             },
             ..container::Style::default()
         })
@@ -2460,8 +2461,8 @@ fn message_bubble<'a>(
     // every bubble of a run but the last (`cursus_core::runs`).
     let r: f32 = if media_flush { 16.0 } else { 18.0 };
     const JOIN: f32 = 6.0;
-    let side_top = if media_flush { r } else { JOIN };
-    let side_bottom = if !media_flush && run.joined_next { JOIN } else { r };
+    let side_top = JOIN;
+    let side_bottom = if run.joined_next { JOIN } else { r };
     let radius = if msg.outgoing {
         iced::border::Radius {
             top_left: r,
@@ -3604,7 +3605,7 @@ fn offer_action(
             container::Style {
                 background: Some(iced::Background::Color(c.accent)),
                 border: iced::Border {
-                    radius: 8.0.into(),
+                    radius: 12.0.into(),
                     ..Default::default()
                 },
                 ..container::Style::default()
@@ -3900,21 +3901,17 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
         .width(Length::Fill)
         .into(),
     };
-    let incognito_btn = composer_hit(
-        icons::incognito_tool(PROFILE_HEADER_ICON, app.incognito(), hover),
-        PROFILE_HEADER_ICON,
-        Message::ToggleIncognito,
-    );
-    connect = connect.push(
-        container(row![link_box, incognito_btn].spacing(6).align_y(Alignment::Center))
-            .padding(Padding::from([0, 8])),
-    );
+    connect = connect.push(container(link_box).padding(Padding::from([0, 8])));
+    connect = connect.push(preference_switch(
+        None, "Use a random profile", Some("Use a random name instead of your profile."),
+        app.incognito(), (!app.invitation_busy()).then_some(Message::ToggleIncognito), d, hover,
+    ));
     // Same look as the Connect button below: accent, full width on phones.
     let regenerate = button(
         container(
             row![
                 icons::repeat_once_icon(16.0, theme::t().accent),
-                text("New link").size(d.meta),
+                text("Replace link").size(d.meta),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -4016,19 +4013,16 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
             .width(Length::Fill)
             .style(theme::list_row(two_columns && app.settings_open() && app.settings_section() == section, hover))
     };
-    let two_lines = |title: String, sub: String, title_size: f32, bold: bool| {
-        let mut title = text(title).size(title_size).color(theme::t().text_primary);
-        if bold {
-            title = title.font(BOLD);
-        }
-        column![title, ellipsis_text(sub, d.meta, theme::t().text_secondary, 1)].spacing(2).width(Length::Fill)
-    };
     let bio = if draft.fields.short_descr.is_empty() { "Add a bio".to_string() } else { draft.fields.short_descr.clone() };
     let mut col = Column::new().spacing(2).width(Length::Fill);
     col = col.push(row_button(
         row![
             profile_avatar(draft.fields.image.as_deref(), &draft.fields.display_name, 56.0),
-            two_lines(draft.fields.display_name.clone(), bio, d.title, true),
+            column![
+                text(draft.fields.display_name.clone()).size(d.title).font(BOLD).color(theme::t().text_primary),
+                container(profile_rich(&bio, d.meta, theme::t().text_secondary, false).wrapping(Wrapping::None))
+                    .width(Length::Fill).height(d.meta * 1.5).clip(true),
+            ].spacing(2).width(Length::Fill),
         ]
         .spacing(14)
         .align_y(Alignment::Center)
@@ -4424,7 +4418,7 @@ fn preference_row_with_support<'a>(
                 .style(|_| container::Style {
                     background: Some(theme::t().accent_soft.into()),
                     border: iced::Border {
-                        radius: 10.0.into(),
+                        radius: theme::CONTROL_RADIUS.into(),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -4487,7 +4481,7 @@ fn preference_switch<'a>(
         .on_press_maybe(message)
         .padding(0)
         .width(Length::Fill)
-        .style(theme::ghost_tile(hover))
+        .style(theme::ghost_tile_r(hover, theme::INSET_CONTROL_RADIUS))
         .into()
 }
 
@@ -4514,7 +4508,7 @@ fn pref_toggle<'a>(on: bool, enabled: bool) -> Element<'a, Message> {
             .into(),
         ),
         border: iced::Border {
-            radius: 10.0.into(),
+            radius: theme::CONTROL_RADIUS.into(),
             ..Default::default()
         },
         ..Default::default()
@@ -4540,7 +4534,7 @@ fn pref_toggle<'a>(on: bool, enabled: bool) -> Element<'a, Message> {
                 .into(),
             ),
             border: iced::Border {
-                radius: 14.0.into(),
+                radius: theme::CONTROL_RADIUS.into(),
                 ..Default::default()
             },
             ..Default::default()
@@ -5181,7 +5175,7 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
                         Message::SetContactVoice,
                     ),
                     _ => (
-                        "Audio/video calls",
+                        "Audio and video calls",
                         app.contact_profile().map(|p| p.calls_allow),
                         Message::SetContactCalls,
                     ),
@@ -5277,7 +5271,7 @@ fn menu_card<'a>(body: Element<'a, Message>, d: Density) -> Element<'a, Message>
             border: iced::Border {
                 color: theme::t().border,
                 width: 1.0,
-                radius: 16.0.into(),
+                radius: theme::CONTROL_RADIUS.into(),
             },
             ..container::Style::default()
         })
@@ -6820,7 +6814,7 @@ fn call_card(app: &App, large: bool) -> Option<Element<'_, Message>> {
             border: iced::Border {
                 color: theme::t().accent,
                 width: 1.0,
-                radius: 12.0.into(),
+                radius: theme::CONTROL_RADIUS.into(),
             },
             ..container::Style::default()
         })
@@ -7591,7 +7585,7 @@ const ROW_PAD: Padding = Padding {
 };
 const ROW_ICON_BOX: f32 = 24.0;
 const ROW_GAP: f32 = 14.0;
-const ROW_RADIUS: f32 = 12.0;
+const ROW_RADIUS: f32 = theme::CONTROL_RADIUS;
 
 /// The glyph in front of a row: a fixed box, no backdrop.
 fn icon_disc<'a>(icon: Element<'a, Message>, size: f32) -> Element<'a, Message> {
@@ -7947,7 +7941,7 @@ fn field_editor_overlay(app: &App) -> Element<'_, Message> {
             border: iced::Border {
                 color: theme::t().border,
                 width: 1.0,
-                radius: 18.0.into(),
+                radius: theme::CONTROL_RADIUS.into(),
             },
             shadow: iced::Shadow {
                 color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
@@ -8142,7 +8136,7 @@ fn contact_feature_prefs(
     ));
     col = col.push(contact_feature_pick_row(
         icons::phone_icon(20.0, icon_tint),
-        "Audio/video calls",
+        "Audio and video calls",
         choice_chip(
             p.calls_allow.label(),
             Message::OpenPrefMenu(PrefMenu::ContactCalls),
@@ -8278,13 +8272,14 @@ fn link_copy_box<'a>(
     button(
         row![
             container(ellipsis_text(link.to_string(), d.meta, theme::t().accent, 1)).width(Length::Fill),
+            text("Copy").size(d.meta).color(theme::t().accent),
             icons::copy_icon(18.0, theme::t().accent),
         ]
         .spacing(10)
         .align_y(Alignment::Center),
     )
     .on_press(on_copy)
-    .padding(Padding::from([10, 12]))
+    .padding(Padding::from([12, 16]))
     .width(Length::Fill)
     .style(theme::link_box(hover))
     .into()
@@ -8292,7 +8287,7 @@ fn link_copy_box<'a>(
 
 /// Rounded card grouping related rows on a page (Invite page sections).
 /// Corner radius of [`card`]; flush buttons inside use it too.
-const CARD_RADIUS: f32 = 16.0;
+const CARD_RADIUS: f32 = theme::CONTROL_RADIUS;
 
 /// A section of a page: rows straight on the panel, no box around them
 /// (the same flat language as the chat list).
@@ -8317,16 +8312,16 @@ fn card_padded<'a>(
 fn card_title<'a>(
     _icon: Element<'a, Message>,
     title: impl iced::widget::text::IntoFragment<'a>,
-    _note: impl iced::widget::text::IntoFragment<'a>,
+    note: impl Into<String>,
     d: Density,
 ) -> Element<'a, Message> {
-    container(text(title).size(d.meta).font(BOLD).color(theme::t().accent))
-        .padding(Padding {
-            top: 0.0,
-            right: 12.0,
-            bottom: 4.0,
-            left: 12.0,
-        })
+    let mut labels = column![text(title).size(d.meta).font(BOLD).color(theme::t().accent)].spacing(4);
+    let note = note.into();
+    if !note.is_empty() {
+        labels = labels.push(text(note).size(d.meta).color(theme::t().text_secondary));
+    }
+    container(labels)
+        .padding(Padding { top: 0.0, right: 16.0, bottom: 4.0, left: 16.0 })
         .width(Length::Fill)
         .into()
 }
@@ -9372,7 +9367,7 @@ fn count_badge<'a>(count: i64) -> Element<'a, Message> {
     .style(|_| container::Style {
         background: Some(iced::Background::Color(theme::t().accent)),
         border: iced::Border {
-            radius: 8.0.into(),
+            radius: theme::CONTROL_RADIUS.into(),
             ..iced::Border::default()
         },
         ..container::Style::default()
@@ -9410,7 +9405,7 @@ fn attention_count<'a>(count: i64) -> Element<'a, Message> {
     .style(|_| container::Style {
         background: Some(iced::Background::Color(theme::t().attention)),
         border: iced::Border {
-            radius: 10.0.into(),
+            radius: theme::CONTROL_RADIUS.into(),
             ..iced::Border::default()
         },
         ..container::Style::default()
@@ -9458,7 +9453,7 @@ fn pending_links_overlay(app: &App) -> Element<'_, Message> {
     col = col.push(
         row![
             icon_disc(icons::link_icon(18.0, theme::t().attention), 36.0),
-            text("Pending links")
+            text("Unused invitations")
                 .size(d.body)
                 .font(BOLD)
                 .color(theme::t().text_primary)
@@ -9483,7 +9478,7 @@ fn pending_links_overlay(app: &App) -> Element<'_, Message> {
     let links = app.pending_links();
     if links.is_empty() {
         col = col.push(
-            text("No pending links.")
+            text("No unused invitations.")
                 .size(d.meta)
                 .color(theme::t().text_muted),
         );
@@ -9612,7 +9607,7 @@ fn pending_links_overlay(app: &App) -> Element<'_, Message> {
                     border: iced::Border {
                         color: theme::t().border,
                         width: 1.0,
-                        radius: 12.0.into(),
+                        radius: theme::CONTROL_RADIUS.into(),
                     },
                     ..container::Style::default()
                 }),
@@ -9625,7 +9620,7 @@ fn pending_links_overlay(app: &App) -> Element<'_, Message> {
     sheet_overlay(menu_card(col.into(), d), Message::ClosePendingLinks)
 }
 
-/// "New link" / delete a pending link: the link stops working, so ask.
+/// "Replace link" / delete a pending link: the link stops working, so ask.
 fn link_confirm_overlay(app: &App, confirm: crate::LinkConfirm) -> Element<'_, Message> {
     let d = app.density();
     let hover = app.hover_ok();

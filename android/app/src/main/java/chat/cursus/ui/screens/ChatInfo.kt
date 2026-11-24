@@ -201,7 +201,7 @@ private val CONTACT_FEATURES = listOf(
     "fullDelete" to "Delete for everyone",
     "reactions" to "Message reactions",
     "voice" to "Voice messages",
-    "calls" to "Audio/video calls",
+    "calls" to "Audio and video calls",
 )
 
 private val FEATURE_ICONS = mapOf(

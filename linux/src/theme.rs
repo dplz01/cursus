@@ -79,7 +79,7 @@ impl Tokens {
             bg_elevated: rgb(0x252B36),
             text_primary: rgb(0xF2F3F5),
             text_secondary: rgb(0xA0A6B3),
-            text_muted: rgb(0x6E7585),
+            text_muted: rgb(0x8B93A3),
             accent,
             accent_on: rgb(0x0B1020),
             accent_soft: Color::from_rgba(0.357, 0.549, 1.0, 0.16),
@@ -116,7 +116,7 @@ impl Tokens {
             bg_elevated: Color::WHITE,
             text_primary: rgb(0x12141A),
             text_secondary: rgb(0x5C6370),
-            text_muted: rgb(0x8B919C),
+            text_muted: rgb(0x656D79),
             accent,
             accent_on: Color::WHITE,
             accent_soft: Color::from_rgba(0.184, 0.435, 0.929, 0.12),
@@ -326,6 +326,13 @@ pub fn sidebar_style() -> impl Fn(&iced::Theme) -> container::Style {
     }
 }
 
+/// Shared control curvature, matching the macOS unified-compact window.
+pub const CONTROL_RADIUS: f32 = 20.0;
+/// Concentric hover within a preference surface with a 4px inset.
+pub const INSET_CONTROL_RADIUS: f32 = CONTROL_RADIUS - 4.0;
+pub const DOCK_INSET: f32 = 5.0;
+pub const DOCK_SELECTION_RADIUS: f32 = CONTROL_RADIUS - DOCK_INSET;
+
 /// Rounded floating section nav that sits over the list page.
 pub fn floating_nav_style() -> impl Fn(&iced::Theme) -> container::Style {
     |_| {
@@ -336,7 +343,7 @@ pub fn floating_nav_style() -> impl Fn(&iced::Theme) -> container::Style {
             border: Border {
                 color: c.border,
                 width: 1.0,
-                radius: 18.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             shadow: Shadow {
                 color: Color::from_rgba(0.0, 0.0, 0.0, shadow_a),
@@ -350,7 +357,7 @@ pub fn floating_nav_style() -> impl Fn(&iced::Theme) -> container::Style {
 
 /// `hover_ok` is false after a touch lift: iced leaves the cursor on the last
 /// touch point, which would otherwise keep buttons stuck in `Hovered`.
-pub fn nav_active(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+pub fn nav_active(hover_ok: bool, radius: f32) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
         let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
@@ -365,14 +372,14 @@ pub fn nav_active(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> bu
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: 12.0.into(),
+                radius: radius.into(),
             },
             ..button::Style::default()
         }
     }
 }
 
-pub fn nav_idle(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+pub fn nav_idle(hover_ok: bool, radius: f32) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
         let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
@@ -391,7 +398,7 @@ pub fn nav_idle(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> butt
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: 12.0.into(),
+                radius: radius.into(),
             },
             ..button::Style::default()
         }
@@ -414,7 +421,7 @@ pub fn primary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: 10.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             ..button::Style::default()
         }
@@ -436,7 +443,7 @@ pub fn secondary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status)
             border: Border {
                 color: c.border,
                 width: 1.0,
-                radius: 10.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             ..button::Style::default()
         }
@@ -459,7 +466,7 @@ pub fn attention_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status)
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: 10.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             ..button::Style::default()
         }
@@ -491,7 +498,7 @@ pub fn list_row(selected: bool, hover_ok: bool) -> impl Fn(&iced::Theme, button:
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: 12.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             ..button::Style::default()
         }
@@ -513,7 +520,7 @@ pub fn menu_item(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> but
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: 8.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             ..button::Style::default()
         }
@@ -586,7 +593,7 @@ pub fn emoji_suggest_row(
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: 8.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             ..button::Style::default()
         }
@@ -608,7 +615,7 @@ pub fn danger_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) ->
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: 10.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             ..button::Style::default()
         }
@@ -649,7 +656,7 @@ pub fn danger_quiet(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> 
             border: Border {
                 color: border_color,
                 width: 1.0,
-                radius: 12.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             ..button::Style::default()
         }
@@ -660,7 +667,7 @@ pub fn danger_quiet(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> 
 /// rounded shape as the old bordered tiles but no border or fill at rest — the shape
 /// only appears on hover / press.
 pub fn ghost_tile(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
-    ghost_tile_r(hover_ok, 12.0)
+    ghost_tile_r(hover_ok, CONTROL_RADIUS)
 }
 
 /// [`ghost_tile`] with its own corner radius (16 = flush with a card edge).
@@ -688,7 +695,7 @@ pub fn ghost_tile_r(hover_ok: bool, radius: f32) -> impl Fn(&iced::Theme, button
 
 /// Destructive variant of [`ghost_tile`] — red label/icon, soft red on hover.
 pub fn ghost_danger(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
-    ghost_danger_r(hover_ok, 12.0)
+    ghost_danger_r(hover_ok, CONTROL_RADIUS)
 }
 
 /// [`ghost_danger`] with its own corner radius.
@@ -728,7 +735,7 @@ pub fn rounded_field() -> impl Fn(&iced::Theme, text_input::Status) -> text_inpu
             border: Border {
                 color: border_color,
                 width: 1.0,
-                radius: 12.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             icon: c.text_muted,
             placeholder: c.text_secondary,
@@ -751,7 +758,7 @@ pub fn rounded_editor() -> impl Fn(&iced::Theme, text_editor::Status) -> text_ed
             border: Border {
                 color: border_color,
                 width: 1.0,
-                radius: 12.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             placeholder: c.text_secondary,
             value: c.text_primary,
@@ -774,9 +781,9 @@ pub fn link_box(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> butt
             background: Some(Background::Color(background)),
             text_color: c.accent,
             border: Border {
-                color: c.accent,
+                color: c.border,
                 width: 1.0,
-                radius: 12.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             ..button::Style::default()
         }
@@ -795,7 +802,7 @@ pub fn composer_input() -> impl Fn(&iced::Theme, text_input::Status) -> text_inp
             border: Border {
                 color: border_color,
                 width: 1.0,
-                radius: 10.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             icon: c.text_muted,
             placeholder: c.text_muted,
@@ -814,7 +821,7 @@ pub fn composer_editor() -> impl Fn(&iced::Theme, text_editor::Status) -> text_e
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: 10.0.into(),
+                radius: CONTROL_RADIUS.into(),
             },
             placeholder: c.text_muted,
             value: c.text_primary,
@@ -849,7 +856,30 @@ pub fn profile_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -
         let hot = hover_ok && matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style { background: Some(if hot { c.accent_soft } else { c.bg_elevated }.into()),
             text_color: c.text_secondary,
-            border: Border { radius: 16.0.into(), width: 1.0, color: if hot { c.accent } else { c.border } },
+            border: Border { radius: CONTROL_RADIUS.into(), width: 1.0, color: if hot { c.accent } else { c.border } },
             ..Default::default() }
+    }
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+
+    fn luminance(color: Color) -> f32 {
+        let linear = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+    }
+
+    #[test]
+    fn ordinary_text_remains_readable_on_standard_surfaces() {
+        for palette in [Tokens::light(), Tokens::dark()] {
+            for background in [palette.bg_panel, palette.bg_elevated, palette.bg_sidebar, palette.bg_field] {
+                for foreground in [palette.text_primary, palette.text_secondary, palette.text_muted] {
+                    let (a, b) = (luminance(foreground), luminance(background));
+                    let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+                    assert!(ratio >= 4.5, "text contrast is only {ratio:.2}:1");
+                }
+            }
+        }
     }
 }

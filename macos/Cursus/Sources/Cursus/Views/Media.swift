@@ -384,7 +384,7 @@ struct VideoThumbnail: View {
             }
         }
         .frame(width: size.width * scale, height: size.height * scale)
-        .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.mediaInset, style: .continuous))
         .task(id: file.path) {
             guard let url = await model.readablePath(file), !Task.isCancelled else { return }
             let image = await Self.poster(url)

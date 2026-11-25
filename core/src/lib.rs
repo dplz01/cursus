@@ -34,7 +34,7 @@ pub use models::{
     group_role_rank, parse_chat_info_id, CallMedia, CallRecord, ChatId, ChatMessage, ChatPreview,
     ChatRelayInfo, ChatSettings, ChatTag, ChatType, ConnLink, DeletedState, DeliveryStatus, Event,
     FileInfo, FileKind, FileTransferState, GroupChatScope, GroupInvitationInfo, GroupMemberInfo,
-    GroupProfileUpdate, GroupSupportChat, MessageInfo, MessageQuote, MessageSender, NtfFilter,
+    GroupProfileUpdate, GroupSupportChat, MemberReceipt, MessageInfo, MessageQuote, ReceiptState, MessageSender, NtfFilter,
     ProfileFields, ReactionCount, ReactionMember, UserProfile, GROUP_ROLES, KNOWN_REACTIONS,
 };
 #[cfg(target_env = "musl")]

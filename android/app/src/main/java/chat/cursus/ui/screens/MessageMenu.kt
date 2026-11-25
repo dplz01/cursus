@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
@@ -40,6 +41,7 @@ import chat.cursus.ComposeMode
 import chat.cursus.R
 import chat.cursus.core.Chat
 import chat.cursus.core.Message
+import chat.cursus.core.Stamps
 import chat.cursus.ui.components.CursusOverlay
 import chat.cursus.ui.components.DangerButton
 import chat.cursus.ui.components.SecondaryButton
@@ -125,7 +127,7 @@ fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
                     val actions: List<Pair<MsgAction, String>> = when {
                         deleted -> listOfNotNull(
                             // Marked deleted: the text is still here, behind a tap.
-                            if (m.deleted == "marked") MsgAction.Reveal to (if (m.id in model.revealedDeleted) "Hide" else "Reveal") else null,
+                            if (m.revealable) MsgAction.Reveal to (if (m.id in model.revealedDeleted) "Hide" else "Reveal") else null,
                             MsgAction.Info to "Info", MsgAction.Delete to "Delete for me", MsgAction.Select to "Select",
                         )
                         m.outgoing -> listOfNotNull(
@@ -193,16 +195,48 @@ fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
             MenuPane.Info -> {
                 val info by rememberLoaded<chat.cursus.core.MessageInfo?>(null, m.id) { model.messageInfo(m) }
                 Text("Message info", style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Item #${m.id}", style = Cursus.type.meta, color = c.textSecondary)
-                    info?.time?.let { Text("Time: $it", style = Cursus.type.meta, color = c.textSecondary) }
-                    info?.status?.let { Text("Status: $it", style = Cursus.type.meta, color = c.textSecondary) }
-                    m.file?.let { Text("File: ${it.name} (${humanSize(it.size)})", style = Cursus.type.meta, color = c.textSecondary) }
-                    info?.text?.takeIf { it.isNotBlank() }?.let {
-                        Text("Text: $it", style = Cursus.type.meta, color = c.textSecondary, maxLines = 8, overflow = TextOverflow.Ellipsis)
-                    }
+                // Label · value rows, words not core codes (as on Linux / Mac).
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val stamp = Stamps.parse(info?.time ?: m.createdAt)?.atZone(java.time.ZoneId.systemDefault())
+                    stamp?.let { InfoRow(if (m.outgoing) "Sent" else "Received", it.format(INFO_TIME)) }
+                    (info?.statusLabel ?: info?.status)?.let { InfoRow("Status", it) }
+                    m.file?.let { InfoRow("File", "${it.name} (${humanSize(it.size)})") }
+                    info?.text?.takeIf { it.isNotBlank() }?.let { InfoRow("Text", it) }
                 }
+                info?.receipts?.takeIf { it.isNotEmpty() }?.let { ReceiptList(it) }
                 SecondaryButton("Close", onDismiss)
+            }
+        }
+    }
+}
+
+private val INFO_TIME = java.time.format.DateTimeFormatter.ofLocalizedDateTime(java.time.format.FormatStyle.MEDIUM, java.time.format.FormatStyle.SHORT)
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    val c = Cursus.colors
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(label, style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.width(72.dp))
+        Text(value, style = Cursus.type.meta, color = c.textPrimary, maxLines = 8, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+    }
+}
+
+/** Group receipts (Linux `receipt_list`): a heading per state over
+ *  avatar + name rows; scrolls inside the sheet when long. */
+@Composable
+private fun ReceiptList(receipts: List<chat.cursus.core.MemberReceipt>) {
+    val c = Cursus.colors
+    Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+        for (group in receipts.groupBy { it.state }.values) {
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(group.first().heading, style = Cursus.type.meta, color = c.textSecondary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Text("${group.size}", style = Cursus.type.meta, color = c.textMuted)
+            }
+            for (r in group) {
+                Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    chat.cursus.ui.components.Avatar(r.name, r.image, 28.dp)
+                    Text(r.name, style = Cursus.type.body, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }

@@ -14,10 +14,9 @@ struct ContactPreferencesPage: View {
     let chat: Chat
 
     var body: some View {
-        Card(spacing: 2) {
-            CardTitle(icon: "settings", title: "Chat preferences",
-                      subtitle: "What you allow \(chat.title). A feature works when you both allow it.")
-                .padding(.bottom, 6)
+        // Same page as Linux / Android: one line per row with your value at
+        // the end; what the contact allows is inside the menu.
+        PreferenceGroup(title: "Chat permissions") {
             if let prefs = chat.contactPrefs {
                 ForEach(Features.contact) { feature in
                     row(feature, prefs)
@@ -25,6 +24,7 @@ struct ContactPreferencesPage: View {
             } else {
                 Text("Preferences are available once the contact is connected.")
                     .font(.cMeta).foregroundColor(Theme.secondaryText)
+                    .padding(16)
             }
         }
         .controlSize(.small)
@@ -35,20 +35,15 @@ struct ContactPreferencesPage: View {
     private func row(_ feature: FeatureInfo, _ prefs: ContactPrefs) -> some View {
         let state = prefs.features[feature.key]
         let mine = state?.mine ?? "no"
-        PrefRow(icon: feature.icon, label: feature.label, note: note(state)) {
+        PrefRow(icon: feature.icon, label: feature.label) {
             // Disappearing messages: no "always" (that is the per-chat delete
             // timer, not a negotiated preference).
-            HStack(spacing: 12) {
-                ChoiceMenu(options: feature.key == "timedMessages"
-                            ? [Choice("no", "No"), Choice("yes", "Yes")]
-                            : [Choice("no", "No"), Choice("yes", "Yes"), Choice("always", "Always")],
-                           selection: mine) { v in
-                    Task { await model.setContactFeature(chat, feature.key, v) }
-                }
-                CIcon("user-alt-1", size: 18, color: state?.contact == "yes" ? Theme.success
-                      : state?.contact == "always" ? Theme.gold : Theme.danger)
-                    .help("Contact: \(Features.allowLabel(state?.contact ?? "no"))")
-                    .accessibilityLabel("Contact: \(Features.allowLabel(state?.contact ?? "no"))")
+            ChoiceMenu(options: feature.key == "timedMessages"
+                        ? [Choice("no", "Off"), Choice("yes", "On")]
+                        : [Choice("no", "Off"), Choice("yes", "On"), Choice("always", "Always")],
+                       selection: mine,
+                       note: state?.contactNote ?? state?.contactSummary ?? note(state)) { v in
+                Task { await model.setContactFeature(chat, feature.key, v) }
             }
         }
         if feature.key == "timedMessages" && mine != "no" {
@@ -60,10 +55,10 @@ struct ContactPreferencesPage: View {
         }
     }
 
+    /// Fallback when an older bridge sends no shared wording.
     private func note(_ state: ContactFeature?) -> String {
         guard let state = state else { return "" }
-        let theirs = "\(chat.title): \(Features.allowLabel(state.contact).lowercased())"
-        return state.enabled ? "On in this chat · \(theirs)" : "Off in this chat · \(theirs)"
+        return "\(chat.title): \(Features.allowLabel(state.contact).lowercased())"
     }
 }
 
@@ -186,11 +181,11 @@ struct MemberPage: View {
                 SectionLabel("Bio")
                 ProfileText(bio).font(.cBody).foregroundColor(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, sectionInset)
             }
         }
         if !member.isMe && !member.gone && (hasChat || (dmAllowed && !chat.isChannel)) {
-            Card(spacing: 2) {
+            Panel {
                 NavRow(icon: "paperplane", title: "Direct message",
                        subtitle: hasChat ? nil : "Starts a private chat with \(member.name)") {
                     Task { await model.messageMember(chat, member) }
@@ -199,16 +194,16 @@ struct MemberPage: View {
         }
         if chat.isModerator && !member.isMe && !member.gone {
             Card(padding: 0, spacing: 0) {
-                NavRow(icon: "flag-2", title: ["owner", "admin", "moderator"].contains(member.role) ? "Chat with admin" : "Chat with member",
+                NavRow(icon: "flag-outline", title: ["owner", "admin", "moderator"].contains(member.role) ? "Chat with admin" : "Chat with member",
                        flush: true) {
                     model.openSupport(chat, member: member)
                 }
             }
         }
         if member.awaitingReview && chat.isModerator {
-            Card(spacing: 4) {
-                CardTitle(icon: "review-file", title: "Waiting for review",
-                          subtitle: "\(member.name) asked to join.")
+            CardTitle(icon: "review-file", title: "Waiting for review",
+                      subtitle: "\(member.name) asked to join.")
+            Panel {
                 HStack(spacing: 8) {
                     Spacer()
                     Button("Remove") { Task { await model.removeMember(chat, member, withMessages: false) } }
@@ -218,10 +213,11 @@ struct MemberPage: View {
                     Button("Accept") { Task { await model.acceptMember(chat, member) } }
                         .buttonStyle(PrimaryButtonStyle())
                 }
+                .padding(12)
             }
         }
         if !member.isMe && !member.gone {
-            Card(spacing: 0) {
+            Panel {
                 if chat.isAdmin && canManage && !member.awaitingReview {
                     PrefRow(icon: MemberRoles.icon(member.role), label: "Role") {
                         ChoiceMenu(options: roleChoices.map { Choice($0, $0.capitalized) },
@@ -229,13 +225,6 @@ struct MemberPage: View {
                             Task { await model.setMemberRole(chat, member, role) }
                         }
                     }
-                }
-                PrefRow(icon: "eye-observer", label: "Show messages",
-                        note: "Off hides \(member.name)'s messages on this Mac only.") {
-                    Toggle("", isOn: Binding(
-                        get: { member.showMessages },
-                        set: { on in Task { await model.setMemberShowMessages(chat, member, on) } }))
-                        .toggleStyle(PreferenceToggleStyle())
                 }
                 if chat.isModerator && canManage {
                     PrefRow(icon: "block-prohibited", label: "Block for everyone",
@@ -252,7 +241,7 @@ struct MemberPage: View {
             .tint(Theme.accent)
         }
         if chat.isAdmin && canManage {
-            Card(spacing: 4) {
+            Panel {
                 if confirmRemove {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Remove \(member.name) from the group?")
@@ -272,7 +261,7 @@ struct MemberPage: View {
                             .buttonStyle(DangerButtonStyle())
                         }
                     }
-                    .padding(4)
+                    .padding(12)
                 } else {
                     ActionTile(icon: "remove-profile", title: chat.isChannel ? "Remove subscriber" : "Remove member",
                                danger: true) {
@@ -318,21 +307,18 @@ struct SupportListPage: View {
     }
 
     var body: some View {
-        Card(spacing: 6) {
-            CardTitle(icon: "flag-2", title: "Chats with members",
-                      subtitle: "Private threads between a member and the moderators, and join requests.")
+        SectionNote("Private threads between a member and the moderators, and join requests.")
+        Panel {
             if rows.isEmpty {
                 Text(model.members.isEmpty ? "Loading…" : "No member chats yet.")
-                    .font(.cMeta).foregroundColor(Theme.secondaryText).padding(8)
+                    .font(.cMeta).foregroundColor(Theme.secondaryText).padding(16)
             }
-            VStack(spacing: 0) {
-                ForEach(rows) { member in
-                    row(member)
-                }
+            ForEach(rows) { member in
+                row(member)
             }
         }
         if let member = confirmDelete {
-            Card(spacing: 4) {
+            Panel {
                 InlineConfirm(question: "Delete the chat with \(member.name)?",
                               detail: "The thread and its messages are deleted for the moderators.",
                               confirmTitle: "Delete",
@@ -341,6 +327,7 @@ struct SupportListPage: View {
                                   confirmDelete = nil
                                   Task { await model.deleteSupportChat(chat, member) }
                               })
+                    .padding(12)
             }
         }
     }
@@ -363,11 +350,11 @@ struct SupportListPage: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(Theme.mutedText)
             }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 16)
             .contentShape(Rectangle())
         }
-        .buttonStyle(GhostTileStyle())
+        .buttonStyle(GhostTileStyle(radius: Radius.insetControl))
         .contextMenu {
             if !member.awaitingReview && member.support != nil {
                 Button("Delete chat…") { confirmDelete = member }
@@ -393,20 +380,23 @@ struct InviteMembersPage: View {
     }
 
     var body: some View {
-        Card(spacing: 6) {
-            CardTitle(icon: "user-plus-alt-1", title: "Invite contacts",
-                      subtitle: "They get an invitation and join when they accept.")
-            PrefRow(icon: MemberRoles.icon(role), label: "Role for new members") {
-                ChoiceMenu(options: MemberRoles.assignable(by: chat.role).map { Choice($0, $0.capitalized) },
-                           selection: role) { r in role = r }
+        // Same order as Linux / Android: note, invite as, search, contacts.
+        VStack(alignment: .leading, spacing: 8) {
+            SectionNote("They get the invitation in your direct chat.")
+            Panel {
+                PrefRow(icon: MemberRoles.icon(role), label: "Invite as") {
+                    ChoiceMenu(options: MemberRoles.assignable(by: chat.role).map { Choice($0, $0.capitalized) },
+                               selection: role) { r in role = r }
+                }
             }
             CursusField(placeholder: "Search contacts", text: $search)
-            if contacts.isEmpty {
-                Text(model.invitableContacts.isEmpty ? "All your contacts are already here." : "No contact matches.")
-                    .font(.cMeta).foregroundColor(Theme.secondaryText)
-                    .padding(8)
-            }
-            VStack(spacing: 0) {
+                .padding(.top, 4)
+            Panel {
+                if contacts.isEmpty {
+                    Text(model.invitableContacts.isEmpty ? "All your contacts are already here." : "No contact matches.")
+                        .font(.cMeta).foregroundColor(Theme.secondaryText)
+                        .padding(16)
+                }
                 ForEach(contacts) { contact in
                     HStack(spacing: 10) {
                         Avatar(image: contact.image, name: contact.title, size: 36, kind: contact.avatarKind)
@@ -422,8 +412,8 @@ struct InviteMembersPage: View {
                             .buttonStyle(SecondaryButtonStyle())
                         }
                     }
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 6)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 16)
                 }
             }
         }
@@ -441,14 +431,13 @@ struct GroupLinkPage: View {
     @State private var confirmDelete = false
 
     var body: some View {
-        Card(spacing: 8) {
-            CardTitle(icon: "share-03", title: chat.isChannel ? "Share this channel" : "Share this group",
-                      subtitle: chat.isChannel
+        // The page title names it: a note, the link box, then a panel of rows.
+        VStack(alignment: .leading, spacing: 8) {
+            SectionNote(chat.isChannel
                         ? "Anyone with this link can subscribe."
                         : "Anyone with this link can join the group.")
             if let link = link {
                 LinkBox(text: link.short ?? link.display, copyText: link.short ?? link.full)
-                ActionTile(icon: "share-03", title: "Share link") { Clipboard.share(link.short ?? link.full) }
             } else if loading {
                 ProgressView().controlSize(.small).padding(8)
             } else if chat.isAdmin {
@@ -460,18 +449,23 @@ struct GroupLinkPage: View {
             } else {
                 Text("No link yet — ask an admin.").font(.cMeta).foregroundColor(Theme.secondaryText)
             }
-            if !chat.isChannel && chat.isAdmin && link != nil {
-                PrefRow(icon: MemberRoles.icon(role), label: "People joining become") {
-                    ChoiceMenu(options: [Choice("member", "Member"), Choice("observer", "Observer")],
-                               selection: role) { r in
-                        role = r
-                        Task { await model.setGroupLinkRole(chat, r) }
+        }
+        if let link = link {
+            Panel {
+                ActionTile(icon: "share-03", title: "Share link") { Clipboard.share(link.short ?? link.full) }
+                if !chat.isChannel && chat.isAdmin {
+                    PrefRow(icon: MemberRoles.icon(role), label: "People joining become") {
+                        ChoiceMenu(options: [Choice("member", "Member"), Choice("observer", "Observer")],
+                                   selection: role) { r in
+                            role = r
+                            Task { await model.setGroupLinkRole(chat, r) }
+                        }
                     }
                 }
             }
         }
         if !chat.isChannel && chat.isAdmin && link != nil {
-            Card(spacing: 4) {
+            Panel {
                 if confirmDelete {
                     InlineConfirm(question: "Delete the group link?",
                                   detail: "Nobody can join with it any more. Members stay in the group.",
@@ -484,6 +478,7 @@ struct GroupLinkPage: View {
                                           link = nil
                                       }
                                   })
+                        .padding(12)
                 } else {
                     ActionTile(icon: "trash-delete", title: "Delete link", danger: true) { confirmDelete = true }
                 }

@@ -168,6 +168,10 @@ data class Message(
     val reactions: List<Reaction> = emptyList(),
     val quote: Quote? = null,
     val deleted: String? = null,
+    /** Tombstone text from core ("marked deleted", "hidden", …). */
+    val deletedLabel: String? = null,
+    /** Text still stored: "Reveal" applies (marked, hidden, blocked). */
+    val revealable: Boolean = false,
     val sender: Sender? = null,
     val announcement: Boolean = false,
     val groupInvitation: GroupInvitation? = null,
@@ -230,7 +234,17 @@ object Stamps {
 }
 
 @Serializable
-data class ContactFeature(val mine: String = "no", val contact: String = "no", val enabled: Boolean = false)
+data class ContactFeature(
+    val mine: String = "no",
+    val contact: String = "no",
+    val enabled: Boolean = false,
+    /** Shared wording (cursus_core::preferences): `Off` / `On` / `Always`. */
+    val mineLabel: String? = null,
+    /** e.g. "Alice allows this" — replaces the coloured peer glyph. */
+    val contactSummary: String? = null,
+    /** Choice-sheet footer: summary + "It works only when you both allow it." */
+    val contactNote: String? = null,
+)
 
 @Serializable
 data class ContactPrefs(val features: Map<String, ContactFeature> = emptyMap(), val timedTtl: Long = 86400)
@@ -263,7 +277,26 @@ data class Member(
 )
 
 @Serializable
-data class MessageInfo(val time: String? = null, val status: String? = null, val text: String? = null)
+data class MessageInfo(
+    val time: String? = null,
+    val status: String? = null,
+    /** Plain words for [status] from core ("Delivered"). */
+    val statusLabel: String? = null,
+    val text: String? = null,
+    /** Your group message: who received it, sorted and headed by core. */
+    val receipts: List<MemberReceipt> = emptyList(),
+)
+
+@Serializable
+data class MemberReceipt(
+    val memberId: Long,
+    val name: String = "Member",
+    val image: String? = null,
+    /** `received` / `pending` / `failed`. */
+    val state: String = "pending",
+    /** Section heading for [state] ("Received by"). */
+    val heading: String = "",
+)
 
 @Serializable
 data class EmojiHit(val shortcode: String, val glyph: String)

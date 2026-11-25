@@ -38,7 +38,12 @@ private val MenuCardShape = chat.cursus.ui.theme.Radius.control
  * (`menu_card`: `bg.panel`, 1px border, shared radius, max 400 wide).
  */
 @Composable
-fun CursusOverlay(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+fun CursusOverlay(
+    onDismiss: () -> Unit,
+    padding: androidx.compose.ui.unit.Dp = 16.dp,
+    spacing: androidx.compose.ui.unit.Dp = 12.dp,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     val c = Cursus.colors
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         BackHandler(onBack = onDismiss)
@@ -56,8 +61,8 @@ fun CursusOverlay(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> 
                     .border(1.dp, c.border, MenuCardShape)
                     .clickable(remember { MutableInteractionSource() }, indication = null) {}
                     .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                    .padding(padding),
+                verticalArrangement = Arrangement.spacedBy(spacing),
                 content = content,
             )
         }

@@ -1,45 +1,68 @@
 //! Inset preference panels shared by app, contact, group and channel settings.
 use iced::widget::{column, container, text, Column};
+
 use iced::{Element, Length, Padding};
 
 use crate::{layout::Density, theme, Message};
 
+/// Section heading above a panel: meta size, bold, `text.secondary`, inset
+/// to the text inside the panel's rows (4 panel + 16 row = 20).
+pub(crate) fn heading<'a>(title: impl text::IntoFragment<'a>, d: Density) -> Element<'a, Message> {
+    container(text(title).size(d.meta).font(crate::ui::BOLD).color(theme::t().text_secondary))
+        .padding(Padding::from([0.0, SECTION_INSET]))
+        .width(Length::Fill)
+        .into()
+}
+
+/// Quiet note under (or over) a panel, at the heading inset.
+pub(crate) fn note<'a>(body: impl text::IntoFragment<'a>, d: Density) -> Element<'a, Message> {
+    container(text(body).size(d.meta).color(theme::t().text_secondary))
+        .padding(Padding::from([0.0, SECTION_INSET]))
+        .width(Length::Fill)
+        .into()
+}
+
+/// Inset of headings and notes; equals the text inset of rows in a panel.
+pub(crate) const SECTION_INSET: f32 = PANEL_PAD + 16.0;
+/// Padding between a panel's edge and its rows (rows round to
+/// `INSET_CONTROL_RADIUS`, concentric with the panel).
+pub(crate) const PANEL_PAD: f32 = 4.0;
+
+/// The one floating surface for a group of rows: `bg.elevated`, 1px border,
+/// shared control radius, 4px inset.
+pub(crate) fn panel<'a>(rows: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(rows)
+        .width(Length::Fill)
+        .padding(PANEL_PAD)
+        .clip(true)
+        .style(|_| {
+            let t = theme::t();
+            container::Style {
+                background: Some(t.bg_elevated.into()),
+                border: iced::Border {
+                    radius: theme::CONTROL_RADIUS.into(),
+                    width: 1.0,
+                    color: t.border,
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
 pub(crate) fn group<'a>(
     title: Option<&'a str>,
-    note: Option<&'a str>,
+    note_text: Option<&'a str>,
     rows: impl Into<Element<'a, Message>>,
     d: Density,
 ) -> Element<'a, Message> {
-    let mut body = Column::new().spacing(9).width(Length::Fill);
+    let mut body = Column::new().spacing(8).width(Length::Fill);
     if let Some(title) = title {
-        body = body.push(
-            container(text(title).size(d.meta).color(theme::t().text_secondary))
-                .padding(Padding::from([0, 20])),
-        );
+        body = body.push(heading(title, d));
     }
-    body = body.push(
-        container(rows)
-            .width(Length::Fill)
-            .padding(4)
-            .clip(true)
-            .style(|_| {
-                let t = theme::t();
-                container::Style {
-                    background: Some(t.bg_elevated.into()),
-                    border: iced::Border {
-                        radius: theme::CONTROL_RADIUS.into(),
-                        width: 1.0,
-                        color: t.border,
-                    },
-                    ..Default::default()
-                }
-            }),
-    );
-    if let Some(note) = note {
-        body = body.push(
-            container(text(note).size(d.meta).color(theme::t().text_secondary))
-                .padding(Padding::from([0, 20])),
-        );
+    body = body.push(panel(rows));
+    if let Some(n) = note_text {
+        body = body.push(note(n, d));
     }
     body.into()
 }
@@ -86,13 +109,9 @@ impl<'a> Sections<'a> {
         let content = if self.grouped {
             group(self.title.take(), None, rows, self.density)
         } else {
-            let mut flat = column![];
+            let mut flat = column![].spacing(8);
             if let Some(title) = self.title.take() {
-                flat = flat.push(
-                    text(title)
-                        .size(self.density.meta)
-                        .color(theme::t().text_secondary),
-                );
+                flat = flat.push(heading(title, self.density));
             }
             flat.push(rows).into()
         };

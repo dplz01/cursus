@@ -113,6 +113,9 @@ struct MessageInfoSheet: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 8)
                 }
+                if let receipts = info.receipts, !receipts.isEmpty {
+                    ReceiptList(receipts: receipts)
+                }
             }
         }
         .padding(20)
@@ -129,6 +132,53 @@ struct MessageInfoSheet: View {
             Text(label).font(.cMeta).foregroundColor(Theme.secondaryText).frame(width: 80, alignment: .leading)
             Text(value).font(.cBody).foregroundColor(Theme.primaryText).textSelection(.enabled)
             Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+    }
+}
+
+/// Group receipts (Linux `receipt_list`): a heading per state over
+/// avatar + name rows; scrolls when long.
+private struct ReceiptList: View {
+    let receipts: [MemberReceipt]
+
+    /// Runs of the same state, in core's order (received first).
+    private var groups: [[MemberReceipt]] {
+        var out: [[MemberReceipt]] = []
+        for r in receipts {
+            if let last = out.last?.last, last.state == r.state { out[out.count - 1].append(r) } else { out.append([r]) }
+        }
+        return out
+    }
+
+    var body: some View {
+        // A ScrollView takes its whole max height, so only long lists scroll.
+        if receipts.count > 8 {
+            ScrollView { list }.frame(height: 280)
+        } else {
+            list
+        }
+    }
+
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(groups, id: \.first!.state) { group in
+                HStack {
+                    Text(group[0].heading).font(.cMeta).fontWeight(.semibold).foregroundColor(Theme.secondaryText)
+                    Spacer()
+                    Text("\(group.count)").font(.cMeta).foregroundColor(Theme.mutedText)
+                }
+                .padding(.top, 10)
+                .padding(.bottom, 4)
+                ForEach(group) { r in
+                    HStack(spacing: 10) {
+                        Avatar(image: r.image, name: r.name, size: 28, kind: .contact)
+                        Text(r.name).font(.cBody).foregroundColor(Theme.primaryText).lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
         }
         .padding(.horizontal, 8)
     }

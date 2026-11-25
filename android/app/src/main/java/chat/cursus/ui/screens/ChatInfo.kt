@@ -48,12 +48,19 @@ import chat.cursus.ui.components.AboutBlock
 import chat.cursus.ui.components.HeroLine
 import chat.cursus.ui.components.QuickAction
 import chat.cursus.ui.components.QuickActions
+import chat.cursus.ui.components.QuickActionTools
+import chat.cursus.ui.components.isParagraph
 import chat.cursus.ui.components.ActionTile
 import chat.cursus.ui.components.Avatar
 import chat.cursus.ui.components.CardTitle
 import chat.cursus.ui.components.ChoiceChip
 import chat.cursus.ui.components.ChoiceMenu
 import chat.cursus.ui.components.CursusCard
+import chat.cursus.ui.components.Panel
+import chat.cursus.ui.components.ChoiceRow
+import chat.cursus.ui.components.SectionHeading
+import chat.cursus.ui.components.SectionNote
+import chat.cursus.ui.components.SectionInset
 import chat.cursus.ui.components.DangerButton
 import chat.cursus.ui.components.EditField
 import chat.cursus.ui.components.EditableLine
@@ -93,16 +100,22 @@ fun ChatInfoPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenChat: (
 // ── shared pieces ─────────────────────────────────────────────────────
 
 @Composable
-private fun PageScaffold(title: String, onBack: () -> Unit, actions: @Composable () -> Unit = {}, body: @Composable ColumnScope.() -> Unit) {
+private fun PageScaffold(
+    title: String,
+    onBack: () -> Unit,
+    actions: @Composable () -> Unit = {},
+    scroll: androidx.compose.foundation.ScrollState = rememberScrollState(),
+    body: @Composable ColumnScope.() -> Unit,
+) {
     Column(Modifier.fillMaxSize().background(Cursus.colors.bgPanel)) {
         PaneHeader(title, onBack = onBack) { actions() }
-        Column(Modifier.verticalScroll(rememberScrollState())) { PageColumn(content = body) }
+        Column(Modifier.verticalScroll(scroll)) { PageColumn(content = body) }
     }
 }
 
 /** A section made only of rows. */
 @Composable
-private fun ButtonCard(content: @Composable ColumnScope.() -> Unit) = Column(Modifier.fillMaxWidth(), content = content)
+private fun ButtonCard(content: @Composable ColumnScope.() -> Unit) = Panel(content = content)
 
 /** Linux pane confirm (icon, sentence, Cancel / solid action). */
 @Composable
@@ -121,10 +134,14 @@ private fun ConfirmPane(icon: Int, danger: Boolean, text: String, action: String
     }
 }
 
+/** List + detail shell: profile actions go to the header as small tools. */
+@Composable
+private fun wideProfile() = PaneLayout.isSplit(androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.toFloat())
+
 private fun allowLabel(v: String) = when (v) {
-    "yes" -> "on"
-    "always" -> "always"
-    else -> "off"
+    "yes" -> "On"
+    "always" -> "Always"
+    else -> "Off"
 }
 
 private fun receiptsLabel(v: Boolean?) = when (v) {
@@ -163,22 +180,24 @@ private fun ContactPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
         ContactPreferencesPage(model, chat) { prefs = false }
         return
     }
-    PageScaffold("Contact", onClose) {
+    val quick = listOf(
+        QuickAction(if (chat.favorite) R.drawable.ic_star_filled else R.drawable.ic_star, if (chat.favorite) "Starred" else "Star", chat.favorite) {
+            model.setFavorite(chat, !chat.favorite)
+        },
+        QuickAction(
+            if (chat.muted) R.drawable.ic_notifications_off else R.drawable.ic_notifications_off_outline,
+            if (chat.muted) "Muted" else "Mute", chat.muted,
+        ) { model.setMuted(chat, !chat.muted) },
+        QuickAction(R.drawable.ic_settings, "Settings") { prefs = true },
+    )
+    val wide = wideProfile()
+    PageScaffold("Contact", onClose, actions = { if (wide) QuickActionTools(quick) }) {
         ProfileIdentity(chat.name, chat.image) {
             ProfileName(chat.name)
             EditableLine(chat.alias, "Add a local name", LineStyle.Sub, rich = false) { editing = EditField.ContactAlias }
             if (chat.shortDescr.isNotBlank()) HeroLine(chat.shortDescr)
         }
-        QuickActions(
-            QuickAction(if (chat.favorite) R.drawable.ic_star_filled else R.drawable.ic_star, if (chat.favorite) "Starred" else "Star", chat.favorite) {
-                model.setFavorite(chat, !chat.favorite)
-            },
-            QuickAction(
-                if (chat.muted) R.drawable.ic_notifications_off else R.drawable.ic_notifications_off_outline,
-                if (chat.muted) "Muted" else "Mute", chat.muted,
-            ) { model.setMuted(chat, !chat.muted) },
-            QuickAction(R.drawable.ic_settings, "Settings") { prefs = true },
-        )
+        if (!wide) QuickActions(*quick.toTypedArray())
         if (chat.description.isNotBlank()) AboutBlock("About", chat.description)
         ButtonCard {
             ActionTile(R.drawable.ic_clear_all, "Clear chat", { confirm = "clear" })
@@ -223,37 +242,23 @@ private fun ContactPreferencesPage(model: AppModel, chat: Chat, onBack: () -> Un
     var menu by remember { mutableStateOf<String?>(null) }
     val prefs = chat.contactPrefs
     PageScaffold("Settings", onBack) {
-        PreferenceGroup("Notifications") {
-            // Personal control stays on the outer edge; peer indicators below
-            // belong only to negotiated chat permissions.
-            PrefRow("Send receipts", R.drawable.ic_check_read) { ChoiceChip(receiptsLabel(chat.sendReceipts), { menu = "receipts" }) }
+        PreferenceGroup("Privacy") {
+            ChoiceRow("Delivery receipts", receiptsLabel(chat.sendReceipts), R.drawable.ic_check_read) { menu = "receipts" }
         }
-        PreferenceGroup("Chat permissions", "Your choices for this chat. The contact icon shows what the other person allows.") {
+        PreferenceGroup("Chat permissions") {
             for ((key, label) in CONTACT_FEATURES) {
                 val f = prefs?.features?.get(key)
-                PrefRow(label, FEATURE_ICONS[key]) {
-                    ChoiceChip(allowLabel(f?.mine ?: "no"), { menu = key })
-                    // What the contact allows: red no, green yes, gold always.
-                    Icon(
-                        painterResource(R.drawable.ic_user_alt_1), "Contact: ${allowLabel(f?.contact ?: "no")}",
-                        Modifier.size(18.dp),
-                        tint = when (f?.contact) {
-                            "yes" -> c.success
-                            "always" -> c.gold
-                            else -> c.danger
-                        },
-                    )
-                }
+                // One centred line per row; what the contact allows is in the
+                // choice sheet (shared wording from cursus_core via the bridge).
+                ChoiceRow(label, f?.mineLabel ?: allowLabel(f?.mine ?: "no"), FEATURE_ICONS[key]) { menu = key }
                 // "on": the time both sides agreed on. "always": your own
                 // one-way timer, deleting from this phone only (as on Linux).
                 if (key == "timedMessages" && f?.mine == "yes") {
-                    PrefRow("Delete after") { ChoiceChip(ttlLabel(prefs.timedTtl), { menu = "ttl" }) }
+                    ChoiceRow("Delete after", ttlLabel(prefs.timedTtl), R.drawable.ic_system_pending_line) { menu = "ttl" }
                 }
                 if (key == "timedMessages" && f?.mine == "always") {
                     val local = chat.chatItemTtl?.takeIf { it > 0 }
-                    PrefRow("Delete after (this device only)") {
-                        ChoiceChip(local?.let { ttlLabel(it) } ?: "Never", { menu = "localTtl" })
-                    }
+                    ChoiceRow("Delete after (this device only)", local?.let { ttlLabel(it) } ?: "Never", R.drawable.ic_system_pending_line) { menu = "localTtl" }
                 }
             }
         }
@@ -264,14 +269,16 @@ private fun ContactPreferencesPage(model: AppModel, chat: Chat, onBack: () -> Un
         "localTtl" -> ChoiceMenu("Delete after (this device only)", LOCAL_TTLS, chat.chatItemTtl?.takeIf { it > 0 }, { menu = null }) {
             model.setChatTtl(chat, it); menu = null
         }
-        "receipts" -> ChoiceMenu("Send receipts", listOf<Pair<Boolean?, String>>(null to "Default", true to "On", false to "Off"), chat.sendReceipts, { menu = null }) {
+        "receipts" -> ChoiceMenu("Delivery receipts", listOf<Pair<Boolean?, String>>(null to "Default", true to "On", false to "Off"), chat.sendReceipts, { menu = null },
+            note = "Let this contact know their messages arrived.") {
             model.setSendReceipts(chat, it); menu = null
         }
         else -> ChoiceMenu(
             CONTACT_FEATURES.first { it.first == m }.second,
-            listOf("always" to "always", "yes" to "on", "no" to "off"),
+            listOf("always" to "Always", "yes" to "On", "no" to "Off"),
             prefs?.features?.get(m)?.mine,
             { menu = null },
+            note = prefs?.features?.get(m)?.let { it.contactNote ?: it.contactSummary },
         ) { model.setContactFeature(chat, m, it); menu = null }
     }
 }
@@ -294,12 +301,15 @@ private enum class GroupPane { Overview, Link, AddMember, Preferences, MemberInf
 private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenChat: (String) -> Unit) {
     var pane by remember { mutableStateOf(GroupPane.Overview) }
     var memberId by remember { mutableStateOf<Long?>(null) }
+    // Held here, not in the overview: sub-pages replace the overview, and
+    // coming back must land where you left it (Linux keeps its offset too).
+    val overviewScroll = rememberScrollState()
     LaunchedEffect(chat.ref) { model.loadMembers(chat) }
     val back = { pane = GroupPane.Overview }
     if (pane != GroupPane.Overview) BackHandler(onBack = back)
     val noun = if (chat.isChannel) "channel" else "group"
     when (pane) {
-        GroupPane.Overview -> GroupOverview(model, chat, onClose, onOpenPane = { pane = it }, onMember = { memberId = it; pane = GroupPane.MemberInfo })
+        GroupPane.Overview -> GroupOverview(model, chat, onClose, overviewScroll, onOpenPane = { pane = it }, onMember = { memberId = it; pane = GroupPane.MemberInfo })
         GroupPane.Link -> PageScaffold(if (chat.isChannel) "Share this channel" else "Share this group", back) {
             GroupSharePane(model, chat)
         }
@@ -311,16 +321,16 @@ private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenCh
             else MemberInfoPane(model, chat, m, onOpenChat)
         }
         GroupPane.ChannelMembers -> PageScaffold(if (chat.canEditProfile) "Subscribers" else "Owners", back) {
-            CursusCard {
+            Panel {
                 MembersList(model.members.filter { chat.canEditProfile || it.role == "owner" }) { memberId = it; pane = GroupPane.MemberInfo }
             }
         }
         GroupPane.SupportList -> PageScaffold("Chats with members", back) {
             // Members waiting for review or with a support thread (Linux support list).
             val list = model.members.filter { !it.isMe && (it.pending || it.support != null) }
-            CursusCard {
+            Panel {
                 if (list.isEmpty()) {
-                    Text("No join requests or member chats.", style = Cursus.type.body, color = Cursus.colors.textMuted, modifier = Modifier.padding(8.dp))
+                    Text("No join requests or member chats.", style = Cursus.type.body, color = Cursus.colors.textMuted, modifier = Modifier.padding(16.dp))
                 } else {
                     var closing by remember { mutableStateOf<Member?>(null) }
                     // Moderators can close a member's thread (not a join request).
@@ -350,7 +360,7 @@ private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenCh
 }
 
 @Composable
-private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenPane: (GroupPane) -> Unit, onMember: (Long) -> Unit) {
+private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, scroll: androidx.compose.foundation.ScrollState, onOpenPane: (GroupPane) -> Unit, onMember: (Long) -> Unit) {
     val c = Cursus.colors
     val owner = chat.canEditProfile
     val admin = chat.canManageMembers
@@ -358,7 +368,19 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
     val supportOk = chat.groupPrefs?.features?.get("support")?.on == true
     var editing by remember { mutableStateOf<EditField?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
-    PageScaffold(if (chat.isChannel) "Channel" else "Group", onClose) {
+    val quick = listOf(
+        QuickAction(if (chat.favorite) R.drawable.ic_star_filled else R.drawable.ic_star, if (chat.favorite) "Starred" else "Star", chat.favorite) {
+            model.setFavorite(chat, !chat.favorite)
+        },
+        QuickAction(
+            if (chat.muted) R.drawable.ic_notifications_off else R.drawable.ic_notifications_off_outline,
+            if (chat.muted) "Muted" else "Mute", chat.muted,
+        ) { model.setMuted(chat, !chat.muted) },
+        QuickAction(R.drawable.ic_settings, "Settings") { onOpenPane(GroupPane.Preferences) },
+    )
+    val wide = wideProfile()
+    val paragraph = isParagraph(chat.shortDescr)
+    PageScaffold(if (chat.isChannel) "Channel" else "Group", onClose, actions = { if (wide) QuickActionTools(quick) }, scroll = scroll) {
         // Profile card
         CursusCard {
             val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -373,21 +395,28 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
                 if (owner) EditableLine(chat.name, "Name", LineStyle.Name) { editing = EditField.GroupName }
                 else ProfileName(chat.name)
                 EditableLine(chat.alias, "Add a local name", LineStyle.Sub, rich = false) { editing = EditField.GroupAlias }
-                // The short description is the line under the name, for everyone.
-                if (owner) EditableLine(chat.shortDescr, "Add a short description", LineStyle.Sub) { editing = EditField.GroupShortDescr }
-                else if (chat.shortDescr.isNotBlank()) HeroLine(chat.shortDescr)
+                // The short description is the line under the name, for everyone
+                // (a paragraph-long one gets its own block under the actions).
+                if (owner && !paragraph) EditableLine(chat.shortDescr, "Add a short description", LineStyle.Sub) { editing = EditField.GroupShortDescr }
+                else if (!paragraph && chat.shortDescr.isNotBlank()) HeroLine(chat.shortDescr)
             }
         }
-        QuickActions(
-            QuickAction(if (chat.favorite) R.drawable.ic_star_filled else R.drawable.ic_star, if (chat.favorite) "Starred" else "Star", chat.favorite) {
-                model.setFavorite(chat, !chat.favorite)
-            },
-            QuickAction(
-                if (chat.muted) R.drawable.ic_notifications_off else R.drawable.ic_notifications_off_outline,
-                if (chat.muted) "Muted" else "Mute", chat.muted,
-            ) { model.setMuted(chat, !chat.muted) },
-            QuickAction(R.drawable.ic_settings, "Settings") { onOpenPane(GroupPane.Preferences) },
-        )
+        if (!wide) QuickActions(*quick.toTypedArray())
+        if (paragraph) {
+            if (owner) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionHeading("Description")
+                Panel {
+                    Row(
+                        Modifier.fillMaxWidth().clip(Radius.insetControl).clickable { editing = EditField.GroupShortDescr }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        ProfileText(chat.shortDescr, style = Cursus.type.body, color = c.textSecondary, modifier = Modifier.weight(1f))
+                        Icon(painterResource(R.drawable.ic_edit_3), "Edit", Modifier.size(16.dp), tint = c.textMuted)
+                    }
+                }
+            } else AboutBlock("Description", chat.shortDescr)
+        }
         if (!owner && chat.description.isNotBlank()) AboutBlock("Welcome message", chat.description)
         // Support / invite / subscribers
         if (owner || supportOk || moderate || admin || chat.isChannel) {
@@ -400,9 +429,9 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
                 }
                 if (supportOk || moderate) {
                     if (moderate) {
-                        NavRow(R.drawable.ic_flag_2, "Chats with members", badge = chat.membersRequireAttention) { onOpenPane(GroupPane.SupportList) }
+                        NavRow(R.drawable.ic_flag_outline, "Chats with members", badge = chat.membersRequireAttention) { onOpenPane(GroupPane.SupportList) }
                     } else {
-                        NavRow(R.drawable.ic_flag_2, "Chat with admins", badge = chat.supportUnread) {
+                        NavRow(R.drawable.ic_flag_outline, "Chat with admins", badge = chat.supportUnread) {
                             model.select("${chat.ref}(_support)"); onClose()
                         }
                     }
@@ -421,11 +450,13 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
         }
         // Members (private groups)
         if (!chat.isChannel) {
-            CursusCard {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val n = model.members.size
-                CardTitle(R.drawable.ic_user_group, "Members", if (n == 1) "1 member" else "$n members")
-                if (admin) NavRow(R.drawable.ic_user_plus_alt_1, "Invite a contact") { onOpenPane(GroupPane.AddMember) }
-                MembersList(model.members, onMember = onMember)
+                SectionHeading(if (n == 1) "1 member" else "$n members")
+                Panel {
+                    if (admin) NavRow(R.drawable.ic_user_plus_alt_1, "Invite a contact") { onOpenPane(GroupPane.AddMember) }
+                    MembersList(model.members, onMember = onMember)
+                }
             }
         }
         // Chat actions — a channel's only owner can delete it but not leave it.
@@ -433,7 +464,7 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onOp
         ButtonCard {
             ActionTile(R.drawable.ic_clear_all, "Clear chat", { confirmClear = true })
             if (!soleChannelOwner) {
-                ActionTile(R.drawable.ic_session_leave, if (chat.isChannel) "Leave channel" else "Leave group", { onOpenPane(GroupPane.ConfirmLeave) })
+                ActionTile(R.drawable.ic_session_leave, if (chat.isChannel) "Leave channel" else "Leave group", { onOpenPane(GroupPane.ConfirmLeave) }, danger = true)
             }
             ActionTile(R.drawable.ic_trash_delete, if (chat.isChannel) "Delete channel" else "Delete group", { onOpenPane(GroupPane.ConfirmDelete) }, danger = true)
         }
@@ -480,20 +511,14 @@ private fun GroupSharePane(model: AppModel, chat: Chat) {
         finally { loading = false }
     }
     LaunchedEffect(chat.ref) { load() }
-    CursusCard {
-        CardTitle(R.drawable.ic_share_03, if (chat.isChannel) "Share this channel" else "Share this group")
-        Text(if (chat.isChannel) "Anyone with this link can subscribe." else "Anyone with this link can join the group.",
-            style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+    // The page title already names it: a note, the link, then its panel.
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionNote(if (chat.isChannel) "Anyone with this link can subscribe." else "Anyone with this link can join the group.")
         when {
             loading -> CircularProgressIndicator(Modifier.padding(12.dp).size(24.dp), color = c.accent)
             link != null -> {
                 val value = link!!.short ?: link!!.full
                 LinkBox(value) { model.notice = "Link copied" }
-                NavRow(R.drawable.ic_share_03, "Share link") {
-                    val intent = android.content.Intent(android.content.Intent.ACTION_SEND)
-                        .setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, value)
-                    context.startActivity(android.content.Intent.createChooser(intent, "Share link"))
-                }
             }
             chat.canManageMembers && !chat.isChannel -> PrimaryButton("Create link", {
                 if (!loading) { loading = true; scope.launch { load() } }
@@ -503,11 +528,22 @@ private fun GroupSharePane(model: AppModel, chat: Chat) {
             else -> Text("No link yet — ask an admin.", style = Cursus.type.meta, color = c.textMuted,
                 modifier = Modifier.padding(12.dp))
         }
-        if (!chat.isChannel && chat.canManageMembers && link != null) {
-            PrefRow("People joining become") { ChoiceChip(role.replaceFirstChar { it.titlecase() }, { roles = true }) }
-            ActionTile(R.drawable.ic_trash_delete, if (deleting) "Deleting…" else "Delete link", {
-                if (!deleting) confirmDelete = true
-            }, danger = true)
+        link?.let { l ->
+            val value = l.short ?: l.full
+            Panel(Modifier.padding(top = 4.dp)) {
+                // Android shares through the system sheet (Linux: clipboard).
+                ActionTile(R.drawable.ic_share_03, "Share link", {
+                    val intent = android.content.Intent(android.content.Intent.ACTION_SEND)
+                        .setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, value)
+                    context.startActivity(android.content.Intent.createChooser(intent, "Share link"))
+                })
+                if (!chat.isChannel && chat.canManageMembers) {
+                    NavRow(roleIcon(role), "People joining become", value = role.replaceFirstChar { it.titlecase() }) { roles = true }
+                    ActionTile(R.drawable.ic_trash_delete, if (deleting) "Deleting…" else "Delete link", {
+                        if (!deleting) confirmDelete = true
+                    }, danger = true)
+                }
+            }
         }
     }
     if (roles) ChoiceMenu("People joining become", listOf("member" to "Member", "observer" to "Observer"), role, { roles = false }) {
@@ -523,6 +559,15 @@ private fun GroupSharePane(model: AppModel, chat: Chat) {
         }, { confirmDelete = false })
 }
 
+/** Same glyph per role on every platform (Linux `icons::role_icon`). */
+private fun roleIcon(role: String) = when (role.lowercase()) {
+    "observer" -> R.drawable.ic_eye_observer
+    "moderator" -> R.drawable.ic_shield_check
+    "admin" -> R.drawable.ic_admin_role
+    "owner" -> R.drawable.ic_owner
+    else -> R.drawable.ic_user_member
+}
+
 /** Linux `group_members_list`: 40px avatar, name (you: YOU (name)), bio, pending clock, role. */
 @Composable
 private fun MembersList(members: List<Member>, trailing: @Composable (Member) -> Unit = {}, onMember: (Long) -> Unit) {
@@ -530,8 +575,8 @@ private fun MembersList(members: List<Member>, trailing: @Composable (Member) ->
     Column {
         for (m in members) {
             Row(
-                Modifier.fillMaxWidth().heightIn(min = 72.dp).clip(Radius.lg).clickable { onMember(m.id) }
-                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                Modifier.fillMaxWidth().heightIn(min = 72.dp).clip(Radius.insetControl).clickable { onMember(m.id) }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -551,7 +596,8 @@ private fun MembersList(members: List<Member>, trailing: @Composable (Member) ->
                         ProfileText(m.shortDescr, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Text(m.role, style = Cursus.type.meta, color = c.textMuted)
+                // The role as a quiet sign, not a control (Linux `role_icon`).
+                Icon(painterResource(roleIcon(m.role)), m.role.replaceFirstChar { it.titlecase() }, Modifier.size(18.dp), tint = c.textSecondary)
                 trailing(m)
             }
         }
@@ -562,50 +608,53 @@ private fun MembersList(members: List<Member>, trailing: @Composable (Member) ->
 private fun MemberInfoPane(model: AppModel, chat: Chat, m: Member, onOpenChat: (String) -> Unit) {
     val c = Cursus.colors
     var roles by remember { mutableStateOf(false) }
-    CursusCard {
-        ProfileIdentity(m.name, m.image) {
-            ProfileName(if (m.isMe) "YOU (${m.publicName.ifBlank { m.name }})" else m.name)
-            if (m.shortDescr.isNotBlank()) {
-                ProfileText(m.shortDescr, style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(horizontal = 12.dp))
-            }
+    // Same hierarchy as Linux / Mac: avatar beside name and role · status.
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.padding(horizontal = 4.dp)) {
+        Avatar(m.name, m.image, 64.dp)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(if (m.isMe) "YOU (${m.publicName.ifBlank { m.name }})" else m.name, style = Cursus.type.title,
+                fontWeight = FontWeight.SemiBold, color = c.textPrimary)
+            Text("${m.role.replaceFirstChar { it.titlecase() }} · ${m.status}", style = Cursus.type.meta, color = c.textSecondary)
         }
-        Column(Modifier.padding(top = 8.dp, start = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("Role: ${m.role}", style = Cursus.type.meta, color = c.textSecondary)
-            Text("Status: ${m.status}", style = Cursus.type.meta, color = c.textSecondary)
-        }
+    }
+    if (m.shortDescr.isNotBlank()) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        SectionHeading("Bio")
+        ProfileText(m.shortDescr, style = Cursus.type.body, color = c.textSecondary, modifier = Modifier.padding(horizontal = SectionInset))
     }
     if (m.isMe) return
     val outranked = chat.assignableRoles.contains(m.role) || m.pending
     ButtonCard {
         NavRow(R.drawable.ic_chats, "Direct message") { model.messageMember(chat, m) { onOpenChat(it) } }
         if (chat.canModerate && !m.pending && (m.support != null || (chat.groupPrefs?.features?.get("support")?.on == true && m.role !in listOf("owner", "admin", "moderator")))) {
-            NavRow(R.drawable.ic_flag_2, if (m.role in listOf("owner", "admin", "moderator")) "Chat with admin" else "Chat with member") {
+            NavRow(R.drawable.ic_flag_outline, if (m.role in listOf("owner", "admin", "moderator")) "Chat with admin" else "Chat with member") {
                 onOpenChat("${chat.ref}(_support:${m.id})")
             }
         }
-        if (m.pending && chat.canModerate) {
+        if (chat.canManageMembers && outranked && !m.pending && chat.assignableRoles.isNotEmpty()) {
+            NavRow(roleIcon(m.role), "Role", value = m.role.replaceFirstChar { it.titlecase() }) { roles = true }
+        }
+        if (chat.canModerate && outranked) {
+            ActionTile(R.drawable.ic_block_prohibited, if (m.blocked) "Unblock for all" else "Block for all", { model.blockMember(chat, m, !m.blocked) })
+        }
+    }
+    if (m.pending && chat.canModerate) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionHeading("Waiting for review")
+        Panel {
             ActionTile(R.drawable.ic_check, "Accept as member", { model.acceptMember(chat, m, "member") })
             ActionTile(R.drawable.ic_eye_observer, "Accept as observer", { model.acceptMember(chat, m, "observer") })
             ActionTile(R.drawable.ic_cancel, "Reject", { model.removeMember(chat, m, false) }, danger = true)
         }
-        if (chat.canManageMembers && outranked && !m.pending && chat.assignableRoles.isNotEmpty()) {
-            ActionTile(R.drawable.ic_admin_role, "Change role", { roles = true })
-        }
-        ActionTile(
-            R.drawable.ic_eye_observer,
-            if (m.showMessages) "Hide messages (for me)" else "Show messages (for me)",
-            { model.setMemberShowMessages(chat, m, !m.showMessages) },
-        )
-        if (chat.canModerate && outranked) {
-            ActionTile(R.drawable.ic_block_prohibited, if (m.blocked) "Unblock for all" else "Block for all", { model.blockMember(chat, m, !m.blocked) })
-        }
-        if (chat.canManageMembers && outranked && !m.pending) {
+    }
+    if (chat.canManageMembers && outranked && !m.pending) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionHeading("Manage member")
+        Panel {
             ActionTile(R.drawable.ic_remove_profile, "Remove member", { model.removeMember(chat, m, false) }, danger = true)
-            ActionTile(R.drawable.ic_trash_delete, "Remove + delete messages", { model.removeMember(chat, m, true) }, danger = true)
+            ActionTile(R.drawable.ic_trash_delete, "Remove and delete messages", { model.removeMember(chat, m, true) }, danger = true)
         }
     }
     if (roles) {
-        ChoiceMenu("Change role", chat.assignableRoles.map { it to "Set $it" }, m.role, { roles = false }) {
+        ChoiceMenu("Role", chat.assignableRoles.map { it to it.replaceFirstChar { c -> c.titlecase() } }, m.role, { roles = false }) {
             model.setMemberRole(chat, m, it); roles = false
         }
     }
@@ -624,15 +673,17 @@ private fun AddMemberPane(model: AppModel, chat: Chat) {
     val inGroup = model.members.mapNotNull { it.contactId }.toSet()
     val contacts = model.chats.filter { it.isContact && !it.isRequest && it.apiId !in inGroup }
     val filtered = contacts.filter { it.title.contains(search, ignoreCase = true) }
-    PreferenceGroup("Invite contacts") {
-        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Send an invitation in a direct chat.", style = Cursus.type.meta, color = c.textSecondary)
-            PrefRow("Invite as") { ChoiceChip(inviteRole.replaceFirstChar { it.titlecase() }, { menu = "invite" }) }
-            RoundedField(search, { search = it }, "Search contacts", modifier = Modifier.fillMaxWidth())
+    // Same order as Linux: note, who to invite as, search, the contacts.
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionNote("They get the invitation in your direct chat.")
+        Panel { NavRow(roleIcon(inviteRole), "Invite as", value = inviteRole.replaceFirstChar { it.titlecase() }) { menu = "invite" } }
+        RoundedField(search, { search = it }, "Search contacts", modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+        Panel {
             if (filtered.isEmpty()) Text(if (contacts.isEmpty()) "Everyone you know is already here." else "No matching contacts.",
                 style = Cursus.type.meta, color = c.textSecondary, modifier = Modifier.padding(16.dp))
             for (contact in filtered) Row(
-                Modifier.fillMaxWidth().clip(Radius.md).clickable { model.addMember(chat, contact, inviteRole) }.padding(8.dp),
+                Modifier.fillMaxWidth().heightIn(min = 64.dp).clip(Radius.insetControl).clickable { model.addMember(chat, contact, inviteRole) }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Avatar(contact.title, contact.image, 40.dp)
@@ -642,7 +693,7 @@ private fun AddMemberPane(model: AppModel, chat: Chat) {
         }
     }
     when (menu) {
-        "invite" -> ChoiceMenu("Invite as", chat.assignableRoles.map { it to it }, inviteRole, { menu = null }) { inviteRole = it; menu = null }
+        "invite" -> ChoiceMenu("Invite as", chat.assignableRoles.map { it to it.replaceFirstChar { c -> c.titlecase() } }, inviteRole, { menu = null }) { inviteRole = it; menu = null }
     }
 }
 
@@ -679,7 +730,7 @@ private fun GroupPreferencesPane(model: AppModel, chat: Chat) {
                 SwitchRow(label, on, { value -> model.setGroupFeature(chat, key, value) },
                     note = groupFeatureSummary(key), icon = FEATURE_ICONS[key], enabled = owner)
                 if (key == "timedMessages" && on) {
-                    PrefRow("Delete after") { ChoiceChip(ttlLabel(prefs?.timedTtl ?: 86400), { menu = "ttl" }, enabled = owner) }
+                    ChoiceRow("Delete after", ttlLabel(prefs?.timedTtl ?: 86400), R.drawable.ic_system_pending_line, enabled = owner) { menu = "ttl" }
                 }
             }
             if (title == "Members" && owner && !chat.isChannel) {
@@ -689,11 +740,12 @@ private fun GroupPreferencesPane(model: AppModel, chat: Chat) {
         }
     }
     if (!chat.isChannel) PreferenceGroup("Just for you", "These choices only affect your account.") {
-        PrefRow("Send receipts") { ChoiceChip(receiptsLabel(chat.sendReceipts), { menu = "receipts" }) }
+        ChoiceRow("Delivery receipts", receiptsLabel(chat.sendReceipts), R.drawable.ic_check_read) { menu = "receipts" }
     }
     when (menu) {
         "ttl" -> ChoiceMenu("Delete after", TTLS, prefs?.timedTtl, { menu = null }) { model.setGroupFeature(chat, "timedMessages", true, it); menu = null }
-        "receipts" -> ChoiceMenu("Send receipts", listOf<Pair<Boolean?, String>>(null to "Default", true to "On", false to "Off"), chat.sendReceipts, { menu = null }) {
+        "receipts" -> ChoiceMenu("Delivery receipts", listOf<Pair<Boolean?, String>>(null to "Default", true to "On", false to "Off"), chat.sendReceipts, { menu = null },
+            note = "Let members know their messages arrived.") {
             model.setSendReceipts(chat, it); menu = null
         }
     }

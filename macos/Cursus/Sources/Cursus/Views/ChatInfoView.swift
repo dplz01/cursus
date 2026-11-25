@@ -189,13 +189,21 @@ private struct InfoOverview: View {
 
     // MARK: Profile card
 
+    /// A long or multi-line short description reads as a paragraph: its own
+    /// block under the hero instead of a centred line (Linux `is_paragraph`).
+    private var paragraph: Bool {
+        chat.shortDescr.contains("\n") || chat.shortDescr.count > 64
+    }
+
+    /// Centred hero like Linux and Android: picture, name, local name and a
+    /// short description; quick actions are the header's tools on the Mac.
     private var identity: some View {
-        Card(spacing: 6) {
-            HStack(alignment: .center, spacing: 14) {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(spacing: 6) {
                 if ownsGroup {
                     // Clicking the picture changes it (no inline buttons).
                     Button { photoMenu = true } label: {
-                        Avatar(image: chat.image, name: chat.title, size: 84, kind: chat.avatarKind)
+                        Avatar(image: chat.image, name: chat.title, size: 96, kind: chat.avatarKind)
                     }
                     .buttonStyle(.plain)
                     .help("Change picture")
@@ -208,36 +216,39 @@ private struct InfoOverview: View {
                         }
                     }
                 } else {
-                    Avatar(image: chat.image, name: chat.title, size: 84, kind: chat.avatarKind)
+                    Avatar(image: chat.image, name: chat.title, size: 96, kind: chat.avatarKind)
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    EditableLine(text: publicName, placeholder: "Name", style: .name,
-                                 editable: ownsGroup) { editing = .groupName }
-                    if chat.pendingRequestId == nil {
-                        EditableLine(text: chat.alias ?? "", placeholder: "Add a local name", style: .sub, rich: false,
-                                     editable: true, help: "Only you see this name") { editing = .alias }
-                    }
-                    if !chat.fullName.isEmpty && chat.fullName != publicName {
-                        Text(chat.fullName).font(.cMeta).foregroundColor(Theme.secondaryText)
-                            .padding(.leading, 13)
-                    }
-                    if chat.isGroup, let role = chat.role {
-                        Text("You are \(role)").font(.cMeta).foregroundColor(Theme.secondaryText)
-                            .padding(.leading, 13)
+                Spacer().frame(height: 4)
+                EditableLine(text: publicName, placeholder: "Name", style: .name,
+                             editable: ownsGroup, centered: true) { editing = .groupName }
+                if chat.pendingRequestId == nil {
+                    EditableLine(text: chat.alias ?? "", placeholder: "Add a local name", style: .sub, rich: false,
+                                 editable: true, help: "Only you see this name", centered: true) { editing = .alias }
+                }
+                if !chat.fullName.isEmpty && chat.fullName != publicName {
+                    Text(chat.fullName).font(.cBody).foregroundColor(Theme.secondaryText)
+                }
+                if !paragraph {
+                    EditableLine(text: chat.shortDescr, placeholder: "Add a short description", style: .sub,
+                                 editable: ownsGroup, centered: true) { editing = .groupBio }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            if paragraph {
+                VStack(alignment: .leading, spacing: 8) {
+                    SectionHeading("Description")
+                    Panel {
+                        EditableLine(text: chat.shortDescr, placeholder: "Add a short description", style: .body,
+                                     editable: ownsGroup) { editing = .groupBio }
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 8)
                     }
                 }
             }
-            if ownsGroup {
-                SectionLabel("Short description")
-                EditableLine(text: chat.shortDescr, placeholder: "Add a short description", style: .body,
-                             editable: true) { editing = .groupBio }
-            } else {
-                if !chat.shortDescr.isEmpty {
-                    SectionLabel(chat.isGroup ? "About" : "Bio")
-                    about(chat.shortDescr)
-                }
-                if let text = chat.description, !text.isEmpty {
-                    SectionLabel(chat.isGroup ? "Welcome message" : "About")
+            if !ownsGroup, let text = chat.description, !text.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    SectionHeading(chat.isGroup ? "Welcome message" : "About")
                     about(text)
                 }
             }
@@ -250,7 +261,7 @@ private struct InfoOverview: View {
             .foregroundColor(Theme.secondaryText)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, sectionInset)
     }
 
     private func pickImage() {
@@ -278,10 +289,10 @@ private struct InfoOverview: View {
                            trailing: "edit-3", flush: true) { editing = .welcome }
                 }
                 if chat.isModerator {
-                    NavRow(icon: "flag-2", title: "Chats with members",
+                    NavRow(icon: "flag-outline", title: "Chats with members",
                            flush: true, badge: chat.membersRequireAttention) { page = .supportList }
                 } else if supportOn && chat.role != nil {
-                    NavRow(icon: "flag-2", title: "Chat with admins",
+                    NavRow(icon: "flag-outline", title: "Chat with admins",
                            flush: true, badge: chat.supportUnread) { model.openSupport(chat) }
                 }
                 if chat.isAdmin || chat.isChannel {
@@ -300,13 +311,14 @@ private struct InfoOverview: View {
     // MARK: Members
 
     private var membersCard: some View {
-        Card(spacing: 6) {
-            CardTitle(icon: "user-group", title: chat.isChannel ? "Subscribers" : "Members",
-                      subtitle: model.members.isEmpty ? "Loading…" : memberCount)
-            if chat.isAdmin && !chat.isChannel {
-                NavRow(icon: "user-plus-alt-1", title: "Invite a contact", flush: true) { page = .invite }
-            }
-            VStack(spacing: 0) {
+        // Heading outside, rows on a panel — as on Linux and Android.
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeading(model.members.isEmpty ? "Loading…"
+                           : chat.isChannel ? "Subscribers · \(memberCount)" : memberCount)
+            Panel {
+                if chat.isAdmin && !chat.isChannel {
+                    NavRow(icon: "user-plus-alt-1", title: "Invite a contact", flush: true) { page = .invite }
+                }
                 ForEach(model.members.filter { !$0.gone }) { member in
                     MemberRow(member: member) { page = .member(member.id) }
                 }
@@ -323,18 +335,17 @@ private struct InfoOverview: View {
 
     @ViewBuilder private var dangerCard: some View {
         if let confirming = confirming {
-            Card(spacing: 4) { confirm(confirming) }
+            Panel { confirm(confirming).padding(12) }
         } else {
-            Card(padding: 0, spacing: 0) {
-                HStack(spacing: 0) {
-                    ActionTile(icon: "clear-all", title: "Clear chat", stacked: true) { confirming = .clear }
-                    if chat.isGroup && amMember {
-                        ActionTile(icon: "session-leave", title: chat.isChannel ? "Leave channel" : "Leave group",
-                                   stacked: true) { confirming = .leave }
-                    }
-                    ActionTile(icon: "trash-delete", title: deleteTitle, danger: true, stacked: true) {
-                        confirming = .delete
-                    }
+            // One row each, like every other panel (leave is destructive too).
+            Panel {
+                ActionTile(icon: "clear-all", title: "Clear chat") { confirming = .clear }
+                if chat.isGroup && amMember {
+                    ActionTile(icon: "session-leave", title: chat.isChannel ? "Leave channel" : "Leave group",
+                               danger: true) { confirming = .leave }
+                }
+                ActionTile(icon: "trash-delete", title: deleteTitle, danger: true) {
+                    confirming = .delete
                 }
             }
         }
@@ -394,6 +405,8 @@ struct EditableLine: View {
     var rich = true
     var editable = true
     var help: String? = nil
+    /// Hero lines sit centred under the picture; the pencil follows the text.
+    var centered = false
     let edit: () -> Void
 
     private var empty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -401,6 +414,7 @@ struct EditableLine: View {
     var body: some View {
         if editable || !empty {
             HStack(alignment: .center, spacing: 2) {
+                if centered { Spacer(minLength: 0) }
                 Group {
                     if style == .name || empty || !rich {
                         Text(empty ? placeholder : text)
@@ -408,6 +422,7 @@ struct EditableLine: View {
                 }
                     .font(font)
                     .foregroundColor(empty ? Theme.mutedText : color)
+                    .multilineTextAlignment(centered ? .center : .leading)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 if editable {
@@ -415,7 +430,8 @@ struct EditableLine: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.leading, style == .body ? 8 : 13)
+            // Centred lines leave the pencil's width free on the left too.
+            .padding(.leading, centered ? (editable ? 24 : 0) : (style == .body ? 8 : 13))
         }
     }
 
@@ -508,16 +524,18 @@ struct ChatSettingsCard: View {
 
     var body: some View {
         PreferenceGroup(title: "Just for you", note: "These choices only affect your account.") {
-            PrefRow(icon: "notifications", label: "Notifications") {
+            PrefRow(icon: "notifications-outline", label: "Notifications") {
                 ChoiceMenu(options: notificationChoices, selection: chat.notifications) { mode in
                     Task { await model.setNotifications(chat, mode) }
                 }
             }
-            PrefRow(icon: "check-read", label: "Send receipts",
-                    note: chat.isGroup ? "Only in groups of up to 20 members." : nil) {
+            PrefRow(icon: "check-read", label: "Delivery receipts") {
                 ChoiceMenu(options: [Choice(-1, "Default (\(defaultReceipts ? "on" : "off"))"),
                                      Choice(1, "On"), Choice(0, "Off")],
-                           selection: chat.sendReceipts.map { $0 ? 1 : 0 } ?? -1) { v in
+                           selection: chat.sendReceipts.map { $0 ? 1 : 0 } ?? -1,
+                           note: chat.isGroup
+                               ? "Let members know their messages arrived. Only in groups of up to 20 members."
+                               : "Let this contact know their messages arrived.") { v in
                     Task { await model.setSendReceipts(chat, v < 0 ? nil : v == 1) }
                 }
             }
@@ -607,7 +625,7 @@ struct ChatSettingsCard: View {
 
 // MARK: - Member row
 
-/// 40px avatar · name (yourself: “YOU (name)”) + bio · pending clock · role.
+/// 40px avatar · name (yourself: “YOU (name)”) + bio · pending clock · role icon.
 private struct MemberRow: View {
     let member: Member
     let open: () -> Void
@@ -636,16 +654,15 @@ private struct MemberRow: View {
                     }
                 }
                 Spacer(minLength: 6)
-                HStack(spacing: 4) {
-                    CIcon(MemberRoles.icon(member.role), size: 16, color: Theme.secondaryText)
-                    Text(member.role).font(.cMeta).foregroundColor(Theme.secondaryText)
-                }
+                // The role as a quiet sign, not a control (as on Linux / Android).
+                CIcon(MemberRoles.icon(member.role), size: 18, color: Theme.secondaryText)
+                    .help(member.role.capitalized)
             }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 16)
             .contentShape(Rectangle())
         }
-        .buttonStyle(GhostTileStyle())
+        .buttonStyle(GhostTileStyle(radius: Radius.insetControl))
         .help("Member details")
     }
 }
@@ -656,7 +673,8 @@ enum MemberRoles {
     static func icon(_ role: String) -> String {
         switch role {
         case "owner": return "owner"
-        case "admin", "moderator": return "admin"
+        case "admin": return "admin-role"
+        case "moderator": return "shield-check"
         case "observer": return "eye-observer"
         default: return "user-member"
         }

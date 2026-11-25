@@ -395,8 +395,16 @@ impl Session {
         self.send(&Commands::forward_items(from, to, item_ids))
     }
 
+    /// One message's details; for your group messages also who received
+    /// it, with names and pictures from the member list.
     pub fn message_info(&self, chat: &ChatId, item_id: i64) -> Result<MessageInfo> {
-        Ok(MessageInfo::from_api(&self.send(&Commands::item_info(chat, item_id))?))
+        let mut info = MessageInfo::from_api(&self.send(&Commands::item_info(chat, item_id))?);
+        if !info.receipts.is_empty() && chat.chat_type == ChatType::Group {
+            // Names are a nicety: a failed member list still shows the counts.
+            let members = self.list_group_members(chat.api_id).unwrap_or_default();
+            info.name_members(&members);
+        }
+        Ok(info)
     }
 
     /// Add (`add`) or remove your reaction on a message.

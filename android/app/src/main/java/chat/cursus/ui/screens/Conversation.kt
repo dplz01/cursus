@@ -121,7 +121,7 @@ fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () 
             }
             // Unread support messages: the yellow counter (Linux header).
             if (chat.isGroup && !chat.isChannel && chat.supportBadge > 0) {
-                AttentionButton(R.drawable.ic_flag_2, chat.supportBadge, if (chat.canModerate) "Chats with members" else "Chat with admins") {
+                AttentionButton(R.drawable.ic_flag_outline, chat.supportBadge, if (chat.canModerate) "Chats with members" else "Chat with admins") {
                     if (chat.canModerate) onInfo() else model.select("${chat.ref}(_support)")
                 }
             }
@@ -416,9 +416,9 @@ internal fun DeliveryGlyph(delivery: String, c: CursusColors) {
 private fun MessageBody(model: AppModel, m: Message, onLongPress: () -> Unit, inlineStamp: Boolean, showReceipt: Boolean) {
     val c = Cursus.colors
     if (m.deleted != null) {
-        // Linux wording; a marked-deleted message keeps its text behind "Reveal".
-        val revealed = m.deleted == "marked" && m.id in model.revealedDeleted
-        Text(if (m.deleted == "marked") "marked deleted" else "deleted", style = Cursus.type.body, color = c.textMuted, fontStyle = FontStyle.Italic)
+        // Core's wording; a stored text (marked deleted, hidden member) stays behind "Reveal".
+        val revealed = m.revealable && m.id in model.revealedDeleted
+        Text(m.deletedLabel ?: if (m.deleted == "marked") "marked deleted" else "deleted", style = Cursus.type.body, color = c.textMuted, fontStyle = FontStyle.Italic)
         if (!revealed) return
     }
     m.groupInvitation?.let { g ->

@@ -8,6 +8,7 @@ import chat.cursus.ui.components.ChoiceMenu
 import chat.cursus.ui.components.ConfirmSheet
 import chat.cursus.ui.components.InfoSwitchRow
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.draw.rotate
 import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Box
@@ -138,13 +139,15 @@ fun NewChatPage(model: AppModel, initialLink: String?, onClose: () -> Unit, onOp
                         Triple("New group", R.drawable.ic_user_group, CreateKind.Group),
                         Triple("New channel", R.drawable.ic_channels, CreateKind.Channel),
                     )) {
-                        Column(Modifier.weight(1f).clip(Radius.md).background(c.bgField)
-                            .border(1.dp, if (create == kind) c.accent else c.border, Radius.md)
-                            .clickable { create = kind }.padding(vertical = 10.dp),
+                        // Same tile as a profile's quick actions; the open one is outlined.
+                        Column(Modifier.weight(1f).clip(Radius.control).background(if (create == kind) c.accentSoft else c.bgElevated)
+                            .border(1.dp, if (create == kind) c.accent else c.border, Radius.control)
+                            .clickable { create = kind }.padding(vertical = 12.dp, horizontal = 4.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            androidx.compose.material3.Icon(androidx.compose.ui.res.painterResource(icon), null, Modifier.size(22.dp), tint = c.accent)
-                            Text(label, style = Cursus.type.meta, color = c.textPrimary, maxLines = 1)
+                            androidx.compose.material3.Icon(androidx.compose.ui.res.painterResource(icon), null, Modifier.size(24.dp), tint = c.accent)
+                            Text(label, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -303,7 +306,7 @@ enum class SettingsPage(val icon: Int, val title: String) {
     Profile(R.drawable.ic_user_alt_1, "Profile"),
     Address(R.drawable.ic_address_card, "Address"),
     Privacy(R.drawable.ic_shield_check, "Privacy & Security"),
-    Notifications(R.drawable.ic_notifications, "Notifications"),
+    Notifications(R.drawable.ic_notifications_outline, "Notifications"),
     Appearance(R.drawable.ic_image_square, "Appearance"),
     About(R.drawable.ic_info_circle, "About"),
 }
@@ -331,17 +334,27 @@ fun SettingsListPane(model: AppModel, selected: SettingsPage?, onOpen: (Settings
                             )
                         }
                     }
-                    Box(Modifier.size(10.dp))
-                    for (p in SettingsPage.entries) {
-                        Row(
-                            Modifier.clip(chat.cursus.ui.theme.Radius.lg)
-                                .background(if (selected == p) c.accentSoft else androidx.compose.ui.graphics.Color.Transparent)
-                                .pageRow { onOpen(p) },
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(14.dp),
-                        ) {
-                            chat.cursus.ui.components.IconDisc(p.icon)
-                            Text(p.title, style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.weight(1f).padding(vertical = 2.dp))
+                    Box(Modifier.size(12.dp))
+                    // Categories in floating panels, grouped like Linux / macOS:
+                    // you · the app · about.
+                    val groups = listOf(
+                        listOf(SettingsPage.Profile, SettingsPage.Address),
+                        listOf(SettingsPage.Privacy, SettingsPage.Notifications, SettingsPage.Appearance),
+                        listOf(SettingsPage.About),
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        for (group in groups) chat.cursus.ui.components.Panel {
+                            for (p in group) Row(
+                                Modifier.clip(chat.cursus.ui.theme.Radius.insetControl)
+                                    .background(if (selected == p) c.accentSoft else androidx.compose.ui.graphics.Color.Transparent)
+                                    .pageRow { onOpen(p) },
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            ) {
+                                chat.cursus.ui.components.IconDisc(p.icon)
+                                Text(p.title, style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.weight(1f).padding(vertical = 2.dp))
+                                Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(16.dp).rotate(-90f), tint = c.textMuted)
+                            }
                         }
                     }
                 }

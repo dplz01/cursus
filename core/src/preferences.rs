@@ -62,6 +62,33 @@ impl FeatureAllow {
         !matches!(self, Self::No)
     }
 
+    /// Value shown for your own choice: `Off` / `On` / `Always`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::No => "Off",
+            Self::Yes => "On",
+            Self::Always => "Always",
+        }
+    }
+
+    /// Plain-language line saying what the contact allows, shown under the
+    /// row (replaces the old coloured person glyph).
+    pub fn peer_summary(self, contact: &str) -> String {
+        let contact = contact.trim();
+        let who = if contact.is_empty() { "Your contact" } else { contact };
+        match self {
+            Self::No => format!("{who} has this off"),
+            Self::Yes => format!("{who} allows this"),
+            Self::Always => format!("{who} always allows this"),
+        }
+    }
+
+    /// Footer of the choice sheet for a contact feature: what the contact
+    /// allows, then the rule. Shown in the sheet, not under the row.
+    pub fn peer_note(self, contact: &str) -> String {
+        format!("{}. It works only when you both allow it.", self.peer_summary(contact))
+    }
+
     /// SimpleX default for a contact feature nobody set.
     pub fn contact_default(key: &str) -> Self {
         match key {
@@ -195,6 +222,18 @@ pub fn set_group_feature(prefs: &mut Option<Value>, key: &str, on: bool, ttl: Op
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn peer_summary_reads_as_a_sentence() {
+        use super::FeatureAllow;
+        assert_eq!(FeatureAllow::Yes.peer_summary("Alice"), "Alice allows this");
+        assert_eq!(FeatureAllow::No.peer_summary(" "), "Your contact has this off");
+        assert_eq!(FeatureAllow::Always.label(), "Always");
+        assert_eq!(
+            FeatureAllow::Yes.peer_note("Alice"),
+            "Alice allows this. It works only when you both allow it."
+        );
+    }
+
     use super::*;
 
     #[test]

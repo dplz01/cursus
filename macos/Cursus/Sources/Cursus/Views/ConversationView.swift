@@ -39,7 +39,7 @@ struct ConversationView: View {
                     if chat.isGroup && !chat.isChannel {
                         let unread = chat.isModerator ? chat.membersRequireAttention : chat.supportUnread
                         if unread > 0 {
-                            AttentionButton(icon: "flag-2", count: unread,
+                            AttentionButton(icon: "flag-outline", count: unread,
                                             help: chat.isModerator ? "Chats with members" : "Chat with admins") {
                                 if chat.isModerator { model.toggleInfo() } else { model.openSupport(chat) }
                             }
@@ -380,10 +380,10 @@ struct MessageRow: View {
                         GroupInviteCard(invite: invite, outgoing: message.outgoing)
                     }
                     if let deleted = message.deleted {
-                        Text(deleted == "marked" ? "Marked deleted" : "Message deleted")
+                        Text((message.deletedLabel ?? (deleted == "marked" ? "marked deleted" : "deleted")).capitalizedFirst)
                             .italic()
                             .foregroundColor(Theme.secondaryText)
-                        if deleted == "marked" && revealed && !message.text.isEmpty {
+                        if message.canReveal && revealed && !message.text.isEmpty {
                             Text(RichText.attributed(message, reveal: true))
                                 .font(.cBody)
                                 .foregroundColor(Theme.secondaryText)
@@ -684,7 +684,7 @@ struct MessageMenu: View {
             }
             Divider()
         }
-        if message.deleted == "marked" && !message.text.isEmpty {
+        if message.canReveal && !message.text.isEmpty {
             Button(model.revealedMessages.contains(message.id) ? "Hide original" : "Show original") {
                 model.toggleRevealed(message)
             }

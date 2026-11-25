@@ -84,13 +84,14 @@ fun PaneHeader(
     }
 }
 
-/** Linux list header "+": secondary button, 36px, accent glyph. */
+/** Linux list header action (`soft_action`): 36dp `accent.soft` rounded
+ *  square, accent glyph, no border — the same on Chats, Channels and Calls. */
 @Composable
 fun HeaderPlus(description: String, icon: Int = R.drawable.ic_plus, onClick: () -> Unit) {
     val c = Cursus.colors
     Box(
-        Modifier.padding(end = 8.dp).size(36.dp).clip(Radius.md).background(c.bgField)
-            .border(1.dp, c.border, Radius.md).clickable(onClick = onClick),
+        Modifier.padding(end = 8.dp).size(36.dp).clip(Radius.smallControl).background(c.accentSoft)
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(painterResource(icon), description, Modifier.size(20.dp), tint = c.accent)

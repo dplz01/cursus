@@ -1010,9 +1010,6 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     fun blockMember(chat: Chat, m: Member, blocked: Boolean) =
         change(chat, "blockMember", mapOf("groupId" to chat.apiId, "memberId" to m.id, "blocked" to blocked), members = true)
 
-    fun setMemberShowMessages(chat: Chat, m: Member, show: Boolean) =
-        change(chat, "setMemberShowMessages", mapOf("groupId" to chat.apiId, "memberId" to m.id, "show" to show), members = true)
-
     fun acceptMember(chat: Chat, m: Member, role: String) =
         change(chat, "acceptMember", mapOf("groupId" to chat.apiId, "memberId" to m.id, "role" to role), members = true)
 

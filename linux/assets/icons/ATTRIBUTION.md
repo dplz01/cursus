@@ -22,13 +22,13 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `copy.svg` | [svgrepo/524469](https://www.svgrepo.com/svg/524469/copy) | Solar Linear Icons / Solar Icons | **CC Attribution** | Yes (with credit) |
 | `session-leave.svg` | [svgrepo/491071](https://www.svgrepo.com/svg/491071/session-leave) | Gitlab Interface Icons / Gitlab | **MIT License** | Yes |
 | `clear-all.svg` | [svgrepo/375990](https://www.svgrepo.com/svg/375990/clear-all) | Keyicons Interface Icons / Elnodos | **CC Attribution** — attribution required | Yes (with credit) |
-| `notifications.svg`, `notifications-off.svg`, `notifications-off-outline.svg` | [Ionicons](https://github.com/ionic-team/ionicons) | Ionicons by Ben Sperry / Ionic | **MIT License** — notice in `licenses/MIT-Ionicons.txt` | Yes (with notice) |
+| `notifications.svg`, `notifications-outline.svg`, `notifications-off.svg`, `notifications-off-outline.svg` | [Ionicons](https://github.com/ionic-team/ionicons) | Ionicons by Ben Sperry / Ionic | **MIT License** — notice in `licenses/MIT-Ionicons.txt` | Yes (with notice) |
 | `incognito.svg`, `incognito-filled.svg` | [Solar Icons](https://www.figma.com/community/file/1166831539721848736) `incognito` (Broken Line / Bold) via SVG Repo | Solar Icons / 480 Design | **CC BY 4.0** — attribution required | Yes (with credit) |
 | `preferences.svg` | Element Plus Tools (same pack) | Element Plus Line Interface Icons / element-plus | **MIT License** | Yes |
 | `mic.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `play.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `stop.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
-| `back.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
+| `back.svg`, `next.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `paste.svg` | [svgrepo/521781](https://www.svgrepo.com/svg/521781/paste) | Gentlecons Interface Icons / Konstantin Filatov | **CC Attribution** — attribution required | Yes (with credit) |
 | `address-card.svg` | [svgrepo/533175](https://www.svgrepo.com/svg/533175/address-card) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |
 | `repeat-once.svg` | [svgrepo/364795](https://www.svgrepo.com/svg/364795/repeat-once-fill) | Phosphor Filled Icons / phosphor | **MIT License** | Yes |
@@ -142,5 +142,7 @@ Call family revision: Solar Linear / 480 Design handset from the existing phone-
 
 Call status revision: missed-call returning arrow redrawn for Cursus above the same Solar handset used by the other call symbols, rotated to face down in the same 24px rounded monoline style; declined calls use the cross-marked Solar handset.
 
-- `flag-2.svg`: Solar Bold Icons, Solar Icons, CC Attribution. https://www.svgrepo.com/svg/525340/flag-2
+- `flag-2.svg`: Solar Bold Icons, Solar Icons, CC Attribution. https://www.svgrepo.com/svg/525340/flag-2 (no longer drawn; kept for reference)
+- `chevron-right.svg`: Cursus original (row chevron, 2px round stroke), CC0.
+- `flag-outline.svg`: Cursus original (outlined flag on the 24px / 1.5px grid), CC0.
 - `share-03.svg`: Ui Oval Interface Icons, SVG Repo, CC0. https://www.svgrepo.com/svg/471879/share-03

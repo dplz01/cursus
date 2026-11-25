@@ -316,6 +316,8 @@ pub enum MsgMenuPane {
         text: String,
         /// Local size · transfer status (kept out of the image bubble).
         file_detail: Option<String>,
+        /// Your group message: who received it (core sorts and names them).
+        receipts: Vec<cursus_core::MemberReceipt>,
     },
 }
 
@@ -353,11 +355,8 @@ pub trait FeatureAllowLabel {
 
 impl FeatureAllowLabel for FeatureAllow {
     fn label(self) -> &'static str {
-        match self {
-            Self::No => "off",
-            Self::Yes => "on",
-            Self::Always => "always",
-        }
+        // Shared wording: `Off` / `On` / `Always`.
+        FeatureAllow::label(self)
     }
 }
 
@@ -663,6 +662,7 @@ pub struct ItemInfoData {
     pub time: Option<String>,
     pub status: Option<String>,
     pub text: String,
+    pub receipts: Vec<cursus_core::MemberReceipt>,
 }
 
 /// A password in memory: wiped when dropped (every clone too) and never
@@ -1179,8 +1179,6 @@ pub enum Message {
         with_messages: bool,
     },
     GroupMemberRemoved(Result<(), String>),
-    GroupMemberToggleBlockSelf,
-    GroupMemberBlockSelfDone(Result<(), String>),
     GroupMemberToggleBlockAll,
     GroupMemberBlockAllDone(Result<(), String>),
     /// Accept a pending member (`pending_approval` / `pending_review`) as this role.
@@ -4422,35 +4420,6 @@ impl App {
                 self.status = err;
                 Task::none()
             }
-            Message::GroupMemberToggleBlockSelf => {
-                let Some(g) = self.group_settings.as_ref() else {
-                    return Task::none();
-                };
-                let Some(member_id) = g.selected_member_id else {
-                    return Task::none();
-                };
-                let show = g
-                    .members
-                    .iter()
-                    .find(|m| m.group_member_id == member_id)
-                    .map(|m| !m.show_messages)
-                    .unwrap_or(false);
-                let Some(session) = self.session.clone() else {
-                    return Task::none();
-                };
-                Task::perform(
-                    set_member_show_messages(session, g.group_id, member_id, show),
-                    Message::GroupMemberBlockSelfDone,
-                )
-            }
-            Message::GroupMemberBlockSelfDone(Ok(())) => {
-                self.status = "Member visibility updated.".into();
-                self.reload_group_members()
-            }
-            Message::GroupMemberBlockSelfDone(Err(err)) => {
-                self.status = err;
-                Task::none()
-            }
             Message::GroupMemberToggleBlockAll => {
                 let Some(g) = self.group_settings.as_ref() else {
                     return Task::none();
@@ -5237,6 +5206,7 @@ impl App {
                         status: info.status,
                         text: info.text,
                         file_detail,
+                        receipts: info.receipts,
                     };
                 }
                 Task::none()
@@ -8347,6 +8317,7 @@ impl App {
                         status: None,
                         text: msg.text.clone(),
                         file_detail,
+                        receipts: Vec::new(),
                     };
                 }
                 let Some(session) = self.session.clone() else {
@@ -8874,9 +8845,10 @@ async fn load_item_info(
             .map_err(|e| e.to_string())?;
         Ok(ItemInfoData {
             item_id,
+            status: info.status_label().map(str::to_string),
             time: info.time,
-            status: info.status,
             text: info.text,
+            receipts: info.receipts,
         })
     })
     .await
@@ -9288,20 +9260,6 @@ async fn remove_group_member(
     blocking(move || {
         session
             .remove_group_member(group_id, member_id, with_messages)
-            .map(|_| ())
-    })
-    .await
-}
-
-async fn set_member_show_messages(
-    session: Arc<Session>,
-    group_id: i64,
-    member_id: i64,
-    show: bool,
-) -> Result<(), String> {
-    blocking(move || {
-        session
-            .set_member_show_messages(group_id, member_id, show)
             .map(|_| ())
     })
     .await

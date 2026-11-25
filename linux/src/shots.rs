@@ -1361,14 +1361,15 @@ fn preference_help_does_not_toggle_the_setting() {
     ));
     assert!(app.desktop_prefs.chat_previews);
     let mut cache = Cache::default();
+    // The (i) sits right after the setting's name: 4 px gap, 24 px hit.
     for (target, help) in [
-        ("Show the latest message below each name.", true),
+        ("Message previews", true),
         ("Message previews", false),
     ] {
         use iced::advanced::widget::Operation;
         struct Locate {
             text: &'static str,
-            at: std::sync::Arc<std::sync::Mutex<Option<Point>>>,
+            at: std::sync::Arc<std::sync::Mutex<Option<iced::Rectangle>>>,
         }
         impl Operation for Locate {
             fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
@@ -1381,11 +1382,11 @@ fn preference_help_does_not_toggle_the_setting() {
                 text: &str,
             ) {
                 if text == self.text {
-                    *self.at.lock().unwrap() = Some(bounds.center());
+                    *self.at.lock().unwrap() = Some(bounds);
                 }
             }
         }
-        let at = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let at = std::sync::Arc::new(std::sync::Mutex::new(None::<iced::Rectangle>));
         let mut ui = UserInterface::build(
             app.view(iced::window::Id::unique()),
             DESKTOP,
@@ -1400,7 +1401,12 @@ fn preference_help_does_not_toggle_the_setting() {
             },
         );
         cache = ui.into_cache();
-        let point = at.lock().unwrap().expect("the setting text is present");
+        let bounds = at.lock().unwrap().expect("the setting text is present");
+        let point = if help {
+            Point::new(bounds.x + bounds.width + 4.0 + 12.0, bounds.center_y())
+        } else {
+            bounds.center()
+        };
         for event in [
             mouse::Event::CursorMoved { position: point },
             mouse::Event::ButtonPressed(mouse::Button::Left),
@@ -2054,7 +2060,30 @@ fn shots_audit_design() {
         render(&app, size, &format!("audit-chat-settings-{tone}"));
         app.pref_menu = Some(crate::PrefMenu::ContactRcpts);
         render(&app, size, &format!("audit-choice-sheet-{tone}"));
+        app.pref_menu = Some(crate::PrefMenu::ContactReactions);
+        render(&app, size, &format!("audit-feature-sheet-{tone}"));
         app.pref_menu = None;
+        {
+            use cursus_core::{MemberReceipt, ReceiptState};
+            let r = |id, name: &str, state| MemberReceipt { group_member_id: id, name: name.into(), image: None, state };
+            app.message_menu = Some(crate::MessageMenu {
+                item_id: 4,
+                pane: crate::MsgMenuPane::Info {
+                    item_id: 4,
+                    time: Some("2026-11-06T09:05:00Z".into()),
+                    status: Some("Sent".into()),
+                    text: "You're the best.".into(),
+                    file_detail: None,
+                    receipts: vec![
+                        r(2, "Bob Rossi", ReceiptState::Received),
+                        r(3, "Carla", ReceiptState::Received),
+                        r(4, "Dario Bianchi", ReceiptState::Pending),
+                    ],
+                },
+            });
+            render(&app, size, &format!("audit-receipts-{tone}"));
+            app.message_menu = None;
+        }
         group_page(&mut app, GroupSettingsPane::AddMember);
         app.contact_profile = None;
         app.group_settings

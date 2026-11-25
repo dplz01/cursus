@@ -53,18 +53,23 @@ import chat.cursus.ui.theme.Cursus
 import chat.cursus.ui.theme.Radius
 
 private val SEND = 36.dp
-private val PillShape = RoundedCornerShape(20.dp)
+/** Every control in the composer row is this tall (IconTool's hit size), so
+ *  attach, field and mic/send share one centre line; the field grows upward. */
+private val ROW_HIT = 48.dp
+private val PillShape = RoundedCornerShape(ROW_HIT / 2)
 
 /** Linux `composer_send_hit`: round accent face when active, bare glyph otherwise. */
 @Composable
 private fun SendHit(active: Boolean, description: String, onClick: () -> Unit) {
     val c = Cursus.colors
-    Box(
-        Modifier.size(SEND).clip(Radius.pill).background(if (active) c.accent else Color.Transparent)
-            .clickable(enabled = active, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(painterResource(R.drawable.ic_send), description, Modifier.size(20.dp), tint = if (active) c.accentOn else c.textSecondary)
+    Box(Modifier.size(ROW_HIT), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.size(SEND).clip(Radius.pill).background(if (active) c.accent else Color.Transparent)
+                .clickable(enabled = active, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(painterResource(R.drawable.ic_send), description, Modifier.size(20.dp), tint = if (active) c.accentOn else c.textSecondary)
+        }
     }
 }
 
@@ -124,8 +129,8 @@ fun Composer(model: AppModel) {
             }
             // Rounded pill holds the text (Linux: radius 20, 1px border, field fill).
             Box(
-                Modifier.weight(1f).heightIn(min = SEND).clip(PillShape).background(c.bgField)
-                    .border(1.dp, c.border, PillShape).padding(horizontal = 14.dp, vertical = 8.dp),
+                Modifier.weight(1f).heightIn(min = ROW_HIT).clip(PillShape).background(c.bgField)
+                    .border(1.dp, c.border, PillShape).padding(horizontal = 18.dp, vertical = 12.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 if (model.recording) {
@@ -155,10 +160,7 @@ fun Composer(model: AppModel) {
             // recording: ■ stops to a draft, Send stops and sends.
             when {
                 model.recording -> {
-                    Box(
-                        Modifier.size(SEND).clip(Radius.pill).clickable { model.stopRecording() },
-                        contentAlignment = Alignment.Center,
-                    ) { Icon(painterResource(R.drawable.ic_stop), "Stop", Modifier.size(20.dp), tint = c.danger) }
+                    IconTool(R.drawable.ic_stop, "Stop", { model.stopRecording() }, tint = c.danger)
                     SendHit(true, "Send voice message") { model.sendVoiceNow() }
                 }
                 model.pastedImage == null && model.draft.isBlank() && model.composeMode !is ComposeMode.Edit ->

@@ -332,7 +332,26 @@ fn with_session(method: &str, p: &Value) -> Result<Value, String> {
         // Sent / received time, delivery status and text of one message.
         "messageInfo" => {
             let info = s.message_info(&chat_param(p)?, i64_param(p, "itemId")?).map_err(err)?;
-            Ok(json!({ "time": info.time, "status": info.status, "text": info.text }))
+            // Group messages you sent: who received them (avatar + name),
+            // already sorted and headed by core.
+            let receipts: Vec<Value> = info
+                .receipts
+                .iter()
+                .map(|r| json!({
+                    "memberId": r.group_member_id,
+                    "name": r.name,
+                    "image": r.image,
+                    "state": r.state.as_api(),
+                    "heading": r.state.heading(),
+                }))
+                .collect();
+            Ok(json!({
+                "time": info.time,
+                "status": info.status,
+                "statusLabel": info.status_label(),
+                "text": info.text,
+                "receipts": receipts,
+            }))
         }
         // Forward messages of `chat` to `to`.
         "forward" => {

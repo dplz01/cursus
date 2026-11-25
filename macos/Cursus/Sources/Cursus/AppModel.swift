@@ -50,7 +50,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .profile: return "user-alt-1"
         case .address: return "address-card"
         case .privacy: return "shield-check"
-        case .notifications: return "notifications"
+        case .notifications: return "notifications-outline"
         case .appearance: return "image-square"
         case .about: return "info-circle"
         }
@@ -630,15 +630,6 @@ final class AppModel: ObservableObject {
             try await Core.run("blockMember", ["groupId": chat.apiId, "memberId": member.id, "blocked": blocked])
         }
         await loadMembers()
-    }
-
-    /// Hide / show a member's messages on this Mac.
-    func setMemberShowMessages(_ chat: Chat, _ member: Member, _ show: Bool) async {
-        await perform {
-            try await Core.run("setMemberShowMessages", ["groupId": chat.apiId, "memberId": member.id, "show": show])
-        }
-        await loadMembers()
-        if selection == chat.ref { await reloadMessages(for: chat.ref) }
     }
 
     func acceptMember(_ chat: Chat, _ member: Member, role: String = "member") async {

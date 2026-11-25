@@ -130,6 +130,10 @@ enum Radius {
     static let md = control
     static let lg = control
     static let dockSelection: CGFloat = control - 5
+    /// Rows inside a panel (4pt inset): concentric with its corner.
+    static let insetControl: CGFloat = control - 4
+    /// Compact square controls (header actions, voice play): rounded square.
+    static let smallControl: CGFloat = 12
     static let composer: CGFloat = 12
     static let mediaInset: CGFloat = 12
     static let bubble: CGFloat = 16
@@ -169,6 +173,8 @@ enum Icons {
         if name.hasPrefix("sf:") { return String(name.dropFirst(3)) }
         switch name {
         case "flag-2": return "flag.fill"
+        case "flag-outline": return "flag"
+        case "chevron-right": return "chevron.right"
         case "share-03": return "square.and.arrow.up"
         case "chats": return "bubble.left"
         case "channels": return "antenna.radiowaves.left.and.right"
@@ -182,6 +188,7 @@ enum Icons {
         case "incognito", "incognito-filled": return "eyeglasses"
         case "star-filled": return "star.fill"
         case "notifications": return "bell.fill"
+        case "notifications-outline": return "bell"
         case "notifications-off": return "bell.slash.fill"
         case "notifications-off-outline": return "bell.slash"
         case "plus": return "plus"

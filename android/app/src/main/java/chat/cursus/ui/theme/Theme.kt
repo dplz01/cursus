@@ -137,6 +137,9 @@ object Radius {
     // Concentric with a control surface containing a 4dp inset.
     val insetControl = RoundedCornerShape(16.dp)
     val dockSelection = RoundedCornerShape(15.dp)
+    // Compact square controls (header actions, voice play): a rounded
+    // square like the nav destinations, never a circle. Linux SMALL_CONTROL_RADIUS.
+    val smallControl = RoundedCornerShape(12.dp)
     val sm = control
     val md = control
     val lg = control

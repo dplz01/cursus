@@ -541,9 +541,84 @@ pub struct MessageInfo {
     pub status: Option<String>,
     /// Text with `:shortcodes:` expanded.
     pub text: String,
+    /// Your group message, per member: who received it (SimpleX group
+    /// receipts say "received", there is no separate "read"). Received
+    /// first, then still on the way; names resolved by [`MessageInfo::name_members`].
+    pub receipts: Vec<MemberReceipt>,
+}
+
+/// Where one of your group messages is for one member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ReceiptState {
+    Received,
+    Pending,
+    Failed,
+}
+
+impl ReceiptState {
+    /// `memberDeliveryStatus.type`: `rcvd` / `error` / anything on its way.
+    fn from_api(kind: &str) -> Self {
+        match kind {
+            "rcvd" => Self::Received,
+            "error" | "invalid" => Self::Failed,
+            _ => Self::Pending,
+        }
+    }
+
+    /// Section heading in the info sheet.
+    pub fn heading(self) -> &'static str {
+        match self {
+            Self::Received => "Received by",
+            Self::Pending => "Not received yet",
+            Self::Failed => "Not delivered",
+        }
+    }
+
+    pub fn as_api(self) -> &'static str {
+        match self {
+            Self::Received => "received",
+            Self::Pending => "pending",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberReceipt {
+    pub group_member_id: i64,
+    pub name: String,
+    pub image: Option<String>,
+    pub state: ReceiptState,
 }
 
 impl MessageInfo {
+    /// Plain words for `itemStatus.type` (`sndRcvd` → "Delivered").
+    pub fn status_label(&self) -> Option<&str> {
+        let status = self.status.as_deref()?;
+        Some(match status {
+            "sndNew" => "Sending",
+            "sndSent" => "Sent",
+            "sndRcvd" => "Delivered",
+            "sndErrorAuth" | "sndError" => "Not delivered",
+            "sndWarning" => "Delivery delayed",
+            "rcvNew" => "Received",
+            "rcvRead" => "Read",
+            other => other,
+        })
+    }
+
+    /// Fill names and pictures from the group's member list and sort:
+    /// received first, then pending, then failed; by name within each.
+    pub fn name_members(&mut self, members: &[GroupMemberInfo]) {
+        for r in &mut self.receipts {
+            if let Some(m) = members.iter().find(|m| m.group_member_id == r.group_member_id) {
+                r.name = m.display_name.clone();
+                r.image = m.image.clone();
+            }
+        }
+        self.receipts.sort_by(|a, b| a.state.cmp(&b.state).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    }
+
     pub fn from_api(value: &Value) -> Self {
         // The item is nested once or twice, depending on the core version.
         let item = value.first(&["/chatItem/chatItem", "/chatItem"]).unwrap_or(&Value::Null);
@@ -552,6 +627,20 @@ impl MessageInfo {
             time: item.str_at("/meta/itemTs").map(str::to_string),
             status: item.str_at("/meta/itemStatus/type").map(str::to_string),
             text: crate::expand_emoji_shortcodes(text.unwrap_or_default()),
+            receipts: value
+                .first(&["/chatItemInfo/memberDeliveryStatuses", "/memberDeliveryStatuses"])
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|s| {
+                    Some(MemberReceipt {
+                        group_member_id: s.i64_at("/groupMemberId")?,
+                        name: "Former member".into(),
+                        image: None,
+                        state: ReceiptState::from_api(s.str_at("/memberDeliveryStatus/type").unwrap_or("")),
+                    })
+                })
+                .collect(),
         }
     }
 }
@@ -580,6 +669,38 @@ pub enum DeletedState {
     Marked,
     /// Legacy / full-delete content (`sndDeleted` / `rcvDeleted`).
     Content,
+    /// The core marked the item `blocked` (sent by a member blocked on this
+    /// device). Content kept, can be revealed.
+    Hidden,
+    /// A group admin blocked the member for everyone (`blockedByAdmin`).
+    BlockedByAdmin,
+}
+
+impl DeletedState {
+    /// Tombstone text shown instead of the message (bubble and chat list).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Marked => "marked deleted",
+            Self::Content => "deleted",
+            Self::Hidden => "blocked",
+            Self::BlockedByAdmin => "blocked by admin",
+        }
+    }
+
+    /// The text is still stored, so the reader can reveal it.
+    pub fn can_reveal(self) -> bool {
+        !matches!(self, Self::Content)
+    }
+
+    /// Bridge value (`marked` / `deleted` / `hidden` / `blockedByAdmin`).
+    pub fn as_api(self) -> &'static str {
+        match self {
+            Self::Marked => "marked",
+            Self::Content => "deleted",
+            Self::Hidden => "hidden",
+            Self::BlockedByAdmin => "blockedByAdmin",
+        }
+    }
 }
 
 /// Quoted parent message for a reply bubble.
@@ -953,9 +1074,36 @@ mod message_info_tests {
         let info = MessageInfo::from_api(&nested);
         assert_eq!(info.time.as_deref(), Some("2026-11-08T01:00:00Z"));
         assert_eq!(info.status.as_deref(), Some("sndRcvd"));
+        assert_eq!(info.status_label(), Some("Delivered"));
         assert!(info.text.starts_with("hi ") && !info.text.contains(":smile:"));
         let flat = serde_json::json!({ "chatItem": { "meta": { "itemText": "file.pdf" } } });
         assert_eq!(MessageInfo::from_api(&flat).text, "file.pdf");
+    }
+
+    #[test]
+    fn group_receipts_list_members_received_first() {
+        use super::{GroupMemberInfo, ReceiptState};
+        let value = serde_json::json!({
+            "chatItem": { "chatItem": { "meta": { "itemText": "hi" } } },
+            "chatItemInfo": { "itemVersions": [], "memberDeliveryStatuses": [
+                { "groupMemberId": 2, "memberDeliveryStatus": { "type": "sent" } },
+                { "groupMemberId": 3, "memberDeliveryStatus": { "type": "rcvd", "msgRcptStatus": "ok" } },
+                { "groupMemberId": 9, "memberDeliveryStatus": { "type": "rcvd", "msgRcptStatus": "ok" } }
+            ] }
+        });
+        let member = |id, name: &str| GroupMemberInfo {
+            group_member_id: id, contact_id: None, display_name: name.into(), role: "member".into(),
+            status: "connected".into(), blocked_by_admin: false, show_messages: true, support_chat: None,
+            image: None, public_name: name.into(), short_descr: None, is_me: false,
+        };
+        let mut info = MessageInfo::from_api(&value);
+        info.name_members(&[member(2, "Bob"), member(3, "Zoe")]);
+        let rows: Vec<_> = info.receipts.iter().map(|r| (r.name.as_str(), r.state)).collect();
+        assert_eq!(rows, vec![
+            ("Former member", ReceiptState::Received),
+            ("Zoe", ReceiptState::Received),
+            ("Bob", ReceiptState::Pending),
+        ]);
     }
 }
 

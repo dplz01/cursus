@@ -96,6 +96,12 @@ struct ContactFeature: Decodable, Equatable {
     let mine: String
     let contact: String
     let enabled: Bool
+    /// Shared wording from cursus_core::preferences: "Off" / "On" / "Always".
+    var mineLabel: String? = nil
+    /// e.g. "Alice allows this" (replaces the coloured peer glyph).
+    var contactSummary: String? = nil
+    /// Menu footer: summary + "It works only when you both allow it."
+    var contactNote: String? = nil
 }
 
 struct ContactPrefs: Decodable, Equatable {
@@ -323,6 +329,10 @@ struct Message: Decodable, Identifiable, Equatable {
     let reactions: [Reaction]
     let quote: Quote?
     let deleted: String?
+    /// Tombstone text from core ("marked deleted", "hidden", …).
+    let deletedLabel: String?
+    /// The text is still stored (marked deleted, hidden member): can be shown.
+    let revealable: Bool?
     let sender: Sender?
     let announcement: Bool
     let groupInvitation: GroupInvite?
@@ -333,6 +343,8 @@ struct Message: Decodable, Identifiable, Equatable {
     let joinedNext: Bool?
 
     var date: Date? { createdAt.flatMap(Dates.parse) }
+    /// Marked deleted or from a hidden member: the original can be revealed.
+    var canReveal: Bool { revealable ?? (deleted == "marked") }
     /// Not the last bubble of its run: the sender-side bottom corner stays small.
     var runContinues: Bool { joinedNext ?? false }
     var hasSecret: Bool { segments.contains { $0.style == "secret" } }
@@ -342,24 +354,26 @@ struct Message: Decodable, Identifiable, Equatable {
 struct MessageInfo: Decodable {
     let time: String?
     let status: String?
+    /// Plain words for `status` from core ("Delivered").
+    let statusLabel: String?
     let text: String
+    /// Your group message: who received it, sorted and headed by core.
+    let receipts: [MemberReceipt]?
 
     var date: Date? { time.flatMap(Dates.parse) }
+}
 
-    /// Plain words for the core's `itemStatus.type`.
-    var statusLabel: String? {
-        guard let status = status else { return nil }
-        switch status {
-        case "sndNew": return "Sending"
-        case "sndSent": return "Sent"
-        case "sndRcvd": return "Delivered"
-        case "sndErrorAuth", "sndError": return "Not delivered"
-        case "sndWarning": return "Delivery warning"
-        case "rcvNew": return "Received"
-        case "rcvRead": return "Read"
-        default: return status
-        }
-    }
+/// One member's receipt for your group message (bridge `messageInfo`).
+struct MemberReceipt: Decodable, Identifiable {
+    let memberId: Int64
+    let name: String
+    let image: String?
+    /// `received` / `pending` / `failed`.
+    let state: String
+    /// Section heading for `state` ("Received by").
+    let heading: String
+
+    var id: Int64 { memberId }
 }
 
 struct FileProgress: Decodable {
@@ -454,4 +468,9 @@ enum Dates {
     static func clock(_ date: Date) -> String {
         time.string(from: date)
     }
+}
+
+extension String {
+    /// "hidden" → "Hidden": core's lowercase labels as a sentence start.
+    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
 }

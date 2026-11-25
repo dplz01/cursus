@@ -175,8 +175,7 @@ fn chat_preview(chat: &Value) -> Option<ChatPreview> {
 /// (it may be an invite link): a short tombstone instead, as the official apps.
 fn item_preview(item: &Value) -> String {
     match deleted_state(item) {
-        Some(DeletedState::Content) => "deleted".into(),
-        Some(DeletedState::Marked) => "marked deleted".into(),
+        Some(state) => state.label().into(),
         None => expand_emoji_shortcodes(item_text(item)),
     }
 }
@@ -318,8 +317,11 @@ fn item_text(item: &Value) -> &str {
 }
 
 fn deleted_state(item: &Value) -> Option<DeletedState> {
-    if item.is_set("/meta/itemDeleted") {
-        return Some(DeletedState::Marked);
+    match item.str_at("/meta/itemDeleted/type") {
+        Some("blocked") => return Some(DeletedState::Hidden),
+        Some("blockedByAdmin") => return Some(DeletedState::BlockedByAdmin),
+        _ if item.is_set("/meta/itemDeleted") => return Some(DeletedState::Marked),
+        _ => {}
     }
     matches!(item.str_at("/content/type"), Some("sndDeleted" | "rcvDeleted")).then_some(DeletedState::Content)
 }
@@ -692,6 +694,20 @@ mod tests {
             "chatItems": [item]
         });
         chat_preview(&chat).expect("chat").preview
+    }
+
+    #[test]
+    fn blocked_items_read_as_blocked_not_deleted() {
+        let item = |deleted: Value| json!({
+            "meta": { "itemId": 1, "itemText": "hi", "itemDeleted": deleted },
+            "content": { "type": "rcvMsgContent", "msgContent": { "type": "text", "text": "hi" } }
+        });
+        let blocked = message(&item(json!({ "type": "blocked" }))).unwrap();
+        assert_eq!(blocked.deleted.map(DeletedState::label), Some("blocked"));
+        assert!(DeletedState::Hidden.can_reveal());
+        let by_admin = message(&item(json!({ "type": "blockedByAdmin" }))).unwrap();
+        assert_eq!(by_admin.deleted, Some(DeletedState::BlockedByAdmin));
+        assert_eq!(message(&item(Value::Null)).unwrap().deleted, None);
     }
 
     #[test]

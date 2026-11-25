@@ -421,7 +421,7 @@ private struct NotificationsPage: View {
     @AppStorage(AppModel.notificationsEnabledKey) private var enabled = true
 
     var body: some View {
-        SettingsSection(icon: "notifications", title: "Notifications",
+        SettingsSection(icon: "notifications-outline", title: "Notifications",
                         subtitle: Notifier.available ? "Banners and sounds for new messages." : "Notifications need Cursus to run as Cursus.app.") {
             ToggleRow(label: "Show notifications for new messages", isOn: $enabled)
             GuardedToggle(label: "Hide message text in notifications",
@@ -457,7 +457,7 @@ private struct AboutPage: View {
             }
         }
         if let dir = model.info?.dataDir {
-            Card(spacing: 4) {
+            Panel {
                 NavRow(icon: "sf:folder", title: "Data folder") {
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir)
                 }

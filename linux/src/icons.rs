@@ -261,10 +261,10 @@ pub fn mute_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     )
 }
 
-/// Notifications (settings) — Ionicons `notifications` (MIT).
+/// Notifications (settings) — Ionicons `notifications-outline` (MIT).
 pub fn notifications_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(
-        svg_handle!("../assets/icons/notifications.svg"),
+        svg_handle!("../assets/icons/notifications-outline.svg"),
         color,
         size,
     )
@@ -394,13 +394,24 @@ pub fn image_pen_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(svg_handle!("../assets/icons/image-pen.svg"), color, size)
 }
 
+/// Up to two initials (first letters of the first two words), as on
+/// Android and macOS.
+pub fn initials(label: &str) -> String {
+    let out: String = label
+        .split_whitespace()
+        .take(2)
+        .filter_map(|w| w.chars().next())
+        .flat_map(char::to_uppercase)
+        .collect();
+    if out.is_empty() { "?".into() } else { out }
+}
+
+/// Placeholder avatar: initials in `accent` on an `accent.soft` disc, no
+/// outline — the same placeholder on every platform.
 pub fn avatar_initial<'a>(label: &str, size: f32) -> Element<'a, Message> {
-    let ch = label
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_else(|| "?".into());
-    container(text(ch).size(size * 0.42).color(theme::t().text_primary))
+    let ch = initials(label);
+    let scale = if ch.chars().count() > 1 { 0.36 } else { 0.42 };
+    container(text(ch).size(size * scale).font(crate::ui::BOLD).color(theme::t().accent))
         .width(size)
         .height(size)
         .center_x(size)
@@ -408,11 +419,10 @@ pub fn avatar_initial<'a>(label: &str, size: f32) -> Element<'a, Message> {
         .align_x(Alignment::Center)
         .align_y(Alignment::Center)
         .style(move |_| container::Style {
-            background: Some(Background::Color(theme::t().bg_elevated)),
+            background: Some(Background::Color(theme::t().accent_soft)),
             border: Border {
-                color: theme::t().border,
-                width: 1.0,
                 radius: (size * 0.5).into(),
+                ..Border::default()
             },
             ..container::Style::default()
         })
@@ -424,16 +434,7 @@ pub fn group_avatar_disk<'a>(size: f32) -> Element<'a, Message> {
     avatar_icon_disk(
         svg_handle!("../assets/icons/user-group.svg"),
         size,
-        theme::t().text_secondary,
-    )
-}
-
-/// Default contact avatar disk — Dazzle Line Icons / Dazzle UI (CC Attribution via SVG Repo).
-pub fn contact_avatar_disk<'a>(size: f32) -> Element<'a, Message> {
-    avatar_icon_disk(
-        svg_handle!("../assets/icons/user-alt-1.svg"),
-        size,
-        theme::t().text_secondary,
+        theme::t().accent,
     )
 }
 
@@ -442,7 +443,7 @@ pub fn channel_avatar_disk<'a>(size: f32) -> Element<'a, Message> {
     avatar_icon_disk(
         svg_handle!("../assets/icons/channels.svg"),
         size,
-        theme::t().text_secondary,
+        theme::t().accent,
     )
 }
 
@@ -459,11 +460,10 @@ pub fn avatar_icon_disk<'a>(
         .center_x(size)
         .center_y(size)
         .style(move |_| container::Style {
-            background: Some(Background::Color(theme::t().bg_elevated)),
+            background: Some(Background::Color(theme::t().accent_soft)),
             border: Border {
-                color: theme::t().border,
-                width: 1.0,
                 radius: (size * 0.5).into(),
+                ..Border::default()
             },
             ..container::Style::default()
         })
@@ -620,9 +620,8 @@ pub fn back_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 }
 
 pub fn next_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    svg(svg_handle!("../assets/icons/back.svg"))
+    svg(svg_handle!("../assets/icons/next.svg"))
         .width(size).height(size)
-        .rotation(iced::Radians(std::f32::consts::PI))
         .style(move |_, status| svg::Style { color: Some(if crate::POINTER_GATE.hover_allowed() && matches!(status, svg::Status::Hovered) { glow_color(color) } else { color }) })
         .into()
 }
@@ -717,34 +716,6 @@ pub fn user_member_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
         svg_handle!("../assets/icons/user-member.svg"),
         color,
         size,
-    )
-}
-
-/// Role-button glyph matching the member's current privilege.
-pub fn role_tool<'a>(role: &str, hit: f32, hover_ok: bool) -> Element<'a, Message> {
-    let handle = match role.to_ascii_lowercase().as_str() {
-        "observer" => svg_handle!("../assets/icons/eye-observer.svg"),
-        "moderator" => svg_handle!("../assets/icons/shield-check.svg"),
-        "admin" => svg_handle!("../assets/icons/admin-role.svg"),
-        "owner" => svg_handle!("../assets/icons/owner.svg"),
-        _ => svg_handle!("../assets/icons/user-member.svg"),
-    };
-    profile_tool_icon(
-        handle,
-        hit,
-        theme::t().text_secondary,
-        theme::t().text_primary,
-        hover_ok,
-    )
-}
-
-pub fn actions_menu_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
-    profile_tool_icon(
-        svg_handle!("../assets/icons/actions-new-window.svg"),
-        hit,
-        theme::t().text_secondary,
-        theme::t().text_primary,
-        hover_ok,
     )
 }
 
@@ -877,10 +848,10 @@ pub fn user_plus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 
 /// Chevron pointing right (navigation rows) — chevron-down rotated −90°.
 pub fn chevron_right<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    let icon: Svg<'a, iced::Theme> = svg(svg_handle!("../assets/icons/chevron-down.svg"))
+    // Its own asset: rotated SVGs are skipped by some renderers.
+    let icon: Svg<'a, iced::Theme> = svg(svg_handle!("../assets/icons/chevron-right.svg"))
     .width(Length::Fixed(size))
     .height(Length::Fixed(size))
-    .rotation(iced::Radians(-std::f32::consts::FRAC_PI_2))
     .style(move |_, _| svg::Style { color: Some(color) });
     container(icon)
         .width(size)
@@ -913,7 +884,7 @@ pub fn minus_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
 }
 
 pub fn flag_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    tinted(svg_handle!("../assets/icons/flag-2.svg"), color, size)
+    tinted(svg_handle!("../assets/icons/flag-outline.svg"), color, size)
 }
 pub fn share_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     tinted(svg_handle!("../assets/icons/share-03.svg"), color, size)

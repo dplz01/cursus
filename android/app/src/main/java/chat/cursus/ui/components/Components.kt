@@ -140,7 +140,7 @@ fun AccentSquare(icon: Int, description: String, onClick: () -> Unit, modifier: 
     Box(
         modifier
             .size(48.dp)
-            .clip(Radius.lg)
+            .clip(Radius.smallControl)
             .background(if (enabled) c.accent else c.disabledFill)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
@@ -164,8 +164,9 @@ fun IconDisc(icon: Int, danger: Boolean = false) {
  *  same numbers as the Linux app's `ROW_*`). */
 val RowIconBox = 24.dp
 val RowShape = chat.cursus.ui.theme.Radius.control
+// Rows live inside panels: their corner is concentric with the panel's.
 fun Modifier.pageRow(onClick: (() -> Unit)? = null): Modifier =
-    fillMaxWidth().defaultMinSize(minHeight = 64.dp).clip(RowShape).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+    fillMaxWidth().defaultMinSize(minHeight = 64.dp).clip(Radius.insetControl).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
         .padding(horizontal = 16.dp, vertical = 16.dp)
 
 /** Ghost action tile: icon disc + label, no fill until pressed. */
@@ -182,25 +183,64 @@ fun ActionTile(icon: Int, text: String, onClick: () -> Unit, modifier: Modifier 
     }
 }
 
-/** A section of a page: rows straight on the panel, no box around them —
- *  the same flat language as the chat list. */
+/** A flat block of a page (profile hero, paragraphs): no surface. Rows of
+ *  settings or actions go in a [Panel]. */
 @Composable
 fun CursusCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(modifier.fillMaxWidth(), content = content)
 }
 
-/** Section heading: a small accent label above its rows. */
+/** Inset of headings and notes = text inset of rows inside a panel (4 + 16). */
+val SectionInset = 20.dp
+
+/** The one floating surface for a group of rows (Linux `preference_ui::panel`):
+ *  `bg.elevated`, 1dp border, shared control radius, 4dp inset. */
+@Composable
+fun Panel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    val c = Cursus.colors
+    Column(
+        modifier.fillMaxWidth().clip(Radius.control).background(c.bgElevated)
+            .border(1.dp, c.border, Radius.control).padding(4.dp),
+        content = content,
+    )
+}
+
+/** Section heading above a panel: meta, semibold, `text.secondary`, at the
+ *  row text inset. The same heading everywhere (Linux `preference_ui::heading`). */
+@Composable
+fun SectionHeading(title: String, modifier: Modifier = Modifier) {
+    Text(title, style = Cursus.type.meta, color = Cursus.colors.textSecondary, fontWeight = FontWeight.SemiBold,
+        modifier = modifier.padding(horizontal = SectionInset))
+}
+
+/** Quiet note beside a panel, at the heading inset. */
+@Composable
+fun SectionNote(text: String, modifier: Modifier = Modifier) {
+    Text(text, style = Cursus.type.meta, color = Cursus.colors.textSecondary, modifier = modifier.padding(horizontal = SectionInset))
+}
+
+/** Section heading with an optional note under it. */
 @Composable
 fun CardTitle(icon: Int, title: String, subtitle: String? = null) {
-    Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(title, style = Cursus.type.meta, color = Cursus.colors.accent, fontWeight = FontWeight.SemiBold)
-        if (!subtitle.isNullOrBlank()) Text(subtitle, style = Cursus.type.meta, color = Cursus.colors.textSecondary)
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        SectionHeading(title)
+        if (!subtitle.isNullOrBlank()) SectionNote(subtitle)
+    }
+}
+
+/** The current value of a row that opens a choice: quiet text + chevron. */
+@Composable
+fun RowValue(value: String, enabled: Boolean = true) {
+    val c = Cursus.colors
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(value, style = Cursus.type.meta, color = if (enabled) c.textSecondary else c.textMuted)
+        Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(16.dp).rotate(-90f), tint = c.textMuted)
     }
 }
 
 /** Navigation row: icon disc · title / subtitle · chevron. */
 @Composable
-fun NavRow(icon: Int, title: String, subtitle: String? = null, badge: Long = 0, richSubtitle: Boolean = false, onClick: () -> Unit) {
+fun NavRow(icon: Int, title: String, subtitle: String? = null, badge: Long = 0, richSubtitle: Boolean = false, value: String? = null, onClick: () -> Unit) {
     val c = Cursus.colors
     Row(
         Modifier.pageRow(onClick),
@@ -216,7 +256,8 @@ fun NavRow(icon: Int, title: String, subtitle: String? = null, badge: Long = 0, 
             }
         }
         if (badge > 0) AttentionCount(badge)
-        Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(16.dp).rotate(-90f), tint = c.textMuted)
+        if (value != null) RowValue(value)
+        else Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(16.dp).rotate(-90f), tint = c.textMuted)
     }
 }
 
@@ -247,7 +288,7 @@ fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, note
 
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) {
-    Text(text, style = Cursus.type.meta, color = Cursus.colors.textMuted, modifier = modifier.padding(start = 12.dp, top = 14.dp, bottom = 4.dp))
+    SectionHeading(text, modifier.padding(top = 14.dp, bottom = 6.dp))
 }
 
 /** A shareable link: the whole box copies. */
@@ -343,19 +384,19 @@ fun decodeDataUrl(url: String): ImageBitmap? = runCatching {
     BitmapFactory.decodeByteArray(data, 0, data.size)?.asImageBitmap()
 }.getOrNull()
 
-/** Unread pill: accent on accent.soft. */
+/** Unread pill: solid accent (muted chats: grey), as on Linux and macOS. */
 @Composable
 fun UnreadBadge(count: Long, muted: Boolean = false) {
     val c = Cursus.colors
     Box(
-        Modifier.widthIn(min = 22.dp).clip(Radius.pill).background(if (muted) c.bgField else c.accentSoft)
+        Modifier.widthIn(min = 22.dp).clip(Radius.pill).background(if (muted) c.textMuted else c.accent)
             .padding(horizontal = 7.dp, vertical = 2.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             if (count > 999) "999+" else if (count > 0) count.toString() else "•",
             style = Cursus.type.meta,
-            color = if (muted) c.textSecondary else c.accent,
+            color = if (muted) c.bgList else c.accentOn,
             fontWeight = FontWeight.SemiBold,
         )
     }

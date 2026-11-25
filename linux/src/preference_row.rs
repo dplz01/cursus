@@ -75,11 +75,12 @@ impl Widget<Message, Theme, iced::Renderer> for PreferenceRow<'_> {
         let control = measure(3, available);
         let trail = measure(4, (available - control.size().width - 8.0).max(0.0));
         let icon = if icon_visible {
-            measure(0, 32.0)
+            measure(0, 24.0)
         } else {
             layout::Node::new(Size::ZERO)
         };
-        let leading = if icon_visible { 44.0 } else { 0.0 };
+        // Same glyph slot and gap as navigation rows (24 + 14).
+        let leading = if icon_visible { 38.0 } else { 0.0 };
         let trailing = if trail.size().width > 0.0 {
             trail.size().width + 8.0
         } else {

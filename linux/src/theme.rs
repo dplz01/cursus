@@ -330,6 +330,9 @@ pub fn sidebar_style() -> impl Fn(&iced::Theme) -> container::Style {
 pub const CONTROL_RADIUS: f32 = 20.0;
 /// Concentric hover within a preference surface with a 4px inset.
 pub const INSET_CONTROL_RADIUS: f32 = CONTROL_RADIUS - 4.0;
+/// Compact square controls (36–48px: header actions, voice play): a rounded
+/// square, like the nav destinations — never a circle.
+pub const SMALL_CONTROL_RADIUS: f32 = 12.0;
 pub const DOCK_INSET: f32 = 5.0;
 pub const DOCK_SELECTION_RADIUS: f32 = CONTROL_RADIUS - DOCK_INSET;
 
@@ -452,6 +455,26 @@ pub fn secondary_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status)
 
 /// Yellow square beside "+" (pending one-time links): same shape as the
 /// "+" button, filled with the `attention` yellow — something to look at.
+/// Header action (new chat / new call): `accent.soft` rounded square with an
+/// accent glyph — no border, the same on every list page.
+pub fn soft_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
+        let c = t();
+        let fill = match status {
+            button::Status::Pressed => c.accent_soft_press,
+            button::Status::Hovered if hover_ok => c.accent_soft_hover,
+            _ => c.accent_soft,
+        };
+        button::Style {
+            background: Some(Background::Color(fill)),
+            text_color: c.accent,
+            border: Border { radius: SMALL_CONTROL_RADIUS.into(), ..Border::default() },
+            ..button::Style::default()
+        }
+    }
+}
+
 pub fn attention_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
         let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
@@ -466,7 +489,7 @@ pub fn attention_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status)
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: CONTROL_RADIUS.into(),
+                radius: SMALL_CONTROL_RADIUS.into(),
             },
             ..button::Style::default()
         }
@@ -480,6 +503,11 @@ pub fn on_attention() -> Color {
 
 /// Selectable list row (settings categories): `accent.soft` when selected.
 pub fn list_row(selected: bool, hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    list_row_r(selected, hover_ok, CONTROL_RADIUS)
+}
+
+/// [`list_row`] with its own corner (rows inside a panel are concentric).
+pub fn list_row_r(selected: bool, hover_ok: bool, radius: f32) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
         let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
@@ -498,7 +526,7 @@ pub fn list_row(selected: bool, hover_ok: bool) -> impl Fn(&iced::Theme, button:
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: CONTROL_RADIUS.into(),
+                radius: radius.into(),
             },
             ..button::Style::default()
         }
@@ -506,6 +534,10 @@ pub fn list_row(selected: bool, hover_ok: bool) -> impl Fn(&iced::Theme, button:
 }
 
 pub fn menu_item(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    menu_item_r(hover_ok, CONTROL_RADIUS)
+}
+
+pub fn menu_item_r(hover_ok: bool, radius: f32) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
     move |_, status| {
         let hover_ok = hover_ok && crate::POINTER_GATE.hover_allowed();
         let c = t();
@@ -520,7 +552,7 @@ pub fn menu_item(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -> but
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: CONTROL_RADIUS.into(),
+                radius: radius.into(),
             },
             ..button::Style::default()
         }

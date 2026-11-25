@@ -57,7 +57,7 @@ Exact values live in `linux/src/theme.rs` (`Tokens::light()` / `Tokens::dark()`)
 | `bg.sidebar` | `#FFFFFF` | `#15181E` | Nav rail and sidebar |
 | `bg.list` | `#FFFFFF` | `#15181E` | Middle column / lists |
 | `bg.panel` | `#EEF0F4` | `#0E1015` | Conversation pane, settings pages |
-| `bg.elevated` | `#FFFFFF` | `#252B36` | Menus, popups, preference cards |
+| `bg.elevated` | `#FFFFFF` | `#252B36` | Menus, popups, panels |
 | `bg.hover` | `#EDEFF3` | `#303746` | Hover fill for every quiet control |
 | `bg.field` | `#F2F4F7` | `#111318` | Text fields and quiet buttons |
 | `bubble.in` / `bubble.out` | `#FFFFFF` / `#D8E5FF` | `#1C2028` / `#243A63` | Incoming / outgoing messages |
@@ -89,7 +89,7 @@ Rules:
 |---|---|---|---|
 | App / page title | 18px | 17px | 600 |
 | Profile name | title + 4 | title + 4 | 600 |
-| Section label | = meta | = meta | 600, `accent` |
+| Section label | = meta | = meta | 600, `text.secondary` |
 | Chat name / body / message | 14px | 16px | 400 |
 | Preview / meta / buttons | 12px | 13px | 400 |
 
@@ -107,6 +107,8 @@ Rules:
 | `radius.lg` | 20 — action tiles, rounded text fields, link box, cards, menus |
 | `radius.bubble` | 16 — message bubbles |
 | `radius.pill` | 999 — round icon buttons, unread badge, avatars |
+| `radius.inset` | 16 — rows inside a panel (concentric with its 20 corner and 4 inset) |
+| `radius.small` | 12 — compact square controls: header actions, voice play |
 
 - Page padding: 16px sides (`pad`), 8–10px between header and content (`pad_tight`).
 - **Settings-style lists** (contact page, group/channel page, app settings, preferences): rows have 6px vertical / 8px horizontal padding; lists of people (members, contacts to invite) sit **flush** (0 spacing, 4px row padding) with a 40px avatar before the name.
@@ -121,7 +123,9 @@ Every button in Cursus is one of these. Pick by *role*, never by look.
 | Kind | Linux style fn | Shape | Rest | Hover / press | Used for |
 |---|---|---|---|---|---|
 | **Primary** | `primary_action` | radius 20, padding 12×16 (8×12 small) | `accent` fill, `accent.on` text | `accent.hover` / `accent.press` | The one main action of a screen: Connect, Next, Accept, Create link |
-| **Secondary** | `secondary_action` | radius 20, 1px `border` | `bg.sidebar` fill | `bg.hover` | Neutral alternatives: Cancel, menu-choice chips (`Short ▾`, `Member ▾`), header “+” |
+| **Secondary** | `secondary_action` | radius 20, 1px `border` | `bg.sidebar` fill | `bg.hover` | Neutral alternatives: Cancel, Replace link |
+| **Header action** | `soft_action` | 36px, radius 12 (`radius.small`) | `accent.soft` fill, accent glyph, no border | `accent.soft` hover / press | “+” on Chats / Channels, phone on Calls (macOS 26: native glass) |
+| **Choice value** | `choice_chip` / `row_value` | radius 12 tint on hover | current value in `text.secondary` + chevron, no box | `bg.hover` | A setting with several values; on macOS a native borderless menu |
 | **Danger (solid)** | `danger_action` | radius 20 | `danger` fill, white text | darker red | Final confirmation of destruction (Leave / Delete confirm) |
 | **Action tile (ghost)** | `ghost_tile` | radius 20, padding 10×8 | **no fill, no border**; 32px `accent.soft` icon disc + body-size label (same sizes as navigation rows) | `bg.hover` / `accent.soft` | Chat actions (Clear, Leave) |
 | **Danger tile (ghost)** | `ghost_danger` | radius 20 | no fill, no border; 32px red-tinted disc (`danger` @ 14%), red body label | `danger` @ 14% / 24% | Delete chat / group / channel / contact |
@@ -172,24 +176,34 @@ Settings categories and contact / group / channel preferences use the same mobil
 - Longer explanations and existing confirmations remain available. Inline text answers the everyday question; it does not replace privacy warnings.
 - Group / channel sections: **Messages**, **Media & interaction**, **Members**, then **Just for you** where applicable. Owners see a note that changes affect everyone; other members see an ownership note and disabled controls. Review new members belongs to groups; channels do not offer it.
 
-### Pages: flat sections, one row (the Cursus look)
+### Pages: panels (the Cursus look)
 
-Profile overviews, the Settings category list, Invite and New keep the same flat rows as the chat list. Preference pages use the inset panels above, giving related controls a shared surface. (Until 2026-11 these pages were stacks of cards; the component names `card` / `CursusCard` / `Card` remain in code and now mean "section".)
+Since 2026-11-25 every list of settings or actions sits in a **panel** — the
+same floating surface on every page, so Settings, profiles and preferences look
+alike wherever they appear. Only the profile hero (picture, name, bio, quick
+actions), paragraphs and the conversation / call lists stay flat.
 
 - **Page column**: at most 620 wide, centred; 16 side padding; 22 between sections.
-- **Section label**: meta size, bold, `accent`, inset 12, 4 above its rows. No icon.
-- **Row** — navigation and actions on flat pages:
-  - inset 12 left and right, 10 above and below; radius 20 hover / press tint (`ghost tile`);
-  - leading glyph 20 in a 24 box, **no disc behind it**; 14 gap to the label;
-  - label in body size; optional one-line meta subtitle;
-  - trailing: chevron, switch, value chip or count.
-- **Switch**: use the shared 46×28 preference switch described above. Tapping the setting's name toggles it too; ⓘ stays its own button.
-- **Destructive actions** (clear / leave / delete) are ordinary rows in red at the bottom of the page, never tiles.
-- Everything on a page starts at the same inset: labels, rows, paragraphs, link boxes.
+- **Panel** (Linux `preference_ui::panel`, Android `Panel`, macOS `Panel` /
+  `Card(padding: 0)`): `bg.elevated`, 1px `border`, radius 20, 4 inset, no shadow.
+- **Section heading** (Linux `preference_ui::heading`, Android `SectionHeading`,
+  macOS `SectionHeading`): meta size, 600, `text.secondary`, *outside* the panel,
+  inset 20 (= panel 4 + row 16) so it lines up with the row text; 8 above the
+  panel. Notes use the same inset in regular weight. A page never repeats its own
+  title as a heading.
+- **Row** inside a panel: 16 horizontal inset, radius 16 hover / press tint;
+  glyph 20 in a 24 slot, accent, **no disc**, 14 gap; label in body size;
+  optional one-line subtitle. Phone rows: 56 high for one line, 68 with a subtitle
+  (Android keeps its 64dp minimum).
+- **Trailing**: a chevron means “opens a page or menu”. Rows that open a choice
+  show the current value before the chevron and the whole row is the button.
+  Immediate actions (Hide messages, Block, Lock now) have no chevron.
+- **Destructive actions** (leave / delete / remove) are red rows in their own
+  panel at the bottom; Clear chat stays neutral.
 
 ### Settings layout
 
-Settings are a list of categories, each opening its own page (as on Android): beside the list when there are two columns, over it (with Back) when there is one. The list's header is your profile (picture, name, bio) and opens the profile page. Each row is an icon and a title — no subtitle.
+Settings are a list of categories, each opening its own page (as on Android): beside the list when there are two columns, over it (with Back) when there is one. The list's header is your profile (picture, name, bio) and opens the profile page. Each row is an icon, a title and a chevron, grouped in three panels: Profile · Address / Privacy & Security · Notifications · Appearance / About. The Settings list sits on `bg.panel` like its pages. macOS keeps its native sidebar rows here (System Settings convention); its pages use the panels.
 
 | Page | Contains |
 |---|---|
@@ -207,12 +221,14 @@ Desktop panes are separated by a single 1px `border` hairline between the list a
 ### Lists and rows
 
 - Names and previews never wrap past their budget: one line for names / bios in member lists, two lines for chat previews, ending in “…”. The fit happens at layout time with the real width (Linux: `ellipsis::ellipsis_text`).
-- Chat rows: 44px avatar in a fixed slot (with or without the group badge, so names line up), name (body), two-line preview (meta, `text.secondary`); text with long unbroken runs (links, keys) wraps by glyph so both lines fill. Trailing badges: favourite star, muted, unread pill in `accent` on `accent.soft`.
+- Chat rows: 44px avatar in a fixed slot (with or without the group badge, so names line up), name (body), two-line preview (meta, `text.secondary`); text with long unbroken runs (links, keys) wraps by glyph so both lines fill. Trailing badges: favourite star, muted, unread pill in solid `accent` with `accent.on` text (muted chats: `text.muted`).
+- **Avatars without a picture**: up to two initials (first letters of the first two words) in `accent`, semibold, on an `accent.soft` disc, no outline; groups and channels show their glyph in `accent` on the same disc. One rule for contacts, members and yourself on every platform.
 - Member / contact rows: 40px avatar, name (yourself: **`YOU (Public name)`**) with the short bio under it, a fixed 16px **gold** pending clock right after invited / connecting names (its space is reserved first, so it never shrinks away), then role and actions tools on the right. Rows sit flush (4px vertical padding).
 
 ## Icons
 
-- One outlined family: 24×24 viewBox, **1.5px stroke**, round caps (Solar Linear style). New glyphs are drawn to that grid (Cursus originals are CC0).
+- One outlined family: 24×24 viewBox, **1.5px stroke**, round caps (Solar Linear style). New glyphs are drawn to that grid (Cursus originals are CC0). Filled glyphs only express state (starred, muted); navigation rows use `notifications-outline`, `flag-outline`, `chevron-right`.
+- Never rely on rotating an SVG at runtime (some renderers skip it): ship the turned glyph (`chevron-right.svg`, `next.svg`).
 - Always rendered as tinted vector (SVG) — never from symbol fonts. Tint follows the text token of the context (`text.secondary` idle, `text.primary` hover, `accent` active, `danger` destructive, `gold` pending).
 - Glyph box 20px inside a 32px hit for tools; 16–18px inside menus and tiles.
 - Third-party glyphs are listed with licence in `linux/assets/icons/ATTRIBUTION.md`; other platforms must ship the same files (or the same glyphs) and keep that attribution.
@@ -319,7 +335,7 @@ Back and other page-changing header controls complete an owned press-and-release
 
 - Profile field editors share SimpleX markdown parsing and a formatting preview on Android and Linux. Source markup and literal shortcodes are preserved; profile fields do not autocomplete or expand emoji shortcodes. Profile names, aliases, bios and descriptions render through that same parser with a bounded cache.
 - Message reactions display all eight supported emojis directly, wrapping on narrow screens without an additional picker. The bundled SimpleX core permits eight emoji reactions (`MREmojiChar`); arbitrary emoji cannot be sent as reactions without a protocol-core change. The UI does not substitute quoted messages or pretend unsupported reactions succeeded.
-- Multi-state preference buttons and their choice menus retain the earlier boxed-value styling.
+- Multi-state preferences show their value as quiet text with a chevron (see Pages); the choice menus are unchanged.
 
 - SimpleX naming validation still applies to public names: the first character must be a letter, number or supported emoji, and some punctuation is prohibited. The editor explains this and offers inline bold/italic formatting after the first word; descriptions and local aliases are not restricted by those public-name rules.
 
@@ -538,3 +554,54 @@ Destination docks use an equal 5pt/dp inset on every side, 4pt gaps, and a
 15pt selection radius concentric with the 20pt outer surface. The inset is
 measured from the outer silhouette, including its 1pt border. macOS lens and
 tab hit shapes share the same geometry throughout the sliding animation.
+
+## Cross-platform UI audit — second pass (25 November 2026)
+
+- One section component on every platform: heading outside, rows in a panel
+  (see “Pages: panels”). Settings categories, profile actions, member lists,
+  member pages, invite and share pages all use it.
+- Chat permissions say in words what the contact allows (“Alice allows this”)
+  under each row, instead of a red / green / gold person glyph. The wording and
+  the `Off` / `On` / `Always` labels come from `cursus_core::preferences`
+  (`FeatureAllow::label`, `peer_summary`); the bridge sends them as
+  `mineLabel` / `contactSummary`. Receipts per contact are “Delivery receipts”
+  under **Privacy**.
+- Header actions are `accent.soft` rounded squares (radius 12) on Chats,
+  Channels and Calls; creation choices use the quick-action tile.
+- The member page puts Role on a row with its value; Leave group / channel is red.
+- Welcome / lock cards carry the panel border and sit proportionally high on
+  phones (room for the keyboard).
+
+### Follow-up (25 November 2026)
+
+- **Choice sheets carry the explanation.** A row that opens a choice is one
+  centred line: icon, label, value, chevron. What the choice means, and for
+  contact permissions what the contact allows (`FeatureAllow::peer_note`,
+  sent as `contactNote`), is a note at the bottom of the sheet (Linux /
+  Android) or the last, disabled item of the menu (macOS). Sheet title,
+  options and note share one text edge (16 px inside the 4 px panel inset);
+  the current option has a check.
+- **Member rows** end with the member's role icon as a sign, never a
+  control and never the role name. The whole row opens the member page,
+  which holds role and moderation actions. Icons: observer eye, member
+  person, moderator shield, admin key-person, owner badge.
+- **Blocked messages.** Items the core marks `blocked` / `blockedByAdmin`
+  show a tombstone ("blocked", "blocked by admin") with Reveal; core owns the
+  state and its label. There is no "hide messages for me" action: official
+  SimpleX doesn't offer it, so the member page doesn't either.
+- **Message info** uses label · value rows in words ("Sent", "Delivered",
+  `MessageInfo::status_label`). For your group messages it lists members
+  under "Received by" / "Not received yet" / "Not delivered" with avatar and
+  name. SimpleX group receipts mean delivered to the member's device; there
+  is no separate "read" state in groups.
+- **Android composer:** attach, field and mic/send are all 48 dp tall, so
+  they share one centre line; the field grows upward.
+- **Profile header.** Picture, name, local name and a short description,
+  all centred. A paragraph-long description (a line break or over 64
+  characters) leaves the hero and gets a "Description" block below the
+  actions. Star / Mute / Settings (and Call) are big labelled tiles only on
+  phones, spanning the page edge to edge like the panels; wider windows and
+  the Mac show them as small icon tools in the page header.
+- **Setting help.** The (i) of a setting sits right after its name, as its
+  own small button; the summary underneath is plain text and toggles the row
+  like the rest of it.

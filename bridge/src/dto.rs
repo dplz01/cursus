@@ -124,7 +124,7 @@ pub fn chat(c: &ChatPreview) -> Value {
     })
 }
 
-/// `{ features: { key: { mine, contact, enabled } }, timedTtl }` — the rules
+/// `{ features: { key: { mine, contact, enabled, mineLabel, contactSummary, contactNote } }, timedTtl }` — the rules
 /// are `cursus_core::preferences`; this is only their JSON for the app.
 fn contact_prefs(c: &ChatPreview) -> Value {
     let (prefs, merged) = (c.contact_preferences.as_ref(), c.contact_merged_preferences.as_ref());
@@ -132,7 +132,15 @@ fn contact_prefs(c: &ChatPreview) -> Value {
         .iter()
         .map(|key| {
             let f = preferences::contact_feature(prefs, merged, key);
-            let v = json!({ "mine": f.mine.as_api(), "contact": f.contact.as_api(), "enabled": f.enabled_for_user });
+            let v = json!({
+                "mine": f.mine.as_api(),
+                "contact": f.contact.as_api(),
+                "enabled": f.enabled_for_user,
+                // Shared wording for the row: value + what the contact allows.
+                "mineLabel": f.mine.label(),
+                "contactSummary": f.contact.peer_summary(&c.title),
+                "contactNote": f.contact.peer_note(&c.title),
+            });
             (key.to_string(), v)
         })
         .collect();
@@ -260,10 +268,7 @@ pub fn message(m: &ChatMessage) -> Value {
         DeliveryStatus::Error => "error",
         DeliveryStatus::Warning => "warning",
     };
-    let deleted = m.deleted.map(|d| match d {
-        DeletedState::Marked => "marked",
-        DeletedState::Content => "deleted",
-    });
+    let deleted = m.deleted.map(DeletedState::as_api);
     json!({
         "id": m.item_id,
         "text": m.text,
@@ -279,6 +284,9 @@ pub fn message(m: &ChatMessage) -> Value {
         })).collect::<Vec<_>>(),
         "quote": m.quote.as_ref().map(|q| json!({ "itemId": q.item_id, "text": q.text, "outgoing": q.outgoing })),
         "deleted": deleted,
+        // Tombstone text and whether "Reveal" applies — rules in core.
+        "deletedLabel": m.deleted.map(DeletedState::label),
+        "revealable": m.deleted.is_some_and(DeletedState::can_reveal),
         "sender": m.sender.as_ref().map(|s| json!({
             "memberId": s.group_member_id, "contactId": s.contact_id,
             "name": s.display_name, "image": s.image, "role": s.role,

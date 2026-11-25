@@ -26,32 +26,44 @@ struct NavigationChrome: ViewModifier {
     }
 }
 
-/// Shared square header action and the three creation choices.
+/// Shared square header action and the three creation choices. On macOS 26
+/// native Liquid Glass; elsewhere the Cursus surfaces: the 36pt header
+/// action is an `accent.soft` rounded square (`soft`), the creation tiles
+/// are elevated tiles with a hairline, as on Linux and Android.
 struct CreationActionStyle: ButtonStyle {
+    var radius: CGFloat = Radius.control
+    var soft = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.modifier(CreationGlass(pressed: configuration.isPressed,
-            glass: !reduceTransparency && contrast != .increased))
+            glass: !reduceTransparency && contrast != .increased, radius: radius, soft: soft))
     }
 }
 private struct CreationGlass: ViewModifier {
     let pressed: Bool
     let glass: Bool
+    let radius: CGFloat
+    let soft: Bool
     @ViewBuilder func body(content: Content) -> some View {
         #if compiler(>=6.2) && CURSUS_GLASS
         if #available(macOS 26.0, *), glass {
             content.glassEffect(.regular.tint(Theme.accent.opacity(pressed ? 0.18 : 0.04)).interactive(),
-                in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+                in: RoundedRectangle(cornerRadius: radius, style: .continuous))
         } else { fallback(content) }
         #else
         fallback(content)
         #endif
     }
-    private func fallback(_ content: Content) -> some View {
-        content.background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-            .fill(pressed ? Theme.accentSoftPress : Theme.fieldFill))
-            .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+    @ViewBuilder private func fallback(_ content: Content) -> some View {
+        if soft {
+            content.background(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(pressed ? Theme.accentSoftPress : Theme.accentSoft))
+        } else {
+            content.background(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(pressed ? Theme.accentSoftPress : Theme.elevated))
+                .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+        }
     }
 }
 struct CreationButton: View {
@@ -60,7 +72,7 @@ struct CreationButton: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) { CIcon(icon, size: 19, color: Theme.accent).frame(width: 36, height: 36) }
-            .buttonStyle(CreationActionStyle()).help(help).accessibilityLabel(help)
+            .buttonStyle(CreationActionStyle(radius: Radius.smallControl, soft: true)).help(help).accessibilityLabel(help)
     }
 }
 
@@ -295,6 +307,9 @@ struct ChoiceMenu<Value: Hashable>: View {
     let options: [Choice<Value>]
     let selection: Value
     var enabled = true
+    /// Explanation shown under the options inside the menu (e.g. what the
+    /// contact allows), instead of a line under the row.
+    var note: String? = nil
     let select: (Value) -> Void
 
     private var current: String {
@@ -313,6 +328,10 @@ struct ChoiceMenu<Value: Hashable>: View {
                         Text(option.label)
                     }
                 }
+            }
+            if let note = note, !note.isEmpty {
+                Divider()
+                Text(note)
             }
         } label: {
             Text(current).font(.cMeta)
@@ -456,12 +475,13 @@ struct ActionTile: View {
                     Spacer(minLength: 0)
                 }
                 .padding(.vertical, 10)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 16)
                 .frame(minHeight: 44)
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(GhostTileStyle(danger: danger))
+        // Rows live inside panels: concentric corner.
+        .buttonStyle(GhostTileStyle(danger: danger, radius: Radius.insetControl))
     }
 
     private var disc: some View {
@@ -488,6 +508,8 @@ struct NavRow: View {
     var flush = false
     /// Yellow count before the trailing icon (unread support chats).
     var badge: Int = 0
+    /// Current value of a row that opens a choice (shown before the chevron).
+    var value: String? = nil
     let action: () -> Void
 
     var body: some View {
@@ -504,6 +526,9 @@ struct NavRow: View {
                 if badge > 0 {
                     AttentionCount(count: badge)
                 }
+                if let value = value {
+                    Text(value).font(.cMeta).foregroundColor(Theme.secondaryText)
+                }
                 if trailing == "chevron" {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
@@ -514,11 +539,11 @@ struct NavRow: View {
             }
             // One row pitch everywhere (`flush` is kept for call sites).
             .padding(.vertical, 10)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 16)
             .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
-        .buttonStyle(GhostTileStyle(selected: selected))
+        .buttonStyle(GhostTileStyle(selected: selected, radius: Radius.insetControl))
     }
 }
 
@@ -532,13 +557,61 @@ struct Card<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: spacing) {
-            content
+        if padding == 0 {
+            // A card made only of rows is a floating panel (Linux `button_card`).
+            Panel(spacing: spacing) { content }
+        } else {
+            // A flat block (profile hero, paragraphs): no surface.
+            VStack(alignment: .leading, spacing: spacing) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        // A section of a page: rows straight on the panel, no box around
-        // them — the same flat language as the chat list (`padding` is kept
-        // for call sites).
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Inset of headings and notes = text inset of rows inside a panel (4 + 16).
+let sectionInset: CGFloat = 20
+
+/// The one floating surface for a group of rows: `bg.elevated`, 1pt border,
+/// shared control radius, 4pt inset (Linux `preference_ui::panel`).
+struct Panel<Content: View>: View {
+    var spacing: CGFloat = 0
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: spacing) { content }
+            .padding(4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Theme.elevated))
+            .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+    }
+}
+
+/// Section heading above a panel: meta, semibold, secondary, at the row
+/// text inset. The same heading everywhere.
+struct SectionHeading: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text).font(.cMetaBold).foregroundColor(Theme.secondaryText)
+            .padding(.horizontal, sectionInset)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Quiet note beside a panel, at the heading inset.
+struct SectionNote: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text).font(.cMeta).foregroundColor(Theme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, sectionInset)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -549,15 +622,12 @@ struct CardTitle: View {
     var subtitle: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.cMetaBold).foregroundColor(Theme.accent)
+        VStack(alignment: .leading, spacing: 2) {
+            SectionHeading(title)
             if let subtitle = subtitle, !subtitle.isEmpty {
-                Text(subtitle).font(.cMeta).foregroundColor(Theme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                SectionNote(subtitle)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
     }
 }
 
@@ -567,8 +637,7 @@ struct SectionLabel: View {
     init(_ text: String) { self.text = text }
 
     var body: some View {
-        Text(text).font(.cMeta).foregroundColor(Theme.mutedText)
-            .padding(.horizontal, 12)
+        SectionHeading(text)
             .padding(.top, 4)
     }
 }
@@ -582,11 +651,11 @@ struct PrefRow<Control: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 12) {
+            HStack(spacing: 14) {
+                // Bare glyph in the shared 24pt slot, like navigation rows.
                 if let icon = icon {
-                    CIcon(icon, size: 18, color: Theme.accent)
-                        .frame(width: 32, height: 32)
-                        .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Theme.accentSoft))
+                    CIcon(icon, size: 20, color: Theme.accent)
+                        .frame(width: 24, height: 24)
                 }
                 Text(label).font(.cBody).foregroundColor(Theme.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -596,7 +665,7 @@ struct PrefRow<Control: View>: View {
             if let note = note, !note.isEmpty {
                 Text(note).font(.cMeta).foregroundColor(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, icon == nil ? 0 : 44)
+                    .padding(.leading, icon == nil ? 0 : 38)
             }
         }
         .padding(.vertical, 14)
@@ -723,7 +792,7 @@ struct LinkBox: View {
     }
 }
 
-/// Unread count: accent on accent.soft (muted: grey).
+/// Unread count: solid accent (muted: grey), as on Linux and Android.
 struct UnreadPill: View {
     let count: Int
     var muted = false
@@ -731,10 +800,10 @@ struct UnreadPill: View {
     var body: some View {
         Text(count > 0 ? (count > 999 ? "999+" : "\(count)") : " ")
             .font(.system(size: 11, weight: .semibold))
-            .foregroundColor(muted ? Theme.secondaryText : Theme.accent)
+            .foregroundColor(muted ? Theme.list : Theme.accentOn)
             .padding(.horizontal, 6)
             .frame(minWidth: 20, minHeight: 18)
-            .background(Capsule().fill(muted ? Theme.hover : Theme.accentSoft))
+            .background(Capsule().fill(muted ? Theme.mutedText : Theme.accent))
     }
 }
 
@@ -755,8 +824,8 @@ enum AvatarKind {
     case contact, group, channel, notes, initial
 }
 
-/// Profile picture, or Cursus's default disc: `bg.elevated` with a hairline
-/// and a person / group / antenna glyph (or an initial).
+/// Profile picture, or Cursus's default disc: initials (people) or a group /
+/// antenna glyph in accent on `accent.soft`, no outline — as on Linux and Android.
 struct Avatar: View {
     let image: String?
     let name: String
@@ -772,8 +841,7 @@ struct Avatar: View {
             } else {
                 fallback
                     .frame(width: size, height: size)
-                    .background(Circle().fill(kind == .notes ? Theme.accentSoft : Theme.elevated))
-                    .overlay(Circle().strokeBorder(kind == .notes ? Color.clear : Theme.border, lineWidth: 1))
+                    .background(Circle().fill(Theme.accentSoft))
             }
         }
         .frame(width: size, height: size)
@@ -782,19 +850,21 @@ struct Avatar: View {
     @ViewBuilder private var fallback: some View {
         let glyph = min(max(size * 0.52, 14), 36)
         switch kind {
-        case .contact: CIcon("user-alt-1", size: glyph, color: Theme.secondaryText)
-        case .group: CIcon("user-group", size: glyph, color: Theme.secondaryText)
-        case .channel: CIcon("channels", size: glyph, color: Theme.secondaryText)
+        case .group: CIcon("user-group", size: glyph, color: Theme.accent)
+        case .channel: CIcon("channels", size: glyph, color: Theme.accent)
         case .notes: CIcon("edit-3", size: glyph, color: Theme.accent)
-        case .initial:
+        case .contact, .initial:
             Text(initial)
-                .font(.system(size: size * 0.42))
-                .foregroundColor(Theme.primaryText)
+                .font(.system(size: size * (initial.count > 1 ? 0.36 : 0.42), weight: .semibold))
+                .foregroundColor(Theme.accent)
         }
     }
 
+    /// Up to two initials (first letters of the first two words).
     private var initial: String {
-        name.trimmingCharacters(in: .whitespaces).first.map { String($0).uppercased() } ?? "?"
+        let letters = name.split(whereSeparator: { $0.isWhitespace }).prefix(2).compactMap { $0.first }
+        let out = letters.map { String($0).uppercased() }.joined()
+        return out.isEmpty ? "?" : out
     }
 }
 
@@ -847,19 +917,10 @@ struct PreferenceGroup<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            if let title = title {
-                Text(title).font(.cMeta).foregroundColor(Theme.secondaryText).padding(.horizontal, 20)
-            }
-            VStack(alignment: .leading, spacing: 0) { content }
-                .padding(4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Theme.elevated))
-                .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
-            if let note = note {
-                Text(note).font(.cMeta).foregroundColor(Theme.secondaryText).padding(.horizontal, 20)
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            if let title = title { SectionHeading(title) }
+            Panel { content }
+            if let note = note { SectionNote(note) }
         }
     }
 }

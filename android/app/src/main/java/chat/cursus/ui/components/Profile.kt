@@ -198,8 +198,7 @@ fun ProfileName(name: String) {
 fun HeroLine(text: String) {
     ProfileText(
         text, style = Cursus.type.body, color = Cursus.colors.textSecondary,
-        textAlign = if (text.contains('\n') || text.length > 64) androidx.compose.ui.text.style.TextAlign.Start
-            else androidx.compose.ui.text.style.TextAlign.Center,
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
     )
 }
@@ -207,12 +206,23 @@ fun HeroLine(text: String) {
 /** One of the actions under a profile's name (Linux `quick_actions`). */
 class QuickAction(val icon: Int, val label: String, val active: Boolean = false, val onClick: () -> Unit)
 
-/** One complete action surface: icon and label share its hit target. */
+/** A long or multi-line short description reads as a paragraph: it gets
+ *  its own block under the actions instead of the centred hero (Linux `is_paragraph`). */
+fun isParagraph(text: String) = text.contains('\n') || text.length > 64
+
+/** Small header tools for wide windows (Linux `profile_quick_actions`). */
+@Composable
+fun QuickActionTools(actions: List<QuickAction>) {
+    for (a in actions) HeaderIcon(a.icon, a.label, a.active, a.onClick)
+}
+
+/** Phones: big tiles spanning the page, edge to edge with the panels below.
+ *  One complete action surface: icon and label share its hit target. */
 @Composable
 fun QuickActions(vararg actions: QuickAction) {
     val c = Cursus.colors
-    Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
-        Row(Modifier.widthIn(max = (92 * actions.size).dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (a in actions) {
                 val interactions = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                 val hovered by interactions.collectIsHoveredAsState()
@@ -238,41 +248,62 @@ fun QuickActions(vararg actions: QuickAction) {
 fun AboutBlock(label: String, text: String) {
     Column {
         CardTitle(0, label)
-        ProfileText(text, style = Cursus.type.body, color = Cursus.colors.textPrimary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp))
+        ProfileText(text, style = Cursus.type.body, color = Cursus.colors.textPrimary, modifier = Modifier.padding(horizontal = SectionInset, vertical = 4.dp))
     }
 }
 
-/** Linux `choice_chip`: a secondary button showing only the current value. */
+/** Linux `choice_chip`: the current value + chevron, tinted when pressed. */
 @Composable
 fun ChoiceChip(value: String, onClick: () -> Unit, enabled: Boolean = true) {
-    val c = Cursus.colors
     Box(
-        Modifier.clip(Radius.md).background(c.bgField).border(1.dp, c.border, Radius.md)
-            .clickable(enabled = enabled, onClick = onClick).padding(horizontal = 10.dp, vertical = 6.dp),
+        Modifier.clip(Radius.smallControl).clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
-        Text(value, style = Cursus.type.meta, color = if (enabled) c.textPrimary else c.textMuted)
+        RowValue(value, enabled)
     }
 }
 
-/** Choice menu: title in muted, options as menu items, the current one in accent. */
+/** Choice sheet (Linux `pref_menu_overlay`): title, options and the
+ *  optional note share one text edge; options highlight as inset rounded
+ *  rows like rows in a panel; a check marks the current one. */
 @Composable
-fun <T> ChoiceMenu(title: String, options: List<Pair<T, String>>, current: T?, onDismiss: () -> Unit, onPick: (T) -> Unit) {
+fun <T> ChoiceMenu(title: String, options: List<Pair<T, String>>, current: T?, onDismiss: () -> Unit, note: String? = null, onPick: (T) -> Unit) {
     val c = Cursus.colors
-    CursusOverlay(onDismiss) {
-        Text(title, style = Cursus.type.meta, color = c.textMuted)
-        Column {
-            for ((value, label) in options) {
+    CursusOverlay(onDismiss, padding = 4.dp, spacing = 0.dp) {
+        Text(
+            title, style = Cursus.type.meta, color = c.textSecondary, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp),
+        )
+        for ((value, label) in options) {
+            val selected = value == current
+            Row(
+                Modifier.fillMaxWidth().clip(Radius.insetControl).clickable { onPick(value) }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
-                    label,
-                    style = Cursus.type.body,
-                    color = if (value == current) c.accent else c.textPrimary,
-                    fontWeight = if (value == current) FontWeight.SemiBold else FontWeight.Normal,
-                    modifier = Modifier.fillMaxWidth().clip(Radius.sm).clickable { onPick(value) }
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    label, style = Cursus.type.body, color = if (selected) c.accent else c.textPrimary,
+                    modifier = Modifier.weight(1f),
                 )
+                Box(Modifier.size(18.dp)) {
+                    if (selected) Icon(painterResource(R.drawable.ic_check), null, Modifier.size(18.dp), tint = c.accent)
+                }
             }
         }
+        if (note != null) {
+            Text(
+                note, style = Cursus.type.meta, color = c.textSecondary,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp),
+            )
+        }
     }
+}
+
+/** A row that opens a choice menu: the whole row is the button, the value
+ *  and chevron sit at the end, an optional sentence underneath (Linux `choice_row`). */
+@Composable
+fun ChoiceRow(label: String, value: String, icon: Int? = null, support: String? = null, enabled: Boolean = true, onClick: () -> Unit) {
+    PreferenceRow(label, subtitle = support, icon = icon, enabled = enabled, onClick = onClick) { RowValue(value, enabled) }
 }
 
 /** Preference row: [icon] label … control (Linux `pref_row`). */

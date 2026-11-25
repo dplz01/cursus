@@ -696,14 +696,14 @@ fn list_with_bottom_nav(app: &App) -> Element<'_, Message> {
         .padding(Padding { top: GLASS_FADE, right: float_inset, bottom: float_inset, left: float_inset })
         .width(Length::Fill)
         .align_x(Alignment::Center)
-        .style(|_| container::Style {
+        .style(move |_| container::Style {
             // Settings sits on the panel colour, the chat / call lists on
             // the list colour: fade into whichever is underneath.
-            background: Some(theme::glass_scrim_on(if app.nav() == NavSection::Settings {
-                theme::t().bg_panel
-            } else {
-                theme::t().bg_list
-            })),
+            background: Some(theme::glass_scrim_on(
+                if app.nav() == NavSection::Settings { theme::t().bg_panel } else { theme::t().bg_list },
+                GLASS_FADE,
+                GLASS_FADE + app.density().nav_bar_height + float_inset,
+            )),
             ..container::Style::default()
         });
     let nav = container(bar)
@@ -1683,8 +1683,10 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         .spacing(8)
         .align_y(Alignment::End);
 
-    // Even inset above and below the text field on every layout.
-    let (bar_pad_top, bar_pad_bottom) = (8.0, 8.0);
+    // Even inset above and below the text field on every layout. The top
+    // one is also the fade strip (GLASS_FADE).
+    let (bar_pad_top, bar_pad_bottom) = (GLASS_FADE, 8.0);
+    let scrim_h = app.composer_inset();
 
     // Keep a fixed 3-slot column ([suggest][reply][input]) so showing the
     // `:shortcode` list doesn't shift the editor's tree index and steal focus.
@@ -1835,14 +1837,14 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     // fade above them lets the messages dissolve as they slide underneath.
     container(body)
         .padding(Padding {
-            top: bar_pad_top + GLASS_FADE,
+            top: bar_pad_top,
             right: bar_pad_x,
             bottom: bar_pad_bottom,
             left: bar_pad_x,
         })
         .width(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(theme::glass_scrim()),
+        .style(move |_| container::Style {
+            background: Some(theme::glass_scrim(bar_pad_top, scrim_h)),
             ..container::Style::default()
         })
         .into()
@@ -1864,7 +1866,9 @@ fn floating_card() -> container::Style {
 }
 
 /// Height of the fade above the floating composer.
-pub(crate) const GLASS_FADE: f32 = 20.0;
+/// The fade above floating bars: just their 8 px top inset, so the list
+/// dissolves in that strip and a resting last message is never dimmed.
+pub(crate) const GLASS_FADE: f32 = 8.0;
 
 /// Soft shadow under floating controls (composer field and its button).
 fn floating_shadow() -> iced::Shadow {
@@ -3121,10 +3125,11 @@ fn voice_draft_bar(
         .spacing(8)
         .align_y(Alignment::Center),
     )
-    .padding(Padding { top: 8.0 + GLASS_FADE, right: 10.0, bottom: 8.0, left: 10.0 })
+    .padding(Padding { top: GLASS_FADE, right: 10.0, bottom: 8.0, left: 10.0 })
     .width(Length::Fill)
-    .style(|_| container::Style {
-        background: Some(theme::glass_scrim()),
+    .style(move |_| container::Style {
+        // The bar is about one control tall; the strip ends GLASS_FADE down.
+        background: Some(theme::glass_scrim(GLASS_FADE, GLASS_FADE + send_size + 8.0)),
         ..container::Style::default()
     })
     .into()

@@ -184,7 +184,7 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
     val sidebar: @Composable () -> Unit = {
         val labelGrowth = 14.dp * (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f)
         Box(Modifier.fillMaxSize().background(listTone)) {
-            CompositionLocalProvider(LocalNavClearance provides NavBarHeight + labelGrowth + NavInset + NavFade + 12.dp) {
+            CompositionLocalProvider(LocalNavClearance provides NavBarHeight + labelGrowth + NavInset + GLASS_FADE + 12.dp) {
                 list()
             }
             BottomBar(model, listTone, Modifier.align(Alignment.BottomCenter))
@@ -219,8 +219,6 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
 val LocalNavClearance = androidx.compose.runtime.compositionLocalOf { 0.dp }
 
 private val NavBarHeight = 64.dp
-/** Height of the fade above the bar (`glassScrim`). */
-private val NavFade = 20.dp
 private val NavInset = 12.dp
 private val NavShape = chat.cursus.ui.theme.Radius.control
 private val NavItemShape = chat.cursus.ui.theme.Radius.dockSelection
@@ -240,6 +238,7 @@ private fun BottomBar(model: AppModel, surface: Color, modifier: Modifier = Modi
         modifier
             .fillMaxWidth()
             .glassScrim(surface)
+            .padding(top = GLASS_FADE)
             .padding(start = NavInset, end = NavInset, bottom = NavInset)
             .height(NavBarHeight + labelGrowth)
             .glass(NavShape)

@@ -922,41 +922,45 @@ mod contrast_tests {
 /// Translucent fill of a floating surface.
 pub fn glass_fill() -> Color {
     let c = t().bg_elevated;
-    // Opaque enough that text behind never competes with text on it.
-    Color { a: if is_light_active() { 0.90 } else { 0.88 }, ..c }
+    // Heavily frosted: iced has no backdrop blur, so a dense fill is what
+    // keeps whatever slides underneath a soft shape rather than legible.
+    Color { a: if is_light_active() { 0.95 } else { 0.94 }, ..c }
 }
 
 /// Thin edge that catches the light on a floating surface.
 pub fn glass_edge() -> Color {
     if is_light_active() {
-        Color::from_rgba(0.0, 0.0, 0.0, 0.08)
+        Color::from_rgba(0.0, 0.0, 0.0, 0.10)
     } else {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.10)
+        Color::from_rgba(1.0, 1.0, 1.0, 0.14)
     }
 }
 
 /// Wide, soft shadow that lifts a floating surface off the chat.
 pub fn glass_shadow() -> iced::Shadow {
     iced::Shadow {
-        color: Color::from_rgba(0.0, 0.0, 0.0, if is_light_active() { 0.14 } else { 0.40 }),
-        offset: iced::Vector::new(0.0, 6.0),
-        blur_radius: 18.0,
+        color: Color::from_rgba(0.0, 0.0, 0.0, if is_light_active() { 0.16 } else { 0.45 }),
+        offset: iced::Vector::new(0.0, 8.0),
+        blur_radius: 28.0,
     }
 }
 
-/// Fade behind the composer: the chat background going from clear (top)
-/// to nearly opaque (bottom), so messages dissolve under the field.
-pub fn glass_scrim() -> Background {
-    glass_scrim_on(t().bg_panel)
+/// Fade behind a floating bar `height` px tall whose top `strip` px are
+/// empty inset: the chat background goes from clear to nearly opaque
+/// across that strip only, so messages dissolve as they slide under it but
+/// one resting just above the strip is never dimmed.
+pub fn glass_scrim(strip: f32, height: f32) -> Background {
+    glass_scrim_on(t().bg_panel, strip, height)
 }
 
 /// The same fade into another surface's colour (the chat list under the
 /// destinations bar): fading into a different colour reads as a band.
-pub fn glass_scrim_on(base: Color) -> Background {
+pub fn glass_scrim_on(base: Color, strip: f32, height: f32) -> Background {
+    let end = if height > 0.0 { (strip / height).clamp(0.01, 1.0) } else { 0.2 };
     Background::Gradient(iced::Gradient::Linear(
         iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI))
             .add_stop(0.0, Color { a: 0.0, ..base })
-            .add_stop(0.55, Color { a: 0.75, ..base })
+            .add_stop(end, Color { a: 0.92, ..base })
             .add_stop(1.0, Color { a: 0.92, ..base }),
     ))
 }

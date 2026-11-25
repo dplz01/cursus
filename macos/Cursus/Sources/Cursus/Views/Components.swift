@@ -107,13 +107,19 @@ struct GlassScrim: View {
         #endif
     }
 
+    /// Clear to nearly opaque across the composer's 8pt top inset only,
+    /// then held, so a resting last message just above it is never dimmed.
     private var gradient: some View {
-        LinearGradient(stops: [
-            .init(color: Theme.panel.opacity(0), location: 0),
-            .init(color: Theme.panel.opacity(0.75), location: 0.55),
-            .init(color: Theme.panel.opacity(0.92), location: 1),
-        ], startPoint: .top, endPoint: .bottom)
+        VStack(spacing: 0) {
+            LinearGradient(colors: [Theme.panel.opacity(0), Theme.panel.opacity(0.92)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: GlassScrim.strip)
+            Theme.panel.opacity(0.92)
+        }
     }
+
+    /// The fade strip: the composer's top inset (Linux `GLASS_FADE`).
+    static let strip: CGFloat = 8
 }
 
 extension View {

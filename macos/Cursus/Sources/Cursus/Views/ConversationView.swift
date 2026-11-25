@@ -117,13 +117,12 @@ struct ConversationView: View {
                 }
                 // The composer floats over the history, which scrolls
                 // underneath it and keeps its height as an inset at the end.
-                // The 20pt fade reaches above the composer without being
-                // part of that inset, so messages slide under it but the
-                // last one rests 8pt above the field, not 40.
+                // Its 8pt top inset is both the fade strip and the whole gap
+                // under the last message.
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if !model.selectingMessages {
                         ComposerView(chat: chat, recorder: model.recorder)
-                            .background(GlassScrim().padding(.top, -20).allowsHitTesting(false))
+                            .background(GlassScrim().allowsHitTesting(false))
                     }
                 }
             }

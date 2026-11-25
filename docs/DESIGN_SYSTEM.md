@@ -356,7 +356,7 @@ or crossfaded per tab.
 Pointer hover retains the ordinary Cursus hover fill and does not move the lens.
 The dock floats exactly like the composer field on every platform: the same
 glass surface (`FloatingSurface` on macOS, Linux `glass_fill`/`glass_edge`/
-`glass_shadow`, Android `glass`). Linux and Android put the 20 px fade under
+`glass_shadow`, Android `glass`). Linux and Android put the 8 px fade strip under
 it too, fading into the list's own colour (`glass_scrim_on(bg.list)`): a fade
 into another colour reads as a band and the bar looks docked. macOS has no
 fade there, since the sidebar is the split view's own material.
@@ -628,19 +628,22 @@ tab hit shapes share the same geometry throughout the sliding animation.
   owners).
 - **Floating composer.** The composer is layered over the chat history,
   which scrolls underneath it and keeps the composer's measured height
-  minus the 20 px fade as room at its end, with no extra history padding:
-  at rest the last message sits exactly 8 px (the composer's top inset)
-  above the field, as in WhatsApp and Telegram (Linux `measure::height_probe`, Android `onSizeChanged`,
+  as room at its end, with no extra history padding: at rest the last
+  message sits exactly 8 px (the composer's top inset) above the field, as
+  in WhatsApp and Telegram (Linux `measure::height_probe`, Android `onSizeChanged`,
   macOS `safeAreaInset`). Lift per platform: macOS 26 Liquid Glass
   (`FloatingSurface`, opaque card + shadow before 26 or with Reduce
   Transparency); Android Material elevation (6 dp shadow, level 3); Linux an
   iced container shadow. Reply / edit bars, a pasted image, emoji
   suggestions and voice drafts float on their own cards of the same style.
-- **Glass.** Floating surfaces are translucent (≈0.9 of the elevated
-  colour) with a thin light edge (white 10 % dark / black 8 % light) and a
-  wide soft shadow (y 6, blur 18). Above the composer a 20 px fade (chat
-  background from clear to 0.92) lets messages dissolve as they slide
-  under it. macOS: Liquid Glass on 26, the system `.regularMaterial` blur
+- **Glass.** Floating surfaces are heavily frosted (0.94 dark / 0.95 light
+  of the elevated colour; Linux and Android have no backdrop blur, so
+  density stands in for it) with a light edge (white 14 % dark / black
+  10 % light) and a
+  wide soft shadow (y 8, blur 28). The fade is only the bar's 8 px top
+  inset: the surface underneath goes from clear to 0.92 across that strip
+  and holds, so messages dissolve as they slide under it but a resting last
+  message is never dimmed. macOS: Liquid Glass on 26, the system `.regularMaterial` blur
   before; Linux and Android have no backdrop blur, so translucency + fade
   carry the effect.
 - **Emoji suggestions.** A fixed 5-row list of `glyph :shortcode:` rows on

@@ -58,32 +58,37 @@ import chat.cursus.ui.theme.Radius
 private val ROW_HIT = 42.dp
 private val FieldShape get() = Radius.smallControl
 /** Material elevation of everything that floats over the chat (level 4). */
-private val FLOAT_ELEVATION = 8.dp
+private val FLOAT_ELEVATION = 12.dp
 
 /** Glass: Compose can't blur what's behind a view, so the look comes from
  *  a translucent fill, a thin light edge, a soft wide shadow and the fade
  *  under the composer that messages slide into (as on Linux). */
-private val glassFill @Composable get() = Cursus.colors.bgElevated.copy(alpha = if (Cursus.colors.isDark) 0.88f else 0.90f)
-private val glassEdge @Composable get() = if (Cursus.colors.isDark) Color.White.copy(alpha = 0.10f) else Color.Black.copy(alpha = 0.08f)
+// Heavily frosted (Linux glass_fill): with no backdrop blur, a dense fill is
+// what keeps whatever slides underneath a soft shape rather than legible.
+private val glassFill @Composable get() = Cursus.colors.bgElevated.copy(alpha = if (Cursus.colors.isDark) 0.94f else 0.95f)
+private val glassEdge @Composable get() = if (Cursus.colors.isDark) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.10f)
 
 @Composable
 internal fun Modifier.glass(shape: androidx.compose.ui.graphics.Shape): Modifier = this
     .shadow(FLOAT_ELEVATION, shape, clip = false,
-        ambientColor = Color.Black.copy(alpha = 0.5f), spotColor = Color.Black.copy(alpha = 0.6f))
+        ambientColor = Color.Black.copy(alpha = 0.55f), spotColor = Color.Black.copy(alpha = 0.65f))
     .clip(shape).background(glassFill).border(1.dp, glassEdge, shape)
 
-/** Fade behind the composer: the chat background from clear to nearly opaque. */
+/** Fade behind a floating bar: the surface underneath goes from clear to
+ *  nearly opaque across the bar's top GLASS_FADE inset only, then holds,
+ *  so a resting last message just above it is never dimmed (Linux
+ *  `glass_scrim`). Fade into the surface it sits on: another colour reads
+ *  as a band. */
 @Composable
 internal fun Modifier.glassScrim(base: Color = Cursus.colors.bgPanel): Modifier {
-    // Fade into the surface it sits on: another colour reads as a band.
-    val p = base
+    val strip = with(androidx.compose.ui.platform.LocalDensity.current) { GLASS_FADE.toPx() }
     return background(androidx.compose.ui.graphics.Brush.verticalGradient(
-        0f to p.copy(alpha = 0f), 0.55f to p.copy(alpha = 0.75f), 1f to p.copy(alpha = 0.92f),
-    )).padding(top = GLASS_FADE)
+        listOf(base.copy(alpha = 0f), base.copy(alpha = 0.92f)), startY = 0f, endY = strip,
+    ))
 }
 
-/** Height of the fade above floating bars (Linux `GLASS_FADE`). */
-internal val GLASS_FADE = 20.dp
+/** The fade strip above floating bars: their 8dp top inset (Linux `GLASS_FADE`). */
+internal val GLASS_FADE = 8.dp
 
 /** A card floating above the field (reply / edit bar, pasted image). */
 @Composable

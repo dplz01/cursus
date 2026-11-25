@@ -74,12 +74,16 @@ internal fun Modifier.glass(shape: androidx.compose.ui.graphics.Shape): Modifier
 
 /** Fade behind the composer: the chat background from clear to nearly opaque. */
 @Composable
-internal fun Modifier.glassScrim(): Modifier {
-    val p = Cursus.colors.bgPanel
+internal fun Modifier.glassScrim(base: Color = Cursus.colors.bgPanel): Modifier {
+    // Fade into the surface it sits on: another colour reads as a band.
+    val p = base
     return background(androidx.compose.ui.graphics.Brush.verticalGradient(
         0f to p.copy(alpha = 0f), 0.55f to p.copy(alpha = 0.75f), 1f to p.copy(alpha = 0.92f),
-    )).padding(top = 20.dp)
+    )).padding(top = GLASS_FADE)
 }
+
+/** Height of the fade above floating bars (Linux `GLASS_FADE`). */
+internal val GLASS_FADE = 20.dp
 
 /** A card floating above the field (reply / edit bar, pasted image). */
 @Composable

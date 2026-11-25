@@ -187,7 +187,7 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
             CompositionLocalProvider(LocalNavClearance provides NavBarHeight + labelGrowth + NavInset + NavFade + 12.dp) {
                 list()
             }
-            BottomBar(model, Modifier.align(Alignment.BottomCenter))
+            BottomBar(model, listTone, Modifier.align(Alignment.BottomCenter))
         }
     }
     Box(Modifier.fillMaxSize().background(c.bgApp)) {
@@ -232,14 +232,14 @@ private val NavItemShape = chat.cursus.ui.theme.Radius.dockSelection
  * fills an equal cell, the active one on an accent-soft rounded square.
  */
 @Composable
-private fun BottomBar(model: AppModel, modifier: Modifier = Modifier) {
+private fun BottomBar(model: AppModel, surface: Color, modifier: Modifier = Modifier) {
     val c = Cursus.colors
     val labelStyle = TextStyle(fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium)
     val labelGrowth = 14.dp * (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f)
     Row(
         modifier
             .fillMaxWidth()
-            .glassScrim()
+            .glassScrim(surface)
             .padding(start = NavInset, end = NavInset, bottom = NavInset)
             .height(NavBarHeight + labelGrowth)
             .glass(NavShape)

@@ -7669,15 +7669,16 @@ impl App {
     }
 
     /// Room the chat history keeps at its end for the floating composer:
-    /// its measured height, or one line's worth before the first layout.
+    /// its measured height without the fade on top (messages slide under the
+    /// fade; reserving it too left a visible gap above the field), or one
+    /// line's worth before the first layout.
     pub(crate) fn composer_inset(&self) -> f32 {
         if self.composer_height > 0.0 {
-            self.composer_height
+            (self.composer_height - crate::ui::GLASS_FADE).max(0.0)
         } else {
             // One-line composer: field (42 phone / 36 desktop) + 8 + 8 inset,
             // so the first measurement doesn't shift the history.
-            // (plus the 20 px fade above it).
-            if self.layout() == crate::LayoutMode::Mobile { 78.0 } else { 72.0 }
+            if self.layout() == crate::LayoutMode::Mobile { 58.0 } else { 52.0 }
         }
     }
 

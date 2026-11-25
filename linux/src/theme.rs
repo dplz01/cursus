@@ -947,7 +947,12 @@ pub fn glass_shadow() -> iced::Shadow {
 /// Fade behind the composer: the chat background going from clear (top)
 /// to nearly opaque (bottom), so messages dissolve under the field.
 pub fn glass_scrim() -> Background {
-    let base = t().bg_panel;
+    glass_scrim_on(t().bg_panel)
+}
+
+/// The same fade into another surface's colour (the chat list under the
+/// destinations bar): fading into a different colour reads as a band.
+pub fn glass_scrim_on(base: Color) -> Background {
     Background::Gradient(iced::Gradient::Linear(
         iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI))
             .add_stop(0.0, Color { a: 0.0, ..base })

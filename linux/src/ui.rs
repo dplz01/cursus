@@ -676,6 +676,14 @@ fn info_column(app: &App) -> Option<Element<'_, Message>> {
     }
 }
 
+/// Room a list keeps at the END of its scrolled content for the floating
+/// destinations bar (bar, its bottom inset and the fade above it). It goes
+/// inside the scrollable, not under it, so rows keep scrolling beneath the
+/// bar and only the last one stops above it.
+fn nav_clearance(d: Density) -> f32 {
+    if d.nav_bar_height > 0.0 { d.nav_bar_height + 12.0 + GLASS_FADE } else { 0.0 }
+}
+
 /// The list with the destinations bar floating over its bottom edge (one
 /// column, and two columns without a rail).
 fn list_with_bottom_nav(app: &App) -> Element<'_, Message> {
@@ -689,7 +697,13 @@ fn list_with_bottom_nav(app: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .align_x(Alignment::Center)
         .style(|_| container::Style {
-            background: Some(theme::glass_scrim()),
+            // Settings sits on the panel colour, the chat / call lists on
+            // the list colour: fade into whichever is underneath.
+            background: Some(theme::glass_scrim_on(if app.nav() == NavSection::Settings {
+                theme::t().bg_panel
+            } else {
+                theme::t().bg_list
+            })),
             ..container::Style::default()
         });
     let nav = container(bar)
@@ -933,13 +947,7 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
         NavSection::Settings => settings_panel(app),
     };
 
-    // Reserve space under the scroll viewport so the floating section nav
-    // doesn't cover the last rows on mobile/compact: the bar, its bottom
-    // inset and the fade above it.
-    let float_clearance =
-        if d.nav_bar_height > 0.0 { d.nav_bar_height + 12.0 + GLASS_FADE } else { 0.0 };
-
-    let mut col = Column::new()
+    let col = Column::new()
         .push(container(header).padding(Padding {
             top: d.pad,
             right: d.pad,
@@ -948,9 +956,6 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
         }))
         .push(body)
         .height(Length::Fill);
-    if float_clearance > 0.0 {
-        col = col.push(vertical().height(float_clearance));
-    }
 
     // Settings is made of floating panels: it sits on the panel background
     // like its pages, so the panels read the same at every level.
@@ -1093,7 +1098,7 @@ fn chat_list(app: &App) -> Element<'_, Message> {
 
         col = col.push(container(row).padding(Padding::from([0, 8])));
     }
-    scroll_y(col)
+    scroll_y(col.push(vertical().height(nav_clearance(d))))
 }
 
 fn content_pane(app: &App, with_back: bool) -> Element<'_, Message> {
@@ -1859,7 +1864,7 @@ fn floating_card() -> container::Style {
 }
 
 /// Height of the fade above the floating composer.
-const GLASS_FADE: f32 = 20.0;
+pub(crate) const GLASS_FADE: f32 = 20.0;
 
 /// Soft shadow under floating controls (composer field and its button).
 fn floating_shadow() -> iced::Shadow {
@@ -2088,10 +2093,12 @@ fn history_column(app: &App, d: Density) -> Element<'static, Message> {
     let show_channel = app.selected_is_channel();
     // Room at the end for the composer floating over the history.
     let inset = if app.composer_floats() { app.composer_inset() } else { 0.0 };
+    // No extra bottom padding: the composer's 8 px top inset is the whole
+    // gap under the last message, as in WhatsApp / Telegram.
     let mut col = Column::new().spacing(0).padding(Padding {
         top: 4.0,
         right: d.pad,
-        bottom: 10.0 + inset,
+        bottom: if inset > 0.0 { inset } else { 10.0 },
         left: d.pad,
     });
     col = col.width(Length::Fill);
@@ -4141,7 +4148,8 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
         col = col.push(button_card(rows));
         col = col.push(vertical().height(4));
     }
-    page_scroll_y(col.spacing(8).padding(Padding { top: 0.0, right: 12.0, bottom: 96.0, left: 12.0 }))
+    let bottom = nav_clearance(d).max(24.0);
+    page_scroll_y(col.spacing(8).padding(Padding { top: 0.0, right: 12.0, bottom, left: 12.0 }))
 }
 
 fn settings_section_meta(section: crate::SettingsSection) -> (Element<'static, Message>, &'static str) {
@@ -6712,7 +6720,7 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
     if history.is_empty() && !app.call.history_loading() {
         col = col.push(placeholder("No recent calls", "Your recent calls will appear here.", d));
     }
-    page_scroll_y(col)
+    page_scroll_y(col.push(vertical().height(nav_clearance(d))))
 }
 
 fn call_contacts_overlay(app: &App) -> Element<'_, Message> {

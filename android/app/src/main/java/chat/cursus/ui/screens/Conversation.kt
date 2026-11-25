@@ -142,7 +142,9 @@ fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () 
         var composerHeight by remember { mutableStateOf(0.dp) }
         val density = androidx.compose.ui.platform.LocalDensity.current
         Box(Modifier.weight(1f)) {
-            MessageList(model, chat, bottomInset = if (floating) composerHeight else 0.dp)
+            // Without the fade on top: messages slide under it, and reserving
+            // it too left a visible gap above the field (Linux composer_inset).
+            MessageList(model, chat, bottomInset = if (floating) (composerHeight - GLASS_FADE).coerceAtLeast(0.dp) else 0.dp)
             if (floating) Box(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .onSizeChanged { composerHeight = with(density) { it.height.toDp() } },
@@ -265,7 +267,7 @@ private fun MessageList(model: AppModel, chat: Chat, bottomInset: androidx.compo
         Modifier.fillMaxSize(),
         state = state,
         reverseLayout = true,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 8.dp, bottom = 8.dp + bottomInset),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 8.dp, bottom = if (bottomInset > 0.dp) bottomInset else 8.dp),
     ) {
         items(rows.size, key = { i ->
             when (val r = rows[i]) {

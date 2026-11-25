@@ -78,7 +78,9 @@ struct ConversationView: View {
                             })
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                    .padding(.top, 12)
+                    // No bottom padding: the composer's own 8pt top inset is
+                    // the whole gap under the last message (WhatsApp/Telegram).
                 }
                 .coordinateSpace(name: "history")
                 .background(GeometryReader { geo in
@@ -115,11 +117,13 @@ struct ConversationView: View {
                 }
                 // The composer floats over the history, which scrolls
                 // underneath it and keeps its height as an inset at the end.
+                // The 20pt fade reaches above the composer without being
+                // part of that inset, so messages slide under it but the
+                // last one rests 8pt above the field, not 40.
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if !model.selectingMessages {
                         ComposerView(chat: chat, recorder: model.recorder)
-                            .padding(.top, 20)
-                            .background(GlassScrim())
+                            .background(GlassScrim().padding(.top, -20).allowsHitTesting(false))
                     }
                 }
             }

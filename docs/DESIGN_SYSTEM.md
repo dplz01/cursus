@@ -347,9 +347,8 @@ Mac navigation uses the shared Cursus colors and glyphs inside a floating
 rounded dock over the bottom of the list in a native resizable list/detail split.
 The bar has 20pt corners; selection, hover and hit shapes use 15pt
 corners, matching the Linux and Android navigation bars.
-The list viewport extends behind the dock and its 20pt fade. Chats, calls and
-settings add 104pt of scroll-content padding so the last row can scroll
-completely above both.
+The list viewport extends behind the dock. Chats, calls and settings add 84pt
+of scroll-content padding so the last row can scroll completely above it.
 The dock is a stable sibling of the changing page so all destination pairs
 retain their animation state. One persistent selection lens moves between the
 four destinations with an explicit spring-animated position; it is not replaced
@@ -357,7 +356,10 @@ or crossfaded per tab.
 Pointer hover retains the ordinary Cursus hover fill and does not move the lens.
 The dock floats exactly like the composer field on every platform: the same
 glass surface (`FloatingSurface` on macOS, Linux `glass_fill`/`glass_edge`/
-`glass_shadow`, Android `glass`) over the same 20pt fade (`glass_scrim`).
+`glass_shadow`, Android `glass`). Linux and Android put the 20 px fade under
+it too, fading into the list's own colour (`glass_scrim_on(bg.list)`): a fade
+into another colour reads as a band and the bar looks docked. macOS has no
+fade there, since the sidebar is the split view's own material.
 The selection lens uses native clear Liquid Glass on macOS 26 and stays below
 the controls so its material cannot blur icons or text.
 A small animated glyph displacement peaks as a moving lens edge crosses each
@@ -625,8 +627,10 @@ tab hit shapes share the same geometry throughout the sliding animation.
   `roles::can_act_on`; role menu `role_change_choices`, owners can make
   owners).
 - **Floating composer.** The composer is layered over the chat history,
-  which scrolls underneath it and keeps the composer's measured height as
-  room at its end (Linux `measure::height_probe`, Android `onSizeChanged`,
+  which scrolls underneath it and keeps the composer's measured height
+  minus the 20 px fade as room at its end, with no extra history padding:
+  at rest the last message sits exactly 8 px (the composer's top inset)
+  above the field, as in WhatsApp and Telegram (Linux `measure::height_probe`, Android `onSizeChanged`,
   macOS `safeAreaInset`). Lift per platform: macOS 26 Liquid Glass
   (`FloatingSurface`, opaque card + shadow before 26 or with Reduce
   Transparency); Android Material elevation (6 dp shadow, level 3); Linux an

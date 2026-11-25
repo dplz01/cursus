@@ -345,6 +345,15 @@ fn shots() {
         if want("mobile") {
             let app = demo_app(dark, MOBILE.width, MOBILE.height);
             render(&app, MOBILE, &format!("mobile-list-{t}"));
+            // A list longer than the screen: rows must show beneath the
+            // floating bar (the list scrolls under it), not stop above it.
+            let mut app = demo_app(dark, MOBILE.width, MOBILE.height);
+            for i in 0..8 {
+                let mut extra = chat(100 + i, ChatType::Direct, &format!("Contact {i}"), "Older conversation", 0);
+                extra.last_ts = Some(format!("2026-10-0{}T10:00:00Z", 9 - i));
+                app.chats.push(extra);
+            }
+            render(&app, MOBILE, &format!("mobile-list-long-{t}"));
         }
         if want("msettings") {
             let mut app = demo_app(dark, MOBILE.width, MOBILE.height);
@@ -399,6 +408,14 @@ fn shots() {
             app.messages.push(msg(9, "Text-style ones: \u{263A} \u{2764}\u{FE0F} \u{2600} \u{270C} \u{2B50} 👍🏽 🇮🇹 👨‍👩‍👧 ok → ✓", false, "14:28"));
             app.set_composer_text("\u{2764}\u{1F604} hi");
             render(&app, MOBILE, &format!("emoji-{t}"));
+            // History taller than the screen: the newest message must sit
+            // just above the field, without a gap the size of the fade.
+            for i in 0..6 {
+                app.messages.push(msg(20 + i, "Filling the history so it scrolls", i % 2 == 0, "14:30"));
+            }
+            app.messages.push(msg(40, "unnatural spacing", true, "14:31"));
+            app.set_composer_text("");
+            render(&app, MOBILE, &format!("chat-end-{t}"));
             app.set_composer_text("love you :he");
             render(&app, MOBILE, &format!("emoji-suggest-{t}"));
         }

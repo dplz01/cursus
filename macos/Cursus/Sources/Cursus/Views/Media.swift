@@ -293,9 +293,12 @@ struct RecordingBar: View {
             .keyboardShortcut(.defaultAction)
             .help("Stop (Return)")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Theme.list)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        // Floats over the chat like the composer it replaces.
+        .floatingSurface()
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
     }
 }
 
@@ -339,9 +342,12 @@ struct VoiceDraftBar: View {
             .keyboardShortcut(.defaultAction)
             .help("Send voice message (Return)")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Theme.list)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        // Floats over the chat like the composer it replaces.
+        .floatingSurface()
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
     }
 }
 

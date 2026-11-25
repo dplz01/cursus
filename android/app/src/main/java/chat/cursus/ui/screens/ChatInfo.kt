@@ -623,7 +623,8 @@ private fun MemberInfoPane(model: AppModel, chat: Chat, m: Member, onOpenChat: (
         ProfileText(m.shortDescr, style = Cursus.type.body, color = c.textSecondary, modifier = Modifier.padding(horizontal = SectionInset))
     }
     if (m.isMe) return
-    val outranked = chat.assignableRoles.contains(m.role) || m.pending
+    // You can act on members up to your own rank (core `can_act_on`), as on Linux.
+    val outranked = chat.roleChoices.contains(m.role) || m.pending
     ButtonCard {
         NavRow(R.drawable.ic_chats, "Direct message") { model.messageMember(chat, m) { onOpenChat(it) } }
         if (chat.canModerate && !m.pending && (m.support != null || (chat.groupPrefs?.features?.get("support")?.on == true && m.role !in listOf("owner", "admin", "moderator")))) {
@@ -631,7 +632,7 @@ private fun MemberInfoPane(model: AppModel, chat: Chat, m: Member, onOpenChat: (
                 onOpenChat("${chat.ref}(_support:${m.id})")
             }
         }
-        if (chat.canManageMembers && outranked && !m.pending && chat.assignableRoles.isNotEmpty()) {
+        if (chat.canManageMembers && outranked && !m.pending) {
             NavRow(roleIcon(m.role), "Role", value = m.role.replaceFirstChar { it.titlecase() }) { roles = true }
         }
         if (chat.canModerate && outranked) {
@@ -654,7 +655,7 @@ private fun MemberInfoPane(model: AppModel, chat: Chat, m: Member, onOpenChat: (
         }
     }
     if (roles) {
-        ChoiceMenu("Role", chat.assignableRoles.map { it to it.replaceFirstChar { c -> c.titlecase() } }, m.role, { roles = false }) {
+        ChoiceMenu("Role", chat.roleChoices.map { it to it.replaceFirstChar { c -> c.titlecase() } }, m.role, { roles = false }) {
             model.setMemberRole(chat, m, it); roles = false
         }
     }

@@ -317,7 +317,7 @@ fun SettingsListPane(model: AppModel, selected: SettingsPage?, onOpen: (Settings
     val user = model.user
     Column(Modifier.fillMaxSize()) {
         PaneHeader("Settings")
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = LocalNavClearance.current)) {
             PageColumn {
                 Column {
                     Row(

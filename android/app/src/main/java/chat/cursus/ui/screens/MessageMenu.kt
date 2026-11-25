@@ -9,7 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -106,16 +106,16 @@ fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
         when (pane) {
             MenuPane.Actions -> {
                 if (!deleted) {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // One line: the reactions share the width equally (no wrapping).
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         for (glyph in model.info?.reactions.orEmpty()) {
                             val mine = m.reactions.any { it.glyph == glyph && it.mine }
-                            Text(
-                                glyph, fontSize = 22.sp,
-                                modifier = Modifier.clip(Radius.sm).background(if (mine) c.accentSoft else Color.Transparent)
-                                    .clickable { onDismiss(); model.react(m, glyph, !mine) }.padding(8.dp),
-                            )
+                            Box(
+                                Modifier.weight(1f).clip(Radius.sm).background(if (mine) c.accentSoft else Color.Transparent)
+                                    .clickable { onDismiss(); model.react(m, glyph, !mine) }.padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) { Text(glyph, fontSize = 22.sp, maxLines = 1) }
                         }
-
                     }
                 }
                 Text("Message", style = Cursus.type.meta, color = c.textMuted)

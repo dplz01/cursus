@@ -118,6 +118,8 @@ pub fn chat(c: &ChatPreview) -> Value {
         "canManageMembers": c.membership_role.as_deref().is_some_and(roles::can_manage_members),
         "canModerate": c.membership_role.as_deref().is_some_and(roles::can_moderate),
         "assignableRoles": roles::assignable_roles(c.membership_role.as_deref().unwrap_or("")),
+        // Role changes on the member page: up to and including yours.
+        "roleChoices": roles::role_change_choices(c.membership_role.as_deref().unwrap_or("")),
         // Your own "Chat with admins" thread.
         "supportUnread": c.membership_support_unread,
         "hasSupportChat": c.membership_has_support_chat,

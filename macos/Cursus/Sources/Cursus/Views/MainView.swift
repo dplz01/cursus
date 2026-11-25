@@ -44,9 +44,14 @@ struct MainView: View {
     private var middle: some View {
         // Leave the sidebar transparent: NSSplitViewController supplies its
         // floating glass, window-control region and native resizing behavior.
+        // The dock floats like the composer: its glass card over the same
+        // fade the list dissolves into as it scrolls underneath.
         ZStack(alignment: .bottom) {
             listContent.frame(maxHeight: .infinity)
-            NavDock().padding(10)
+            NavDock()
+                .padding(10)
+                .padding(.top, NavDock.fade)
+                .background(GlassScrim().allowsHitTesting(false))
         }
     }
 
@@ -112,9 +117,11 @@ struct NavDock: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
 
+    /// Height of the fade above the dock (as above the composer).
+    static let fade: CGFloat = 20
     /// Scroll content can pass under the dock, but its final row must be able
-    /// to scroll entirely above the 64pt bar and its two 10pt margins.
-    static let clearance: CGFloat = 84
+    /// to scroll entirely above the 64pt bar, its two 10pt margins and the fade.
+    static let clearance: CGFloat = 84 + fade
 
     private var refractive: Bool {
         #if compiler(>=6.2) && CURSUS_GLASS
@@ -135,7 +142,8 @@ struct NavDock: View {
 
     var body: some View {
         ZStack {
-            Color.clear.modifier(NavigationChrome())
+            // The composer field's surface (glass, light edge, soft shadow).
+            Color.clear.floatingSurface(radius: Radius.control)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             // Keep native glass behind the glyphs so its material never blurs

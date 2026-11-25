@@ -22,6 +22,7 @@ mod image_gestures;
 mod input_gate;
 mod kinetic;
 mod layout;
+mod measure;
 mod media;
 mod navigation;
 mod preference_row;
@@ -1379,6 +1380,8 @@ pub enum Message {
         result: Result<(), String>,
     },
     DiscardComposerImage,
+    /// The floating composer was laid out at this height.
+    ComposerHeight(f32),
     OpenImage(PathBuf),
     GalleryReady { path: PathBuf, generation: u64, result: Result<iced::widget::image::Handle, String> },
     CloseImage,
@@ -1426,6 +1429,8 @@ struct App {
     decrypts_failed: HashSet<PathBuf>,
     composer: text_editor::Content,
     pasted_image: Option<Vec<u8>>,
+    /// Measured height of the floating composer (0 until first laid out).
+    composer_height: f32,
     image_viewer: Option<(PathBuf, f32)>,
     gallery_cache: gallery::Cache,
     connecting: bool,
@@ -1685,6 +1690,7 @@ impl App {
                 decrypts_failed: HashSet::new(),
                 composer: text_editor::Content::new(),
                 pasted_image: None,
+                composer_height: 0.0,
                 image_viewer: None,
                 gallery_cache: gallery::Cache::default(),
                 connecting: false,
@@ -2464,6 +2470,12 @@ impl App {
                     self.pasted_image = Some(bytes);
                 }
                 self.update(Message::FileAttached(result))
+            }
+            Message::ComposerHeight(h) => {
+                if (self.composer_height - h).abs() > 0.5 {
+                    self.composer_height = h;
+                }
+                Task::none()
             }
             Message::DiscardComposerImage => {
                 self.pasted_image = None;
@@ -7648,6 +7660,27 @@ impl App {
     }
 
     /// Pending joiner currently scoped in a member-support thread.
+    /// The composer (not a request / selection bar) is this chat's footer.
+    pub(crate) fn composer_floats(&self) -> bool {
+        self.selected()
+            .and_then(|i| self.chats().get(i))
+            .is_some_and(|c| c.pending_request_id.is_none())
+            && !self.selection_mode()
+    }
+
+    /// Room the chat history keeps at its end for the floating composer:
+    /// its measured height, or one line's worth before the first layout.
+    pub(crate) fn composer_inset(&self) -> f32 {
+        if self.composer_height > 0.0 {
+            self.composer_height
+        } else {
+            // One-line composer: field (42 phone / 36 desktop) + 8 + 8 inset,
+            // so the first measurement doesn't shift the history.
+            // (plus the 20 px fade above it).
+            if self.layout() == crate::LayoutMode::Mobile { 78.0 } else { 72.0 }
+        }
+    }
+
     pub(crate) fn pending_support_member(&self) -> Option<&GroupMemberInfo> {
         let s = self.support.as_ref()?;
         let SupportPane::Thread {

@@ -24,6 +24,19 @@ pub fn assignable_roles(my_role: &str) -> Vec<&'static str> {
     GROUP_ROLES.iter().copied().filter(|r| group_role_rank(r) <= max).collect()
 }
 
+/// Roles you may switch a member to: up to and including your own (an
+/// owner can make another owner, as in SimpleX).
+pub fn role_change_choices(my_role: &str) -> Vec<&'static str> {
+    let mine = group_role_rank(my_role);
+    GROUP_ROLES.iter().copied().filter(|r| group_role_rank(r) <= mine).collect()
+}
+
+/// Whether your role reaches a member's: you can act on members up to
+/// your own rank (role, block, remove), not on higher ones.
+pub fn can_act_on(my_role: &str, member_role: &str) -> bool {
+    can_moderate(my_role) && group_role_rank(member_role) <= group_role_rank(my_role)
+}
+
 /// Roles a group-link joiner may receive (core: `CEGroupMemberInitialRole`).
 pub const LINK_JOINER_ROLES: &[&str] = &["observer", "member"];
 
@@ -56,6 +69,9 @@ mod tests {
     #[test]
     fn assignable_roles_are_below_yours() {
         assert_eq!(assignable_roles("owner"), ["observer", "member", "moderator", "admin"]);
+        assert_eq!(role_change_choices("owner"), ["observer", "member", "moderator", "admin", "owner"]);
+        assert!(can_act_on("owner", "owner") && can_act_on("admin", "admin"));
+        assert!(!can_act_on("admin", "owner") && !can_act_on("member", "observer"));
         assert_eq!(assignable_roles("admin"), ["observer", "member", "moderator"]);
         assert_eq!(assignable_roles("member"), ["observer"]);
         assert_eq!(assignable_roles(""), ["observer"]);

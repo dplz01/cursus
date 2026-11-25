@@ -86,6 +86,8 @@ data class Chat(
     val membersRequireAttention: Long = 0,
     val supportUnread: Long = 0,
     val assignableRoles: List<String> = emptyList(),
+    /** Member page role menu: up to and including your role (core `role_change_choices`). */
+    val roleChoices: List<String> = emptyList(),
 ) {
     val isContact get() = type == "direct"
     val isGroup get() = type == "group"

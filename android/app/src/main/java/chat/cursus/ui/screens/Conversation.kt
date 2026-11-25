@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -46,6 +47,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.shadow
@@ -74,6 +76,7 @@ import chat.cursus.ComposeMode
 import chat.cursus.R
 import chat.cursus.core.Chat
 import chat.cursus.core.Message
+import chat.cursus.core.Quote
 import chat.cursus.core.Segment
 import chat.cursus.core.Stamps
 import chat.cursus.ui.components.AccentSquare
@@ -128,19 +131,28 @@ fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () 
             if (chat.isContact && !chat.isRequest) IconTool(R.drawable.ic_calls, "Audio call", {
                 callPermission { model.calls.start(chat.apiId, chat.title) }
             }, enabled = model.calls.state.active == null && !model.calls.starting)
-            IconTool(R.drawable.ic_info_circle, "Info", onInfo)
+            // No (i): tapping the name / picture opens the profile.
         }
         Box(Modifier.fillMaxWidth().background(c.border).heightIn(min = 1.dp, max = 1.dp))
 
+        // The composer floats over the history (which scrolls underneath
+        // it); the list keeps its height as bottom padding so the newest
+        // message can still be scrolled clear of the field.
+        val floating = model.selected.isEmpty() && !chat.isRequest && !(chat.isChannel && chat.role != "owner")
+        var composerHeight by remember { mutableStateOf(0.dp) }
+        val density = androidx.compose.ui.platform.LocalDensity.current
         Box(Modifier.weight(1f)) {
-            MessageList(model, chat)
+            MessageList(model, chat, bottomInset = if (floating) composerHeight else 0.dp)
+            if (floating) Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .onSizeChanged { composerHeight = with(density) { it.height.toDp() } },
+            ) { Composer(model) }
         }
 
         when {
             model.selected.isNotEmpty() -> SelectionBar(model)
             chat.isRequest -> RequestBar(model, chat)
-            chat.isChannel && chat.role != "owner" -> Unit // only owners post in channels
-            else -> Composer(model)
+            else -> Unit
         }
     }
     androidx.activity.compose.BackHandler(model.selected.isNotEmpty()) { model.selected.clear() }
@@ -199,7 +211,7 @@ private sealed interface Row_ {
 }
 
 @Composable
-private fun MessageList(model: AppModel, chat: Chat) {
+private fun MessageList(model: AppModel, chat: Chat, bottomInset: androidx.compose.ui.unit.Dp = 0.dp) {
     val rows = remember(model.messages.toList()) {
         buildList<Row_> {
             var lastDay: LocalDate? = null
@@ -227,6 +239,23 @@ private fun MessageList(model: AppModel, chat: Chat) {
         }
         displayedLast = last?.id
     }
+    // Tapping a reply's quote scrolls to the original and flashes it
+    // (Linux `jump_to_item`).
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var focused by remember(chat.ref) { mutableStateOf<Long?>(null) }
+    val jumpTo: (Long) -> Unit = { itemId ->
+        val index = rows.indexOfFirst { it is Row_.Msg && it.message.id == itemId }
+        if (index < 0) {
+            model.notice = "Original message is no longer available."
+        } else {
+            focused = itemId
+            scope.launch {
+                state.animateScrollToItem(index)
+                kotlinx.coroutines.delay(1600)
+                if (focused == itemId) focused = null
+            }
+        }
+    }
     if (model.messagesFor != chat.ref) return
     if (rows.isEmpty()) {
         EmptyPane(if (chat.isNotes) "Notes to yourself, only on this phone." else "No messages yet.")
@@ -236,7 +265,7 @@ private fun MessageList(model: AppModel, chat: Chat) {
         Modifier.fillMaxSize(),
         state = state,
         reverseLayout = true,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 8.dp, bottom = 8.dp + bottomInset),
     ) {
         items(rows.size, key = { i ->
             when (val r = rows[i]) {
@@ -246,7 +275,8 @@ private fun MessageList(model: AppModel, chat: Chat) {
         }) { i ->
             when (val r = rows[i]) {
                 is Row_.Day -> DayLabel(r.date)
-                is Row_.Msg -> MessageRow(model, chat, r.message, r.firstOfRun, r.lastOfRun)
+                is Row_.Msg -> MessageRow(model, chat, r.message, r.firstOfRun, r.lastOfRun,
+                    focused = r.message.id == focused, onQuote = jumpTo)
             }
         }
         // Reversed list: the last item is the top of the history.
@@ -274,7 +304,10 @@ private fun DayLabel(date: LocalDate) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Boolean, lastOfRun: Boolean) {
+private fun MessageRow(
+    model: AppModel, chat: Chat, m: Message, firstOfRun: Boolean, lastOfRun: Boolean,
+    focused: Boolean = false, onQuote: (Long) -> Unit = {},
+) {
     val c = Cursus.colors
     if (m.announcement) {
         Text(
@@ -291,13 +324,13 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
     whoReacted?.let { emoji -> ReactionMembers(model, m, emoji) { whoReacted = null } }
     val groupIncoming = chat.isGroup && !m.outgoing
     val visualMedia = m.deleted == null && m.file?.kind in setOf("image", "video")
-    val shape = bubbleShape(m.outgoing, lastOfRun)
+    val shape = bubbleShape(m.outgoing, lastOfRun, visualMedia)
     // Selection mode: a tap anywhere on the row adds / removes the message.
     val selecting = model.selected.isNotEmpty()
     val onLongPress = { if (selecting) model.toggleSelected(m) else menu = true }
     Row(
         Modifier.fillMaxWidth()
-            .background(if (m.id in model.selected) c.accentSoft else Color.Transparent)
+            .background(if (m.id in model.selected || focused) c.accentSoft else Color.Transparent)
             .then(if (selecting) Modifier.clickable { model.toggleSelected(m) } else Modifier)
             .padding(start = 8.dp, end = 8.dp, top = if (firstOfRun) 6.dp else 2.dp),
         horizontalArrangement = if (m.outgoing) Arrangement.End else Arrangement.Start,
@@ -325,7 +358,8 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
                     if (groupIncoming && firstOfRun) {
                         Text(
                             m.sender?.name ?: "",
-                            modifier = if (visualMedia) Modifier.padding(horizontal = 8.dp, vertical = 4.dp) else Modifier,
+                            // A clear gap between the name and the message (Linux: 4).
+                            modifier = if (visualMedia) Modifier.padding(horizontal = 8.dp, vertical = 4.dp) else Modifier.padding(bottom = 4.dp),
                             style = Cursus.type.meta,
                             color = c.accent,
                             fontWeight = FontWeight.SemiBold,
@@ -333,19 +367,11 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
                         )
                     }
                     m.quote?.let { q ->
-                        Row(
-                            Modifier.padding(horizontal = if (visualMedia) 8.dp else 0.dp).padding(bottom = 6.dp).clip(Radius.sm).background(c.bgField.copy(alpha = 0.7f)),
-                        ) {
-                            Box(Modifier.width(3.dp).heightIn(min = 32.dp).background(c.accent))
-                            Text(
-                                q.text,
-                                style = Cursus.type.meta,
-                                color = c.textSecondary,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            )
-                        }
+                        QuotePreview(
+                            q,
+                            Modifier.padding(horizontal = if (visualMedia) 8.dp else 0.dp).padding(bottom = 6.dp),
+                            onClick = q.itemId?.let { id -> { if (selecting) model.toggleSelected(m) else onQuote(id) } },
+                        )
                     }
                     val imageStamp = visualMedia && m.file?.state == "complete"
                     val inlineStamp = !imageStamp && m.deleted == null && m.groupInvitation == null &&
@@ -384,19 +410,53 @@ private fun MessageRow(model: AppModel, chat: Chat, m: Message, firstOfRun: Bool
 
 private val RoundedChip = chat.cursus.ui.theme.Radius.control
 
+/** Linux `quote_preview`: an inset card in the bubble — rounded accent bar,
+ *  "You" / "Reply", up to three lines of the original. Tapping it jumps to
+ *  the original message. */
+@Composable
+private fun QuotePreview(q: Quote, modifier: Modifier, onClick: (() -> Unit)?) {
+    val c = Cursus.colors
+    Row(
+        modifier.fillMaxWidth().height(IntrinsicSize.Min)
+            .clip(QuoteShape)
+            .background(Color.Black.copy(alpha = 0.22f))
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(Modifier.width(3.dp).fillMaxHeight().heightIn(min = 28.dp).clip(QuoteBarShape).background(c.accent))
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(if (q.outgoing) "You" else "Reply", style = Cursus.type.meta, color = c.accent, maxLines = 1)
+            Text(
+                q.text,
+                style = Cursus.type.meta,
+                color = c.textSecondary,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+private val QuoteShape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
+private val QuoteBarShape = androidx.compose.foundation.shape.RoundedCornerShape(2.dp)
+
 /**
  * Bubbles round off at 16 except on the sender's side (right for sent, left
  * for received): the top corner there is always small, and the bottom one
  * too on every bubble of a run but its last, so the run reads as one block.
  */
-private fun bubbleShape(outgoing: Boolean, lastOfRun: Boolean): androidx.compose.foundation.shape.RoundedCornerShape {
-    val top = 4.dp
-    val bottom = if (lastOfRun) 16.dp else 4.dp
+private fun bubbleShape(outgoing: Boolean, lastOfRun: Boolean, media: Boolean = false): androidx.compose.foundation.shape.RoundedCornerShape {
+    // Same numbers as Linux / Mac: 18 (16 around flush media), joins at 6.
+    val r = if (media) 16.dp else 18.dp
+    val top = 6.dp
+    val bottom = if (lastOfRun) r else 6.dp
     return androidx.compose.foundation.shape.RoundedCornerShape(
-        topStart = if (outgoing) 16.dp else top,
-        topEnd = if (outgoing) top else 16.dp,
-        bottomStart = if (outgoing) 16.dp else bottom,
-        bottomEnd = if (outgoing) bottom else 16.dp,
+        topStart = if (outgoing) r else top,
+        topEnd = if (outgoing) top else r,
+        bottomStart = if (outgoing) r else bottom,
+        bottomEnd = if (outgoing) bottom else r,
     )
 }
 

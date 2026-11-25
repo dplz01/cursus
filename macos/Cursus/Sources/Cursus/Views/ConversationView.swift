@@ -49,10 +49,7 @@ struct ConversationView: View {
                         IconTool(icon: "calls", help: "Audio call", size: 20) { model.calls.start(chat) }
                             .disabled(model.calls.state.active != nil || model.calls.busy)
                     }
-                    if canOpenProfile {
-                        IconTool(icon: "info-circle", help: chat.isGroup ? "Group info (⌘I)" : "Contact info (⌘I)",
-                                 size: 20) { model.toggleInfo() }
-                    }
+                    // No (i): clicking the name / picture (or ⌘I) opens the profile.
                 }
             }
             if chat.pendingRequestId != nil {
@@ -116,12 +113,19 @@ struct ConversationView: View {
                     withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(target, anchor: .center) }
                     model.scrollTarget = nil
                 }
+                // The composer floats over the history, which scrolls
+                // underneath it and keeps its height as an inset at the end.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if !model.selectingMessages {
+                        ComposerView(chat: chat, recorder: model.recorder)
+                            .padding(.top, 20)
+                            .background(GlassScrim())
+                    }
+                }
             }
-            Hairline()
             if model.selectingMessages {
+                Hairline()
                 SelectionBar()
-            } else {
-                ComposerView(chat: chat, recorder: model.recorder)
             }
         }
         .sheet(isPresented: Binding(get: { model.forwarding != nil },
@@ -342,7 +346,9 @@ struct MessageRow: View {
     private var revealed: Bool { model.revealedMessages.contains(message.id) }
 
     private var bubbleShape: BubbleShape {
-        BubbleShape(outgoing: message.outgoing, runContinues: message.runContinues)
+        // 18 like Linux / Android; 16 around flush media (12 preview + 4 inset).
+        BubbleShape(outgoing: message.outgoing, runContinues: message.runContinues,
+                    radius: isVisualMedia ? 16 : Radius.bubble)
     }
 
     @ViewBuilder private var bubble: some View {
@@ -586,26 +592,61 @@ struct DeliveryMark: View {
     }
 }
 
+struct EmojiSuggestionRow: View {
+    static let rows = 5
+    static let height: CGFloat = 36
+    static let inset: CGFloat = 4
+    let hit: EmojiHit
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 10) {
+                Text(hit.glyph).font(.cBody)
+                Text(":\(hit.shortcode):").font(.cMeta)
+                    .foregroundColor(selected ? Theme.accentOn : Theme.primaryText)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: Self.height, maxHeight: Self.height)
+            .background(RoundedRectangle(cornerRadius: Radius.smallControl - Self.inset, style: .continuous)
+                .fill(selected ? Theme.accent : hovered ? Theme.accentSoft : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help("Insert (Return) · next (Tab)")
+    }
+}
+
 struct QuoteView: View {
     let quote: Quote
 
     var body: some View {
-        HStack(spacing: 6) {
-            RoundedRectangle(cornerRadius: 1.5)
+        // Linux `quote_preview`: a full-height rounded accent bar on an inset
+        // card with radius 10 (the 20pt control radius clipped the bar).
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 2)
                 .fill(Theme.accent)
                 .frame(width: 3)
-            VStack(alignment: .leading, spacing: 1) {
+                .frame(minHeight: 28)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(quote.outgoing ? "You" : "Reply")
-                    .font(.cMetaBold)
+                    .font(.cMeta)
                     .foregroundColor(Theme.accent)
                 Text(quote.text.isEmpty ? "Attachment" : quote.text)
                     .font(.cMeta)
                     .foregroundColor(Theme.secondaryText)
-                    .lineLimit(2)
+                    .lineLimit(3)
             }
         }
-        .padding(6)
-        .background(RoundedRectangle(cornerRadius: Radius.sm).fill(Color.primary.opacity(0.05)))
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.22)))
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
@@ -1044,47 +1085,58 @@ struct ComposerView: View {
             VStack(spacing: 0) {
                 contextBar
                 if !suggestions.isEmpty { suggestionStrip }
-                HStack(spacing: 6) {
-                    IconTool(icon: "sf:paperclip", help: "Send a file", action: attach)
-                    ZStack(alignment: .topLeading) {
-                        ComposerField(text: $text, height: $fieldHeight, enterSends: enterSends,
-                                      focusToken: focusToken, onSend: send,
-                                      onEscape: escape,
-                                      onAccept: acceptHighlighted,
-                                      onTab: cycleSuggestion,
-                                      onUp: { model.editLastOutgoing() })
-                            .frame(height: fieldHeight)
-                        if text.isEmpty {
-                            Text(placeholder)
-                                .font(.cBody)
-                                .foregroundColor(Theme.mutedText)
-                                .padding(.top, 2)
-                                .padding(.leading, 5) // NSTextView line-fragment padding
-                                .allowsHitTesting(false)
+                // A floating field with the control radius of every other
+                // button, the paperclip inside it, and one rounded-square
+                // action beside it: mic while empty, Send once there is text.
+                HStack(alignment: .bottom, spacing: 8) {
+                    HStack(alignment: .bottom, spacing: 4) {
+                        ZStack(alignment: .topLeading) {
+                            ComposerField(text: $text, height: $fieldHeight, enterSends: enterSends,
+                                          focusToken: focusToken, onSend: send,
+                                          onEscape: escape,
+                                          onAccept: acceptHighlighted,
+                                          onTab: cycleSuggestion,
+                                          onUp: { model.editLastOutgoing() })
+                                .frame(height: fieldHeight)
+                            if text.isEmpty {
+                                Text(placeholder)
+                                    .font(.cBody)
+                                    .foregroundColor(Theme.mutedText)
+                                    .padding(.top, 2)
+                                    .padding(.leading, 5) // NSTextView line-fragment padding
+                                    .allowsHitTesting(false)
+                            }
                         }
+                        // One line: exactly 36 pt tall, like the "+"; more lines keep this inset.
+                        .padding(.vertical, max(4, (36 - ComposerField.lineHeight) / 2))
+                        IconTool(icon: "sf:paperclip", help: "Send a file", size: 18, action: attach)
+                            .frame(height: 36)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(RoundedRectangle(cornerRadius: Radius.composer, style: .continuous).fill(Theme.fieldFill))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Radius.composer, style: .continuous)
-                            .strokeBorder(Theme.border, lineWidth: 1))
-                    IconTool(icon: "mic", help: "Record a voice message", size: 20) {
-                        Task { await model.startRecording() }
+                    .padding(.leading, 12)
+                    .padding(.trailing, 2)
+                    .floatingSurface()
+                    // Exactly the list header's "+" (CreationButton): 36 pt,
+                    // radius 12, same style; Send is its solid accent twin.
+                    if canSend {
+                        Button(action: send) {
+                            CIcon("send", size: 19, color: Theme.accentOn)
+                                .frame(width: 36, height: 36)
+                                .background(RoundedRectangle(cornerRadius: Radius.smallControl, style: .continuous).fill(Theme.accent))
+                        }
+                        .buttonStyle(.plain)
+                        .shadow(color: Color.black.opacity(0.22), radius: 12, x: 0, y: 6)
+                        .help(enterSends ? "Send (Return)" : "Send (⌘Return)")
+                    } else {
+                        Button { Task { await model.startRecording() } } label: {
+                            CIcon("mic", size: 19, color: Theme.accent).frame(width: 36, height: 36)
+                        }
+                        .buttonStyle(CreationActionStyle(radius: Radius.smallControl, soft: true))
+                        .help("Record a voice message")
                     }
-                    Button(action: send) {
-                        CIcon("send", size: 18, color: canSend ? Theme.accentOn : Theme.mutedText)
-                            .frame(width: 34, height: 34)
-                            .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(canSend ? Theme.accent : Theme.disabledFill))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canSend)
-                    .help(enterSends ? "Send (Return)" : "Send (⌘Return)")
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
             }
-            .background(Theme.list)
             .onAppear {
                 text = model.draft
                 pushedDraft = model.draft
@@ -1139,7 +1191,10 @@ struct ComposerView: View {
             Spacer()
             IconTool(icon: "cancel", help: "Cancel (Esc)", size: 14) { model.cancelCompose() }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .floatingSurface()
+        .padding(.horizontal, 10)
         .padding(.top, 8)
     }
 
@@ -1151,28 +1206,24 @@ struct ComposerView: View {
 
     // MARK: Emoji shortcodes
 
+    /// Linux emoji suggestions: a fixed 5-row list on the composer field's
+    /// surface, as wide as the field, hits glued to it; rows concentric with
+    /// the card (4pt inset, radius 12 − 4).
     private var suggestionStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(Array(suggestions.enumerated()), id: \.element) { index, hit in
-                    Button { accept(index) } label: {
-                        HStack(spacing: 4) {
-                            Text(hit.glyph).font(.system(size: 18))
-                            Text(":\(hit.shortcode):").font(.cMeta).foregroundColor(Theme.secondaryText)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
-                            .fill(index == suggestIndex ? Theme.accentSoft : Color.clear))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Insert (Return) · next (Tab)")
-                }
+        VStack(spacing: 2) {
+            Spacer(minLength: 0)
+            ForEach(Array(suggestions.prefix(EmojiSuggestionRow.rows).enumerated()), id: \.element) { index, hit in
+                EmojiSuggestionRow(hit: hit, selected: index == suggestIndex) { accept(index) }
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 6)
         }
+        .frame(height: EmojiSuggestionRow.height * CGFloat(EmojiSuggestionRow.rows)
+               + 2 * CGFloat(EmojiSuggestionRow.rows - 1))
+        .padding(EmojiSuggestionRow.inset)
+        .floatingSurface()
+        // Ends where the field ends: the action button sits beside it.
+        .padding(.leading, 10)
+        .padding(.trailing, 10 + 36 + 8)
+        .padding(.top, 6)
     }
 
     /// Completed `:shortcodes:` turn into emoji as you type; an open

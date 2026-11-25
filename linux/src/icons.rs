@@ -594,19 +594,10 @@ pub fn profile_tool_icon<'a>(
     )
 }
 
-pub fn plus_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
+/// Attach a file: paperclip inside the composer field (Cursus original, CC0).
+pub fn attach_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
     composer_tool_icon(
-        svg_handle!("../assets/icons/plus.svg"),
-        hit,
-        theme::t().text_secondary,
-        theme::t().text_primary,
-        hover_ok,
-    )
-}
-
-pub fn mic_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
-    composer_tool_icon(
-        svg_handle!("../assets/icons/mic.svg"),
+        svg_handle!("../assets/icons/paperclip.svg"),
         hit,
         theme::t().text_secondary,
         theme::t().text_primary,
@@ -691,21 +682,6 @@ pub fn settings_tool<'a>(hit: f32, hover_ok: bool) -> Element<'a, Message> {
         svg_handle!("../assets/icons/settings.svg"),
         hit,
         theme::t().text_secondary,
-        theme::t().text_primary,
-        hover_ok,
-    )
-}
-
-pub fn admin_tool<'a>(hit: f32, active: bool, hover_ok: bool) -> Element<'a, Message> {
-    let idle = if active {
-        theme::t().accent
-    } else {
-        theme::t().text_secondary
-    };
-    profile_tool_icon(
-        svg_handle!("../assets/icons/admin.svg"),
-        hit,
-        idle,
         theme::t().text_primary,
         hover_ok,
     )

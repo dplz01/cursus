@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use iced::theme::Palette;
 use iced::widget::{button, container, text_editor, text_input};
-use iced::{Background, Border, Color, Shadow, Vector};
+use iced::{Background, Border, Color};
 
 /// Process-wide active palette — set from `App::view` / preference changes so
 /// style closures and view helpers stay token-driven without threading `App`
@@ -333,28 +333,26 @@ pub const INSET_CONTROL_RADIUS: f32 = CONTROL_RADIUS - 4.0;
 /// Compact square controls (36–48px: header actions, voice play): a rounded
 /// square, like the nav destinations — never a circle.
 pub const SMALL_CONTROL_RADIUS: f32 = 12.0;
+/// Inset of the `:shortcode` list inside its field-shaped card.
+pub const SUGGEST_INSET: f32 = 4.0;
+/// Concentric hover/selection inside that card.
+pub const SUGGEST_ROW_RADIUS: f32 = SMALL_CONTROL_RADIUS - SUGGEST_INSET;
 pub const DOCK_INSET: f32 = 5.0;
 pub const DOCK_SELECTION_RADIUS: f32 = CONTROL_RADIUS - DOCK_INSET;
 
-/// Rounded floating section nav that sits over the list page.
+/// Rounded floating section nav that sits over the list page: the same
+/// glass surface as the composer field (translucent fill, light edge, wide
+/// soft shadow), over the same fade (`glass_scrim`).
 pub fn floating_nav_style() -> impl Fn(&iced::Theme) -> container::Style {
-    |_| {
-        let c = t();
-        let shadow_a = if is_light_active() { 0.16 } else { 0.55 };
-        container::Style {
-            background: Some(Background::Color(c.bg_elevated)),
-            border: Border {
-                color: c.border,
-                width: 1.0,
-                radius: CONTROL_RADIUS.into(),
-            },
-            shadow: Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, shadow_a),
-                offset: Vector::new(0.0, 6.0),
-                blur_radius: 18.0,
-            },
-            ..container::Style::default()
-        }
+    |_| container::Style {
+        background: Some(Background::Color(glass_fill())),
+        border: Border {
+            color: glass_edge(),
+            width: 1.0,
+            radius: CONTROL_RADIUS.into(),
+        },
+        shadow: glass_shadow(),
+        ..container::Style::default()
     }
 }
 
@@ -625,7 +623,7 @@ pub fn emoji_suggest_row(
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: CONTROL_RADIUS.into(),
+                radius: SUGGEST_ROW_RADIUS.into(),
             },
             ..button::Style::default()
         }
@@ -914,4 +912,46 @@ mod contrast_tests {
             }
         }
     }
+}
+
+// ── Glass: surfaces floating over the chat (composer and its cards) ─────
+// Iced has no backdrop blur, so the effect comes from a translucent fill,
+// a thin light edge, a wide soft shadow and the fade under the composer
+// (`glass_scrim`) that the messages slide into.
+
+/// Translucent fill of a floating surface.
+pub fn glass_fill() -> Color {
+    let c = t().bg_elevated;
+    // Opaque enough that text behind never competes with text on it.
+    Color { a: if is_light_active() { 0.90 } else { 0.88 }, ..c }
+}
+
+/// Thin edge that catches the light on a floating surface.
+pub fn glass_edge() -> Color {
+    if is_light_active() {
+        Color::from_rgba(0.0, 0.0, 0.0, 0.08)
+    } else {
+        Color::from_rgba(1.0, 1.0, 1.0, 0.10)
+    }
+}
+
+/// Wide, soft shadow that lifts a floating surface off the chat.
+pub fn glass_shadow() -> iced::Shadow {
+    iced::Shadow {
+        color: Color::from_rgba(0.0, 0.0, 0.0, if is_light_active() { 0.14 } else { 0.40 }),
+        offset: iced::Vector::new(0.0, 6.0),
+        blur_radius: 18.0,
+    }
+}
+
+/// Fade behind the composer: the chat background going from clear (top)
+/// to nearly opaque (bottom), so messages dissolve under the field.
+pub fn glass_scrim() -> Background {
+    let base = t().bg_panel;
+    Background::Gradient(iced::Gradient::Linear(
+        iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI))
+            .add_stop(0.0, Color { a: 0.0, ..base })
+            .add_stop(0.55, Color { a: 0.75, ..base })
+            .add_stop(1.0, Color { a: 0.92, ..base }),
+    ))
 }

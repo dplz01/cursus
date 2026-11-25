@@ -67,6 +67,8 @@ enum Theme {
     static let hover = dynamic(0xEDEFF3, 0x303746)
     static let fieldFill = dynamic(0xF2F4F7, 0x111318)
     static let border = dynamic(0xDDE1E7, 0x3B4453)
+    /// Thin edge catching the light on floating (glass) surfaces.
+    static let glassEdge = dynamic(0x000000, 0xFFFFFF, alpha: 0.08, darkAlpha: 0.12)
 
     // Text
     static let primaryText = dynamic(0x12141A, 0xF2F3F5)
@@ -136,7 +138,7 @@ enum Radius {
     static let smallControl: CGFloat = 12
     static let composer: CGFloat = 12
     static let mediaInset: CGFloat = 12
-    static let bubble: CGFloat = 16
+    static let bubble: CGFloat = 18
 }
 
 /// Type scale (desktop): title 18 / body 14 / meta 12, times the text size

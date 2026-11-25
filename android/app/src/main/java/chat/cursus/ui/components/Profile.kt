@@ -98,7 +98,9 @@ fun FieldEditor(field: EditField, initial: String, onDismiss: () -> Unit, onSave
     val canSave = !field.required || value.isNotBlank()
     val literalName = field in setOf(EditField.OwnName, EditField.GroupName, EditField.GroupAlias, EditField.ContactAlias)
     CursusOverlay(onDismiss) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // The overlay already scrolls: a second vertical scroll inside it is
+        // measured with infinite height and crashes (welcome message editor).
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f)) {
                     Text(field.title, style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.Bold)

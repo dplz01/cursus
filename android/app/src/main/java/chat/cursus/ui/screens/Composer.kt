@@ -33,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.runtime.getValue
 import chat.cursus.ui.components.rememberLoaded
 import androidx.compose.ui.graphics.ImageBitmap
@@ -52,25 +53,41 @@ import chat.cursus.ui.components.IconTool
 import chat.cursus.ui.theme.Cursus
 import chat.cursus.ui.theme.Radius
 
-private val SEND = 36.dp
-/** Every control in the composer row is this tall (IconTool's hit size), so
- *  attach, field and mic/send share one centre line; the field grows upward. */
-private val ROW_HIT = 48.dp
-private val PillShape = RoundedCornerShape(ROW_HIT / 2)
+/** One-line field and its action: 42dp (between the 36dp "+" and the
+ *  48dp of other messengers), radius 12 like the "+", so corners match. */
+private val ROW_HIT = 42.dp
+private val FieldShape get() = Radius.smallControl
+/** Material elevation of everything that floats over the chat (level 4). */
+private val FLOAT_ELEVATION = 8.dp
 
-/** Linux `composer_send_hit`: round accent face when active, bare glyph otherwise. */
+/** Glass: Compose can't blur what's behind a view, so the look comes from
+ *  a translucent fill, a thin light edge, a soft wide shadow and the fade
+ *  under the composer that messages slide into (as on Linux). */
+private val glassFill @Composable get() = Cursus.colors.bgElevated.copy(alpha = if (Cursus.colors.isDark) 0.88f else 0.90f)
+private val glassEdge @Composable get() = if (Cursus.colors.isDark) Color.White.copy(alpha = 0.10f) else Color.Black.copy(alpha = 0.08f)
+
 @Composable
-private fun SendHit(active: Boolean, description: String, onClick: () -> Unit) {
+internal fun Modifier.glass(shape: androidx.compose.ui.graphics.Shape): Modifier = this
+    .shadow(FLOAT_ELEVATION, shape, clip = false,
+        ambientColor = Color.Black.copy(alpha = 0.5f), spotColor = Color.Black.copy(alpha = 0.6f))
+    .clip(shape).background(glassFill).border(1.dp, glassEdge, shape)
+
+/** Fade behind the composer: the chat background from clear to nearly opaque. */
+@Composable
+internal fun Modifier.glassScrim(): Modifier {
+    val p = Cursus.colors.bgPanel
+    return background(androidx.compose.ui.graphics.Brush.verticalGradient(
+        0f to p.copy(alpha = 0f), 0.55f to p.copy(alpha = 0.75f), 1f to p.copy(alpha = 0.92f),
+    )).padding(top = 20.dp)
+}
+
+/** A card floating above the field (reply / edit bar, pasted image). */
+@Composable
+private fun FloatingCard(content: @Composable () -> Unit) {
     val c = Cursus.colors
-    Box(Modifier.size(ROW_HIT), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier.size(SEND).clip(Radius.pill).background(if (active) c.accent else Color.Transparent)
-                .clickable(enabled = active, onClick = onClick),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(painterResource(R.drawable.ic_send), description, Modifier.size(20.dp), tint = if (active) c.accentOn else c.textSecondary)
-        }
-    }
+    Box(
+        Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 8.dp).glass(Radius.smallControl),
+    ) { content() }
 }
 
 @Composable
@@ -103,71 +120,104 @@ fun Composer(model: AppModel) {
         return
     }
 
-    Column(Modifier.fillMaxWidth().background(c.bgSidebar)) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
+    // No bar behind it: the field and its action float over the chat with
+    // Material elevation; anything above the field (reply / edit, pasted
+    // image) floats on its own card.
+    Column(Modifier.fillMaxWidth().glassScrim()) {
         EmojiSuggestions(model)
-        ContextBar(model)
+        if (model.composeMode !is ComposeMode.New) FloatingCard { ContextBar(model) }
         model.pastedImage?.let { file ->
-            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            FloatingCard { Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 val bitmap by rememberLoaded<ImageBitmap?>(null, file) {
                     withContext(Dispatchers.IO) { decodeScaled(file.absolutePath, 256) }
                 }
                 bitmap?.let { androidx.compose.foundation.Image(it, "Image to send", Modifier.size(72.dp).clip(Radius.md)) }
                 Text("Image ready to send", Modifier.weight(1f).padding(12.dp), color = c.textSecondary)
                 IconTool(R.drawable.ic_cancel, "Discard image", model::discardPastedImage)
-            }
+            } }
         }
+        // A floating field with the control radius of every other button,
+        // the paperclip inside it (✕ while recording), and one rounded-square
+        // action beside it: mic while empty, Send once there is text.
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (model.recording) {
-                IconTool(R.drawable.ic_cancel, "Discard recording", { model.discardRecording() })
-            } else {
-                IconTool(R.drawable.ic_plus, "Attach", { pick.launch(arrayOf("*/*")) })
-            }
-            // Rounded pill holds the text (Linux: radius 20, 1px border, field fill).
-            Box(
-                Modifier.weight(1f).heightIn(min = ROW_HIT).clip(PillShape).background(c.bgField)
-                    .border(1.dp, c.border, PillShape).padding(horizontal = 18.dp, vertical = 12.dp),
-                contentAlignment = Alignment.CenterStart,
+            Row(
+                Modifier.weight(1f).heightIn(min = ROW_HIT).glass(FieldShape),
+                verticalAlignment = Alignment.Bottom,
             ) {
-                if (model.recording) {
-                    Text("Recording… ${formatDuration(model.recordSecs.toLong())}", style = Cursus.type.body, color = c.danger)
-                } else if (model.voicePreparing) {
-                    Text("Preparing voice…", style = Cursus.type.body, color = c.textSecondary)
-                } else {
-                    if (model.draft.isEmpty()) Text("Message", style = Cursus.type.body, color = c.textSecondary)
-                    BasicTextField(
-                        state = field,
-                        textStyle = Cursus.type.body.copy(color = c.textPrimary),
-                        cursorBrush = SolidColor(c.accent),
-                        lineLimits = androidx.compose.foundation.text.input.TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
-                        modifier = Modifier.fillMaxWidth().contentReceiver { content ->
-                            content.consume { item ->
-                                val uri = item.uri
-                                if (uri != null && context.contentResolver.getType(uri)?.startsWith("image/") == true) {
-                                    model.pasteImage(uri)
-                                    true
-                                } else false
-                            }
-                        },
-                    )
+                Box(
+                    Modifier.weight(1f).heightIn(min = ROW_HIT).padding(start = 14.dp, end = 4.dp, top = 9.dp, bottom = 9.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (model.recording) {
+                        Text("Recording… ${formatDuration(model.recordSecs.toLong())}", style = Cursus.type.body, color = c.danger)
+                    } else if (model.voicePreparing) {
+                        Text("Preparing voice…", style = Cursus.type.body, color = c.textSecondary)
+                    } else {
+                        if (model.draft.isEmpty()) Text("Message", style = Cursus.type.body, color = c.textSecondary)
+                        BasicTextField(
+                            state = field,
+                            textStyle = Cursus.type.body.copy(color = c.textPrimary),
+                            cursorBrush = SolidColor(c.accent),
+                            lineLimits = androidx.compose.foundation.text.input.TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
+                            modifier = Modifier.fillMaxWidth().contentReceiver { content ->
+                                content.consume { item ->
+                                    val uri = item.uri
+                                    if (uri != null && context.contentResolver.getType(uri)?.startsWith("image/") == true) {
+                                        model.pasteImage(uri)
+                                        true
+                                    } else false
+                                }
+                            },
+                        )
+                    }
                 }
+                InFieldTool(
+                    if (model.recording) R.drawable.ic_cancel else R.drawable.ic_paperclip,
+                    if (model.recording) "Discard recording" else "Attach",
+                ) { if (model.recording) model.discardRecording() else pick.launch(arrayOf("*/*")) }
             }
-            // One primary action at a time: mic while empty, Send once there is text;
-            // recording: ■ stops to a draft, Send stops and sends.
             when {
                 model.recording -> {
-                    IconTool(R.drawable.ic_stop, "Stop", { model.stopRecording() }, tint = c.danger)
-                    SendHit(true, "Send voice message") { model.sendVoiceNow() }
+                    SquareAction(R.drawable.ic_stop, "Stop", soft = true, tint = c.danger) { model.stopRecording() }
+                    SquareAction(R.drawable.ic_send, "Send voice message") { model.sendVoiceNow() }
                 }
                 model.pastedImage == null && model.draft.isBlank() && model.composeMode !is ComposeMode.Edit ->
-                    IconTool(R.drawable.ic_mic, "Record voice message", startMic)
-                else -> SendHit(model.pastedImage != null || model.draft.isNotBlank(), "Send") { model.send() }
+                    SquareAction(R.drawable.ic_mic, "Record voice message", soft = true, onClick = startMic)
+                else -> SquareAction(R.drawable.ic_send, "Send", enabled = model.pastedImage != null || model.draft.isNotBlank()) { model.send() }
             }
         }
+    }
+}
+
+/** Icon button inside the composer field (paperclip / ✕), field-height hit. */
+@Composable
+private fun InFieldTool(icon: Int, description: String, onClick: () -> Unit) {
+    Box(Modifier.size(ROW_HIT).clip(FieldShape).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Icon(painterResource(icon), description, Modifier.size(20.dp), tint = Cursus.colors.textSecondary)
+    }
+}
+
+/** The composer's action: a rounded square like the list header's "+".
+ *  Soft (accent tint) for mic / stop, solid accent for Send. */
+@Composable
+private fun SquareAction(icon: Int, description: String, soft: Boolean = false, enabled: Boolean = true, tint: Color? = null, onClick: () -> Unit) {
+    val c = Cursus.colors
+    val fill = when {
+        soft -> c.accentSoft
+        enabled -> c.accent
+        else -> c.disabledFill
+    }
+    Box(
+        Modifier.size(ROW_HIT).shadow(FLOAT_ELEVATION, Radius.smallControl, clip = false,
+            ambientColor = Color.Black.copy(alpha = 0.5f), spotColor = Color.Black.copy(alpha = 0.6f)).clip(Radius.smallControl)
+            .background(fill).clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(painterResource(icon), description, Modifier.size(20.dp), tint = tint ?: if (soft) c.accent else c.accentOn)
     }
 }
 
@@ -181,7 +231,7 @@ private fun ContextBar(model: AppModel) {
         ComposeMode.New -> return
     }
     Row(
-        Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 6.dp),
+        Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -194,20 +244,27 @@ private fun ContextBar(model: AppModel) {
     }
 }
 
+/** Linux `SUGGEST_INSET` / `SUGGEST_ROW_RADIUS`: concentric with the field. */
+private val SUGGEST_INSET = 4.dp
+private val SuggestRowShape = RoundedCornerShape(12.dp - SUGGEST_INSET)
+
 /** Linux emoji suggestions: fixed 5-row card, hits glued to the field. */
 @Composable
 private fun EmojiSuggestions(model: AppModel) {
     val c = Cursus.colors
     val hits = model.emojiSuggestions
     if (hits.isEmpty()) return
+    // Same surface and width as the field: its glass card, ending where the
+    // field ends (the action button sits beside the field, not under it).
     Column(
-        Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 6.dp).height(38.dp * 5 + 12.dp)
-            .clip(Radius.lg).background(c.bgElevated).border(1.dp, c.border, Radius.lg).padding(6.dp),
+        Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp + ROW_HIT + 8.dp, top = 6.dp)
+            .height(38.dp * 5 + 8.dp)
+            .glass(FieldShape).padding(SUGGEST_INSET),
         verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.Bottom),
     ) {
         for (hit in hits.take(5)) {
             Row(
-                Modifier.fillMaxWidth().height(36.dp).clip(Radius.sm).clickable { model.acceptEmoji(hit) }.padding(horizontal = 10.dp),
+                Modifier.fillMaxWidth().height(36.dp).clip(SuggestRowShape).clickable { model.acceptEmoji(hit) }.padding(horizontal = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -222,19 +279,22 @@ private fun EmojiSuggestions(model: AppModel) {
 @Composable
 private fun VoiceDraftBar(model: AppModel, secs: Long, peaks: List<Float>) {
     val c = Cursus.colors
-    Column(Modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
+    // Same floating field + square action as the composer.
+    Row(
+        Modifier.fillMaxWidth().glassScrim().padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         Row(
-            Modifier.fillMaxWidth().background(c.bgSidebar).padding(horizontal = 12.dp, vertical = 8.dp),
+            Modifier.weight(1f).glass(FieldShape).padding(end = 12.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            IconTool(R.drawable.ic_cancel, "Discard", { model.discardVoiceDraft() })
+            InFieldTool(R.drawable.ic_cancel, "Discard") { model.discardVoiceDraft() }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Voice · ${formatDuration(secs)}", style = Cursus.type.meta, color = c.textSecondary)
-                Waveform(peaks, 1f, Modifier.fillMaxWidth().height(36.dp))
+                Waveform(peaks, 1f, Modifier.fillMaxWidth().height(28.dp))
             }
-            SendHit(true, "Send voice message") { model.sendVoiceDraft() }
         }
+        SquareAction(R.drawable.ic_send, "Send voice message") { model.sendVoiceDraft() }
     }
 }

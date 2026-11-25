@@ -1,5 +1,6 @@
 package chat.cursus.ui.screens
 
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.activity.compose.BackHandler
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.CompositionLocalProvider
@@ -178,10 +179,15 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
             }
         }
     }
+    // The destinations bar floats over the list (as on Linux): the list
+    // scrolls underneath it and keeps room at its end so nothing hides.
     val sidebar: @Composable () -> Unit = {
-        Column(Modifier.fillMaxSize().background(listTone)) {
-            Box(Modifier.weight(1f).fillMaxWidth()) { list() }
-            BottomBar(model)
+        val labelGrowth = 14.dp * (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f)
+        Box(Modifier.fillMaxSize().background(listTone)) {
+            CompositionLocalProvider(LocalNavClearance provides NavBarHeight + labelGrowth + NavInset + NavFade + 12.dp) {
+                list()
+            }
+            BottomBar(model, Modifier.align(Alignment.BottomCenter))
         }
     }
     Box(Modifier.fillMaxSize().background(c.bgApp)) {
@@ -209,14 +215,20 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
     FileApprovalDialog(model)
 }
 
+/** Room a list keeps at its end for the floating destinations bar. */
+val LocalNavClearance = androidx.compose.runtime.compositionLocalOf { 0.dp }
+
 private val NavBarHeight = 64.dp
+/** Height of the fade above the bar (`glassScrim`). */
+private val NavFade = 20.dp
 private val NavInset = 12.dp
 private val NavShape = chat.cursus.ui.theme.Radius.control
 private val NavItemShape = chat.cursus.ui.theme.Radius.dockSelection
 
 /**
- * Linux `bottom_nav` + `floating_nav_style`: a rounded elevated card inset
- * 12dp from the edges, 1px border and a soft drop shadow; each destination
+ * Linux `bottom_nav` + `floating_nav_style`: the composer's glass card
+ * (translucent fill, light edge, soft wide shadow) inset 12dp from the
+ * edges, over the same fade the list dissolves into; each destination
  * fills an equal cell, the active one on an accent-soft rounded square.
  */
 @Composable
@@ -226,16 +238,11 @@ private fun BottomBar(model: AppModel, modifier: Modifier = Modifier) {
     val labelGrowth = 14.dp * (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f)
     Row(
         modifier
-            .padding(start = NavInset, end = NavInset, bottom = NavInset)
             .fillMaxWidth()
+            .glassScrim()
+            .padding(start = NavInset, end = NavInset, bottom = NavInset)
             .height(NavBarHeight + labelGrowth)
-            .shadow(
-                if (c.isDark) 12.dp else 8.dp, NavShape,
-                ambientColor = Color.Black, spotColor = Color.Black,
-            )
-            .clip(NavShape)
-            .background(c.bgElevated)
-            .border(1.dp, c.border, NavShape)
+            .glass(NavShape)
             .padding(5.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -305,7 +312,8 @@ fun CallsPane(model: AppModel) {
             failure != null -> EmptyPane(failure ?: "Could not load calls.")
             calls == null -> EmptyPane("Loading calls…")
             calls!!.isEmpty() -> EmptyPane("Your recent calls will appear here.")
-            else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f)) {
+            else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f),
+                contentPadding = PaddingValues(bottom = LocalNavClearance.current)) {
                 items(calls!!.size, key = { calls!![it].itemId }) { index ->
                     val call = calls!![index]
                     val contact = contactsById[call.contactId]

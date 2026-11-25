@@ -1,5 +1,6 @@
 package chat.cursus.ui.screens
 
+import androidx.compose.foundation.layout.PaddingValues
 import chat.cursus.ui.components.AttentionButton
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.defaultMinSize
@@ -127,7 +128,8 @@ fun ChatListPane(model: AppModel, channels: Boolean, onNew: () -> Unit, onSelect
                 PrimaryButton(if (channels) "New channel" else "New chat", onNew)
             }
         } else {
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = LocalNavClearance.current)) {
                 items(chats, key = { it.ref }) { chat ->
                     ChatRow(model, chat, selected = chat.ref == model.selection, onSelect = { onSelect(chat.ref) })
                 }

@@ -143,6 +143,7 @@ Call family revision: Solar Linear / 480 Design handset from the existing phone-
 Call status revision: missed-call returning arrow redrawn for Cursus above the same Solar handset used by the other call symbols, rotated to face down in the same 24px rounded monoline style; declined calls use the cross-marked Solar handset.
 
 - `flag-2.svg`: Solar Bold Icons, Solar Icons, CC Attribution. https://www.svgrepo.com/svg/525340/flag-2 (no longer drawn; kept for reference)
+- `paperclip.svg`: Cursus original (composer attach, 1.9px round stroke), CC0.
 - `chevron-right.svg`: Cursus original (row chevron, 2px round stroke), CC0.
 - `flag-outline.svg`: Cursus original (outlined flag on the 24px / 1.5px grid), CC0.
 - `share-03.svg`: Ui Oval Interface Icons, SVG Repo, CC0. https://www.svgrepo.com/svg/471879/share-03

@@ -144,7 +144,7 @@ object Radius {
     val md = control
     val lg = control
     val mediaInset = RoundedCornerShape(12.dp)
-    val bubble = RoundedCornerShape(16.dp)
+    val bubble = RoundedCornerShape(18.dp)
     val pill = RoundedCornerShape(percent = 50)
 }
 

@@ -16,16 +16,6 @@ private struct Hovering<Content: View>: View {
     }
 }
 
-/// The shared opaque navigation surface. Only the moving selection lens
-/// uses glass; the bar keeps the same solid Cursus palette as Linux.
-struct NavigationChrome: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Theme.elevated))
-            .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
-    }
-}
-
 /// Shared square header action and the three creation choices. On macOS 26
 /// native Liquid Glass; elsewhere the Cursus surfaces: the 36pt header
 /// action is an `accent.soft` rounded square (`soft`), the creation tiles
@@ -66,6 +56,72 @@ private struct CreationGlass: ViewModifier {
         }
     }
 }
+/// Something floating over the chat (composer field, its extras): Liquid
+/// Glass on macOS 26, otherwise an opaque card with a border and a soft
+/// shadow. Same radius as the "+".
+struct FloatingSurface: ViewModifier {
+    var radius: CGFloat = Radius.smallControl
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    @ViewBuilder func body(content: Content) -> some View {
+        #if compiler(>=6.2) && CURSUS_GLASS
+        if #available(macOS 26.0, *), !reduceTransparency && contrast != .increased {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+        } else { fallback(content) }
+        #else
+        fallback(content)
+        #endif
+    }
+
+    /// Before Liquid Glass: a real blur of what's behind (system material),
+    /// a thin light edge and a wide soft shadow. Reduce Transparency gets
+    /// the opaque card.
+    @ViewBuilder private func fallback(_ content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        if reduceTransparency {
+            content
+                .background(shape.fill(Theme.elevated))
+                .overlay(shape.strokeBorder(Theme.border, lineWidth: 1))
+        } else {
+            content
+                .background(shape.fill(.regularMaterial))
+                .overlay(shape.strokeBorder(Theme.glassEdge, lineWidth: 1))
+                .shadow(color: Color.black.opacity(0.22), radius: 12, x: 0, y: 6)
+        }
+    }
+}
+
+/// Fade behind the floating composer before Liquid Glass: the chat
+/// background from clear to nearly opaque, so messages dissolve under it.
+struct GlassScrim: View {
+    var body: some View {
+        #if compiler(>=6.2) && CURSUS_GLASS
+        if #available(macOS 26.0, *) {
+            Color.clear
+        } else {
+            gradient
+        }
+        #else
+        gradient
+        #endif
+    }
+
+    private var gradient: some View {
+        LinearGradient(stops: [
+            .init(color: Theme.panel.opacity(0), location: 0),
+            .init(color: Theme.panel.opacity(0.75), location: 0.55),
+            .init(color: Theme.panel.opacity(0.92), location: 1),
+        ], startPoint: .top, endPoint: .bottom)
+    }
+}
+
+extension View {
+    func floatingSurface(radius: CGFloat = Radius.smallControl) -> some View {
+        modifier(FloatingSurface(radius: radius))
+    }
+}
+
 struct CreationButton: View {
     let help: String
     var icon = "plus"

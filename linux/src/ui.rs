@@ -128,9 +128,10 @@ fn composer_send_hit<'a>(
                 container::Style {
                     background: Some(iced::Background::Color(c.accent)),
                     border: iced::Border {
-                        radius: 999.0.into(),
+                        radius: theme::SMALL_CONTROL_RADIUS.into(),
                         ..Default::default()
                     },
+                    shadow: floating_shadow(),
                     ..container::Style::default()
                 }
             })
@@ -681,11 +682,19 @@ fn list_with_bottom_nav(app: &App) -> Element<'_, Message> {
     let float_inset = if app.layout() == LayoutMode::Mobile { 12.0 } else { 8.0 };
     // On a wide one-column window the list and the bar keep a readable
     // width in the middle instead of stretching edge to edge.
-    let nav = container(container(bottom_nav(app)).max_width(PHONE_LIST_MAX))
-        .padding(Padding { top: 0.0, right: float_inset, bottom: float_inset, left: float_inset })
+    // Like the composer: the bar floats on glass over a fade that the list
+    // dissolves into as it scrolls underneath.
+    let bar = container(container(bottom_nav(app)).max_width(PHONE_LIST_MAX))
+        .padding(Padding { top: GLASS_FADE, right: float_inset, bottom: float_inset, left: float_inset })
+        .width(Length::Fill)
+        .align_x(Alignment::Center)
+        .style(|_| container::Style {
+            background: Some(theme::glass_scrim()),
+            ..container::Style::default()
+        });
+    let nav = container(bar)
         .width(Length::Fill)
         .height(Length::Fill)
-        .align_x(Alignment::Center)
         .align_y(Alignment::End);
     Stack::new()
         .width(Length::Fill)
@@ -925,8 +934,10 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
     };
 
     // Reserve space under the scroll viewport so the floating section nav
-    // doesn't cover the last rows on mobile/compact.
-    let float_clearance = if d.nav_bar_height > 0.0 { d.nav_bar_height + 24.0 } else { 0.0 };
+    // doesn't cover the last rows on mobile/compact: the bar, its bottom
+    // inset and the fade above it.
+    let float_clearance =
+        if d.nav_bar_height > 0.0 { d.nav_bar_height + 12.0 + GLASS_FADE } else { 0.0 };
 
     let mut col = Column::new()
         .push(container(header).padding(Padding {
@@ -1189,23 +1200,25 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
             .align_y(Alignment::Center)
             .into()
     } else if app.selected_is_direct() {
-        button(
+        // Tapping the title opens the profile; no hover tile (it is a
+        // header, not a row).
+        mouse_area(
             row![avatar, identity.width(Length::Fill)]
                 .spacing(10)
                 .align_y(Alignment::Center),
         )
-        .padding(0)
-        .style(theme::ghost_tile(app.hover_ok()))
+        .interaction(iced::mouse::Interaction::Pointer)
         .on_press(Message::OpenContactProfile)
         .into()
     } else if app.selected_is_group_or_channel() {
-        button(
+        // Tapping the title opens the profile; no hover tile (it is a
+        // header, not a row).
+        mouse_area(
             row![avatar, identity.width(Length::Fill)]
                 .spacing(10)
                 .align_y(Alignment::Center),
         )
-        .padding(0)
-        .style(theme::ghost_tile(app.hover_ok()))
+        .interaction(iced::mouse::Interaction::Pointer)
         .on_press(Message::OpenGroupSettings)
         .into()
     } else {
@@ -1228,11 +1241,12 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
         } else {
             Message::OpenUserSupportChat
         };
+        // Only unread support messages earn a header button (the yellow
+        // counter); otherwise these chats live in the group page.
         if badge > 0 {
-            // Unread support messages: the yellow counter button.
             attention_button(icons::flag_icon(20.0, theme::on_attention()), badge, open, app.hover_ok())
         } else {
-            composer_hit(icons::admin_tool(36.0, false, app.hover_ok()), 36.0, open)
+            horizontal().width(0).into()
         }
     } else {
         horizontal().width(0).into()
@@ -1312,9 +1326,24 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
         });
     // Taps anywhere below the header keep the composer (and the on-screen
     // keyboard) up; only the header and other panes dismiss it.
-    let body = crate::touch_mouse::keep_focus_zone(
-        column![history, footer].height(Length::Fill),
-    );
+    // The composer floats over the history (which scrolls underneath it);
+    // other footers (request, selection) stay plain bars below it.
+    let content: Element<'_, Message> = if app.composer_floats() {
+        Stack::new()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .push(history)
+            .push(
+                container(crate::measure::height_probe(footer, Message::ComposerHeight))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_y(Alignment::End),
+            )
+            .into()
+    } else {
+        column![history, footer].height(Length::Fill).into()
+    };
+    let body = crate::touch_mouse::keep_focus_zone(content);
     column![header, hairline(), body]
         .height(Length::Fill)
         .into()
@@ -1502,18 +1531,17 @@ fn composer_key_binding(
 fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     // Hit target / field height — a bit tighter than before. Glyphs stay at
     // `composer_glyph` (same visual size as the previous larger buttons).
-    let send_size = if app.layout() == LayoutMode::Mobile {
-        36.0
-    } else {
-        32.0
-    };
+    // Radius 12 like the list header's "+"; phones get a roomier 42 px
+    // field (between the 36 px "+" and other messengers' 48), desktop 36.
+    let send_size = if app.layout() == LayoutMode::Mobile { 42.0 } else { 36.0 };
     let icon_size = 20.0;
     let hover_ok = app.hover_ok();
 
     // mouse_area + on_press: fires before OSK dismiss consumes the gesture;
     // avoids `button`'s focus-steal on the editor.
+    // Paperclip inside the field, at its trailing end (as on the Mac).
     let attach = composer_hit(
-        icons::plus_tool(send_size, hover_ok),
+        icons::centered_hit(icons::attach_tool(icon_size, hover_ok), send_size),
         send_size,
         Message::AttachFile,
     );
@@ -1538,13 +1566,10 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     } else if arming {
         // Capture is still probing — keep the mic, ignore presses so the
         // start tap cannot also stop a recorder that has not attached yet.
-        composer_inert_hit(icons::mic_tool(send_size, hover_ok), send_size)
+        composer_inert_hit(soft_square(icons::mic_icon(icon_size, theme::t().accent), send_size), send_size)
     } else {
-        composer_hit(
-            icons::mic_tool(send_size, hover_ok),
-            send_size,
-            Message::ToggleVoiceRecord,
-        )
+        // Same soft rounded square as the list header's "+".
+        composer_hit(soft_square(icons::mic_icon(icon_size, theme::t().accent), send_size), send_size, Message::ToggleVoiceRecord)
     };
 
     let can_send = app.pasted_image.is_some() || !app.composer().trim().is_empty();
@@ -1615,23 +1640,9 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         app.hover_ok(),
     );
 
-    // Rounded field holds the text; the trailing slot is the mic while the
-    // draft is empty (or recording) and becomes Send once there is text —
-    // one primary action at a time. The editor keeps tree index 1 either way.
-    let pill = container(editor)
-        .width(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().bg_field)),
-            border: iced::Border {
-                color: theme::t().border,
-                width: 1.0,
-                radius: 20.0.into(),
-            },
-            ..container::Style::default()
-        });
     // Recording: ✕ discards, ■ stops to a draft you can review, and Send
     // stops + sends in one tap (the send button must not vanish here).
-    let (leading, trailing): (Element<'_, Message>, Element<'_, Message>) = if recording {
+    let (inner, trailing): (Element<'_, Message>, Element<'_, Message>) = if recording {
         (
             composer_hit(
                 icons::centered_hit(icons::cancel_icon(icon_size, theme::t().text_secondary), send_size),
@@ -1656,9 +1667,15 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     } else {
         (attach, mic)
     };
+    // A floating field with the control radius of every other button; the
+    // paperclip (or ✕ while recording) sits inside it at the end. The tree
+    // shape is the same in every state, so the editor keeps its focus.
+    let pill = container(row![editor, inner].align_y(Alignment::End))
+        .width(Length::Fill)
+        .style(|_| floating_card());
     // Always End: equal-height single-line looks centered; multi-line grows up.
-    let input_row = row![leading, pill, trailing]
-        .spacing(6)
+    let input_row = row![pill, trailing]
+        .spacing(8)
         .align_y(Alignment::End);
 
     // Even inset above and below the text field on every layout.
@@ -1688,48 +1705,54 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         for (i, hit) in suggestions.iter().enumerate() {
             let selected = i == suggest_idx;
             let fg = if selected {
-                Color::from_rgb(0.043, 0.063, 0.125)
+                theme::t().accent_on
             } else {
                 theme::t().text_primary
             };
+            // Both glyph and shortcode fill the row height and centre their
+            // own line inside it: centring the two text boxes alone left the
+            // smaller shortcode riding high next to the taller emoji line.
             let label = row![
                 emoji_glyph(hit.glyph)
                     .size(d.body)
-                    .color(Color::WHITE),
+                    .color(Color::WHITE)
+                    .height(Length::Fill)
+                    .align_y(iced::alignment::Vertical::Center),
                 txt(format!(":{}:", hit.shortcode))
                     .size(d.meta)
-                    .color(fg),
+                    .color(fg)
+                    .height(Length::Fill)
+                    .align_y(iced::alignment::Vertical::Center),
             ]
             .spacing(10)
+            .height(Length::Fill)
             .align_y(Alignment::Center);
             let row = button(label)
                 .on_press(Message::EmojiSuggestSelect(i))
-                .padding(Padding::from([8, 10]))
+                .padding(Padding::from([0, 10]))
                 .width(Length::Fill)
                 .height(row_h)
                 .style(theme::emoji_suggest_row(selected, app.hover_ok()));
             list = list.push(row);
         }
+        // Same surface and width as the text field it completes: the
+        // field's floating card, ending where the field ends (the send /
+        // mic button sits beside the field, not under the list).
         let suggest_panel = container(list)
-            .padding(6)
+            .padding(theme::SUGGEST_INSET)
             .width(Length::Fill)
-            .style(|_| container::Style {
-                background: Some(iced::Background::Color(theme::t().bg_elevated)),
-                border: iced::Border {
-                    color: theme::t().border,
-                    width: 1.0,
-                    radius: theme::CONTROL_RADIUS.into(),
-                },
-                ..container::Style::default()
-            });
-        column![suggest_panel, vertical().height(6)]
-            .width(Length::Fill)
-            .into()
+            .style(|_| floating_card());
+        column![
+            row![suggest_panel, Space::new().width(send_size + 8.0)],
+            vertical().height(6)
+        ]
+        .width(Length::Fill)
+        .into()
     };
 
     // Editing wins over replying; both share one context bar.
     let pasted_slot: Element<'_, Message> = if let Some(bytes) = &app.pasted_image {
-        row![
+        let card = row![
             iced::widget::image(iced::widget::image::Handle::from_bytes(bytes.clone()))
                 .width(72)
                 .height(72)
@@ -1745,8 +1768,8 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         ]
         .spacing(12)
         .padding(12)
-        .align_y(Alignment::Center)
-        .into()
+        .align_y(Alignment::Center);
+        column![container(card).width(Length::Fill).style(|_| floating_card()), vertical().height(8)].into()
     } else {
         Column::new().into()
     };
@@ -1775,7 +1798,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     // A recording that couldn't become a draft says why (the status line
     // isn't shown in chats).
     let voice_error_slot: Element<'_, Message> = match app.voice_error() {
-        Some(err) => row![
+        Some(err) => column![container(row![
             icons::mic_icon(16.0, theme::t().danger),
             text(err.to_string())
                 .size(d.meta)
@@ -1786,7 +1809,9 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         ]
         .spacing(8)
         .align_y(Alignment::Center)
-        .padding(Padding::from([4, 6]))
+        .padding(Padding::from([6, 10])))
+        .width(Length::Fill)
+        .style(|_| floating_card()), vertical().height(8)]
         .into(),
         None => Column::new().width(Length::Fill).into(),
     };
@@ -1801,19 +1826,60 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     } else {
         10.0
     };
-    let bar = container(body)
+    // No bar behind it: the field and its button float over the chat; a
+    // fade above them lets the messages dissolve as they slide underneath.
+    container(body)
         .padding(Padding {
-            top: bar_pad_top,
+            top: bar_pad_top + GLASS_FADE,
             right: bar_pad_x,
             bottom: bar_pad_bottom,
             left: bar_pad_x,
         })
         .width(Length::Fill)
         .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().bg_sidebar)),
+            background: Some(theme::glass_scrim()),
             ..container::Style::default()
-        });
-    column![hairline(), bar].width(Length::Fill).into()
+        })
+        .into()
+}
+
+/// A card floating over the chat above the composer field (reply / edit,
+/// pasted image, voice error, emoji suggestions): opaque, shadowed.
+fn floating_card() -> container::Style {
+    container::Style {
+        background: Some(iced::Background::Color(theme::glass_fill())),
+        border: iced::Border {
+            color: theme::glass_edge(),
+            width: 1.0,
+            radius: theme::SMALL_CONTROL_RADIUS.into(),
+        },
+        shadow: floating_shadow(),
+        ..container::Style::default()
+    }
+}
+
+/// Height of the fade above the floating composer.
+const GLASS_FADE: f32 = 20.0;
+
+/// Soft shadow under floating controls (composer field and its button).
+fn floating_shadow() -> iced::Shadow {
+    theme::glass_shadow()
+}
+
+/// A glyph on the soft-accent rounded square (list header "+", composer mic).
+fn soft_square<'a>(icon: Element<'a, Message>, size: f32) -> Element<'a, Message> {
+    container(icon)
+        .width(size)
+        .height(size)
+        .center_x(size)
+        .center_y(size)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(theme::t().accent_soft)),
+            border: iced::Border { radius: theme::SMALL_CONTROL_RADIUS.into(), ..Default::default() },
+            shadow: floating_shadow(),
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// "Editing" / "Replying" strip above the composer: icon, label, preview and ✕.
@@ -1853,15 +1919,8 @@ fn composer_context_bar(
     )
     .padding(Padding::from([8, 10]))
     .width(Length::Fill)
-    .style(|_| container::Style {
-        background: Some(iced::Background::Color(theme::t().accent_soft)),
-        border: iced::Border {
-            radius: theme::CONTROL_RADIUS.into(),
-            ..Default::default()
-        },
-        ..container::Style::default()
-    });
-    column![bar, vertical().height(6)].width(Length::Fill).into()
+    .style(|_| floating_card());
+    column![bar, vertical().height(8)].width(Length::Fill).into()
 }
 
 /// 1px horizontal rule in the border colour (top of bars, under headers).
@@ -1956,6 +2015,8 @@ fn history_key(app: &App, d: Density) -> u64 {
         f(&mut h, v);
     }
     app.layout().hash(&mut h);
+    // Bottom room for the floating composer.
+    f(&mut h, if app.composer_floats() { app.composer_inset() } else { 0.0 });
     theme::is_light_active().hash(&mut h);
     app.hover_ok().hash(&mut h);
     // "Today" / "Yesterday" dividers roll over at midnight.
@@ -2025,10 +2086,12 @@ fn history_column(app: &App, d: Density) -> Element<'static, Message> {
     let messages = app.messages();
     let show_members = app.selected_shows_member_headers();
     let show_channel = app.selected_is_channel();
+    // Room at the end for the composer floating over the history.
+    let inset = if app.composer_floats() { app.composer_inset() } else { 0.0 };
     let mut col = Column::new().spacing(0).padding(Padding {
         top: 4.0,
         right: d.pad,
-        bottom: 10.0,
+        bottom: 10.0 + inset,
         left: d.pad,
     });
     col = col.width(Length::Fill);
@@ -2164,7 +2227,7 @@ fn message_history_shell<'a>(
         .padding(Padding {
             top: 0.0,
             right: d.pad,
-            bottom: d.pad,
+            bottom: d.pad + if app.composer_floats() { app.composer_inset() } else { 0.0 },
             left: 0.0,
         })
         .into()
@@ -2775,24 +2838,26 @@ fn reaction_chips<'a>(app: &'a App, msg: &'a ChatMessage, d: Density) -> Element
 }
 
 fn reaction_picker_row(item_id: i64, d: Density, hover: bool) -> Element<'static, Message> {
-    let mut row = Row::new().spacing(4).align_y(Alignment::Center);
+    // One line on every width: the reactions share the sheet's width
+    // equally instead of wrapping onto a second row on phones.
+    let mut row = Row::new().spacing(2).align_y(Alignment::Center).width(Length::Fill);
     for emoji in KNOWN_REACTIONS {
         let glyph = if *emoji == "❤" { "❤️" } else { *emoji };
         row = row.push(
             button(
-                emoji_glyph(glyph.to_string())
-                    .size(d.body)
-                    .color(Color::WHITE),
+                container(emoji_glyph(glyph.to_string()).size(d.body).color(Color::WHITE))
+                    .center_x(Length::Fill),
             )
             .on_press(Message::ToggleReaction {
                 item_id,
                 emoji: (*emoji).to_string(),
             })
-            .padding(8)
+            .padding(Padding::from([8, 0]))
+            .width(Length::Fill)
             .style(theme::reaction_chip(false, hover)),
         );
     }
-    row.wrap().into()
+    container(row).max_width(8.0 * 48.0).into()
 }
 
 /// Big emoji; `reserve` is the trailing stamp room (see [`stamp_reserve`]).
@@ -3010,7 +3075,8 @@ fn voice_draft_bar(
     .width(Length::Fill)
     .height(36.0);
 
-    let bar = container(
+    // Same floating field + rounded-square Send as the text composer.
+    let field = container(
         row![
             composer_hit(
                 icons::centered_hit(
@@ -3028,8 +3094,16 @@ fn voice_draft_bar(
             ]
             .spacing(4)
             .width(Length::Fill),
-            // Same round accent Send as the text composer (the old bare navy
-            // arrow vanished on the dark bar).
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .padding(Padding { top: 6.0, right: 12.0, bottom: 6.0, left: 0.0 })
+    .width(Length::Fill)
+    .style(|_| floating_card());
+    container(
+        row![
+            field,
             composer_send_hit(
                 icons::send_tool(send_size, true, hover),
                 send_size,
@@ -3040,18 +3114,13 @@ fn voice_draft_bar(
         .spacing(8)
         .align_y(Alignment::Center),
     )
-    .padding(Padding {
-        top: 8.0,
-        right: d.pad,
-        bottom: 8.0,
-        left: d.pad,
-    })
+    .padding(Padding { top: 8.0 + GLASS_FADE, right: 10.0, bottom: 8.0, left: 10.0 })
     .width(Length::Fill)
     .style(|_| container::Style {
-        background: Some(iced::Background::Color(theme::t().bg_sidebar)),
+        background: Some(theme::glass_scrim()),
         ..container::Style::default()
-    });
-    column![hairline(), bar].width(Length::Fill).into()
+    })
+    .into()
 }
 
 /// Soft cap for bubble body text on wide desktops.

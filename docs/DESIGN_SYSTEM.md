@@ -102,7 +102,7 @@ Rules:
 | Token | Value |
 |---|---|
 | `space.1` … `space.6` | 4 / 8 / 12 / 16 / 24 / 32 px |
-| `radius.sm` | 20 — menu items, emoji suggestions |
+| `radius.sm` | 20 — menu items |
 | `radius.md` | 20 — primary / secondary / danger buttons, form fields |
 | `radius.lg` | 20 — action tiles, rounded text fields, link box, cards, menus |
 | `radius.bubble` | 16 — message bubbles |
@@ -345,18 +345,21 @@ Back and other page-changing header controls complete an owned press-and-release
 
 Mac navigation uses the shared Cursus colors and glyphs inside a floating
 rounded dock over the bottom of the list in a native resizable list/detail split.
-The opaque bar has 18pt corners; selection, hover and hit shapes use 12pt
+The bar has 20pt corners; selection, hover and hit shapes use 15pt
 corners, matching the Linux and Android navigation bars.
-The list viewport extends behind the dock. Chats, calls and settings add 84pt
-of scroll-content padding so the last row can scroll completely above it.
+The list viewport extends behind the dock and its 20pt fade. Chats, calls and
+settings add 104pt of scroll-content padding so the last row can scroll
+completely above both.
 The dock is a stable sibling of the changing page so all destination pairs
 retain their animation state. One persistent selection lens moves between the
 four destinations with an explicit spring-animated position; it is not replaced
 or crossfaded per tab.
 Pointer hover retains the ordinary Cursus hover fill and does not move the lens.
-The dock itself is opaque, using the shared Cursus surface and border as on
-Linux. Only the selection lens uses native clear Liquid Glass on macOS 26.
-The glass stays below the controls so its material cannot blur icons or text.
+The dock floats exactly like the composer field on every platform: the same
+glass surface (`FloatingSurface` on macOS, Linux `glass_fill`/`glass_edge`/
+`glass_shadow`, Android `glass`) over the same 20pt fade (`glass_scrim`).
+The selection lens uses native clear Liquid Glass on macOS 26 and stays below
+the controls so its material cannot blur icons or text.
 A small animated glyph displacement peaks as a moving lens edge crosses each
 tab and returns exactly to the unmodified rendering at rest. Hover does not
 trigger that displacement.
@@ -605,3 +608,44 @@ tab hit shapes share the same geometry throughout the sliding animation.
 - **Setting help.** The (i) of a setting sits right after its name, as its
   own small button; the summary underneath is plain text and toggles the row
   like the rest of it.
+- **Bubbles:** radius 18 (16 around flush media, concentric with the 12
+  preview), sender-side joins 6, on every platform. A group sender's name
+  sits 4 above the message.
+- **Composer (all platforms).** One-line field and its action are 42 tall
+  on phones, 36 on desktop, radius 12 like the "+". No bar behind it: a floating field
+  (elevated fill, 1 px border, soft shadow, radius 12 like every button)
+  with the paperclip inside at its end (✕ while recording), and one
+  rounded-square action beside it, the same shape as the list header's
+  "+": soft accent mic while empty, solid accent Send once there is text.
+- **Chat header.** Tapping the name or picture opens the profile; there is
+  no hover tile, no (i) and no support button. Only unread support messages
+  add the yellow counter.
+- **Message menu reactions** stay on one line, sharing the sheet's width.
+- **Member actions** reach members up to your own rank (core
+  `roles::can_act_on`; role menu `role_change_choices`, owners can make
+  owners).
+- **Floating composer.** The composer is layered over the chat history,
+  which scrolls underneath it and keeps the composer's measured height as
+  room at its end (Linux `measure::height_probe`, Android `onSizeChanged`,
+  macOS `safeAreaInset`). Lift per platform: macOS 26 Liquid Glass
+  (`FloatingSurface`, opaque card + shadow before 26 or with Reduce
+  Transparency); Android Material elevation (6 dp shadow, level 3); Linux an
+  iced container shadow. Reply / edit bars, a pasted image, emoji
+  suggestions and voice drafts float on their own cards of the same style.
+- **Glass.** Floating surfaces are translucent (≈0.9 of the elevated
+  colour) with a thin light edge (white 10 % dark / black 8 % light) and a
+  wide soft shadow (y 6, blur 18). Above the composer a 20 px fade (chat
+  background from clear to 0.92) lets messages dissolve as they slide
+  under it. macOS: Liquid Glass on 26, the system `.regularMaterial` blur
+  before; Linux and Android have no backdrop blur, so translucency + fade
+  carry the effect.
+- **Emoji suggestions.** A fixed 5-row list of `glyph :shortcode:` rows on
+  the composer field's own surface, exactly as wide as the field (it ends
+  where the field ends, not under the action button), hits glued to the
+  field. The card has a 4 px inset; row hover / selection is concentric with
+  it (radius 12 − 4 = 8). Selected: accent fill, `accent.on` text. Glyph and
+  shortcode are vertically centred in the 36 px row.
+- **Reply quotes.** Inside the bubble: an inset card (black 22 %, radius 10,
+  8 × 6 padding) with a full-height 3 px rounded accent bar, "You" / "Reply"
+  in accent and up to three lines of the original. Tapping it scrolls to the
+  original and highlights it for 1.6 s.

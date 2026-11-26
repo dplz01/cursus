@@ -36,6 +36,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import chat.cursus.ui.components.ProfileText
+import chat.cursus.ui.components.pageSlide
+import chat.cursus.ui.components.rememberPageMotion
 import chat.cursus.AppModel
 import chat.cursus.R
 import chat.cursus.core.Chat
@@ -197,9 +199,10 @@ private fun ContactPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
     var prefs by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<EditField?>(null) }
     var confirm by remember { mutableStateOf<String?>(null) }
+    val motion = rememberPageMotion(prefs, if (prefs) 1 else 0)
     if (prefs) {
         BackHandler { prefs = false }
-        ContactPreferencesPage(model, chat) { prefs = false }
+        Box(Modifier.fillMaxSize().pageSlide(motion)) { ContactPreferencesPage(model, chat) { prefs = false } }
         return
     }
     val quick = listOf(
@@ -330,6 +333,8 @@ private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenCh
     val back = { pane = GroupPane.Overview }
     if (pane != GroupPane.Overview) BackHandler(onBack = back)
     val noun = if (chat.isChannel) "channel" else "group"
+    val motion = rememberPageMotion(pane, if (pane == GroupPane.Overview) 0 else 1)
+    Box(Modifier.fillMaxSize().pageSlide(motion)) {
     when (pane) {
         GroupPane.Overview -> GroupOverview(model, chat, onClose, overviewScroll, onOpenPane = { pane = it }, onMember = { memberId = it; pane = GroupPane.MemberInfo })
         GroupPane.Link -> PageScaffold(if (chat.isChannel) "Share this channel" else "Share this group", back) {
@@ -378,6 +383,7 @@ private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenCh
                 onClose(); model.delete(chat)
             }
         }
+    }
     }
 }
 

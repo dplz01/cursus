@@ -5,11 +5,13 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(Prefs.theme) private var theme = AppTheme.system.rawValue
     @AppStorage(Prefs.textSize) private var textSize = TextSize.medium.rawValue
+    @AppStorage(Prefs.timeFormat) private var timeFormat = TimeFormat.h12.rawValue
 
     var body: some View {
         content
-            // Fonts read the text size when built: rebuild on change.
-            .id(textSize)
+            // Fonts read the text size, stamps the time format, when
+            // built: rebuild on change.
+            .id(textSize + "/" + timeFormat)
             .background(WindowChrome())
             .onAppear { Prefs.currentTheme.apply() }
             .onChange(of: theme) { _ in Prefs.currentTheme.apply() }

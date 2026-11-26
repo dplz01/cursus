@@ -8,6 +8,8 @@ enum Prefs {
     static let showTray = "showTray"
     static let theme = "theme"
     static let textSize = "textSize"
+    /// 12-hour or 24-hour clock for every time shown (cursus_core::clock).
+    static let timeFormat = "timeFormat"
     static let enterSends = "enterSends"
     static let lockAfter = "lockAfter"
     static let chatPreviews = "chatPreviews"
@@ -63,6 +65,10 @@ enum Prefs {
         TextSize(rawValue: defaults.string(forKey: textSize) ?? "") ?? .medium
     }
 
+    static var currentTimeFormat: TimeFormat {
+        TimeFormat(rawValue: defaults.string(forKey: timeFormat) ?? "") ?? .h12
+    }
+
     static var currentLockAfter: LockAfter {
         LockAfter(rawValue: defaults.integer(forKey: lockAfter)) ?? .never
     }
@@ -110,6 +116,21 @@ enum TextSize: String, CaseIterable, Identifiable {
         case .medium: return 1
         case .large: return 1.15
         case .larger: return 1.3
+        }
+    }
+}
+
+/// How times of day are written: `2:05 PM` or `14:05` (same values as the
+/// core's `TimeFormat`: "12h" / "24h").
+enum TimeFormat: String, CaseIterable, Identifiable {
+    case h12 = "12h"
+    case h24 = "24h"
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .h12: return "12-hour"
+        case .h24: return "24-hour"
         }
     }
 }

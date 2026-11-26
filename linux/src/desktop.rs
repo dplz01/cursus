@@ -209,6 +209,8 @@ pub struct DesktopPrefs {
     /// New one-time links and links pasted on the Connect card use a random
     /// incognito profile (the official apps' "Incognito" toggle).
     pub incognito: bool,
+    /// 12-hour or 24-hour clock for every time Cursus shows.
+    pub time_format: cursus_core::TimeFormat,
     /// Prefs schema version — lets new privacy defaults reach old files.
     /// Missing in files written before versioning → 0.
     #[serde(default)]
@@ -240,6 +242,7 @@ impl Default for DesktopPrefs {
             keyring_unlock: false,
             enter_sends: true,
             incognito: false,
+            time_format: cursus_core::TimeFormat::default(),
             version: PREFS_VERSION,
         }
     }

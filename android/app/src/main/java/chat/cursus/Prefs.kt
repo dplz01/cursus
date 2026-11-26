@@ -8,6 +8,9 @@ import kotlin.reflect.KProperty
 
 enum class ThemeMode { System, Light, Dark }
 
+/** 12-hour or 24-hour clock for every time shown (cursus_core::clock). */
+enum class TimeFormat(val label: String) { H12("12-hour"), H24("24-hour") }
+
 /** Text size: the Linux app's five steps, Medium being the design size. */
 enum class TextSize(val label: String, val scale: Float) {
     ExtraSmall("Extra small", 0.8f), Small("Small", 0.9f), Medium("Medium", 1f),
@@ -42,6 +45,19 @@ class Prefs(context: Context) {
 
     var theme by enum("theme", ThemeMode.System)
     var textSize by enum("textSize", TextSize.Medium)
+
+    private var savedTimeFormat by enum("timeFormat", TimeFormat.H12)
+    /** Message stamps, the chat list and message info follow it ([chat.cursus.core.Stamps]). */
+    var timeFormat: TimeFormat
+        get() = savedTimeFormat
+        set(value) {
+            savedTimeFormat = value
+            chat.cursus.core.Stamps.clock24 = value == TimeFormat.H24
+        }
+
+    init {
+        chat.cursus.core.Stamps.clock24 = savedTimeFormat == TimeFormat.H24
+    }
 
     /** Remove tracking codes from links you send and open (core rule). */
     var cleanLinks by bool("cleanLinks", true)

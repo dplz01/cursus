@@ -4,6 +4,7 @@
 
 mod account;
 pub mod app_lock;
+pub mod clock;
 mod chat_list;
 mod commands;
 mod error;
@@ -27,6 +28,7 @@ pub use account::{
     database_exists, load_account, save_account, setup_complete, wipe_local_data, AccountMeta,
 };
 pub use chat_list::{merge_seeded_channels, prune_resolved_seeds};
+pub use clock::TimeFormat;
 pub use commands::Commands;
 pub use error::{Error, Result};
 pub use invitations::Invitation;

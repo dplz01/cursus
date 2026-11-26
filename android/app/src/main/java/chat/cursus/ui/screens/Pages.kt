@@ -335,15 +335,15 @@ fun SettingsListPane(model: AppModel, selected: SettingsPage?, onOpen: (Settings
                         }
                     }
                     Box(Modifier.size(12.dp))
-                    // Categories in floating panels, grouped like Linux / macOS:
+                    // Categories in named groups, the same on Linux / macOS:
                     // you · the app · about.
                     val groups = listOf(
-                        listOf(SettingsPage.Profile, SettingsPage.Address),
-                        listOf(SettingsPage.Privacy, SettingsPage.Notifications, SettingsPage.Appearance),
-                        listOf(SettingsPage.About),
+                        "Account" to listOf(SettingsPage.Profile, SettingsPage.Address),
+                        "Preferences" to listOf(SettingsPage.Privacy, SettingsPage.Notifications, SettingsPage.Appearance),
+                        "Cursus" to listOf(SettingsPage.About),
                     )
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        for (group in groups) chat.cursus.ui.components.Panel {
+                    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                        for ((heading, group) in groups) PreferenceGroup(heading) {
                             for (p in group) Row(
                                 Modifier.clip(chat.cursus.ui.theme.Radius.insetControl)
                                     .background(if (selected == p) c.accentSoft else androidx.compose.ui.graphics.Color.Transparent)
@@ -399,12 +399,16 @@ fun SettingsDetailPane(model: AppModel, page: SettingsPage, onBack: () -> Unit) 
                         SettingsPage.Appearance -> {
                             var themes by remember { mutableStateOf(false) }
                             var sizes by remember { mutableStateOf(false) }
+                            var clocks by remember { mutableStateOf(false) }
                             PreferenceGroup("Display") {
                             chat.cursus.ui.components.PrefRow("Theme") {
                                 chat.cursus.ui.components.ChoiceChip(model.prefs.theme.name, { themes = true })
                             }
                             chat.cursus.ui.components.PrefRow("Text size") {
                                 chat.cursus.ui.components.ChoiceChip(model.prefs.textSize.label, { sizes = true })
+                            }
+                            chat.cursus.ui.components.PrefRow("Time format") {
+                                chat.cursus.ui.components.ChoiceChip(model.prefs.timeFormat.label, { clocks = true })
                             }
                             }
                             if (themes) {
@@ -416,6 +420,11 @@ fun SettingsDetailPane(model: AppModel, page: SettingsPage, onBack: () -> Unit) 
                                 chat.cursus.ui.components.ChoiceMenu(
                                     "Text size", chat.cursus.TextSize.entries.map { it to it.label }, model.prefs.textSize, { sizes = false },
                                 ) { model.prefs.textSize = it; sizes = false }
+                            }
+                            if (clocks) {
+                                chat.cursus.ui.components.ChoiceMenu(
+                                    "Time format", chat.cursus.TimeFormat.entries.map { it to it.label }, model.prefs.timeFormat, { clocks = false },
+                                ) { model.prefs.timeFormat = it; clocks = false }
                             }
                         }
                         SettingsPage.About -> {

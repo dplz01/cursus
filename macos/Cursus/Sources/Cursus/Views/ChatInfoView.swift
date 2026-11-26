@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Pages of a chat's profile (Back returns to the overview, then to the chat).
-enum InfoPage: Equatable {
+enum InfoPage: Hashable {
     case overview
     case preferences
     case member(Int64)
@@ -58,6 +58,8 @@ struct ChatInfoView: View {
             }
             pages
         }
+        // A page inside the profile (settings, a member…) slides in.
+        .pageEntrance(page, forward: page != .overview)
         .background(Theme.panel)
         .onExitCommand(perform: back)
         .onAppear {

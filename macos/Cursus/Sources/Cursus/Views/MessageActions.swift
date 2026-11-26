@@ -76,13 +76,6 @@ struct MessageInfoSheet: View {
     @State private var info: MessageInfo?
     @State private var loading = true
 
-    private static let full: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .medium
-        return f
-    }()
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -95,7 +88,7 @@ struct MessageInfoSheet: View {
                 ProgressView().controlSize(.small)
             } else if let info = info {
                 if let date = info.date ?? message.date {
-                    row(message.outgoing ? "Sent" : "Received", Self.full.string(from: date))
+                    row(message.outgoing ? "Sent" : "Received", Dates.dateTime(date))
                 }
                 if let status = info.statusLabel {
                     row("Status", status)

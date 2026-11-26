@@ -198,7 +198,7 @@ fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
                 // Label · value rows, words not core codes (as on Linux / Mac).
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     val stamp = Stamps.parse(info?.time ?: m.createdAt)?.atZone(java.time.ZoneId.systemDefault())
-                    stamp?.let { InfoRow(if (m.outgoing) "Sent" else "Received", it.format(INFO_TIME)) }
+                    stamp?.let { InfoRow(if (m.outgoing) "Sent" else "Received", Stamps.dateTime(it)) }
                     (info?.statusLabel ?: info?.status)?.let { InfoRow("Status", it) }
                     m.file?.let { InfoRow("File", "${it.name} (${humanSize(it.size)})") }
                     info?.text?.takeIf { it.isNotBlank() }?.let { InfoRow("Text", it) }
@@ -209,8 +209,6 @@ fun MessageMenu(model: AppModel, m: Message, onDismiss: () -> Unit) {
         }
     }
 }
-
-private val INFO_TIME = java.time.format.DateTimeFormatter.ofLocalizedDateTime(java.time.format.FormatStyle.MEDIUM, java.time.format.FormatStyle.SHORT)
 
 @Composable
 private fun InfoRow(label: String, value: String) {

@@ -15,6 +15,18 @@ struct SettingsListView: View {
         .background(Color.clear)
     }
 
+    private struct Group: Identifiable {
+        let heading: String
+        let pages: [SettingsPage]
+        var id: String { heading }
+    }
+
+    private static let groups = [
+        Group(heading: "Account", pages: [.profile, .address]),
+        Group(heading: "Preferences", pages: [.privacy, .notifications, .appearance]),
+        Group(heading: "Cursus", pages: [.about]),
+    ]
+
     private var list: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
@@ -36,10 +48,18 @@ struct SettingsListView: View {
                     .buttonStyle(GhostTileStyle())
                     .padding(.bottom, 6)
                 }
-                ForEach(SettingsPage.allCases) { page in
-                    NavRow(icon: page.icon, title: page.title,
-                           selected: model.settingsPage == page) {
-                        model.settingsPage = page
+                // Categories in named groups, the same on Linux / Android:
+                // you · the app · about.
+                VStack(alignment: .leading, spacing: 20) {
+                    ForEach(Self.groups) { group in
+                        PreferenceGroup(title: group.heading) {
+                            ForEach(group.pages) { page in
+                                NavRow(icon: page.icon, title: page.title,
+                                       selected: model.settingsPage == page) {
+                                    model.settingsPage = page
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -73,6 +93,7 @@ struct SettingsDetailView: View {
                 Placeholder(icon: "settings", text: "Choose a settings category")
             }
         }
+        .pageEntrance(model.settingsPage, forward: model.settingsPage != nil)
         .background(Theme.panel)
     }
 }
@@ -391,6 +412,7 @@ private struct AddressPage: View {
 private struct AppearancePage: View {
     @AppStorage(Prefs.theme) private var theme = AppTheme.system.rawValue
     @AppStorage(Prefs.textSize) private var textSize = TextSize.medium.rawValue
+    @AppStorage(Prefs.timeFormat) private var timeFormat = TimeFormat.h12.rawValue
     @AppStorage(Prefs.enterSends) private var enterSends = true
 
     var body: some View {
@@ -406,6 +428,10 @@ private struct AppearancePage: View {
             PrefRow(label: "Text size") {
                 ChoiceMenu(options: TextSize.allCases.map { Choice($0.rawValue, $0.label) },
                            selection: textSize) { textSize = $0 }
+            }
+            PrefRow(label: "Time format") {
+                ChoiceMenu(options: TimeFormat.allCases.map { Choice($0.rawValue, $0.label) },
+                           selection: timeFormat) { timeFormat = $0 }
             }
         }
         SettingsSection(icon: "edit-3", title: "Typing", subtitle: "The message field.") {

@@ -1895,18 +1895,26 @@ fn floating_shadow() -> iced::Shadow {
 
 /// A glyph on the soft-accent rounded square (list header "+", composer mic).
 fn soft_square<'a>(icon: Element<'a, Message>, size: f32) -> Element<'a, Message> {
-    container(icon)
+    let radius = theme::SMALL_CONTROL_RADIUS;
+    // Glass like the field beside it (blurred backdrop + tint), with the
+    // soft accent over the tint.
+    let accent = container(icon)
         .width(size)
         .height(size)
         .center_x(size)
         .center_y(size)
-        .style(|_| container::Style {
+        .style(move |_| container::Style {
             background: Some(iced::Background::Color(theme::t().accent_soft)),
-            border: iced::Border { radius: theme::SMALL_CONTROL_RADIUS.into(), ..Default::default() },
-            shadow: floating_shadow(),
+            border: iced::Border { radius: radius.into(), ..Default::default() },
             ..container::Style::default()
-        })
-        .into()
+        });
+    let glass = container(accent).style(move |_| container::Style {
+        background: Some(iced::Background::Color(theme::glass_fill())),
+        border: iced::Border { radius: radius.into(), width: 1.0, color: theme::glass_edge() },
+        shadow: floating_shadow(),
+        ..container::Style::default()
+    });
+    crate::glass::surface(glass, radius)
 }
 
 /// "Editing" / "Replying" strip above the composer: icon, label, preview and ✕.
@@ -6059,22 +6067,48 @@ fn about_block<'a>(label: &'a str, value: String, d: Density) -> Element<'a, Mes
 }
 
 /// Title on the left; round actions flush to the right edge.
+/// A profile page whose top bar floats like the chat's: the bar on a glass
+/// card inset from the top and sides, the page scrolling underneath it and
+/// keeping CHAT_HEADER_ROOM at its top.
+fn floating_header_page<'a>(
+    header: Element<'a, Message>,
+    body: impl Into<Element<'a, Message>>,
+    d: Density,
+) -> Element<'a, Message> {
+    let side = if d.list_width == 0.0 { 6.0 } else { 10.0 };
+    let bar = container(crate::glass::surface(
+        container(header)
+            .height(CHAT_HEADER_HEIGHT)
+            .align_y(Alignment::Center)
+            .width(Length::Fill)
+            .style(theme::floating_nav_style()),
+        theme::CONTROL_RADIUS,
+    ))
+    .padding(Padding { top: CHAT_HEADER_INSET, right: side, bottom: 0.0, left: side })
+    .width(Length::Fill);
+    let scroll = page_scroll_y(
+        container(container(body).max_width(PAGE_MAX).width(Length::Fill))
+            .width(Length::Fill)
+            .center_x(Length::Fill)
+            .padding(Padding { top: CHAT_HEADER_ROOM, right: d.pad, bottom: d.pad, left: d.pad }),
+    );
+    Stack::new()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .push(scroll)
+        .push(bar)
+        .into()
+}
+
 fn profile_header_bar<'a>(
     leading: Element<'a, Message>,
     actions: Element<'a, Message>,
     d: Density,
     with_back: bool,
 ) -> Element<'a, Message> {
-    let pad = if with_back {
-        Padding {
-            top: d.pad_tight,
-            right: d.pad,
-            bottom: d.pad_tight,
-            left: 8.0,
-        }
-    } else {
-        Padding::from([d.pad_tight, 0.0])
-    };
+    // Inside its floating card: Back (or the title) 8 px from the edge.
+    let _ = with_back;
+    let pad = Padding { top: d.pad_tight, right: d.pad, bottom: d.pad_tight, left: 8.0 };
     row![
         container(leading)
             .width(Length::Fill)
@@ -6156,12 +6190,7 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
     let narrow = matches!(app.layout(), LayoutMode::Mobile) || app.window_width() < 720.0;
     body = body.push(button_card(contact_danger_actions(d, hover, narrow)));
 
-    column![
-        header,
-        page_scroll(body, d),
-    ]
-    .height(Length::Fill)
-    .into()
+    floating_header_page(header, body, d)
 }
 
 fn contact_preferences_page<'a>(
@@ -6185,12 +6214,7 @@ fn contact_preferences_page<'a>(
         crate::preference_ui::group(Some("Chat permissions"), None, contact_feature_prefs(p, d, hover), d),
     ].spacing(20);
 
-    column![
-        header,
-        page_scroll(body, d),
-    ]
-    .height(Length::Fill)
-    .into()
+    floating_header_page(header, body, d)
 }
 
 fn reaction_members_overlay(app: &App) -> Element<'_, Message> {
@@ -7239,9 +7263,7 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
         }
     };
 
-    let page: Element<'_, Message> = column![header, page_scroll(body, d),]
-        .height(Length::Fill)
-        .into();
+    let page: Element<'_, Message> = floating_header_page(header, body, d);
 
     let mut layers = Stack::new()
         .width(Length::Fill)
@@ -8670,9 +8692,7 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
         }
     }
 
-    column![header, page_scroll(body, d),]
-        .height(Length::Fill)
-        .into()
+    floating_header_page(header, body, d)
 }
 
 fn group_preferences_pane<'a>(

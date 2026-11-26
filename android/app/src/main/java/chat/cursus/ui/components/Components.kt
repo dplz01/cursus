@@ -193,14 +193,16 @@ fun CursusCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.(
 /** Inset of headings and notes = text inset of rows inside a panel (4 + 16). */
 val SectionInset = 20.dp
 
-/** The one floating surface for a group of rows (Linux `preference_ui::panel`):
- *  `bg.elevated`, 1dp border, shared control radius, 4dp inset. */
+/** A group of rows (Linux `preference_ui::panel`): flat on the page,
+ *  4dp inset. */
 @Composable
 fun Panel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     val c = Cursus.colors
+    // Flat: no surface, border or shadow; the heading above and the gap
+    // between groups do the grouping (Linux `preference_ui::panel`). Rows
+    // keep the 4dp inset so their text lines up with headings and notes.
     Column(
-        modifier.fillMaxWidth().clip(Radius.control).background(c.bgElevated)
-            .border(1.dp, c.border, Radius.control).padding(4.dp),
+        modifier.fillMaxWidth().padding(4.dp),
         content = content,
     )
 }

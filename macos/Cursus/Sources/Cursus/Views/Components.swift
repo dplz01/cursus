@@ -590,7 +590,7 @@ struct Card<Content: View>: View {
 
     var body: some View {
         if padding == 0 {
-            // A card made only of rows is a floating panel (Linux `button_card`).
+            // A card made only of rows is a flat row group (Linux `button_card`).
             Panel(spacing: spacing) { content }
         } else {
             // A flat block (profile hero, paragraphs): no surface.
@@ -605,8 +605,10 @@ struct Card<Content: View>: View {
 /// Inset of headings and notes = text inset of rows inside a panel (4 + 16).
 let sectionInset: CGFloat = 20
 
-/// The one floating surface for a group of rows: `bg.elevated`, 1pt border,
-/// shared control radius, 4pt inset (Linux `preference_ui::panel`).
+/// A group of rows, flat on the page: no surface, border or shadow; the
+/// heading above and the gap between groups do the grouping. Rows keep the
+/// 4pt inset so their text lines up with headings (Linux
+/// `preference_ui::panel`).
 struct Panel<Content: View>: View {
     var spacing: CGFloat = 0
     @ViewBuilder let content: Content
@@ -615,9 +617,6 @@ struct Panel<Content: View>: View {
         VStack(alignment: .leading, spacing: spacing) { content }
             .padding(4)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).fill(Theme.elevated))
-            .clipShape(RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
     }
 }
 

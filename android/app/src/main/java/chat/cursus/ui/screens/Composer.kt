@@ -193,10 +193,15 @@ private fun SquareAction(icon: Int, description: String, soft: Boolean = false, 
         enabled -> c.accent
         else -> c.disabledFill
     }
+    // Soft (mic, stop): glass like the field beside it — the blurred
+    // backdrop under the tint, the soft accent over it. A translucent fill
+    // straight over a shadow showed the shadow as a square inside it.
+    val surface = if (soft) Modifier.glass(Radius.smallControl).background(fill)
+    else Modifier.shadow(FLOAT_ELEVATION, Radius.smallControl, clip = false,
+        ambientColor = Color.Black.copy(alpha = 0.25f), spotColor = Color.Black.copy(alpha = 0.3f))
+        .clip(Radius.smallControl).background(fill)
     Box(
-        Modifier.size(ROW_HIT).shadow(FLOAT_ELEVATION, Radius.smallControl, clip = false,
-            ambientColor = Color.Black.copy(alpha = 0.25f), spotColor = Color.Black.copy(alpha = 0.3f)).clip(Radius.smallControl)
-            .background(fill).clickable(enabled = enabled, onClick = onClick),
+        Modifier.size(ROW_HIT).then(surface).clip(Radius.smallControl).clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(painterResource(icon), description, Modifier.size(20.dp), tint = tint ?: if (soft) c.accent else c.accentOn)

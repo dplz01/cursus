@@ -84,7 +84,10 @@ fun CallControls(model: AppModel) {
     val call = calls.state.active
     val permission = rememberCallPermission(model)
     val contact = model.chats.firstOrNull { it.isContact && it.apiId == call?.contactId }
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally,
+    // No scroll of its own: the call overlay (CursusOverlay) already
+    // scrolls, and a scroll inside a scroll crashes Compose (infinite
+    // height). In CallsDetail it is centred in the pane.
+    Column(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Avatar(call?.name ?: "Audio call", contact?.image, 84.dp)
         Text(call?.name ?: "Audio call", style = Cursus.type.title, color = c.textPrimary,

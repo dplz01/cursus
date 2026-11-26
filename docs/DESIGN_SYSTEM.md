@@ -176,16 +176,17 @@ Settings categories and contact / group / channel preferences use the same mobil
 - Longer explanations and existing confirmations remain available. Inline text answers the everyday question; it does not replace privacy warnings.
 - Group / channel sections: **Messages**, **Media & interaction**, **Members**, then **Just for you** where applicable. Owners see a note that changes affect everyone; other members see an ownership note and disabled controls. Review new members belongs to groups; channels do not offer it.
 
-### Pages: panels (the Cursus look)
+### Pages: flat row groups (the Cursus look)
 
-Since 2026-11-25 every list of settings or actions sits in a **panel** — the
-same floating surface on every page, so Settings, profiles and preferences look
-alike wherever they appear. Only the profile hero (picture, name, bio, quick
-actions), paragraphs and the conversation / call lists stay flat.
+Since 2026-11-26 pages are flat again: every list of settings or actions is a
+**row group** straight on the page — no card, border or shadow. A heading
+above it and the gap between groups do the grouping, so Settings, profiles
+and preferences stay clean and alike. Only the floating bars (chat and
+profile title bars, composer, destinations bar) are glass.
 
 - **Page column**: at most 620 wide, centred; 16 side padding; 22 between sections.
-- **Panel** (Linux `preference_ui::panel`, Android `Panel`, macOS `Panel` /
-  `Card(padding: 0)`): `bg.elevated`, 1px `border`, radius 20, 4 inset, no shadow.
+- **Row group** (Linux `preference_ui::panel`, Android `Panel`, macOS `Panel` /
+  `Card(padding: 0)`): no surface, 4 inset so row text lines up with headings.
 - **Section heading** (Linux `preference_ui::heading`, Android `SectionHeading`,
   macOS `SectionHeading`): meta size, 600, `text.secondary`, *outside* the panel,
   inset 20 (= panel 4 + row 16) so it lines up with the row text; 8 above the
@@ -653,8 +654,9 @@ tab hit shapes share the same geometry throughout the sliding animation.
   A light edge (white 12–14 % dark / black 8–10 % light) and a subtle
   shadow (Linux y 2 / blur 10, Android 3 dp elevation) separate it; a large
   halo read as a box around the bar.
-- **Chat title bar.** Floats over the top of the history like the
-  composer (Linux, Android): a 56 px glass card (radius 20) inset 8 px from
+- **Chat and profile title bars.** Float over the top of the history /
+  profile page like the composer (Linux, Android; profile pages: Linux
+  `floating_header_page`, Android `PageScaffold`): a 56 px glass card (radius 20) inset 8 px from
   the top and 6/10 px from the sides, the history scrolling underneath and
   keeping 8 + 56 + 8 px at its top so the first message rests 8 px below
   it. macOS keeps its native unified toolbar.

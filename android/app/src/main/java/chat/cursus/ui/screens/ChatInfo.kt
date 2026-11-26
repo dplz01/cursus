@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -84,6 +85,8 @@ import chat.cursus.ui.components.SecondaryButton
 import chat.cursus.ui.components.SectionLabel
 import chat.cursus.ui.components.SwitchRow
 import chat.cursus.ui.theme.Cursus
+import chat.cursus.ui.components.backdropSource
+import chat.cursus.ui.components.glass
 import chat.cursus.ui.theme.Radius
 import kotlinx.coroutines.launch
 
@@ -107,9 +110,28 @@ private fun PageScaffold(
     scroll: androidx.compose.foundation.ScrollState = rememberScrollState(),
     body: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().background(Cursus.colors.bgPanel)) {
-        PaneHeader(title, onBack = onBack) { actions() }
-        Column(Modifier.verticalScroll(scroll)) { PageColumn(content = body) }
+    // The top bar floats like the chat's: a glass card over the blurred
+    // page, which scrolls underneath it (Linux `floating_header_page`).
+    val backdrop = chat.cursus.ui.components.rememberBackdrop()
+    Box(Modifier.fillMaxSize().background(Cursus.colors.bgPanel)) {
+        Column(
+            Modifier.fillMaxSize()
+                .backdropSource(backdrop, Cursus.colors.bgPanel)
+                .verticalScroll(scroll),
+        ) {
+            // Bar (56) + its 8dp inset + 8dp gap = PageColumn's 16 + 56.
+            Box(Modifier.height(56.dp))
+            PageColumn(content = body)
+        }
+        androidx.compose.runtime.CompositionLocalProvider(chat.cursus.ui.components.LocalBackdrop provides backdrop) {
+            Box(
+                Modifier.align(Alignment.TopCenter).fillMaxWidth()
+                    .padding(start = 10.dp, end = 10.dp, top = 8.dp)
+                    .glass(Radius.control),
+            ) {
+                PaneHeader(title, onBack = onBack) { actions() }
+            }
+        }
     }
 }
 

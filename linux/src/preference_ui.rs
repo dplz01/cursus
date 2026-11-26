@@ -1,11 +1,11 @@
-//! Inset preference panels shared by app, contact, group and channel settings.
+//! Flat row groups shared by app, contact, group and channel settings.
 use iced::widget::{column, container, text, Column};
 
 use iced::{Element, Length, Padding};
 
 use crate::{layout::Density, theme, Message};
 
-/// Section heading above a panel: meta size, bold, `text.secondary`, inset
+/// Section heading above a group of rows: meta size, bold, `text.secondary`, inset
 /// to the text inside the panel's rows (4 panel + 16 row = 20).
 pub(crate) fn heading<'a>(title: impl text::IntoFragment<'a>, d: Density) -> Element<'a, Message> {
     container(text(title).size(d.meta).font(crate::ui::BOLD).color(theme::t().text_secondary))
@@ -28,25 +28,14 @@ pub(crate) const SECTION_INSET: f32 = PANEL_PAD + 16.0;
 /// `INSET_CONTROL_RADIUS`, concentric with the panel).
 pub(crate) const PANEL_PAD: f32 = 4.0;
 
-/// The one floating surface for a group of rows: `bg.elevated`, 1px border,
-/// shared control radius, 4px inset.
+/// A group of rows (settings, profile actions, member lists, preferences):
+/// flat on the page — no surface, no border, no shadow; the heading above
+/// and the spacing between groups do the grouping. Rows keep their 4px
+/// inset and rounded hover, so text lines up with headings and notes.
 pub(crate) fn panel<'a>(rows: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     container(rows)
         .width(Length::Fill)
         .padding(PANEL_PAD)
-        .clip(true)
-        .style(|_| {
-            let t = theme::t();
-            container::Style {
-                background: Some(t.bg_elevated.into()),
-                border: iced::Border {
-                    radius: theme::CONTROL_RADIUS.into(),
-                    width: 1.0,
-                    color: t.border,
-                },
-                ..Default::default()
-            }
-        })
         .into()
 }
 

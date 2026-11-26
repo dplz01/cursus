@@ -343,7 +343,43 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Chat whose history loads before it opens ([`open`]), the history it
+    /// got, and the two halves of the race (the load / the 0.3 s deadline).
+    private var pendingOpen: String?
+    private var preloaded: (ref: String, list: [Message])?
+    private var openingLoad: Task<Void, Never>?
+    private var openingDeadline: Task<Void, Never>?
+
+    /// Opens a chat from the list once its history is in (waiting at most
+    /// 0.3 s), so it appears with its messages instead of a spinner, then
+    /// the messages, then the pictures.
+    func open(_ ref: String) {
+        guard selection != ref else { return }
+        openingLoad?.cancel()
+        openingDeadline?.cancel()
+        pendingOpen = ref
+        let unread = chats.first { $0.ref == ref }?.unread ?? 0
+        let count = max(pageSize, min(5000, unread * 2 + pageSize))
+        openingLoad = Task { [weak self] in
+            let list = try? await Core.call("listMessages", ["chat": ref, "count": count], as: [Message].self)
+            guard let self = self, self.pendingOpen == ref else { return }
+            self.pendingOpen = nil
+            self.openingDeadline?.cancel()
+            self.preloaded = list.map { (ref: ref, list: $0) }
+            self.selection = ref
+        }
+        openingDeadline = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self = self, self.pendingOpen == ref else { return }
+            // Slow: open now; the history fills in as before.
+            self.pendingOpen = nil
+            self.selection = ref
+        }
+    }
+
     private func selectionChanged(from old: String?) {
+        // Any other way of choosing a chat wins over a tap still loading.
+        pendingOpen = nil
         if let old = old {
             drafts[old] = composeMode == .new ? draft : nil
         }
@@ -364,8 +400,21 @@ final class AppModel: ObservableObject {
         support = nil
         openUnread = selection.flatMap { ref in chats.first { $0.ref == ref }?.unread } ?? 0
         historyLimit = max(pageSize, min(5000, openUnread * 2 + pageSize))
-        openConversationHistory(selection) { ref in
-            await self.markRead(ref)
+        if let ref = selection, let pre = preloaded, pre.ref == ref {
+            // Already loaded by `open`: shown in this same update.
+            preloaded = nil
+            openingConversation &+= 1
+            historyRequest &+= 1
+            isLoadingMessages = false
+            messages = pre.list
+            markNewMessages(old: [], new: pre.list)
+            autoDownload(pre.list)
+            Task { await self.markRead(ref) }
+        } else {
+            preloaded = nil
+            openConversationHistory(selection) { ref in
+                await self.markRead(ref)
+            }
         }
     }
 

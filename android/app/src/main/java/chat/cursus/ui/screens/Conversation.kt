@@ -85,7 +85,6 @@ import chat.cursus.core.Segment
 import chat.cursus.core.Stamps
 import chat.cursus.ui.components.AccentSquare
 import chat.cursus.ui.components.Avatar
-import chat.cursus.ui.components.systemBack
 import chat.cursus.ui.components.IconTool
 import chat.cursus.ui.components.PrimaryButton
 import chat.cursus.ui.components.SecondaryButton
@@ -99,10 +98,11 @@ import java.time.LocalDate
 
 
 @Composable
-fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () -> Unit) {
+fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onBack: () -> Unit, onInfo: () -> Unit) {
     val c = Cursus.colors
     val callPermission = rememberCallPermission(model)
-    Column(Modifier.fillMaxSize().background(c.bgPanel).windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
+    // No fill of its own: the page / pane under it is bg.panel.
+    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
         // The composer floats over the history (which scrolls underneath
         // it); the list keeps its height as bottom padding so the newest
         // message can still be scrolled clear of the field.
@@ -127,7 +127,7 @@ fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () 
                         .height(HEADER_HEIGHT).glass(Radius.control).padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (showBack) IconTool(R.drawable.ic_back, "Back", systemBack { model.select(null) })
+                    if (showBack) IconTool(R.drawable.ic_back, "Back", onBack)
                     Row(
                         Modifier.weight(1f).clip(Radius.lg).clickable(onClick = onInfo).padding(6.dp),
                         verticalAlignment = Alignment.CenterVertically,

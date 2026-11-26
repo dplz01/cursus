@@ -708,6 +708,8 @@ struct PrefRow<Control: View>: View {
 /// column on every Cursus app).
 struct Page<Content: View>: View {
     var background: Color = Theme.panel
+    /// Room kept at the top for a bar floating over the page.
+    var topInset: CGFloat = 0
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -716,6 +718,7 @@ struct Page<Content: View>: View {
                 content
             }
             .padding(16)
+            .padding(.top, topInset)
             .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
         }
@@ -995,35 +998,5 @@ struct ProfileText: View {
         if cache.count >= 256 { cache.removeAll(keepingCapacity: true) }
         cache[source] = value
         return value
-    }
-}
-
-// MARK: - Page transitions
-
-/// A newly opened page (chat, profile, a profile's settings, a settings
-/// category) slides in from the right while it fades in, like Linux
-/// `page_motion` and Android `PageMotion`. Back is instant.
-extension AnyTransition {
-    static var pageEnter: AnyTransition {
-        .asymmetric(insertion: AnyTransition.offset(x: 48).combined(with: .opacity), removal: .identity)
-    }
-}
-
-extension Animation {
-    static let pageEnterCurve = Animation.timingCurve(0.33, 1, 0.68, 1, duration: 0.22)
-
-    /// The page animation for a move that opens a page; none for Back or
-    /// when the system asks for reduced motion.
-    static func pageEnter(forward: Bool) -> Animation? {
-        forward && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .pageEnterCurve : nil
-    }
-}
-
-extension View {
-    /// Show this page as `key`; when `key` changes and `forward` is true the
-    /// new page slides in.
-    func pageEntrance<Key: Hashable>(_ key: Key, forward: Bool) -> some View {
-        ZStack { self.id(key).transition(.pageEnter) }
-            .animation(Animation.pageEnter(forward: forward), value: key)
     }
 }

@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -30,12 +31,75 @@ fun ProfileText(
     overflow: TextOverflow = TextOverflow.Clip,
     textAlign: TextAlign? = null,
     rich: Boolean = true,
+    onOverflow: ((Boolean) -> Unit)? = null,
 ) {
+    val formatted = rememberProfileText(value, style, color, rich)
+    Text(formatted, modifier = modifier, style = style, color = color, fontWeight = fontWeight,
+        maxLines = maxLines, overflow = overflow, textAlign = textAlign,
+        onTextLayout = { layout -> onOverflow?.invoke(layout.hasVisualOverflow) })
+}
+
+/**
+ * A profile's "about" folded to two lines that end in "… Show more" — an
+ * accent link right after the ellipsis — and, unfolded, in "Show less"
+ * (Linux `fold`). The kept part keeps its formatting.
+ */
+@Composable
+fun FoldedProfileText(value: String, style: TextStyle, color: Color, open: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    val c = Cursus.colors
+    val full = rememberProfileText(value, style, color, true)
+    val toggle by androidx.compose.runtime.rememberUpdatedState(onToggle)
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier) {
+        val width = constraints.maxWidth
+        val shown = androidx.compose.runtime.remember(full, width, open, style, c.accent) {
+            val link = { label: String ->
+                buildAnnotatedString {
+                    withLink(
+                        androidx.compose.ui.text.LinkAnnotation.Clickable(
+                            "fold",
+                            androidx.compose.ui.text.TextLinkStyles(SpanStyle(color = c.accent, fontWeight = FontWeight.SemiBold)),
+                        ) { toggle() },
+                    ) { append(label) }
+                }
+            }
+            val limits = androidx.compose.ui.unit.Constraints(maxWidth = width)
+            fun fits(t: androidx.compose.ui.text.AnnotatedString) =
+                !measurer.measure(t, style, maxLines = 2, constraints = limits).hasVisualOverflow
+            when {
+                fits(full) -> full
+                open -> full + androidx.compose.ui.text.AnnotatedString(" ") + link("Show less")
+                else -> {
+                    val more = link("Show more")
+                    fun head(n: Int) = full.subSequence(0, n).let { h ->
+                        h.subSequence(0, h.text.trimEnd().length)
+                    }
+                    fun candidate(n: Int) = head(n) + androidx.compose.ui.text.AnnotatedString("… ") + more
+                    // Longest prefix that still fits with "… Show more".
+                    var lo = 0
+                    var hi = full.length
+                    while (lo < hi) {
+                        val mid = (lo + hi + 1) / 2
+                        if (fits(candidate(mid))) lo = mid else hi = mid - 1
+                    }
+                    // End on a whole word when one ends close by.
+                    val space = (lo - 1 downTo maxOf(0, lo - 16)).firstOrNull { full.text[it].isWhitespace() }
+                    candidate(space ?: lo)
+                }
+            }
+        }
+        Text(shown, style = style, color = color)
+    }
+}
+
+/** The SimpleX-formatted spans of a profile text (same parser as Linux). */
+@Composable
+private fun rememberProfileText(value: String, style: TextStyle, color: Color, rich: Boolean): androidx.compose.ui.text.AnnotatedString {
     val c = Cursus.colors
     val segments by rememberLoaded<List<Segment>>(emptyList(), value, rich) {
         if (!rich) emptyList() else runCatching { Core.call<List<Segment>>("formatProfileText", mapOf("text" to value)) }.getOrDefault(emptyList())
     }
-    val formatted = buildAnnotatedString {
+    return buildAnnotatedString {
         if (segments.isEmpty() || !rich) append(value)
         for (segment in if (rich) segments else emptyList()) {
             val span = when (segment.style) {
@@ -55,6 +119,4 @@ fun ProfileText(
             withStyle(span) { append(segment.text) }
         }
     }
-    Text(formatted, modifier = modifier, style = style, color = color, fontWeight = fontWeight,
-        maxLines = maxLines, overflow = overflow, textAlign = textAlign)
 }

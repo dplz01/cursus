@@ -58,12 +58,14 @@ pub fn surface<'a>(content: impl Into<Element<'a, Message>>, radius: f32) -> Ele
     let content: Element<'a, Message> = content.into();
     // Same sizing as the surface, so rows / columns lay it out unchanged.
     let size = content.as_widget().size();
-    iced::widget::Stack::new()
-        .width(size.width)
-        .height(size.height)
-        .push(content)
-        .push_under(backdrop(radius))
-        .into()
+    // A floating surface: taps on it never reach what it floats over.
+    crate::shield::shield(
+        iced::widget::Stack::new()
+            .width(size.width)
+            .height(size.height)
+            .push(content)
+            .push_under(backdrop(radius)),
+    )
 }
 
 struct Glass {

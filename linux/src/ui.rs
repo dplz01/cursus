@@ -212,6 +212,16 @@ pub enum NavSection {
 }
 
 impl NavSection {
+    /// Place in the destinations bar, left to right.
+    pub fn order(self) -> u8 {
+        match self {
+            Self::Chats => 0,
+            Self::Channels => 1,
+            Self::Calls => 2,
+            Self::Settings => 3,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Chats => "Chats",
@@ -639,7 +649,7 @@ fn auth_gate(app: &App) -> Element<'_, Message> {
     }
 }
 
-fn desktop_shell<'a>(app: &'a App) -> Element<'a, Message> {
+fn desktop_shell(app: &App) -> Element<'_, Message> {
     let d = app.density();
     let mut columns = Row::new().height(Length::Fill);
     // Destinations: a rail when there is room, else a bar under the list.
@@ -650,23 +660,12 @@ fn desktop_shell<'a>(app: &'a App) -> Element<'a, Message> {
     }
     columns = columns.push(pane_divider());
     // Wide windows: an open profile sits beside its chat instead of over it.
-    use crate::page_motion::{slide, Slot};
-    let moving = |content: Element<'a, Message>, slot: Slot| {
-        let (remaining, _) = app.page_slide(slot);
-        slide(content, remaining, false, theme::t().bg_panel)
-    };
     match info_column(app) {
         Some(info) => columns
-            .push(moving(
-                container(conversation_pane(app, false)).width(Length::Fill).height(Length::Fill).style(theme::panel_style()).into(),
-                Slot::Detail,
-            ))
+            .push(container(conversation_pane(app, false)).width(Length::Fill).height(Length::Fill).style(theme::panel_style()))
             .push(pane_divider())
-            .push(moving(
-                container(info).width(d.info_width).height(Length::Fill).style(theme::panel_style()).into(),
-                Slot::Info,
-            )),
-        None => columns.push(moving(content_pane(app, false), Slot::Detail)),
+            .push(container(info).width(d.info_width).height(Length::Fill).style(theme::panel_style())),
+        None => columns.push(content_pane(app, false)),
     }
     .into()
 }
@@ -714,13 +713,31 @@ fn list_with_bottom_nav(app: &App) -> Element<'_, Message> {
     Stack::new()
         .width(Length::Fill)
         .height(Length::Fill)
-        .push(
-            container(container(list_pane(app, Length::Fill)).max_width(PHONE_LIST_MAX).height(Length::Fill))
-                .center_x(Length::Fill)
-                .height(Length::Fill)
-                .style(theme::panel_style()),
-        )
+        .push(phone_lists(app))
         .push(nav)
+        .into()
+}
+
+/// The phone's list, and while the destination changes the one it left,
+/// side by side as they slide. The same two layers at rest and in motion,
+/// so the list keeps its state (scroll) when the slide ends.
+fn phone_lists(app: &App) -> Element<'_, Message> {
+    let list_of = |nav: NavSection| -> Element<'_, Message> {
+        container(container(list_pane_for(app, Length::Fill, nav)).max_width(PHONE_LIST_MAX).height(Length::Fill))
+            .center_x(Length::Fill)
+            .height(Length::Fill)
+            .style(theme::panel_style())
+            .into()
+    };
+    let (leaving, incoming): (Element<'_, Message>, f32) = match app.section_slide() {
+        Some((from, out, inc)) => (crate::page_motion::shift(list_of(from), out), inc),
+        None => (Space::new().width(Length::Fill).height(Length::Fill).into(), 0.0),
+    };
+    Stack::new()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .push(leaving)
+        .push(crate::page_motion::shift(list_of(app.nav()), incoming))
         .into()
 }
 
@@ -752,35 +769,35 @@ fn stacked_shell(app: &App) -> Element<'_, Message> {
             .width(Length::Fill)
             .height(Length::Fill)
             .style(theme::panel_style());
-        // Opened from the list, the page slides over it while it dims.
-        let (remaining, full) = app.page_slide(crate::page_motion::Slot::Detail);
-        let under: Element<'_, Message> = if full && remaining > 0.0 {
-            Stack::new()
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .push(list_with_bottom_nav(app))
-                .push(
-                    container(Space::new().width(Length::Fill).height(Length::Fill))
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .style(move |_| container::Style {
-                            background: Some(iced::Background::Color(Color { a: 0.18 * (1.0 - remaining), ..Color::BLACK })),
-                            ..container::Style::default()
-                        }),
-                )
-                .into()
-        } else {
-            Space::new().width(Length::Fill).height(Length::Fill).into()
+        // A page sliding in or out (GTK navigation): the page it covers or
+        // uncovers stays still underneath.
+        let (offset, under) = match app.page_slide() {
+            Some((offset, under)) if offset > 0.0 => (offset, Some(under_page(app, under))),
+            _ => (0.0, None),
         };
+        let under = under.unwrap_or_else(|| Space::new().width(Length::Fill).height(Length::Fill).into());
         // Same tree at rest and in motion, so the page keeps its state.
-        return Stack::new()
+        let stack = Stack::new()
             .width(Length::Fill)
             .height(Length::Fill)
             .push(under)
-            .push(crate::page_motion::slide(page, remaining, full, theme::t().bg_panel))
-            .into();
+            .push(crate::page_motion::slide(page, offset, crate::page_motion::shade(!theme::is_light_active())));
+        // Swipe right from the left edge to go back (GTK, touchscreen).
+        return crate::page_motion::back_swipe(stack, app.swipe_back_ready(), Message::BackSwipe);
     }
     list_with_bottom_nav(app)
+}
+
+/// The page under a sliding one (phone layout).
+fn under_page(app: &App, under: crate::page_motion::Under) -> Element<'_, Message> {
+    use crate::page_motion::Under;
+    let page: Element<'_, Message> = match under {
+        Under::List => return list_with_bottom_nav(app),
+        Under::Conversation => conversation_pane(app, true),
+        Under::ContactOverview => contact_profile_page_as(app, true, true),
+        Under::GroupOverview => group_settings_page_as(app, true, Some(GroupSettingsPane::Overview)),
+    };
+    container(page).width(Length::Fill).height(Length::Fill).style(theme::panel_style()).into()
 }
 
 /// Widest the phone layout's list (and its bottom bar) gets.
@@ -932,22 +949,27 @@ fn nav_destination(
 }
 
 fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
+    list_pane_for(app, width, app.nav())
+}
+
+/// The list of destination `nav` (also the one sliding away after a switch).
+fn list_pane_for(app: &App, width: Length, nav: NavSection) -> Element<'_, Message> {
     let d = app.density();
-    let show_compose = matches!(app.nav(), NavSection::Chats | NavSection::Channels | NavSection::Calls)
+    let show_compose = matches!(nav, NavSection::Chats | NavSection::Channels | NavSection::Calls)
         && app.connected();
     // Same header chrome for every section: title + trailing 36px slot so
     // Calls/Settings match the Chats/Channels "title row with button" box.
     let trailing: Element<'_, Message> = if show_compose {
         let plus = button(icons::centered_hit(
-            if app.nav() == NavSection::Calls { icons::phone_icon(20.0, theme::t().accent) }
+            if nav == NavSection::Calls { icons::phone_icon(20.0, theme::t().accent) }
             else { icons::plus_icon(20.0, theme::t().accent) },
             36.0,
         ))
-        .on_press(if app.nav() == NavSection::Calls { Message::CallContacts(true) } else { Message::OpenCompose })
+        .on_press(if nav == NavSection::Calls { Message::CallContacts(true) } else { Message::OpenCompose })
         .padding(0)
         .style(theme::soft_action(app.hover_ok()));
         let pending = app.pending_links().len();
-        if pending > 0 && app.nav() != NavSection::Calls {
+        if pending > 0 && nav != NavSection::Calls {
             row![pending_links_button(pending, app.hover_ok()), plus]
                 .spacing(8)
                 .align_y(Alignment::Center)
@@ -959,7 +981,7 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
         horizontal().width(36.0).height(36.0).into()
     };
     let header: Element<'_, Message> = row![
-        text(app.nav().label())
+        text(nav.label())
             .size(d.title + 4.0)
             .font(BOLD)
             .color(theme::t().text_primary)
@@ -970,8 +992,8 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
     .align_y(Alignment::Center)
     .into();
 
-    let body: Element<'_, Message> = match app.nav() {
-        NavSection::Chats | NavSection::Channels => chat_list(app),
+    let body: Element<'_, Message> = match nav {
+        NavSection::Chats | NavSection::Channels => chat_list_for(app, nav),
         NavSection::Calls => calls_panel(app),
         NavSection::Settings => settings_panel(app),
     };
@@ -988,7 +1010,7 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
 
     // Settings is made of floating panels: it sits on the panel background
     // like its pages, so the panels read the same at every level.
-    let settings = app.nav() == NavSection::Settings;
+    let settings = nav == NavSection::Settings;
     container(col)
         .width(width)
         .height(Length::Fill)
@@ -999,7 +1021,7 @@ fn list_pane(app: &App, width: Length) -> Element<'_, Message> {
         .into()
 }
 
-fn chat_list(app: &App) -> Element<'_, Message> {
+fn chat_list_for(app: &App, nav: NavSection) -> Element<'_, Message> {
     let d = app.density();
     if !app.connected() {
         return placeholder(
@@ -1011,9 +1033,9 @@ fn chat_list(app: &App) -> Element<'_, Message> {
 
     let mut col = Column::new().spacing(0).padding(Padding::ZERO);
 
-    let rows = app.chats_for_nav();
+    let rows = app.chats_in(nav);
     if rows.is_empty() {
-        let (title, body) = match app.nav() {
+        let (title, body) = match nav {
             NavSection::Channels => (
                 "No channels yet",
                 "Tap + to create a channel (needs chat relays), or join via invite link.",
@@ -1027,8 +1049,12 @@ fn chat_list(app: &App) -> Element<'_, Message> {
         return scroll_y(col);
     }
 
+    // The open chat is highlighted only beside it (two columns). On a phone
+    // the list is under the chat: a highlight there showed while Back slid
+    // the chat away, then blinked off when it closed.
+    let side_by_side = !matches!(app.layout(), LayoutMode::Mobile);
     for (index, chat) in rows {
-        let selected = app.selected() == Some(index);
+        let selected = side_by_side && app.selected() == Some(index);
         let show_unread = chat.unread > 0 || chat.unread_chat;
         let muted = chat.settings.enable_ntfs.is_muted();
         let support_badge = app.support_badge_count(chat);
@@ -1236,24 +1262,34 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
     } else if app.selected_is_direct() {
         // Tapping the title opens the profile; no hover tile (it is a
         // header, not a row).
-        mouse_area(
+        // A button: it opens on release, and only for a press that began
+        // on it. Opening on press let the release land on the page it
+        // opened (the group picture → its photo sheet); `on_release` alone
+        // reopened the profile on the stray release after Back closed it.
+        button(
             row![avatar, identity.width(Length::Fill)]
                 .spacing(10)
                 .align_y(Alignment::Center),
         )
-        .interaction(iced::mouse::Interaction::Pointer)
         .on_press(Message::OpenContactProfile)
+        .padding(0)
+        .style(|_, _| button::Style::default())
         .into()
     } else if app.selected_is_group_or_channel() {
         // Tapping the title opens the profile; no hover tile (it is a
         // header, not a row).
-        mouse_area(
+        // A button: it opens on release, and only for a press that began
+        // on it. Opening on press let the release land on the page it
+        // opened (the group picture → its photo sheet); `on_release` alone
+        // reopened the profile on the stray release after Back closed it.
+        button(
             row![avatar, identity.width(Length::Fill)]
                 .spacing(10)
                 .align_y(Alignment::Center),
         )
-        .interaction(iced::mouse::Interaction::Pointer)
         .on_press(Message::OpenGroupSettings)
+        .padding(0)
+        .style(|_, _| button::Style::default())
         .into()
     } else {
         row![avatar, identity.width(Length::Fill)]
@@ -1394,6 +1430,8 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
 
 /// Floating chat title bar: its height and its inset from the pane's top.
 const CHAT_HEADER_HEIGHT: f32 = 56.0;
+/// The Back button floating alone on a profile page (all of it is the hit).
+const BACK_SQUARE: f32 = 44.0;
 const CHAT_HEADER_INSET: f32 = 8.0;
 /// Room the history keeps at its top so the first message can scroll clear
 /// of the floating title bar (bar + inset above + 8 px gap below, as above
@@ -2117,6 +2155,9 @@ fn history_key(app: &App, d: Density) -> u64 {
         if let Some(file) = msg.file.as_ref() {
             let plain = app.plaintext_path_for(file);
             plain.hash(&mut h);
+            // The picture stand-in shows (sharp or not) before decrypting.
+            crate::embedded_preview::get(file.file_id).map(|(_, w, h)| (w, h)).hash(&mut h);
+            app.media_revealed(msg.item_id).hash(&mut h);
             if let Some(p) = plain.as_ref() {
                 p.is_file().hash(&mut h);
                 app.image_preview_for(p, 0, 0).hash(&mut h);
@@ -2987,28 +3028,39 @@ fn profile_rich<'a>(
     color: Color,
     bold: bool,
 ) -> iced::widget::text::Rich<'a, Message, Message> {
-    let spans = cursus_core::profile_text(raw)
-        .into_iter()
-        .map(|mut segment| {
-            if segment.style == TextStyle::Secret {
-                segment.style = TextStyle::Snippet;
-            }
-            let styled = styled_span(&segment, size, -1, 0, true);
-            if matches!(
-                segment.style,
-                TextStyle::Plain | TextStyle::Bold | TextStyle::Italic | TextStyle::Strike
-            ) {
-                styled.color(color)
-            } else {
-                styled
-            }
-        })
+    let spans = profile_segments(raw)
+        .iter()
+        .map(|segment| profile_span(segment, size, color))
         .collect::<Vec<_>>();
     rich_text(spans)
         .size(size)
         .color(color)
         .font(if bold { BOLD } else { Font::DEFAULT })
         .wrapping(Wrapping::WordOrGlyph)
+}
+
+/// A profile text's segments (secrets show as snippets on a profile).
+fn profile_segments(raw: &str) -> Vec<TextSegment> {
+    let mut segments = cursus_core::profile_text(raw);
+    for segment in &mut segments {
+        if segment.style == TextStyle::Secret {
+            segment.style = TextStyle::Snippet;
+        }
+    }
+    segments
+}
+
+/// One span of profile text: plain styles in `color`, the rest as in chats.
+fn profile_span(segment: &TextSegment, size: f32, color: Color) -> iced::widget::text::Span<'static, Message> {
+    let styled = styled_span(segment, size, -1, 0, true);
+    if matches!(
+        segment.style,
+        TextStyle::Plain | TextStyle::Bold | TextStyle::Italic | TextStyle::Strike
+    ) {
+        styled.color(color)
+    } else {
+        styled
+    }
 }
 
 /// Unformatted body followed by the stamp reservation.
@@ -3783,43 +3835,54 @@ fn visual_media_preview(
     if !matches!(state, FileTransferState::Complete) {
         return None;
     }
-    // Prefer decrypted plaintext; skip preview until CryptoFile decrypt finishes.
+    // Decrypted plaintext (None until CryptoFile decrypt finishes).
     // No fs::metadata / image_dimensions here — view runs on every fling tick.
-    let path = app.plaintext_path_for(file)?;
+    let path = app.plaintext_path_for(file);
     let is_video = matches!(file.kind, FileKind::Video) || media::is_video_name(&file.file_name);
     // Compact chat-pane previews — keep native aspect.
-    const PREVIEW_MAX_W: u32 = 220;
-    const PREVIEW_MAX_H: u32 = 280;
-    const RADIUS: f32 = 12.0;
+    use crate::embedded_preview::{MAX_H as PREVIEW_MAX_H, MAX_W as PREVIEW_MAX_W, RADIUS};
+    // The sender's embedded preview fixes the frame's size from the start
+    // and stands in until the file's own preview is ready.
+    let embedded = if is_video { None } else { crate::embedded_preview::get(file.file_id) };
+    if path.is_none() && embedded.is_none() {
+        return None;
+    }
     // Videos: placeholder only (ffmpeg posters were unreliable on ARM — do not
     // regenerate). Stills still use the rounded image preview cache.
-    let prepared = if is_video {
-        None
-    } else {
-        app.image_preview_for(&path, PREVIEW_MAX_W, PREVIEW_MAX_H)
+    let prepared = match path.as_ref() {
+        Some(path) if !is_video => app.image_preview_for(path, PREVIEW_MAX_W, PREVIEW_MAX_H),
+        _ => None,
     };
     // "Blur photos": show the blurred copy until this item is tapped; never
     // the sharp preview while the blurred one is still being made.
     let blur = app.desktop_prefs().blur_media && !app.media_revealed(msg.item_id);
-    let prepared = match prepared {
+    let prepared = match (prepared, path.as_ref()) {
         // Placeholder until the blurred copy exists.
-        Some((_, pw, ph)) if blur => app.blurred_preview_for(&path).map(|b| (b.clone(), pw, ph)),
-        other => other,
+        (Some((_, pw, ph)), Some(path)) if blur => app.blurred_preview_for(path).map(|b| (b.clone(), pw, ph)),
+        (other, _) => other,
     };
-    let (w, h, face): (f32, f32, Element<'static, Message>) = if let Some((display_path, pw, ph)) =
-        prepared
-    {
-        let w = pw as f32;
-        let h = ph as f32;
-        let thumb = image(image::Handle::from_path(display_path))
+    // The file's own preview sets the frame (never bigger than the picture:
+    // stickers aren't blown up); until it's ready the sender's preview
+    // stands in at the full frame for its proportions.
+    let frame = match prepared.as_ref() {
+        Some((_, pw, ph)) => Some((*pw as f32, *ph as f32)),
+        None => embedded.as_ref().map(|(_, ew, eh)| (*ew as f32, *eh as f32)),
+    };
+    // The sharp stand-in is never shown while photos are blurred.
+    let stand_in = embedded.filter(|_| !blur).map(|(handle, _, _)| handle);
+    let shown = prepared
+        .map(|(display_path, pw, ph)| (image::Handle::from_path(display_path), pw as f32, ph as f32))
+        .or_else(|| stand_in.zip(frame).map(|(handle, (w, h))| (handle, w, h)));
+    let (w, h, face): (f32, f32, Element<'static, Message>) = if let Some((handle, pw, ph)) = shown {
+        let (w, h) = frame.unwrap_or((pw, ph));
+        let thumb = image(handle)
             .width(Length::Fixed(w))
             .height(Length::Fixed(h))
-            .content_fit(ContentFit::Contain);
+            .content_fit(ContentFit::Cover);
         (w, h, thumb.into())
     } else {
         // Still not ready / video placeholder.
-        let w = 160.0;
-        let h = 120.0;
+        let (w, h) = frame.unwrap_or((160.0, 120.0));
         let glyph = if is_video {
             icons::play_icon(28.0, theme::t().text_secondary)
         } else {
@@ -3864,13 +3927,13 @@ fn visual_media_preview(
         .clip(true);
     // Images stay in the app; the outer bubble owns long-press menus.
     let tap = if blur && !is_video {
-        Message::RevealMedia(msg.item_id)
+        Some(Message::RevealMedia(msg.item_id))
     } else {
-        if is_video {
-            Message::OpenLocalFile(path)
-        } else {
-            Message::OpenImage(path)
-        }
+        // Opens once the file is decrypted.
+        path.map(|path| if is_video { Message::OpenLocalFile(path) } else { Message::OpenImage(path) })
+    };
+    let Some(tap) = tap else {
+        return Some(framed.into());
     };
     Some(
         mouse_area(framed)
@@ -4186,47 +4249,39 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
         crate::SettingsSection::Profile,
     ));
     col = col.push(vertical().height(12));
-    // Categories in named groups, the same on Android / macOS:
-    // you · the app · about.
-    for (heading, group) in SETTINGS_GROUPS {
-        let mut rows = Column::new().width(Length::Fill);
-        for &section in group {
-            let (icon, title) = settings_section_meta(section);
-            rows = rows.push(
-                button(
-                    row![
-                        icon_disc(icon, ROW_ICON_BOX),
-                        text(title).size(d.body).color(theme::t().text_primary).width(Length::Fill),
-                        icons::chevron_right(16.0, theme::t().text_muted),
-                    ]
-                    .spacing(ROW_GAP)
-                    .align_y(Alignment::Center),
-                )
-                .on_press(Message::OpenSettingsSection(section))
-                .padding(Padding::from([if two_columns { 12.0 } else { 18.0 }, 16.0]))
-                .width(Length::Fill)
-                .style(theme::list_row_r(
-                    two_columns && app.settings_open() && app.settings_section() == section,
-                    hover,
-                    theme::INSET_CONTROL_RADIUS,
-                )),
-            );
-        }
-        col = col.push(crate::preference_ui::group(Some(heading), None, rows, d));
-        col = col.push(vertical().height(4));
+    // Every category in one list, no headings (same on Android / macOS).
+    let mut rows = Column::new().width(Length::Fill);
+    for section in SETTINGS_PAGES {
+        let (icon, title) = settings_section_meta(section);
+        rows = rows.push(
+            button(
+                row![
+                    icon_disc(icon, ROW_ICON_BOX),
+                    text(title).size(d.body).color(theme::t().text_primary).width(Length::Fill),
+                    icons::chevron_right(16.0, theme::t().text_muted),
+                ]
+                .spacing(ROW_GAP)
+                .align_y(Alignment::Center),
+            )
+            .on_press(Message::OpenSettingsSection(section))
+            .padding(Padding::from([if two_columns { 12.0 } else { 18.0 }, 16.0]))
+            .width(Length::Fill)
+            .style(theme::list_row_r(
+                two_columns && app.settings_open() && app.settings_section() == section,
+                hover,
+                theme::INSET_CONTROL_RADIUS,
+            )),
+        );
     }
+    col = col.push(crate::preference_ui::group(None, None, rows, d));
     let bottom = nav_clearance(d).max(24.0);
     page_scroll_y(col.spacing(8).padding(Padding { top: 0.0, right: 12.0, bottom, left: 12.0 }))
 }
 
-/// The settings list's groups, in order, with their headings.
-const SETTINGS_GROUPS: [(&str, &[crate::SettingsSection]); 3] = {
+/// The settings list's categories, in order.
+const SETTINGS_PAGES: [crate::SettingsSection; 6] = {
     use crate::SettingsSection as S;
-    [
-        ("Account", &[S::Profile, S::Address]),
-        ("Preferences", &[S::Privacy, S::Notifications, S::Appearance]),
-        ("Cursus", &[S::About]),
-    ]
+    [S::Profile, S::Address, S::Privacy, S::Notifications, S::Appearance, S::About]
 };
 
 fn settings_section_meta(section: crate::SettingsSection) -> (Element<'static, Message>, &'static str) {
@@ -6144,74 +6199,127 @@ fn about_block<'a>(label: &'a str, value: String, d: Density) -> Element<'a, Mes
     .into()
 }
 
-/// Title on the left; round actions flush to the right edge.
-/// A profile page whose top bar floats like the chat's: the bar on a glass
-/// card inset from the top and sides, the page scrolling underneath it and
-/// keeping CHAT_HEADER_ROOM at its top.
+/// A profile's "about" (a contact's About, a group's Description): a clear
+/// heading and, just under it, the text folded to two lines that end in
+/// "… Show more" (see [`crate::fold`]). `inset` is where `content`'s text
+/// starts, so the heading lines up with it.
+fn about_section<'a>(label: &'a str, content: Element<'a, Message>, inset: f32, d: Density) -> Element<'a, Message> {
+    column![
+        container(text(label).size(d.body).font(BOLD).color(theme::t().text_primary))
+            .padding(Padding::from([0.0, inset]))
+            .width(Length::Fill),
+        content,
+    ]
+    .spacing(2)
+    .width(Length::Fill)
+    .into()
+}
+
+/// The about text, folded (see [`crate::fold`]).
+fn folded_about_text(app: &App, value: &str, d: Density) -> Element<'static, Message> {
+    crate::fold::fold(
+        profile_segments(value),
+        d.body,
+        theme::t().text_secondary,
+        theme::t().accent,
+        app.about_open(),
+        profile_span,
+    )
+}
+
+/// Someone else's about: plain text at the section inset.
+fn folded_about_block<'a>(app: &App, label: &'a str, value: String, d: Density) -> Element<'a, Message> {
+    let body = container(folded_about_text(app, &value, d)).padding(Padding::from([0, 12])).width(Length::Fill);
+    about_section(label, body.into(), 12.0, d)
+}
+
+/// A profile page (or one of its settings pages) under floating glass:
+/// - `tools` (the profile's actions, wide windows): a glass bar with Back on
+///   the left and the actions on the right — no title;
+/// - otherwise just Back, on a small glass square.
+///
+/// The page scrolls underneath. A `hero` page (centred avatar first) starts
+/// right under the top inset when only the Back square floats over it.
 fn floating_header_page<'a>(
-    header: Element<'a, Message>,
+    back: Option<Message>,
+    tools: Option<Element<'a, Message>>,
+    hero: bool,
     body: impl Into<Element<'a, Message>>,
     d: Density,
+    hover: bool,
 ) -> Element<'a, Message> {
     let side = if d.list_width == 0.0 { 6.0 } else { 10.0 };
-    let bar = container(crate::glass::surface(
-        container(header)
-            .height(CHAT_HEADER_HEIGHT)
+    let inset = Padding { top: CHAT_HEADER_INSET, right: side, bottom: 0.0, left: side };
+    let full_bar = tools.is_some();
+    let bar: Option<Element<'a, Message>> = match tools {
+        Some(tools) => {
+            let row = row![
+                back.map_or_else(|| Space::new().width(0).into(), |msg| mobile_back_btn(msg, hover)),
+                horizontal(),
+                tools,
+            ]
+            .spacing(10)
             .align_y(Alignment::Center)
-            .width(Length::Fill)
-            .style(theme::floating_nav_style()),
-        theme::CONTROL_RADIUS,
-    ))
-    .padding(Padding { top: CHAT_HEADER_INSET, right: side, bottom: 0.0, left: side })
-    .width(Length::Fill);
+            .height(CHAT_HEADER_HEIGHT)
+            .padding(Padding { top: 0.0, right: d.pad, bottom: 0.0, left: 8.0 });
+            Some(
+                container(crate::glass::surface(
+                    container(row).width(Length::Fill).style(theme::floating_nav_style()),
+                    theme::CONTROL_RADIUS,
+                ))
+                .padding(inset)
+                .width(Length::Fill)
+                .into(),
+            )
+        }
+        // The whole glass square is the button: what you see is what you hit.
+        None => back.map(|msg| {
+            container(crate::glass::surface(
+                button(
+                    container(icons::back_tool(BACK_SQUARE, hover))
+                        .width(BACK_SQUARE)
+                        .height(BACK_SQUARE)
+                        .center_x(BACK_SQUARE)
+                        .center_y(BACK_SQUARE)
+                        .style(theme::floating_nav_style()),
+                )
+                .on_press(msg)
+                .padding(0)
+                .style(theme::icon_action(hover)),
+                theme::SMALL_CONTROL_RADIUS,
+            ))
+            .padding(inset)
+            .into()
+        }),
+    };
+    let top = if full_bar || !hero { CHAT_HEADER_ROOM } else { CHAT_HEADER_INSET + 4.0 };
     let scroll = page_scroll_y(
         container(container(body).max_width(PAGE_MAX).width(Length::Fill))
             .width(Length::Fill)
             .center_x(Length::Fill)
-            .padding(Padding { top: CHAT_HEADER_ROOM, right: d.pad, bottom: d.pad, left: d.pad }),
+            .padding(Padding { top, right: d.pad, bottom: d.pad, left: d.pad }),
     );
-    Stack::new()
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .push(scroll)
-        .push(bar)
-        .into()
-}
-
-fn profile_header_bar<'a>(
-    leading: Element<'a, Message>,
-    actions: Element<'a, Message>,
-    d: Density,
-    with_back: bool,
-) -> Element<'a, Message> {
-    // Inside its floating card: Back (or the title) 8 px from the edge.
-    let _ = with_back;
-    let pad = Padding { top: d.pad_tight, right: d.pad, bottom: d.pad_tight, left: 8.0 };
-    row![
-        container(leading)
-            .width(Length::Fill)
-            .align_y(Alignment::Center),
-        actions,
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center)
-    .height(56)
-    .padding(Padding {
-        top: 0.0,
-        bottom: 0.0,
-        ..pad
-    })
-    .into()
+    let mut stack = Stack::new().width(Length::Fill).height(Length::Fill).push(scroll);
+    if let Some(bar) = bar {
+        stack = stack.push(bar);
+    }
+    stack.into()
 }
 
 fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
+    contact_profile_page_as(app, with_back, false)
+}
+
+/// The contact page; `overview` shows the overview whatever pane is open
+/// (the page under its settings while they slide).
+fn contact_profile_page_as(app: &App, with_back: bool, overview: bool) -> Element<'_, Message> {
     let d = app.density();
     let hover = app.hover_ok();
     let Some(p) = app.contact_profile() else {
         return vertical().height(0).into();
     };
 
-    if matches!(p.pane, crate::ContactProfilePane::Preferences) {
+    if !overview && matches!(p.pane, crate::ContactProfilePane::Preferences) {
         return contact_preferences_page(app, p);
     }
 
@@ -6232,8 +6340,7 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
         hover,
     );
 
-    let leading = page_title("Contact", with_back.then_some(Message::CloseContactProfile), d, hover);
-    let header = profile_header_bar(leading, tools, d, with_back);
+    let wide = d.list_width != 0.0;
 
     let mut body = Column::new().spacing(PAGE_GAP).width(Length::Fill);
     {
@@ -6262,13 +6369,13 @@ fn contact_profile_page(app: &App, with_back: bool) -> Element<'_, Message> {
             body = body.push(tiles);
         }
         if !p.fields.description.is_empty() {
-            body = body.push(about_block("About", p.fields.description.clone(), d));
+            body = body.push(folded_about_block(app, "About", p.fields.description.clone(), d));
         }
     }
     let narrow = matches!(app.layout(), LayoutMode::Mobile) || app.window_width() < 720.0;
     body = body.push(button_card(contact_danger_actions(d, hover, narrow)));
 
-    floating_header_page(header, body, d)
+    floating_header_page(with_back.then_some(Message::CloseContactProfile), wide.then_some(tools), true, body, d, hover)
 }
 
 fn contact_preferences_page<'a>(
@@ -6277,9 +6384,6 @@ fn contact_preferences_page<'a>(
 ) -> Element<'a, Message> {
     let d = app.density();
     let hover = app.hover_ok();
-    // Same header with or without a parent pane: the page always has Back.
-    let leading = page_title("Settings", Some(Message::CloseContactPreferences), d, hover);
-    let header = profile_header_bar(leading, Space::new().width(0).into(), d, true);
 
     let receipts = choice_row(
         Some(icons::check_read(20.0, theme::t().accent)), "Delivery receipts",
@@ -6292,7 +6396,8 @@ fn contact_preferences_page<'a>(
         crate::preference_ui::group(Some("Chat permissions"), None, contact_feature_prefs(p, d, hover), d),
     ].spacing(20);
 
-    floating_header_page(header, body, d)
+    // Only Back: the page always has one (with or without a parent pane).
+    floating_header_page(Some(Message::CloseContactPreferences), None, false, body, d, hover)
 }
 
 fn reaction_members_overlay(app: &App) -> Element<'_, Message> {
@@ -7148,9 +7253,12 @@ fn call_button<'a>(
 /// Image-pen (set) + cancel/X (clear) for own / group / channel profile photos.
 /// A profile picture you can change: tap opens the Change / Remove sheet.
 fn tappable_avatar<'a>(avatar: Element<'a, Message>, on_press: Message) -> Element<'a, Message> {
-    mouse_area(avatar)
-        .on_release(on_press)
-        .interaction(mouse::Interaction::Pointer)
+    // A button, not `mouse_area::on_release`: that fires on any release over
+    // it, even one whose press began elsewhere (the tap that opened the page).
+    button(avatar)
+        .on_press(on_press)
+        .padding(0)
+        .style(|_, _| button::Style::default())
         .into()
 }
 
@@ -7219,47 +7327,31 @@ fn photo_menu_overlay(app: &App, target: crate::PhotoTarget) -> Element<'_, Mess
 }
 
 fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
+    group_settings_page_as(app, with_back, None)
+}
+
+/// The group page showing `pane` (default: the open one).
+fn group_settings_page_as(app: &App, with_back: bool, pane: Option<GroupSettingsPane>) -> Element<'_, Message> {
     let d = app.density();
     let hover = app.hover_ok();
     let Some(g) = app.group_settings() else {
         return vertical().height(0).into();
     };
+    let pane = pane.unwrap_or(g.pane);
 
-    let (heading, close_msg): (&str, Message) = match g.pane {
-        GroupSettingsPane::Link if g.is_channel => ("Share this channel", Message::Back),
-        GroupSettingsPane::Link => ("Share this group", Message::Back),
-        GroupSettingsPane::AddMember => ("Invite a contact", Message::CloseAddGroupMember),
-        GroupSettingsPane::Preferences => ("Group settings", Message::CloseGroupPreferences),
-        GroupSettingsPane::MemberInfo => ("Member", Message::CloseGroupMember),
-        GroupSettingsPane::ConfirmLeave => ("Leave group", Message::CloseGroupSettings),
-        GroupSettingsPane::ConfirmDelete => ("Delete group", Message::CloseGroupSettings),
-        GroupSettingsPane::ChannelMembers if can_edit_group_profile(&g.my_role) => {
-            ("Subscribers", Message::Back)
-        }
-        GroupSettingsPane::ChannelMembers => ("Owners", Message::Back),
-        GroupSettingsPane::Overview if g.is_channel => ("Channel", Message::CloseGroupSettings),
-        GroupSettingsPane::Overview => ("Group", Message::CloseGroupSettings),
-    };
-    let nested = !matches!(g.pane, GroupSettingsPane::Overview);
-
-    let overview_actions: Element<'_, Message> = if nested {
-        horizontal().width(0).into()
-    } else {
-        group_quick_actions(g, d, hover).0
-    };
+    let nested = !matches!(pane, GroupSettingsPane::Overview);
+    // No titles: the profile shows only Back (and its actions when wide);
+    // nested panes only Back.
+    let tools = (!nested && d.list_width != 0.0).then(|| group_quick_actions(g, d, hover).0);
 
     // Nested panes always go Back; top-level ones close (phones only).
     let back = if nested {
         Some(Message::Back)
     } else {
-        with_back.then(|| close_msg.clone())
+        with_back.then_some(Message::CloseGroupSettings)
     };
-    let leading = page_title(heading, back, d, hover);
 
-    // Keep the same Back hit target and header geometry in every profile pane.
-    let header = profile_header_bar(leading, overview_actions, d, with_back);
-
-    let body: Element<'_, Message> = match g.pane {
+    let body: Element<'_, Message> = match pane {
         GroupSettingsPane::Link | GroupSettingsPane::AddMember => group_add_member_pane(app, g, d, hover),
         GroupSettingsPane::Preferences => group_preferences_pane(app, g, d, hover),
         GroupSettingsPane::MemberInfo => group_member_info_pane(g, d, hover),
@@ -7342,11 +7434,11 @@ fn group_settings_page(app: &App, with_back: bool) -> Element<'_, Message> {
                 })
                 .map(|c| app.support_badge_count(c))
                 .unwrap_or(0);
-            group_overview_pane(g, d, hover, narrow, support_unread)
+            group_overview_pane(app, g, d, hover, narrow, support_unread)
         }
     };
 
-    let page: Element<'_, Message> = floating_header_page(header, body, d);
+    let page: Element<'_, Message> = floating_header_page(back, tools, !nested, body, d, hover);
 
     let mut layers = Stack::new()
         .width(Length::Fill)
@@ -7607,13 +7699,14 @@ fn group_quick_actions(
     )
 }
 
-fn group_overview_pane(
-    g: &crate::GroupSettingsOverlay,
+fn group_overview_pane<'a>(
+    app: &App,
+    g: &'a crate::GroupSettingsOverlay,
     d: Density,
     hover: bool,
     narrow: bool,
     support_unread: i64,
-) -> Element<'_, Message> {
+) -> Element<'a, Message> {
     let owner = can_edit_group_profile(&g.my_role);
     let admin = can_manage_members(&g.my_role);
     let mut page = Column::new().spacing(PAGE_GAP).width(Length::Fill);
@@ -7684,15 +7777,23 @@ fn group_overview_pane(
     // A paragraph-long description: its own block under the actions.
     if is_paragraph(&g.short_descr) {
         page = page.push(if owner {
-            column![
-                card_title(vertical().height(0).into(), "Description", "", d),
-                button_card(editable_line(&g.short_descr, "Add a short description", LineStyle::Body,
-                    crate::EditField::GroupShortDescr, d, hover)),
-            ]
-            .spacing(8)
-            .into()
+            // Your own: the same section as everyone else's view, and
+            // tapping the text (or its pencil) edits it.
+            let edit = button(
+                row![
+                    container(folded_about_text(app, &g.short_descr, d)).width(Length::Fill),
+                    icons::edit_icon(16.0, theme::t().text_muted),
+                ]
+                .spacing(12)
+                .align_y(Alignment::Start),
+            )
+            .on_press(Message::OpenFieldEditor(crate::EditField::GroupShortDescr))
+            .padding(Padding::from([4, 12]))
+            .width(Length::Fill)
+            .style(theme::ghost_tile_r(hover, ROW_RADIUS));
+            about_section("Description", edit.into(), 12.0, d)
         } else {
-            about_block("Description", g.short_descr.clone(), d)
+            folded_about_block(app, "Description", g.short_descr.clone(), d)
         });
     }
     if !owner && !g.welcome_message.is_empty() {
@@ -8019,7 +8120,7 @@ fn group_members_list<'a>(
 }
 
 /// Profile size of the avatar in every profile header.
-const PROFILE_AVATAR: f32 = 96.0;
+const PROFILE_AVATAR: f32 = 112.0;
 
 /// Read-only name line, inset to line up with the text inside the fields.
 fn profile_name_text<'a>(name: String, d: Density) -> Element<'a, Message> {
@@ -8658,13 +8759,6 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
         return vertical().height(0).into();
     };
 
-    let leading = page_title(
-        "Chats with members",
-        with_back.then_some(Message::CloseSupportOverlay),
-        d,
-        hover,
-    );
-    let header = profile_header_bar(leading, horizontal().width(0).into(), d, with_back);
 
     let mut body = Column::new().spacing(8).width(Length::Fill);
     body = body.push(
@@ -8775,7 +8869,7 @@ fn support_list_page(app: &App, with_back: bool) -> Element<'_, Message> {
         }
     }
 
-    floating_header_page(header, body, d)
+    floating_header_page(with_back.then_some(Message::CloseSupportOverlay), None, false, body, d, hover)
 }
 
 fn group_preferences_pane<'a>(
@@ -8872,17 +8966,12 @@ fn group_preferences_pane<'a>(
         groups = groups.push(preference_group(Some(title), note, rows, d));
     }
     if !g.is_channel {
-        let row = info_row(
-            "Send receipts",
-            crate::SettingInfo::GroupReceipts,
-            choice_chip(
-                RcptChoice::from_opt(app.group_send_rcpts()).label(app.receipts().1),
-                Message::OpenPrefMenu(PrefMenu::GroupRcpts),
-                d,
-                hover,
-            ),
-            d,
-            hover,
+        // The whole row opens the choice, like the contact's (and Android's).
+        let row = choice_row(
+            Some(icons::check_read(20.0, theme::t().accent)), "Delivery receipts",
+            RcptChoice::from_opt(app.group_send_rcpts()).label(app.receipts().1),
+            None,
+            Message::OpenPrefMenu(PrefMenu::GroupRcpts), d, hover,
         );
         groups = groups.push(preference_group(
             Some("Just for you"),

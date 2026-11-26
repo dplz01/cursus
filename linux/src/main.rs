@@ -10,8 +10,10 @@ mod call_flow;
 mod desktop;
 mod desktop_entry;
 mod edit_menu;
+mod embedded_preview;
 mod ellipsis;
 mod emoji_font;
+mod fold;
 mod exit_wipe;
 mod float_open;
 mod gallery;
@@ -29,6 +31,7 @@ mod page_motion;
 mod preference_row;
 mod preference_ui;
 mod retained;
+mod shield;
 #[cfg(test)]
 mod shots;
 mod glass;
@@ -958,6 +961,8 @@ pub enum Message {
     LockTick,
     /// A frame while a page slides in.
     MotionFrame(Instant),
+    /// Phone: swiping back from the left edge.
+    BackSwipe(page_motion::Swipe),
     LockPasswordChanged(Secret),
     LockToggleReveal,
     AuthToggleReveal,
@@ -1281,6 +1286,14 @@ pub enum Message {
     RefreshChatsDebounced(u64),
     ChatsLoaded(Result<Vec<ChatPreview>, String>),
     /// `gen` discards stale loads when the user switches chats quickly.
+    /// "More" / "Less" under a profile's "about".
+    ToggleAbout,
+    /// A tapped chat's history arrived (or `None`: it took longer than
+    /// [`OPEN_WAIT`]); the chat opens now.
+    ChatPrefetched {
+        chat: ChatId,
+        result: Option<Result<history::History, String>>,
+    },
     MessagesLoaded {
         gen: u64,
         chat: ChatId,
@@ -1586,7 +1599,12 @@ struct App {
     page_key: page_motion::PageKey,
     /// A page sliding in, and the time of the last animation frame.
     page_motion: Option<page_motion::Motion>,
+    /// Phone: the destination left (and +1 / −1: the new one comes in from
+    /// the right / left) while the lists slide sideways.
+    section_motion: Option<(NavSection, f32, page_motion::Motion)>,
     motion_now: Instant,
+    /// A closing message held back while its page slides out.
+    pending_pop: Option<Message>,
     /// Ensures libsimplex is loaded only after the first GPU window is up.
     core_connect_launched: bool,
     /// Settings → My profile draft.
@@ -1594,6 +1612,12 @@ struct App {
     /// Active inertial fling after a touch scroll (GTK-style kinetic feel).
     /// Bumps on each message history request; stale `MessagesLoaded` are ignored.
     messages_load_gen: u64,
+    /// The profile's "about" is unfolded ("More").
+    about_open: bool,
+    /// Chat whose history is loading before it opens ([`Message::SelectChat`]).
+    prefetching: Option<ChatId>,
+    /// That history, handed to the `SelectChat` that opens the chat.
+    prefetched: Option<(ChatId, Option<Result<history::History, String>>)>,
     messages_snapshot_gen: u64,
     /// Bumps on each scheduled chat-list refresh; only the latest debounce fires.
     chats_refresh_gen: u64,
@@ -1758,6 +1782,9 @@ impl App {
                 new_messages_marker_gen: 0,
                 open_unread: 0,
                 messages_load_gen: 0,
+                about_open: false,
+                prefetching: None,
+                prefetched: None,
                 messages_snapshot_gen: 0,
                 chats_refresh_gen: 0,
                 pending_url: None,
@@ -1795,7 +1822,9 @@ impl App {
                 decorations_checked: want_decorations().then(Instant::now),
                 page_key: page_motion::PageKey::default(),
                 page_motion: None,
+                section_motion: None,
                 motion_now: Instant::now(),
+                pending_pop: None,
                 core_connect_launched: false,
                 own_profile: OwnProfileDraft {
                     fields: ProfileFields {
@@ -1981,7 +2010,9 @@ impl App {
         let relaunch = Subscription::run(relaunch_stream);
 
         // Frames only while a page slides in.
-        let motion = if self.page_motion.is_some() {
+        let motion = if self.page_motion.is_some_and(|m| m.animating())
+            || self.section_motion.is_some()
+        {
             iced::window::frames().map(Message::MotionFrame)
         } else {
             Subscription::none()
@@ -2012,7 +2043,30 @@ impl App {
         ) {
             self.photo_menu = None;
         }
-        let task = self.update_inner(message);
+        // Phone: a message that closes the page waits until the page has
+        // slid out (GTK pop); a second one finishes the first at once.
+        let mut finished = Task::none();
+        if self.pages_slide() && matches!(
+            message,
+            Message::Back
+                | Message::Escape
+                | Message::CloseContactPreferences
+                | Message::CloseContactProfile
+                | Message::CloseGroupSettings
+                | Message::CloseAddGroupMember
+                | Message::CloseGroupPreferences
+                | Message::CloseGroupMember
+        ) {
+            finished = self.finish_pop();
+            if let Some(under) = self.pop_uncovers(&message) {
+                let now = Instant::now();
+                self.page_motion = Some(page_motion::Motion::pop(under, now));
+                self.motion_now = now;
+                self.pending_pop = Some(message);
+                return finished;
+            }
+        }
+        let task = Task::batch([finished, self.update_inner(message)]);
         self.track_page();
         if was_composing && !self.compose_open {
             return Task::batch([task, self.drop_unshared_invitation()]);
@@ -2033,6 +2087,14 @@ impl App {
                 } else {
                     Task::none()
                 };
+                // Phone: the lists slide sideways, in the bar's order.
+                if self.pages_slide() && self.nav != section && self.layout() == LayoutMode::Mobile {
+                    let now = Instant::now();
+                    let dir = if section.order() > self.nav.order() { 1.0 } else { -1.0 };
+                    self.section_motion =
+                        Some((self.nav, dir, page_motion::Motion::push(page_motion::Under::List, now)));
+                    self.motion_now = now;
+                }
                 self.nav = section;
                 self.compose_open = false;
                 self.pref_menu = None;
@@ -2152,12 +2214,36 @@ impl App {
                 Task::none()
             }
             Message::SelectChat(index) => {
-                if !self.tap_allowed() {
-                    return Task::none();
-                }
                 let Some(chat) = self.chats.get(index) else {
                     return Task::none();
                 };
+                let id = chat.id.without_scope();
+                // Opening after its history loaded (below): no new tap check.
+                let preloaded = match self.prefetched.take() {
+                    Some((chat, result)) if chat == id => Some(result),
+                    _ => None,
+                };
+                if preloaded.is_none() && !self.tap_allowed() {
+                    return Task::none();
+                }
+                // Load the history first (waiting at most OPEN_WAIT), so the
+                // chat opens with its messages instead of empty, then
+                // filling in — on a phone, the page slides in complete.
+                if preloaded.is_none() && self.selected_id.as_ref() != Some(&id) {
+                    if let Some(session) = self.session.clone() {
+                        let count = (chat.unread.clamp(0, 5000) as u32 * 2 + HISTORY_PAGE).min(5000);
+                        self.prefetching = Some(id.clone());
+                        return Task::perform(
+                            async move {
+                                let result = tokio::time::timeout(OPEN_WAIT, load_messages(session, id.clone(), count))
+                                    .await
+                                    .ok();
+                                Message::ChatPrefetched { chat: id, result }
+                            },
+                            |m| m,
+                        );
+                    }
+                }
                 let needs_read = chat.unread > 0 || chat.unread_chat;
                 self.clear_pointer_gesture();
                 self.pasted_image = None;
@@ -2193,8 +2279,16 @@ impl App {
                 self.focus_item = None;
                 self.history_away_from_end = false;
                 HISTORY_AWAY_GATE.reset();
+                let history = match preloaded.flatten() {
+                    Some(result) => {
+                        self.messages_load_gen = self.messages_load_gen.wrapping_add(1);
+                        let gen = self.messages_load_gen;
+                        self.update(Message::MessagesLoaded { gen, chat: id, result })
+                    }
+                    None => self.reload_messages(),
+                };
                 Task::batch([
-                    self.reload_messages(),
+                    history,
                     if needs_read {
                         self.mark_selected_read()
                     } else {
@@ -2638,10 +2732,43 @@ impl App {
                     Task::none()
                 }
             }
+            Message::BackSwipe(swipe) => {
+                use page_motion::{Phase, Swipe};
+                let now = Instant::now();
+                match swipe {
+                    Swipe::Begin => {
+                        if self.swipe_back_ready() {
+                            if let Some(under) = self.pop_uncovers(&Message::Back) {
+                                self.page_motion = Some(page_motion::Motion::drag(under, now));
+                                self.motion_now = now;
+                            }
+                        }
+                    }
+                    Swipe::Update(offset) => {
+                        if let Some(m) = self.page_motion.as_mut().filter(|m| matches!(m.phase, Phase::Drag(_))) {
+                            m.phase = Phase::Drag(offset);
+                        }
+                    }
+                    Swipe::End { pop, velocity } => {
+                        if let Some(m) = self.page_motion.as_mut().filter(|m| matches!(m.phase, Phase::Drag(_))) {
+                            m.release(pop, velocity, now);
+                            self.motion_now = now;
+                            if pop {
+                                // Back happens once the page has gone.
+                                self.pending_pop = Some(Message::Back);
+                            }
+                        }
+                    }
+                }
+                Task::none()
+            }
             Message::MotionFrame(now) => {
                 self.motion_now = now;
+                if self.section_motion.is_some_and(|(_, _, m)| m.done(now)) {
+                    self.section_motion = None;
+                }
                 if self.page_motion.is_some_and(|m| m.done(now)) {
-                    self.page_motion = None;
+                    return self.finish_pop();
                 }
                 Task::none()
             }
@@ -5504,6 +5631,22 @@ impl App {
                 self.history_count = self.history_count.saturating_add(HISTORY_PAGE);
                 self.reload_messages()
             }
+            Message::ToggleAbout => {
+                self.about_open = !self.about_open;
+                Task::none()
+            }
+            Message::ChatPrefetched { chat, result } => {
+                // Only the latest tap opens.
+                if self.prefetching.as_ref() != Some(&chat) {
+                    return Task::none();
+                }
+                self.prefetching = None;
+                let Some(index) = self.chats.iter().position(|c| c.id.without_scope() == chat) else {
+                    return Task::none();
+                };
+                self.prefetched = Some((chat, result));
+                self.update(Message::SelectChat(index))
+            }
             Message::MessagesLoaded { gen, chat, result } => {
                 if gen != self.messages_load_gen || self.selected_id.as_ref() != Some(&chat) {
                     return Task::none();
@@ -6748,14 +6891,9 @@ impl App {
 
     fn view(&self, _window: iced::window::Id) -> Element<'_, Message> {
         self.apply_appearance();
-        input_gate::freeze(container(shell(self))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|_| container::Style {
-                background: Some(iced::Background::Color(theme::t().bg_app)),
-                ..container::Style::default()
-            })
-            , false)
+        // No fill here: the frame is already cleared to bg.app (the iced
+        // theme's background), so a full-window quad would only paint over it.
+        input_gate::freeze(container(shell(self)).width(Length::Fill).height(Length::Fill), false)
     }
 
     pub(crate) fn nav(&self) -> NavSection {
@@ -6773,6 +6911,9 @@ impl App {
     /// The history is full to its page limit: there may be older messages.
     pub(crate) fn history_has_earlier(&self) -> bool {
         self.messages.len() as u32 >= self.history_count
+    }
+    pub(crate) fn about_open(&self) -> bool {
+        self.about_open
     }
     pub(crate) fn selected(&self) -> Option<usize> {
         self.selected
@@ -7327,11 +7468,6 @@ impl App {
             }
         } else if let Some(g) = &self.group_settings {
             (if g.pane == GroupSettingsPane::Overview { 1 } else { 2 }, 20 + g.pane as u8)
-        } else if let Some(s) = &self.support {
-            match s.pane {
-                SupportPane::List => (1, 30),
-                SupportPane::Thread { .. } => (2, 31),
-            }
         } else {
             (0, 0)
         };
@@ -7342,37 +7478,148 @@ impl App {
                 .flatten(),
             info_level,
             info_page,
+            support: in_chats && self.support.is_some(),
             settings: (self.nav == NavSection::Settings && self.settings_open).then_some(self.settings_section),
         }
     }
 
-    /// Start a slide when the last message opened a page.
+    /// Phone layout: pages slide (two columns switch at once).
+    fn pages_slide(&self) -> bool {
+        // Screenshots and tests see every page at rest, at once (unless a
+        // test is about the motion itself).
+        #[cfg(test)]
+        if !TEST_PAGES_SLIDE.with(std::cell::Cell::get) {
+            return false;
+        }
+        self.layout() == LayoutMode::Mobile
+    }
+
+    /// The page under the one showing (what Back uncovers).
+    fn parent_page(&self) -> page_motion::Under {
+        use page_motion::Under;
+        let chat_open = self.selected.is_some() && matches!(self.nav, NavSection::Chats | NavSection::Channels);
+        let over_chat = if chat_open { Under::Conversation } else { Under::List };
+        if let Some(p) = &self.contact_profile {
+            if p.pane == ContactProfilePane::Preferences {
+                return Under::ContactOverview;
+            }
+            return over_chat;
+        }
+        if let Some(g) = &self.group_settings {
+            if g.pane != GroupSettingsPane::Overview {
+                return Under::GroupOverview;
+            }
+            return over_chat;
+        }
+        Under::List
+    }
+
+    /// Start a push when the last message opened a page.
     fn track_page(&mut self) {
         let page = self.current_page();
         if page == self.page_key {
             return;
         }
         let old = std::mem::replace(&mut self.page_key, page);
-        // Screenshots and tests render pages at rest.
-        if cfg!(test) {
-            return;
-        }
-        let now = Instant::now();
-        let two_panes = self.layout() == LayoutMode::Desktop;
-        let info_column = two_panes && self.density().info_width > 0.0;
-        if let Some(motion) = page_motion::motion_for(&old, &self.page_key, two_panes, info_column, now) {
-            self.page_motion = Some(motion);
+        if self.pages_slide() && self.pending_pop.is_none() && page_motion::is_push(&old, &self.page_key) {
+            let now = Instant::now();
+            self.page_motion = Some(page_motion::Motion::push(self.parent_page(), now));
             self.motion_now = now;
         }
     }
 
-    /// How far the page in `slot` still has to travel (1 → 0), and whether
-    /// it travels the full width over the list.
-    pub(crate) fn page_slide(&self, slot: page_motion::Slot) -> (f32, bool) {
-        match self.page_motion {
-            Some(m) if m.slot == slot => (m.remaining(self.motion_now), m.full),
-            _ => (0.0, false),
+    /// Whether a swipe from the left edge may take the page back now.
+    pub(crate) fn swipe_back_ready(&self) -> bool {
+        self.pages_slide()
+            && self.pending_pop.is_none()
+            && self.page_motion.is_none_or(|m| matches!(m.phase, page_motion::Phase::Drag(_)))
+            && self.pop_uncovers(&Message::Back).is_some()
+    }
+
+    /// Back / Escape only dismiss a sheet, menu or composer state first
+    /// (`go_back`'s order); `false` when they would leave the page.
+    fn back_dismisses_layer(&self) -> bool {
+        let page_layers = self.locked.is_some()
+            || self.auth.is_some()
+            || self.image_viewer.is_some()
+            || self.call_contacts_open
+            || self.field_editor.is_some()
+            || self.pref_menu.is_some()
+            || self.create_chat.is_some()
+            || self.compose_open
+            || self.reaction_members.is_some()
+            || self.message_menu.is_some()
+            || self.setting_info.is_some()
+            || self.link_confirm.is_some()
+            || self.photo_menu.is_some()
+            || self.pending_links_open
+            || self.privacy_confirm.is_some()
+            || self.pending_url.is_some()
+            || self.chat_menu.is_some()
+            || self.group_settings.as_ref().is_some_and(|g| g.member_dropdown.is_some());
+        let in_profile = self.contact_profile.is_some() || self.group_settings.is_some();
+        let composer_layers = self.nav != NavSection::Settings
+            && !in_profile
+            && (self.editing.is_some()
+                || self.reply_to.is_some()
+                || self.selection_mode
+                || cursus_core::pending_shortcode_query(&self.composer_text()).is_some());
+        page_layers || composer_layers
+    }
+
+    /// If `message` closes the page showing, the page it uncovers.
+    fn pop_uncovers(&self, message: &Message) -> Option<page_motion::Under> {
+        use page_motion::Under;
+        let key = self.current_page();
+        if key.depth() == 0 || key.support {
+            return None;
         }
+        let chat_open = self.selected.is_some() && matches!(self.nav, NavSection::Chats | NavSection::Channels);
+        let over_chat = if chat_open { Under::Conversation } else { Under::List };
+        let group_inner = self.group_settings.as_ref().is_some_and(|g| g.pane != GroupSettingsPane::Overview);
+        match message {
+            Message::Back | Message::Escape => (!self.back_dismisses_layer()).then(|| self.parent_page()),
+            Message::CloseContactPreferences => self
+                .contact_profile
+                .as_ref()
+                .is_some_and(|p| p.pane == ContactProfilePane::Preferences)
+                .then_some(Under::ContactOverview),
+            Message::CloseContactProfile => self.contact_profile.is_some().then_some(over_chat),
+            Message::CloseGroupSettings => self.group_settings.is_some().then_some(over_chat),
+            Message::CloseAddGroupMember | Message::CloseGroupPreferences | Message::CloseGroupMember => {
+                group_inner.then_some(Under::GroupOverview)
+            }
+            _ => None,
+        }
+    }
+
+    /// Apply a held-back closing message now (its page has left, or another
+    /// Back came first).
+    fn finish_pop(&mut self) -> Task<Message> {
+        self.page_motion = None;
+        let Some(message) = self.pending_pop.take() else {
+            return Task::none();
+        };
+        let task = self.update_inner(message);
+        self.page_key = self.current_page();
+        task
+    }
+
+    /// Phone, while the destination changes: the one left, and the shift
+    /// (fraction of the width) of it and of the new one.
+    pub(crate) fn section_slide(&self) -> Option<(NavSection, f32, f32)> {
+        self.section_motion.map(|(from, dir, m)| {
+            let incoming = dir * m.offset(self.motion_now);
+            (from, incoming - dir, incoming)
+        })
+    }
+
+    /// How far the top page is moved right (fraction of the width), and
+    /// which page is under it while it moves.
+    pub(crate) fn page_slide(&self) -> Option<(f32, page_motion::Under)> {
+        self.page_motion
+            .filter(|_| self.layout() == LayoutMode::Mobile)
+            .map(|m| (m.offset(self.motion_now), m.under))
     }
 
     pub(crate) fn connected(&self) -> bool {
@@ -7676,6 +7923,7 @@ impl App {
         self.plaintext_files.clear();
         self.decrypts_pending.clear();
         self.image_previews.clear();
+        embedded_preview::clear();
         self.image_previews_pending.clear();
         self.image_previews_failed.clear();
         self.waveforms.clear();
@@ -7867,11 +8115,12 @@ impl App {
     }
 
     /// Chats for the current nav: inbox (non-channel) or channels only.
-    pub(crate) fn chats_for_nav(&self) -> Vec<(usize, &ChatPreview)> {
+    /// The chats listed under destination `nav`.
+    pub(crate) fn chats_in(&self, nav: NavSection) -> Vec<(usize, &ChatPreview)> {
         self.chats
             .iter()
             .enumerate()
-            .filter(|(_, c)| match self.nav {
+            .filter(|(_, c)| match nav {
                 NavSection::Channels => c.is_channel,
                 NavSection::Chats => !c.is_channel,
                 _ => false,
@@ -8091,6 +8340,7 @@ impl App {
     }
 
     fn open_group_settings(&mut self) -> Task<Message> {
+        self.about_open = false;
         let Some(index) = self.selected else {
             return Task::none();
         };
@@ -8182,6 +8432,7 @@ impl App {
     }
 
     fn open_contact_profile(&mut self) -> Task<Message> {
+        self.about_open = false;
         let Some(index) = self.selected else {
             return Task::none();
         };
@@ -8958,13 +9209,29 @@ async fn load_chats(session: Arc<Session>) -> Result<Vec<ChatPreview>, String> {
 
 /// Messages loaded when a chat opens, and added by "Load earlier messages".
 const HISTORY_PAGE: u32 = 100;
+#[cfg(test)]
+thread_local! {
+    /// Tests of page motion turn sliding on (it is off for screenshots).
+    pub(crate) static TEST_PAGES_SLIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Longest a tapped chat waits for its history before opening.
+const OPEN_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
 
 async fn load_messages(
     session: Arc<Session>,
     chat: ChatId,
     count: u32,
 ) -> Result<history::History, String> {
-    blocking(move || session.list_messages(&chat, count).map(history::History::from)).await
+    blocking(move || {
+        session.list_messages(&chat, count).map(|messages| {
+            // Picture stand-ins are built here, off the UI thread, so the
+            // first frame of the chat already has every picture's size.
+            embedded_preview::warm(&messages);
+            history::History::from(messages)
+        })
+    })
+    .await
 }
 
 async fn send_text(
@@ -9240,7 +9507,7 @@ impl SettingInfo {
             Self::CleanLinks => ("Remove tracking from links", "Cursus removes tracking codes such as utm_source or fbclid from links in the messages you send — so they never reach your contacts — and from links before opening them. They tell websites who shared the link and where you came from. The page itself is the same."),
             Self::ReceiptsContacts => ("Delivery receipts to contacts", "Your contacts see a second tick when their messages reach this device. It does not tell them you read them.\n\nYou can choose differently for a single contact in its chat preferences."),
             Self::ReceiptsGroups => ("Delivery receipts in small groups", "Members see when their messages reach this device. SimpleX only sends receipts in groups with up to 20 members.\n\nYou can choose differently for a single group in its preferences."),
-            Self::GroupReceipts => ("Send receipts", "Whether this group's members see when their messages reach this device. \u{201c}Default\u{201d} follows the setting in Privacy & security.\n\nSimpleX only sends receipts in groups with up to 20 members."),
+            Self::GroupReceipts => ("Delivery receipts", "Whether this group's members see when their messages reach this device. \u{201c}Default\u{201d} follows the setting in Privacy & security.\n\nSimpleX only sends receipts in groups with up to 20 members."),
             Self::DesktopNotifications => ("Desktop notifications", "Shows a notification for new messages in chats you aren't looking at. Muted chats never notify."),
             Self::Tray => ("System tray icon", "Puts a Cursus icon in your panel's system tray, with Show, Hide and Quit."),
             Self::Connect => ("Connect", "One-time link: a new one is made each time you open this page. Send it to one person \u{2014} whoever opens it first becomes your contact, then it stops working. \u{201c}New link\u{201d} deletes the shown link and makes a fresh one.\n\nLinks you copied that nobody has used yet stay valid: the gold link button next to + lists them, to copy, name or delete. A link you never copied is deleted when you leave this page \u{2014} nobody can have it.\n\nIncognito: when on, the person who connects sees a new random name instead of your profile \u{2014} a different one for each contact. You can switch it until the link is used. It also applies when you connect with a link below.\n\nJoin with a link: paste a link someone sent you \u{2014} a one-time link, an address, or a group or channel link \u{2014} and tap Connect.\n\nYour reusable address, which many people can use, is in Settings \u{2192} Address."),

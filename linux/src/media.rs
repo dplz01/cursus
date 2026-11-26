@@ -307,6 +307,15 @@ pub fn fit_within(sw: u32, sh: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     (w.max(1), h.max(1))
 }
 
+/// [`fit_within`], but never bigger than the image itself: a sticker or a
+/// small picture keeps its own pixels instead of being blown up blurry.
+pub fn fit_within_shrink(sw: u32, sh: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+    if sw <= max_w && sh <= max_h {
+        return (sw.max(1), sh.max(1));
+    }
+    fit_within(sw, sh, max_w, max_h)
+}
+
 /// EXIF orientation of an image file (headers only, no pixel decode). Phone
 /// cameras store portrait shots as landscape pixels plus this tag.
 /// Profile pictures are at most a few hundred pixels; anything bigger is junk.
@@ -362,7 +371,7 @@ pub fn cached_rounded_fitted_preview(
     if sw == 0 || sh == 0 {
         return None;
     }
-    let (width, height) = fit_within(sw, sh, max_w.max(32), max_h.max(32));
+    let (width, height) = fit_within_shrink(sw, sh, max_w.max(32), max_h.max(32));
     let out = rounded_preview_path(path, width, height);
     if !out.is_file() {
         return None;
@@ -392,7 +401,7 @@ pub fn rounded_fitted_preview(
     if sw == 0 || sh == 0 {
         return Err("empty image".into());
     }
-    let (width, height) = fit_within(sw, sh, max_w.max(32), max_h.max(32));
+    let (width, height) = fit_within_shrink(sw, sh, max_w.max(32), max_h.max(32));
     let out = rounded_preview_path(path, width, height);
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -407,6 +416,16 @@ pub fn rounded_fitted_preview(
     let rgba = img.to_rgba8();
     let mut resized =
         image::imageops::resize(&rgba, width, height, image::imageops::FilterType::Triangle);
+    round_corners(&mut resized, radius);
+    resized
+        .save(&out)
+        .map_err(|e| format!("write rounded preview: {e}"))?;
+    Ok((out, width, height))
+}
+
+/// Fade the corners of `img` to transparent (iced can't clip to a radius).
+fn round_corners(img: &mut image::RgbaImage, radius: f32) {
+    let (width, height) = img.dimensions();
     let r = radius
         .max(0.0)
         .min(width as f32 / 2.0)
@@ -418,14 +437,34 @@ pub fn rounded_fitted_preview(
             if cover >= 0.999 {
                 continue;
             }
-            let px = resized.get_pixel_mut(x, y);
+            let px = img.get_pixel_mut(x, y);
             px.0[3] = ((px.0[3] as f32) * cover).round() as u8;
         }
     }
-    resized
-        .save(&out)
-        .map_err(|e| format!("write rounded preview: {e}"))?;
-    Ok((out, width, height))
+}
+
+/// The small picture a sender embeds in an image message (data-URL),
+/// fitted and rounded exactly like [`rounded_fitted_preview`]: it has the
+/// photo's proportions, so it stands in at the final size until the file's
+/// own preview is ready. `(width, height, RGBA)`.
+pub fn embedded_preview_rgba(
+    data_url: &str,
+    max_w: u32,
+    max_h: u32,
+    radius: f32,
+) -> Option<(u32, u32, Vec<u8>)> {
+    let raw = decode_profile_image_bytes(data_url).ok()?;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(&raw)).with_guessed_format().ok()?;
+    reader.limits(avatar_limits());
+    let img = reader.decode().ok()?;
+    if img.width() == 0 || img.height() == 0 {
+        return None;
+    }
+    let (width, height) = fit_within(img.width(), img.height(), max_w.max(32), max_h.max(32));
+    let mut resized =
+        image::imageops::resize(&img.to_rgba8(), width, height, image::imageops::FilterType::Triangle);
+    round_corners(&mut resized, radius);
+    Some((width, height, resized.into_raw()))
 }
 
 fn rounded_preview_path(path: &Path, width: u32, height: u32) -> PathBuf {
@@ -712,6 +751,29 @@ mod tests {
         assert_eq!(h, 400);
         assert_eq!(w, 225);
         assert!((w as f32 / h as f32 - 1080.0 / 1920.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn embedded_preview_takes_the_file_preview_size() {
+        use base64::Engine as _;
+        // A 300×400 photo's embedded preview (here 60×80): the stand-in gets
+        // the frame the file's own preview will have, so nothing moves.
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(60, 80, image::Rgba([200, 30, 30, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let url = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&png));
+        let (w, h, rgba) = embedded_preview_rgba(&url, 220, 280, 12.0).unwrap();
+        assert_eq!((w, h), fit_within(300, 400, 220, 280));
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
+        assert_eq!(rgba[3], 0, "rounded corner is transparent");
+        assert!(embedded_preview_rgba("data:image/png;base64,!!", 220, 280, 12.0).is_none());
+    }
+
+    #[test]
+    fn small_pictures_are_not_blown_up() {
+        assert_eq!(fit_within_shrink(120, 90, 220, 280), (120, 90), "a sticker keeps its size");
+        assert_eq!(fit_within_shrink(1920, 1080, 220, 280), fit_within(1920, 1080, 220, 280), "big ones still fit");
     }
 
     #[test]

@@ -15,17 +15,7 @@ struct SettingsListView: View {
         .background(Color.clear)
     }
 
-    private struct Group: Identifiable {
-        let heading: String
-        let pages: [SettingsPage]
-        var id: String { heading }
-    }
-
-    private static let groups = [
-        Group(heading: "Account", pages: [.profile, .address]),
-        Group(heading: "Preferences", pages: [.privacy, .notifications, .appearance]),
-        Group(heading: "Cursus", pages: [.about]),
-    ]
+    private static let pages: [SettingsPage] = [.profile, .address, .privacy, .notifications, .appearance, .about]
 
     private var list: some View {
         ScrollView {
@@ -48,17 +38,12 @@ struct SettingsListView: View {
                     .buttonStyle(GhostTileStyle())
                     .padding(.bottom, 6)
                 }
-                // Categories in named groups, the same on Linux / Android:
-                // you · the app · about.
-                VStack(alignment: .leading, spacing: 20) {
-                    ForEach(Self.groups) { group in
-                        PreferenceGroup(title: group.heading) {
-                            ForEach(group.pages) { page in
-                                NavRow(icon: page.icon, title: page.title,
-                                       selected: model.settingsPage == page) {
-                                    model.settingsPage = page
-                                }
-                            }
+                // Every category in one list, no headings (same on Linux / Android).
+                PreferenceGroup {
+                    ForEach(Self.pages) { page in
+                        NavRow(icon: page.icon, title: page.title,
+                               selected: model.settingsPage == page) {
+                            model.settingsPage = page
                         }
                     }
                 }
@@ -93,7 +78,6 @@ struct SettingsDetailView: View {
                 Placeholder(icon: "settings", text: "Choose a settings category")
             }
         }
-        .pageEntrance(model.settingsPage, forward: model.settingsPage != nil)
         .background(Theme.panel)
     }
 }

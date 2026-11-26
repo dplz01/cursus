@@ -97,11 +97,3 @@ fun DialogEscape(onBack: () -> Unit) {
         onDispose { back.remove(); if (window.callback === callback) window.callback = previous }
     }
 }
-
-/** Header buttons and keyboard Escape enter Android's normal back dispatcher. */
-@Composable
-fun systemBack(onBack: () -> Unit): () -> Unit {
-    BackHandler(onBack = onBack)
-    val dispatcher = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
-    return { dispatcher?.onBackPressed() }
-}

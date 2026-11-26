@@ -26,6 +26,9 @@ class MainActivity : ComponentActivity() {
             CursusTheme(model.prefs.theme, model.prefs.textSize.scale) {
                 Root(model)
             }
+            // Root paints the whole window, so the window's own background
+            // would only be painted over (overdraw) on every frame.
+            androidx.compose.runtime.SideEffect { window.setBackgroundDrawable(null) }
             LaunchedEffect(model.prefs.secureScreen) {
                 if (model.prefs.secureScreen) {
                     window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)

@@ -39,6 +39,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 sealed interface Phase {
     data object Starting : Phase
@@ -453,7 +454,39 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         private set
     private var openingUnread = 0L
 
-    fun select(ref: String?) {
+    private var opening: Job? = null
+
+    /**
+     * Opens a chat from the list once its history is in (waiting at most
+     * [OPEN_WAIT_MS]), so the page slides in with its messages instead of
+     * empty and then filling in.
+     */
+    fun open(ref: String) {
+        if (selection == ref) return
+        opening?.cancel()
+        opening = viewModelScope.launch {
+            val unread = chats.firstOrNull { it.ref == ref }?.unread ?: 0L
+            val list = withTimeoutOrNull(OPEN_WAIT_MS) {
+                try {
+                    Core.call<List<Message>>("listMessages", mapOf("chat" to ref, "count" to historyCountFor(unread)))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null // select() loads it again and reports the error
+                }
+            }
+            opening = null
+            select(ref, list)
+        }
+    }
+
+    private fun historyCountFor(unread: Long) =
+        (unread.coerceAtMost(HISTORY_MAX.toLong()) * 2 + HISTORY_PAGE).coerceIn(HISTORY_PAGE.toLong(), HISTORY_MAX.toLong()).toInt()
+
+    /** [loaded]: the chat's history, already fetched by [open]. */
+    fun select(ref: String?, loaded: List<Message>? = null) {
+        opening?.cancel()
+        opening = null
         val old = selection
         if (old == ref) return
         historyRequest?.cancel()
@@ -471,11 +504,11 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         VoicePlayer.stop()
         selected.clear()
         revealedDeleted.clear()
-        historyCount = (openingUnread.coerceAtMost(HISTORY_MAX.toLong()) * 2 + HISTORY_PAGE).coerceIn(HISTORY_PAGE.toLong(), HISTORY_MAX.toLong()).toInt()
+        historyCount = historyCountFor(openingUnread)
         messages.clear()
         messagesFor = null
         if (ref != null) {
-            reloadMessages(ref)
+            if (loaded != null) showMessages(ref, loaded) else reloadMessages(ref)
             markRead(ref)
             Notifier.clear(getApplication(), ref)
         }
@@ -488,22 +521,26 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         historyRequest = viewModelScope.launch {
             try {
                 val list: List<Message> = Core.call("listMessages", mapOf("chat" to ref, "count" to count))
-                if (selection != ref) return@launch
-                if (messagesFor != ref) {
-                    openingReadAnchor = chat.cursus.core.latestReadAnchor(list, openingUnread)
-                    openingUnread = 0
-                }
-                messages.clear()
-                messages.addAll(list)
-                messagesFor = ref
-                loadImages(list)
-                autoDownload(list)
+                showMessages(ref, list)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (selection == ref) notice = e.message
             }
         }
+    }
+
+    private fun showMessages(ref: String, list: List<Message>) {
+        if (selection != ref) return
+        if (messagesFor != ref) {
+            openingReadAnchor = chat.cursus.core.latestReadAnchor(list, openingUnread)
+            openingUnread = 0
+        }
+        messages.clear()
+        messages.addAll(list)
+        messagesFor = ref
+        loadImages(list)
+        autoDownload(list)
     }
 
     private fun scheduleMessagesReload() {
@@ -525,7 +562,10 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 if ((file.kind != "image" && file.kind != "voice") || file.state != "complete" ||
                     file.path == null || plainFiles.containsKey(file.id)) continue
                 try {
-                    plainFiles[file.id] = Core.call("plainFile", mapOf("path" to file.path, "key" to file.key, "nonce" to file.nonce))
+                    val plain: String = Core.call("plainFile", mapOf("path" to file.path, "key" to file.key, "nonce" to file.nonce))
+                    // The bubble learns the picture's size with its path.
+                    if (file.kind == "image") chat.cursus.ui.screens.noteImageSize(file.id, plain)
+                    plainFiles[file.id] = plain
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -1176,6 +1216,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         /** Messages loaded when a chat opens and per "Load earlier messages" (as on Linux). */
         const val HISTORY_PAGE = 100
+        /** Longest a tapped chat waits for its history before opening. */
+        const val OPEN_WAIT_MS = 300L
         /** The most the bridge returns for one chat. */
         const val HISTORY_MAX = 5000
     }

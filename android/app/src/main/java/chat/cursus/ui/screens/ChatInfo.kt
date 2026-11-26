@@ -36,8 +36,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import chat.cursus.ui.components.ProfileText
-import chat.cursus.ui.components.pageSlide
-import chat.cursus.ui.components.rememberPageMotion
+import chat.cursus.ui.components.StackedPage
 import chat.cursus.AppModel
 import chat.cursus.R
 import chat.cursus.core.Chat
@@ -48,6 +47,8 @@ import chat.cursus.core.Member
 import chat.cursus.ui.components.IconTool
 import chat.cursus.ui.components.CursusSwitch
 import chat.cursus.ui.components.AboutBlock
+import chat.cursus.ui.components.AboutSection
+import chat.cursus.ui.components.FoldedProfileText
 import chat.cursus.ui.components.HeroLine
 import chat.cursus.ui.components.QuickAction
 import chat.cursus.ui.components.QuickActions
@@ -106,14 +107,19 @@ fun ChatInfoPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenChat: (
 
 @Composable
 private fun PageScaffold(
-    title: String,
     onBack: () -> Unit,
-    actions: @Composable () -> Unit = {},
+    actions: (@Composable () -> Unit)? = null,
+    hero: Boolean = false,
     scroll: androidx.compose.foundation.ScrollState = rememberScrollState(),
     body: @Composable ColumnScope.() -> Unit,
 ) {
-    // The top bar floats like the chat's: a glass card over the blurred
-    // page, which scrolls underneath it (Linux `floating_header_page`).
+    // Floating glass over the blurred page, which scrolls underneath it
+    // (Linux `floating_header_page`), and no title:
+    // - [actions] (the profile's, wide screens): a bar with Back on the left
+    //   and the actions on the right;
+    // - otherwise just Back, on a small glass square.
+    // A [hero] page (centred picture first) starts right under the top when
+    // only the Back square floats over it.
     val backdrop = chat.cursus.ui.components.rememberBackdrop()
     Box(Modifier.fillMaxSize().background(Cursus.colors.bgPanel)) {
         Column(
@@ -122,16 +128,32 @@ private fun PageScaffold(
                 .verticalScroll(scroll),
         ) {
             // Bar (56) + its 8dp inset + 8dp gap = PageColumn's 16 + 56.
-            Box(Modifier.height(56.dp))
+            if (actions != null || !hero) Box(Modifier.height(56.dp))
             PageColumn(content = body)
         }
         androidx.compose.runtime.CompositionLocalProvider(chat.cursus.ui.components.LocalBackdrop provides backdrop) {
-            Box(
-                Modifier.align(Alignment.TopCenter).fillMaxWidth()
-                    .padding(start = 10.dp, end = 10.dp, top = 8.dp)
-                    .glass(Radius.control),
-            ) {
-                PaneHeader(title, onBack = onBack) { actions() }
+            if (actions != null) {
+                Row(
+                    Modifier.align(Alignment.TopCenter).fillMaxWidth()
+                        .padding(start = 10.dp, end = 10.dp, top = 8.dp)
+                        .glass(Radius.control).height(56.dp).padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconTool(R.drawable.ic_back, "Back", onBack)
+                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                    actions()
+                }
+            } else {
+                // The whole glass square is the button: what you see is
+                // what you hit.
+                Box(
+                    Modifier.align(Alignment.TopStart).padding(start = 10.dp, top = 8.dp)
+                        .glass(Radius.smallControl).size(44.dp)
+                        .clickable(onClickLabel = "Back", onClick = onBack),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(painterResource(R.drawable.ic_back), "Back", Modifier.size(20.dp), tint = Cursus.colors.textSecondary)
+                }
             }
         }
     }
@@ -195,17 +217,28 @@ private fun ttlLabel(secs: Long) = TTLS.firstOrNull { it.first == secs }?.second
 
 @Composable
 private fun ContactPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
-    val c = Cursus.colors
     var prefs by remember { mutableStateOf(false) }
+    StackedPage(
+        open = prefs,
+        onBack = { prefs = false },
+        below = { ContactOverview(model, chat, onClose) { prefs = true } },
+    ) { back ->
+        Box(Modifier.fillMaxSize().background(Cursus.colors.bgPanel)) { ContactPreferencesPage(model, chat, back) }
+    }
+}
+
+@Composable
+private fun ContactOverview(model: AppModel, chat: Chat, onClose: () -> Unit, onSettings: () -> Unit) {
     var editing by remember { mutableStateOf<EditField?>(null) }
     var confirm by remember { mutableStateOf<String?>(null) }
-    val motion = rememberPageMotion(prefs, if (prefs) 1 else 0)
-    if (prefs) {
-        BackHandler { prefs = false }
-        Box(Modifier.fillMaxSize().pageSlide(motion)) { ContactPreferencesPage(model, chat) { prefs = false } }
-        return
-    }
-    val quick = listOf(
+    val callPermission = rememberCallPermission(model)
+    // Same actions and order as Linux: Call, Star, Mute, Settings.
+    val quick = listOfNotNull(
+        if (!chat.isRequest) QuickAction(R.drawable.ic_calls, "Call") {
+            if (model.calls.state.active == null && !model.calls.starting) {
+                callPermission { model.calls.start(chat.apiId, chat.title) }
+            }
+        } else null,
         QuickAction(if (chat.favorite) R.drawable.ic_star_filled else R.drawable.ic_star, if (chat.favorite) "Starred" else "Star", chat.favorite) {
             model.setFavorite(chat, !chat.favorite)
         },
@@ -213,17 +246,17 @@ private fun ContactPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
             if (chat.muted) R.drawable.ic_notifications_off else R.drawable.ic_notifications_off_outline,
             if (chat.muted) "Muted" else "Mute", chat.muted,
         ) { model.setMuted(chat, !chat.muted) },
-        QuickAction(R.drawable.ic_settings, "Settings") { prefs = true },
+        QuickAction(R.drawable.ic_settings, "Settings", onClick = onSettings),
     )
     val wide = wideProfile()
-    PageScaffold("Contact", onClose, actions = { if (wide) QuickActionTools(quick) }) {
+    PageScaffold(onClose, actions = if (wide) { { QuickActionTools(quick) } } else null, hero = true) {
         ProfileIdentity(chat.name, chat.image) {
             ProfileName(chat.name)
             EditableLine(chat.alias, "Add a local name", LineStyle.Sub, rich = false) { editing = EditField.ContactAlias }
             if (chat.shortDescr.isNotBlank()) HeroLine(chat.shortDescr)
         }
         if (!wide) QuickActions(*quick.toTypedArray())
-        if (chat.description.isNotBlank()) AboutBlock("About", chat.description)
+        if (chat.description.isNotBlank()) AboutBlock("About", chat.description, folded = true)
         ButtonCard {
             ActionTile(R.drawable.ic_clear_all, "Clear chat", { confirm = "clear" })
             ActionTile(R.drawable.ic_trash_delete, "Delete contact", { confirm = "delete" }, danger = true)
@@ -266,7 +299,7 @@ private fun ContactPreferencesPage(model: AppModel, chat: Chat, onBack: () -> Un
     val c = Cursus.colors
     var menu by remember { mutableStateOf<String?>(null) }
     val prefs = chat.contactPrefs
-    PageScaffold("Settings", onBack) {
+    PageScaffold(onBack) {
         PreferenceGroup("Privacy") {
             ChoiceRow("Delivery receipts", receiptsLabel(chat.sendReceipts), R.drawable.ic_check_read) { menu = "receipts" }
         }
@@ -311,7 +344,7 @@ private fun ContactPreferencesPage(model: AppModel, chat: Chat, onBack: () -> Un
 @Composable
 private fun NotesPage(model: AppModel, chat: Chat, onClose: () -> Unit) {
     var confirm by remember { mutableStateOf(false) }
-    PageScaffold("Notes", onClose) {
+    PageScaffold(onClose, hero = true) {
         CursusCard { Text("Notes to yourself, kept only on this phone.", style = Cursus.type.body, color = Cursus.colors.textSecondary) }
         ButtonCard { ActionTile(R.drawable.ic_clear_all, "Clear chat", { confirm = true }) }
     }
@@ -330,29 +363,30 @@ private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenCh
     // coming back must land where you left it (Linux keeps its offset too).
     val overviewScroll = rememberScrollState()
     LaunchedEffect(chat.ref) { model.loadMembers(chat) }
-    val back = { pane = GroupPane.Overview }
-    if (pane != GroupPane.Overview) BackHandler(onBack = back)
     val noun = if (chat.isChannel) "channel" else "group"
-    val motion = rememberPageMotion(pane, if (pane == GroupPane.Overview) 0 else 1)
-    Box(Modifier.fillMaxSize().pageSlide(motion)) {
+    val overview: @Composable () -> Unit = {
+        GroupOverview(model, chat, onClose, overviewScroll, onOpenPane = { pane = it }, onMember = { memberId = it; pane = GroupPane.MemberInfo })
+    }
+    StackedPage(open = pane != GroupPane.Overview, onBack = { pane = GroupPane.Overview }, below = overview) { back ->
+    Box(Modifier.fillMaxSize().background(Cursus.colors.bgPanel)) {
     when (pane) {
-        GroupPane.Overview -> GroupOverview(model, chat, onClose, overviewScroll, onOpenPane = { pane = it }, onMember = { memberId = it; pane = GroupPane.MemberInfo })
-        GroupPane.Link -> PageScaffold(if (chat.isChannel) "Share this channel" else "Share this group", back) {
+        GroupPane.Overview -> overview()
+        GroupPane.Link -> PageScaffold(back) {
             GroupSharePane(model, chat)
         }
-        GroupPane.AddMember -> PageScaffold("Invite a contact", back) { AddMemberPane(model, chat) }
-        GroupPane.Preferences -> PageScaffold("Group settings", back) { GroupPreferencesPane(model, chat) }
-        GroupPane.MemberInfo -> PageScaffold("Member", back) {
+        GroupPane.AddMember -> PageScaffold(back) { AddMemberPane(model, chat) }
+        GroupPane.Preferences -> PageScaffold(back) { GroupPreferencesPane(model, chat) }
+        GroupPane.MemberInfo -> PageScaffold(back) {
             val m = model.members.firstOrNull { it.id == memberId }
             if (m == null) Text("Member not found.", style = Cursus.type.body, color = Cursus.colors.textMuted)
             else MemberInfoPane(model, chat, m, onOpenChat)
         }
-        GroupPane.ChannelMembers -> PageScaffold(if (chat.canEditProfile) "Subscribers" else "Owners", back) {
+        GroupPane.ChannelMembers -> PageScaffold(back) {
             Panel {
                 MembersList(model.members.filter { chat.canEditProfile || it.role == "owner" }) { memberId = it; pane = GroupPane.MemberInfo }
             }
         }
-        GroupPane.SupportList -> PageScaffold("Chats with members", back) {
+        GroupPane.SupportList -> PageScaffold(back) {
             // Members waiting for review or with a support thread (Linux support list).
             val list = model.members.filter { !it.isMe && (it.pending || it.support != null) }
             Panel {
@@ -373,16 +407,17 @@ private fun GroupPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenCh
                 }
             }
         }
-        GroupPane.ConfirmLeave -> PageScaffold("Leave $noun", back) {
+        GroupPane.ConfirmLeave -> PageScaffold(back) {
             ConfirmPane(R.drawable.ic_session_leave, false, "Leave this $noun? You will need a new invite to rejoin.", "Leave", back) {
                 model.leaveGroup(chat); back()
             }
         }
-        GroupPane.ConfirmDelete -> PageScaffold("Delete $noun", back) {
+        GroupPane.ConfirmDelete -> PageScaffold(back) {
             ConfirmPane(R.drawable.ic_trash_delete, true, "Delete this $noun for yourself? This cannot be undone.", "Delete", back) {
                 onClose(); model.delete(chat)
             }
         }
+    }
     }
     }
 }
@@ -408,7 +443,7 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, scro
     )
     val wide = wideProfile()
     val paragraph = isParagraph(chat.shortDescr)
-    PageScaffold(if (chat.isChannel) "Channel" else "Group", onClose, actions = { if (wide) QuickActionTools(quick) }, scroll = scroll) {
+    PageScaffold(onClose, actions = if (wide) { { QuickActionTools(quick) } } else null, hero = true, scroll = scroll) {
         // Profile card
         CursusCard {
             val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -431,19 +466,20 @@ private fun GroupOverview(model: AppModel, chat: Chat, onClose: () -> Unit, scro
         }
         if (!wide) QuickActions(*quick.toTypedArray())
         if (paragraph) {
-            if (owner) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SectionHeading("Description")
-                Panel {
+            if (owner) {
+                // Your own: the same section as everyone else's view, and
+                // tapping the text (or its pencil) edits it.
+                AboutSection("Description", chat.shortDescr) { open, toggle ->
                     Row(
                         Modifier.fillMaxWidth().clip(Radius.insetControl).clickable { editing = EditField.GroupShortDescr }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        ProfileText(chat.shortDescr, style = Cursus.type.body, color = c.textSecondary, modifier = Modifier.weight(1f))
-                        Icon(painterResource(R.drawable.ic_edit_3), "Edit", Modifier.size(16.dp), tint = c.textMuted)
+                        FoldedProfileText(chat.shortDescr, Cursus.type.body, c.textSecondary, open, toggle, Modifier.weight(1f))
+                        Icon(painterResource(R.drawable.ic_edit_3), "Edit", Modifier.padding(top = 2.dp).size(16.dp), tint = c.textMuted)
                     }
                 }
-            } else AboutBlock("Description", chat.shortDescr)
+            } else AboutBlock("Description", chat.shortDescr, folded = true)
         }
         if (!owner && chat.description.isNotBlank()) AboutBlock("Welcome message", chat.description)
         // Support / invite / subscribers

@@ -69,7 +69,7 @@ fun PaneHeader(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onBack != null) {
-            IconTool(R.drawable.ic_back, "Back", chat.cursus.ui.components.systemBack(onBack))
+            IconTool(R.drawable.ic_back, "Back", onBack)
         } else {
             Box(Modifier.size(8.dp))
         }
@@ -101,6 +101,7 @@ fun HeaderPlus(description: String, icon: Int = R.drawable.ic_plus, onClick: () 
 
 @Composable
 fun ChatListPane(model: AppModel, channels: Boolean, onNew: () -> Unit, onSelect: (String) -> Unit) {
+    val phone = chat.cursus.ui.components.LocalPhonePages.current
     val c = Cursus.colors
     val chats = model.chats
         .filter { it.isChannel == channels }
@@ -131,7 +132,10 @@ fun ChatListPane(model: AppModel, channels: Boolean, onNew: () -> Unit, onSelect
             LazyColumn(Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = LocalNavClearance.current)) {
                 items(chats, key = { it.ref }) { chat ->
-                    ChatRow(model, chat, selected = chat.ref == model.selection, onSelect = { onSelect(chat.ref) })
+                    // Highlighted only beside the chat (two panes): on a phone the
+                    // list is under it, and a highlight there showed while Back
+                    // slid the chat away, then blinked off.
+                    ChatRow(model, chat, selected = !phone && chat.ref == model.selection, onSelect = { onSelect(chat.ref) })
                 }
             }
         }
@@ -151,7 +155,7 @@ private fun ChatRow(model: AppModel, chat: Chat, selected: Boolean, onSelect: ()
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 2.dp)
                 .clip(Radius.lg)
-                .background(if (selected) c.accentSoft else c.bgList)
+                .background(if (selected) c.accentSoft else androidx.compose.ui.graphics.Color.Transparent)
                 .combinedClickable(onClick = onSelect, onLongClick = { menu = true })
                 .heightIn(min = 64.dp)
                 .padding(horizontal = 8.dp, vertical = 8.dp),

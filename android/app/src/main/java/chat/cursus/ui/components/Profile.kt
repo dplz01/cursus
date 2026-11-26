@@ -32,6 +32,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -148,12 +149,12 @@ fun ProfileIdentity(name: String, image: String?, group: Boolean = false, photo:
     var sheet by remember { mutableStateOf(false) }
     // Centred hero: picture, then the name and the lines under it.
     Column(
-        Modifier.fillMaxWidth().padding(top = 8.dp),
+        Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Box(if (photo != null) Modifier.clip(Radius.pill).clickable { sheet = true } else Modifier) {
-            Avatar(name, image, 96.dp, group = group)
+            Avatar(name, image, 112.dp, group = group)
         }
         Box(Modifier.size(4.dp))
         lines()
@@ -245,12 +246,34 @@ fun QuickActions(vararg actions: QuickAction) {
     }
 }
 
-/** A paragraph of a profile under its section label (Linux `about_block`). */
+/** A paragraph of a profile under its section label (Linux `about_block`);
+ *  [folded]: a profile's About / Description, see [AboutSection]. */
 @Composable
-fun AboutBlock(label: String, text: String) {
+fun AboutBlock(label: String, text: String, folded: Boolean = false) {
+    if (folded) {
+        AboutSection(label, text) { open, toggle ->
+            FoldedProfileText(text, Cursus.type.body, Cursus.colors.textSecondary, open, toggle, Modifier.padding(horizontal = 12.dp))
+        }
+        return
+    }
     Column {
         CardTitle(0, label)
         ProfileText(text, style = Cursus.type.body, color = Cursus.colors.textPrimary, modifier = Modifier.padding(horizontal = SectionInset, vertical = 4.dp))
+    }
+}
+
+/**
+ * A profile's "about" (Linux `about_section`): a clear heading and, just
+ * under it, the text folded to two lines ending in "… Show more"
+ * ([FoldedProfileText]). [content] draws the text, unfolded when `open`.
+ */
+@Composable
+fun AboutSection(label: String, key: String, content: @Composable (open: Boolean, toggle: () -> Unit) -> Unit) {
+    var open by remember(key) { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, style = Cursus.type.body, color = Cursus.colors.textPrimary, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 12.dp))
+        content(open) { open = !open }
     }
 }
 

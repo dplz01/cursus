@@ -432,6 +432,88 @@ struct VideoThumbnail: View {
     }
 }
 
+// MARK: - Bubble pictures
+
+/// Pictures in chat bubbles. A bubble takes its final size from the
+/// sender's embedded preview at once and shows it until the photo is
+/// decoded, so the history doesn't jump as pictures load. Photos are
+/// decoded off the main thread to a thumbnail and kept, so a chat opened
+/// again shows them at once.
+@MainActor
+enum BubbleImages {
+    /// The picture frame in a bubble (Linux / Android fit the same way).
+    static let maxSize = CGSize(width: 300, height: 320)
+
+    private static let photos: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.totalCostLimit = 48 * 1024 * 1024
+        return cache
+    }()
+    private static let previews = NSCache<NSNumber, NSImage>()
+    /// Each photo's own size in points (pixels at its DPI, as AppKit shows
+    /// it): a picture is never drawn bigger than that, so stickers stay sharp.
+    private static var natural: [String: CGSize] = [:]
+
+    static func naturalSize(_ path: String?) -> CGSize? {
+        path.flatMap { natural[$0] }
+    }
+
+    /// The decoded photo at `path`, if it is already in memory.
+    static func cached(_ path: String?) -> NSImage? {
+        path.flatMap { photos.object(forKey: $0 as NSString) }
+    }
+
+    /// The embedded preview of file `id` (a data URL), decoded once.
+    static func preview(id: Int64, dataURL: String?) -> NSImage? {
+        let key = NSNumber(value: id)
+        if let hit = previews.object(forKey: key) { return hit }
+        guard let url = dataURL, let comma = url.range(of: "base64,"),
+              let data = Data(base64Encoded: String(url[comma.upperBound...]), options: .ignoreUnknownCharacters),
+              let image = NSImage(data: data) else { return nil }
+        previews.setObject(image, forKey: key)
+        return image
+    }
+
+    /// Decode the photo at `url` (a thumbnail big enough for the frame on a
+    /// Retina screen) off the main thread, and keep it under `key`.
+    static func load(_ url: URL, key: String) async -> NSImage? {
+        let decoded: (CGImage, CGSize)? = await Task.detached(priority: .userInitiated) { () -> (CGImage, CGSize)? in
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 900,
+            ]
+            guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+            // Its own size in points: pixels × 72 / DPI, turned like the
+            // thumbnail (which has the upright proportions).
+            let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
+            let pw = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue ?? Double(cg.width)
+            let ph = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue ?? Double(cg.height)
+            let dpi = (props[kCGImagePropertyDPIWidth] as? NSNumber)?.doubleValue ?? 72
+            let long = max(pw, ph) * 72 / max(dpi, 1)
+            let thumbLong = Double(max(cg.width, cg.height))
+            let k = long / max(thumbLong, 1)
+            return (cg, CGSize(width: Double(cg.width) * k, height: Double(cg.height) * k))
+        }.value
+        guard let decoded = decoded else { return nil }
+        let (cg, points) = decoded
+        natural[key] = points
+        let image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        photos.setObject(image, forKey: key as NSString, cost: cg.width * cg.height * 4)
+        return image
+    }
+
+    /// `size`'s proportions fitted into [maxSize], and no bigger than the
+    /// photo's `natural` size when that is known.
+    static func frame(for size: CGSize, natural: CGSize? = nil) -> CGSize {
+        let w = max(1, size.width), h = max(1, size.height)
+        var k = min(maxSize.width / w, maxSize.height / h)
+        if let natural = natural { k = min(k, natural.width / w) }
+        return CGSize(width: (w * k).rounded(), height: (h * k).rounded())
+    }
+}
+
 // MARK: - Gallery
 
 /// Photos and videos of the open chat, one at a time: ← / → (arrow keys)

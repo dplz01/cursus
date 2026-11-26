@@ -71,29 +71,22 @@ struct MainView: View {
         case .calls:
             CallDetailView(calls: model.calls)
         case .chats, .channels:
-            chatDetail
-                .pageEntrance(model.activeRef ?? model.selectedChat?.ref, forward: model.selectedChat != nil)
-        }
-    }
-
-    @ViewBuilder private var chatDetail: some View {
-        if let chat = model.selectedChat {
-            // The profile is a page of its own (as on Linux), not a strip
-            // beside the chat; Back returns to the conversation.
-            ZStack {
-                ConversationView(chat: chat).id(model.activeRef ?? chat.ref)
-                    .opacity(model.showInfo && !chat.isNotes ? 0 : 1)
-                    .allowsHitTesting(!model.showInfo)
-                    .accessibilityHidden(model.showInfo)
-                if model.showInfo && !chat.isNotes {
-                    ChatInfoView(chat: chat).id(chat.ref)
-                        .transition(.pageEnter)
+            if let chat = model.selectedChat {
+                // The profile is a page of its own (as on Linux), not a strip
+                // beside the chat; Back returns to the conversation.
+                ZStack {
+                    ConversationView(chat: chat).id(model.activeRef ?? chat.ref)
+                        .opacity(model.showInfo && !chat.isNotes ? 0 : 1)
+                        .allowsHitTesting(!model.showInfo)
+                        .accessibilityHidden(model.showInfo)
+                    if model.showInfo && !chat.isNotes {
+                        ChatInfoView(chat: chat).id(chat.ref)
+                    }
                 }
+            } else {
+                Placeholder(icon: model.destination == .channels ? "channels" : "chats",
+                            text: "Select a conversation")
             }
-            .animation(Animation.pageEnter(forward: model.showInfo), value: model.showInfo)
-        } else {
-            Placeholder(icon: model.destination == .channels ? "channels" : "chats",
-                        text: "Select a conversation")
         }
     }
 }
@@ -319,7 +312,7 @@ struct ChatListView: View {
             LazyVStack(spacing: 2) {
                 ForEach(rows) { chat in
                     ChatRow(chat: chat, selected: model.selection == chat.ref) {
-                        model.selection = chat.ref
+                        model.open(chat.ref)
                     }
                     .contextMenu { ChatMenu(chat: chat) }
                 }

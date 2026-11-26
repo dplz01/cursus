@@ -112,7 +112,7 @@ class VoiceRecorder {
             process(audio, rate)
             val m4a = File(pcm.parentFile, pcm.nameWithoutExtension + ".m4a")
             encodeAac(audio, rate, m4a)
-            VoiceDraft(m4a, secs, Waveforms.bucket(blockPeaks(audio, rate), BARS))
+            VoiceDraft(m4a, secs, Waveforms.bars(Waveforms.Blocks(rate / 50).apply { audio.forEach(::add) }, BARS))
         } catch (_: Exception) {
             null
         } finally {
@@ -187,15 +187,6 @@ class VoiceRecorder {
                 val v = x[i] * gain
                 val m = abs(v)
                 x[i] = if (m <= 0.7f) v else Math.copySign(0.7f + 0.29f * tanh((m - 0.7f) / 0.29f), v)
-            }
-        }
-
-        private fun blockPeaks(x: FloatArray, rate: Int): List<Float> {
-            val block = rate / 50
-            return (0 until x.size / block).map { b ->
-                var p = 0f
-                for (i in b * block until (b + 1) * block) p = maxOf(p, abs(x[i]))
-                p
             }
         }
 

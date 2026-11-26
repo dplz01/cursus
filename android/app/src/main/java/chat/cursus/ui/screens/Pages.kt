@@ -335,26 +335,23 @@ fun SettingsListPane(model: AppModel, selected: SettingsPage?, onOpen: (Settings
                         }
                     }
                     Box(Modifier.size(12.dp))
-                    // Categories in named groups, the same on Linux / macOS:
-                    // you · the app · about.
-                    val groups = listOf(
-                        "Account" to listOf(SettingsPage.Profile, SettingsPage.Address),
-                        "Preferences" to listOf(SettingsPage.Privacy, SettingsPage.Notifications, SettingsPage.Appearance),
-                        "Cursus" to listOf(SettingsPage.About),
+                    // Every category in one list, no headings (same on Linux / macOS).
+                    val pages = listOf(
+                        SettingsPage.Profile, SettingsPage.Address, SettingsPage.Privacy,
+                        SettingsPage.Notifications, SettingsPage.Appearance, SettingsPage.About,
                     )
-                    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                        for ((heading, group) in groups) PreferenceGroup(heading) {
-                            for (p in group) Row(
-                                Modifier.clip(chat.cursus.ui.theme.Radius.insetControl)
-                                    .background(if (selected == p) c.accentSoft else androidx.compose.ui.graphics.Color.Transparent)
-                                    .pageRow { onOpen(p) },
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                            ) {
-                                chat.cursus.ui.components.IconDisc(p.icon)
-                                Text(p.title, style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.weight(1f).padding(vertical = 2.dp))
-                                Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(16.dp).rotate(-90f), tint = c.textMuted)
-                            }
+                    PreferenceGroup {
+                        for (p in pages) Row(
+                            Modifier.clip(chat.cursus.ui.theme.Radius.insetControl)
+                                // Beside the page only (two panes), like the chat list.
+                                .background(if (selected == p && !chat.cursus.ui.components.LocalPhonePages.current) c.accentSoft else androidx.compose.ui.graphics.Color.Transparent)
+                                .pageRow { onOpen(p) },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        ) {
+                            chat.cursus.ui.components.IconDisc(p.icon)
+                            Text(p.title, style = Cursus.type.body, color = c.textPrimary, modifier = Modifier.weight(1f).padding(vertical = 2.dp))
+                            Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(16.dp).rotate(-90f), tint = c.textMuted)
                         }
                     }
                 }
@@ -371,7 +368,6 @@ fun SettingsDetailPane(model: AppModel, page: SettingsPage, onBack: () -> Unit) 
     val user = model.user
     var editing by remember { mutableStateOf<EditField?>(null) }
     var showLicences by remember { mutableStateOf(false) }
-    androidx.activity.compose.BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize()) {
         PaneHeader(page.title, onBack = onBack)
         Column(Modifier.verticalScroll(rememberScrollState())) {

@@ -2,9 +2,9 @@ package chat.cursus.ui.screens
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.activity.compose.BackHandler
-import chat.cursus.ui.components.pageSlide
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.animation.togetherWith
 import androidx.compose.ui.graphics.Color
 import chat.cursus.ui.components.backdropSource
 import chat.cursus.ui.components.glass
@@ -66,14 +66,18 @@ sealed interface Page {
 
 @Composable
 fun Root(model: AppModel) {
-    when (val phase = model.phase) {
-        Phase.Starting -> StartingScreen()
-        Phase.Welcome -> WelcomeScreen(model)
-        Phase.Unlock -> UnlockScreen(model)
-        Phase.Ready -> if (model.appLocked) AppLockScreen(model) else MainScreen(model)
-        is Phase.Failed -> FailedScreen(phase.message)
+    // The one base fill of the window (the window's own background is off,
+    // see MainActivity); pages paint over it only where they differ.
+    Box(Modifier.fillMaxSize().background(Cursus.colors.bgApp)) {
+        when (val phase = model.phase) {
+            Phase.Starting -> StartingScreen()
+            Phase.Welcome -> WelcomeScreen(model)
+            Phase.Unlock -> UnlockScreen(model)
+            Phase.Ready -> if (model.appLocked) AppLockScreen(model) else MainScreen(model)
+            is Phase.Failed -> FailedScreen(phase.message)
+        }
+        if (model.phase == Phase.Ready && !model.appLocked) CallSurface(model)
     }
-    if (model.phase == Phase.Ready && !model.appLocked) CallSurface(model)
     model.error?.let { text ->
         AlertDialog(
             onDismissRequest = { model.error = null },
@@ -131,45 +135,43 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
     val inChatSection = model.section == Section.Chats || model.section == Section.Channels
     val chatOpen = inChatSection && model.selectedChat?.isChannel == (model.section == Section.Channels)
 
-    // A newly opened chat / profile / settings page slides in.
-    val openChat = if (chatOpen) model.selection else null
-    val motion = chat.cursus.ui.components.rememberPageMotion(
-        key = Triple(model.section, openChat, page),
-        depth = (if (openChat != null) 1 else 0) + (if (page != null) 1 else 0),
-        onePane = !twoPane,
-    )
+    // Two panes: Back closes the page / chat at once. Phone: the page stack
+    // below handles Back (with Android's predictive back).
+    BackHandler(enabled = twoPane && page != null) { page = null }
+    BackHandler(enabled = twoPane && page == null && chatOpen) { model.select(null) }
 
-    BackHandler(enabled = page != null) { page = null }
-    BackHandler(enabled = page == null && chatOpen) { model.select(null) }
-
-    val list: @Composable () -> Unit = {
-        when (model.section) {
-            Section.Chats, Section.Channels -> ChatListPane(model, channels = model.section == Section.Channels,
-                onNew = { newChatOverlay = true }, onSelect = { ref -> page = null; model.select(ref) })
+    // One section's list; `s` is passed in so a list sliding away keeps
+    // showing its own section.
+    val list: @Composable (Section) -> Unit = { s ->
+        when (s) {
+            Section.Chats, Section.Channels -> ChatListPane(model, channels = s == Section.Channels,
+                onNew = { newChatOverlay = true }, onSelect = { ref -> page = null; model.open(ref) })
             Section.Calls -> CallsPane(model)
             Section.Settings -> SettingsListPane(model, (page as? Page.Settings)?.section) { page = Page.Settings(it) }
         }
     }
-    val pageContent: @Composable (Page) -> Unit = { p ->
+    // `back` closes the page (animated on a phone).
+    val pageContent: @Composable (Page, () -> Unit) -> Unit = { p, back ->
         when (p) {
-            Page.NewChat -> NewChatPage(model, initialLink = linkToOpen, onClose = { page = null; linkToOpen = null }) { ref ->
+            Page.NewChat -> NewChatPage(model, initialLink = linkToOpen, onClose = { back(); linkToOpen = null }) { ref ->
                 page = null
                 linkToOpen = null
                 model.select(ref)
             }
-            is Page.Settings -> SettingsDetailPane(model, p.section, onBack = { page = null })
+            is Page.Settings -> SettingsDetailPane(model, p.section, onBack = back)
             Page.ChatInfo -> model.selectedChat?.let { chat ->
-                ChatInfoPage(model, chat, onClose = { page = null }) { ref ->
+                ChatInfoPage(model, chat, onClose = back) { ref ->
                     page = null
                     model.select(ref)
                 }
             } ?: run { page = null }
         }
     }
-    val conversation: @Composable () -> Unit = {
+    // `back` leaves the chat (animated on a phone).
+    val conversation: @Composable (back: () -> Unit) -> Unit = { back ->
         val chat = model.selectedChat?.takeIf { it.isChannel == (model.section == Section.Channels) }
         if (chat != null) {
-            ConversationPane(model, chat, showBack = true, onInfo = { page = Page.ChatInfo })
+            ConversationPane(model, chat, showBack = true, onBack = back, onInfo = { page = Page.ChatInfo })
         } else {
             EmptyPane("Pick a chat to start messaging.")
         }
@@ -183,8 +185,8 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
             // fresh state (latest message) when a different chat is opened.
             val chatState = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
             when {
-                current != null -> androidx.compose.runtime.key(current) { pageContent(current) }
-                inChatSection -> chatState.SaveableStateProvider("conversation") { conversation() }
+                current != null -> androidx.compose.runtime.key(current) { pageContent(current) { page = null } }
+                inChatSection -> chatState.SaveableStateProvider("conversation") { conversation { model.select(null) } }
                 model.section == Section.Settings -> EmptyPane("Choose a settings category.")
                 else -> CallsDetail(model)
             }
@@ -199,7 +201,23 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
         Box(Modifier.fillMaxSize().background(listTone)) {
             Box(Modifier.fillMaxSize().backdropSource(backdrop, listTone)) {
                 CompositionLocalProvider(LocalNavClearance provides NavBarHeight + labelGrowth + NavInset + 12.dp) {
-                    list()
+                    // Changing destination slides the lists sideways, in the
+                    // bar's order (Chats → Channels → Calls → Settings); the
+                    // bar itself stays put.
+                    androidx.compose.animation.AnimatedContent(
+                        targetState = model.section,
+                        transitionSpec = {
+                            val dir = if (targetState.ordinal > initialState.ordinal) 1 else -1
+                            val spec = androidx.compose.animation.core.tween<androidx.compose.ui.unit.IntOffset>(
+                                300, easing = androidx.compose.animation.core.FastOutSlowInEasing,
+                            )
+                            androidx.compose.animation.slideInHorizontally(spec) { dir * it } togetherWith
+                                androidx.compose.animation.slideOutHorizontally(spec) { -dir * it }
+                        },
+                        label = "section",
+                    ) { s ->
+                        Box(Modifier.fillMaxSize().background(if (s == Section.Settings) c.bgPanel else c.bgList)) { list(s) }
+                    }
                 }
             }
             CompositionLocalProvider(chat.cursus.ui.components.LocalBackdrop provides backdrop) {
@@ -207,24 +225,41 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
             }
         }
     }
-    Box(Modifier.fillMaxSize().background(c.bgApp)) {
+    Box(Modifier.fillMaxSize()) {
         if (twoPane) {
             Row(Modifier.fillMaxSize()) {
                 Box(Modifier.width(listWidth).fillMaxHeight()) { sidebar() }
                 VerticalDivider(color = c.border, thickness = 1.dp)
-                Box(Modifier.weight(1f).fillMaxHeight().background(c.bgPanel)) {
-                    Box(Modifier.fillMaxSize().pageSlide(motion)) { detail() }
+                Box(Modifier.weight(1f).fillMaxHeight().background(c.bgPanel)) { detail() }
+            }
+        } else {
+            // Phone: list → chat / settings page → profile, each page over
+            // the one before it (Android page transitions, predictive back).
+            CompositionLocalProvider(chat.cursus.ui.components.LocalPhonePages provides true) {
+                val current = page
+                val chatLevel = chatOpen && (current == null || current == Page.ChatInfo)
+                chat.cursus.ui.components.StackedPage(
+                    open = current != null || chatOpen,
+                    onBack = { if (chatLevel) { page = null; model.select(null) } else page = null },
+                    below = { sidebar() },
+                ) { back ->
+                    Box(Modifier.fillMaxSize().background(c.bgPanel)) {
+                        if (chatLevel) {
+                            androidx.compose.runtime.key(model.selection) {
+                                chat.cursus.ui.components.StackedPage(
+                                    open = current == Page.ChatInfo,
+                                    onBack = { page = null },
+                                    below = { conversation(back) },
+                                ) { closeInfo ->
+                                    Box(Modifier.fillMaxSize().background(c.bgPanel)) { pageContent(Page.ChatInfo, closeInfo) }
+                                }
+                            }
+                        } else if (current != null) {
+                            androidx.compose.runtime.key(current) { pageContent(current, back) }
+                        }
+                    }
                 }
             }
-        } else if (page != null || chatOpen) {
-            // Opened from the list: the page slides over it while it dims.
-            if (motion.full && motion.remaining > 0f) {
-                sidebar()
-                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.18f * (1f - motion.remaining))))
-            }
-            Box(Modifier.fillMaxSize().pageSlide(motion).background(c.bgPanel)) { detail() }
-        } else {
-            sidebar()
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp))
         ImageGallery(model)
@@ -311,7 +346,8 @@ private fun NavIcon(s: Section, dot: Boolean) {
 
 @Composable
 fun EmptyPane(text: String) {
-    Box(Modifier.fillMaxSize().background(Cursus.colors.bgPanel), contentAlignment = Alignment.Center) {
+    // No fill: it sits on its pane's own background.
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(text, style = Cursus.type.body, color = Cursus.colors.textMuted)
     }
 }

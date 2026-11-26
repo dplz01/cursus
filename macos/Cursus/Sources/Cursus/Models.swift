@@ -249,6 +249,9 @@ struct FileAttachment: Decodable, Equatable {
     let error: String?
     /// Downloaded without asking (core rule; Settings → auto-download).
     let autoReceive: Bool?
+    /// Small picture (data URL) the sender embedded in a photo / video
+    /// message: it has the photo's proportions.
+    let preview: String?
 
     var isComplete: Bool { state == "complete" && path != nil }
 }

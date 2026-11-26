@@ -114,15 +114,62 @@ private fun InlinePreview(f: FileInfo) {
     )
 }
 
+/** Decoded bubble images by path + size, so a chat opened again shows
+ *  them at once instead of their previews first. */
+private val thumbCache = object : android.util.LruCache<String, ImageBitmap>(24 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
+}
+
+/** Largest image frame in a bubble. */
+private const val THUMB_MAX_W = 296f
+private const val THUMB_MAX_H = 360f
+
+/** Pixel size of each picture file, read from its header once: a picture is
+ *  never drawn bigger than its own pixels (a sticker stays sharp). */
+private val naturalSizes = androidx.compose.runtime.mutableStateMapOf<Long, android.util.Size>()
+
+/** Note the pixel size of picture [fileId] at [path] (decrypted): read off
+ *  the main thread, recorded on the caller's (UI) thread. */
+internal suspend fun noteImageSize(fileId: Long, path: String) {
+    if (fileId in naturalSizes) return
+    withContext(Dispatchers.IO) { imageSize(path) }?.let { naturalSizes[fileId] = it }
+}
+
+private fun imageSize(path: String): android.util.Size? = runCatching {
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeFile(path, bounds)
+    android.util.Size(bounds.outWidth, bounds.outHeight).takeIf { it.width > 0 && it.height > 0 }
+}.getOrNull()
+
 @Composable
 private fun ImageThumb(model: AppModel, message: Message, f: FileInfo, onLongPress: () -> Unit, showReceipt: Boolean) {
     val path = model.plainFiles[f.id]
     val blurred = model.prefs.blurMedia && f.id !in model.revealedMedia
-    val bitmap by rememberLoaded<ImageBitmap?>(null, path, blurred) {
-        path?.let { withContext(Dispatchers.IO) { decodeScaled(it, if (blurred) 24 else 720) } }
+    val maxSide = if (blurred) 24 else 720
+    val cacheKey = path?.let { "$it@$maxSide" }
+    val bitmap by rememberLoaded<ImageBitmap?>(cacheKey?.let { thumbCache.get(it) }, cacheKey) {
+        if (path == null || cacheKey == null) null
+        else {
+            if (f.id !in naturalSizes) withContext(Dispatchers.IO) { imageSize(path) }?.let { naturalSizes[f.id] = it }
+            thumbCache.get(cacheKey) ?: withContext(Dispatchers.IO) { decodeScaled(path, maxSide) }?.also { thumbCache.put(cacheKey, it) }
+        }
     }
+    // The sender's embedded preview has the picture's proportions: the
+    // frame takes its final size from it at once, and shows it until the
+    // file is decoded, so the history doesn't jump when pictures load.
+    val preview = remember(f.preview) { f.preview?.let { chat.cursus.ui.components.decodeDataUrl(it) } }
+    val shape = (preview ?: bitmap)?.let { it.width.toFloat() / it.height.coerceAtLeast(1) }
+    // Its own pixels at most (dp = px / density), like before the frame
+    // came from the preview: small pictures aren't stretched up.
+    val natural = naturalSizes[f.id]
+    val density = androidx.compose.ui.platform.LocalDensity.current.density
+    val frame = shape?.let { aspect ->
+        var w = minOf(THUMB_MAX_W, THUMB_MAX_H * aspect)
+        if (natural != null) w = minOf(w, natural.width / density)
+        Modifier.size(w.dp, (w / aspect).dp)
+    } ?: Modifier.widthIn(max = THUMB_MAX_W.dp).heightIn(max = THUMB_MAX_H.dp)
     Box(
-        Modifier.widthIn(max = 296.dp).heightIn(max = 360.dp).clip(Radius.mediaInset)
+        frame.clip(Radius.mediaInset)
             .combinedClickable(
                 onClick = {
                     if (bitmap != null) {
@@ -132,12 +179,16 @@ private fun ImageThumb(model: AppModel, message: Message, f: FileInfo, onLongPre
                 onLongClick = onLongPress,
             ),
     ) {
-        bitmap?.let {
-            Image(it, f.name,
-                Modifier.then(if (blurred) Modifier.blur(16.dp) else Modifier),
-                contentScale = ContentScale.Fit)
-        } ?: Box(Modifier.size(200.dp, 140.dp).background(Cursus.colors.bgField), contentAlignment = Alignment.Center) {
-            FileRowPlaceholder(f)
+        val shown = bitmap ?: preview
+        if (shown != null) {
+            Image(shown, f.name,
+                Modifier.then(if (shape != null) Modifier.fillMaxSize() else Modifier)
+                    .then(if (blurred) Modifier.blur(16.dp) else Modifier),
+                contentScale = if (shape != null) ContentScale.Crop else ContentScale.Fit)
+        } else {
+            Box(Modifier.size(200.dp, 140.dp).background(Cursus.colors.bgField), contentAlignment = Alignment.Center) {
+                FileRowPlaceholder(f)
+            }
         }
         if (message.deleted == null) {
             MessageStamp(message, showReceipt,

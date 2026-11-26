@@ -305,24 +305,72 @@ fn shots() {
             super::ui::set_clock(cursus_core::TimeFormat::H12);
         }
         if want("motion") {
-            // Page transitions frozen mid-way (~40% travelled).
-            for (size, name, two_panes) in [(MOBILE, "mmotion", false), (DESKTOP, "motion", true)] {
-                let mut app = demo_app(dark, size.width, size.height);
-                let list = app.current_page();
-                select(&mut app, 0);
-                app.page_key = app.current_page();
-                let now = std::time::Instant::now();
-                app.page_motion = super::page_motion::motion_for(&list, &app.page_key, two_panes, false, now);
-                assert!(app.page_motion.is_some());
-                app.motion_now = now + std::time::Duration::from_millis(60);
-                render(&app, size, &format!("{name}-{t}"));
+            // GTK-style phone transitions frozen mid-way (~half travelled).
+            use super::page_motion::{Motion, Under};
+            let half = std::time::Duration::from_millis(53);
+            let mut app = demo_app(dark, MOBILE.width, MOBILE.height);
+            select(&mut app, 0);
+            let now = std::time::Instant::now();
+            app.motion_now = now + half;
+            app.page_motion = Some(Motion::push(Under::List, now));
+            render(&app, MOBILE, &format!("motion-chat-push-{t}"));
+            // A back swipe held 40% of the way across.
+            let mut drag = Motion::drag(Under::List, now);
+            drag.phase = super::page_motion::Phase::Drag(0.4);
+            app.page_motion = Some(drag);
+            render(&app, MOBILE, &format!("motion-chat-swipe-{t}"));
+            // Chats → Settings, the lists half way past each other.
+            let mut tabs = demo_app(dark, MOBILE.width, MOBILE.height);
+            tabs.own_profile.fields = profile("Davide", "Building Cursus");
+            tabs.nav = NavSection::Settings;
+            tabs.section_motion = Some((NavSection::Chats, 1.0, Motion::push(Under::List, now)));
+            tabs.motion_now = now + half;
+            render(&tabs, MOBILE, &format!("motion-tabs-{t}"));
+            let _ = app.open_contact_profile();
+            app.page_motion = Some(Motion::push(Under::Conversation, now));
+            render(&app, MOBILE, &format!("motion-profile-push-{t}"));
+            if let Some(p) = app.contact_profile.as_mut() {
+                p.pane = crate::ContactProfilePane::Preferences;
             }
+            app.page_motion = Some(Motion::pop(Under::ContactOverview, now));
+            render(&app, MOBILE, &format!("motion-prefs-pop-{t}"));
         }
         if want("contact") {
             let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);
             select(&mut app, 0);
             let _ = app.open_contact_profile();
             render(&app, DESKTOP, &format!("contact-{t}"));
+        }
+        if want("profiles") {
+            // Profile pages: Back only on a phone (actions in the page), Back
+            // and the actions on a wide window; About folded to two lines.
+            let about = "Climber, coffee person and part-time map collector. Usually somewhere between Arco and the Dolomites, \
+                planning the next trip. Ask me about routes, gear or where the good espresso is.";
+            for (size, name) in [(MOBILE, "mprofile"), (DESKTOP, "profile")] {
+                let mut app = demo_app(dark, size.width, size.height);
+                select(&mut app, 0);
+                let _ = app.open_contact_profile();
+                if let Some(p) = app.contact_profile.as_mut() {
+                    p.fields.description = about.into();
+                }
+                render(&app, size, &format!("{name}-contact-{t}"));
+                app.about_open = true;
+                render(&app, size, &format!("{name}-contact-open-{t}"));
+                if let Some(p) = app.contact_profile.as_mut() {
+                    p.pane = crate::ContactProfilePane::Preferences;
+                }
+                render(&app, size, &format!("{name}-contact-prefs-{t}"));
+                let mut app = demo_app(dark, size.width, size.height);
+                group_page(&mut app, GroupSettingsPane::Overview);
+                render(&app, size, &format!("{name}-group-{t}"));
+                // You own it: the editable description folds too.
+                if let Some(g) = app.group_settings.as_mut() {
+                    g.short_descr = about.into();
+                }
+                render(&app, size, &format!("{name}-group-about-{t}"));
+                group_page(&mut app, GroupSettingsPane::Preferences);
+                render(&app, size, &format!("{name}-group-prefs-{t}"));
+            }
         }
         if want("calls") {
             for (size, name) in [(DESKTOP, "calls"), (MOBILE, "mcalls")] {
@@ -2256,19 +2304,7 @@ fn swiping_profile_actions_does_not_block_other_rows() {
 #[test]
 fn group_nested_back_keeps_its_position_and_returns_to_profile() {
     let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    use iced::advanced::widget::Operation;
-    use iced::{mouse, touch, Event, Point, Rectangle};
-    struct Heading<'a>(&'a str, Option<Rectangle>);
-    impl Operation for Heading<'_> {
-        fn traverse(&mut self, op: &mut dyn FnMut(&mut dyn Operation)) {
-            op(self);
-        }
-        fn text(&mut self, _: Option<&iced::widget::Id>, bounds: Rectangle, text: &str) {
-            if text == self.0 && bounds.y < 100.0 {
-                self.1 = Some(bounds);
-            }
-        }
-    }
+    use iced::{mouse, touch, Event, Point};
     load_fonts();
     let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
         iced::Font::with_name("Noto Sans"),
@@ -2276,6 +2312,28 @@ fn group_nested_back_keeps_its_position_and_returns_to_profile() {
         Some("tiny-skia"),
     ))
     .unwrap();
+    // A tap on the one Back spot of the page (the pages have no titles now:
+    // Back floats alone, at the same place on the profile and inside it).
+    let tap = |app: &App, renderer: &mut iced::Renderer, cache: Cache, point: Point| {
+        let size = Size::new(400.0, 900.0);
+        let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), size, cache, renderer);
+        let mut messages = vec![];
+        for event in [
+            touch::Event::FingerPressed { id: touch::Finger(3), position: point },
+            touch::Event::FingerLifted { id: touch::Finger(3), position: point },
+        ] {
+            let _ = ui.update(
+                &[Event::Touch(event)],
+                mouse::Cursor::Available(point),
+                renderer,
+                &mut iced::advanced::clipboard::Null,
+                &mut messages,
+            );
+        }
+        (messages, ui.into_cache())
+    };
+    // Centre of the Back square: side inset 6, top inset 8, 56 px square.
+    let back = Point::new(6.0 + 28.0, 8.0 + 28.0);
     for channel in [false, true] {
         for pane in [GroupSettingsPane::Preferences, GroupSettingsPane::AddMember] {
             if channel && pane == GroupSettingsPane::AddMember {
@@ -2285,64 +2343,18 @@ fn group_nested_back_keeps_its_position_and_returns_to_profile() {
             let mut app = demo_app(true, size.width, size.height);
             group_page(&mut app, GroupSettingsPane::Overview);
             app.group_settings.as_mut().unwrap().is_channel = channel;
-            let mut ui = UserInterface::build(
-                app.view(iced::window::Id::unique()),
-                size,
-                Cache::default(),
-                &mut renderer,
+            let (on_profile, cache) = tap(&app, &mut renderer, Cache::default(), back);
+            assert!(
+                on_profile.iter().any(|m| matches!(m, Message::CloseGroupSettings)),
+                "the profile's Back is at the Back spot"
             );
-            let mut heading = Heading(if channel { "Channel" } else { "Group" }, None);
-            ui.operate(&renderer, &mut heading);
-            let profile_heading = heading.1.unwrap();
-            let cache = ui.into_cache();
             let _ = app.update(if pane == GroupSettingsPane::Preferences {
                 Message::OpenGroupPreferences
             } else {
                 Message::OpenAddGroupMember
             });
-            let mut ui = UserInterface::build(
-                app.view(iced::window::Id::unique()),
-                size,
-                cache,
-                &mut renderer,
-            );
-            let mut heading = Heading(
-                if pane == GroupSettingsPane::Preferences {
-                    "Group settings"
-                } else {
-                    "Invite a contact"
-                },
-                None,
-            );
-            ui.operate(&renderer, &mut heading);
-            let nested_heading = heading.1.unwrap();
-            assert_eq!(
-                profile_heading.position(),
-                nested_heading.position(),
-                "Back must stay fixed between profile and nested page"
-            );
-            let point = Point::new(nested_heading.x - 22.0, nested_heading.center_y());
-            let mut messages = vec![];
-            for event in [
-                touch::Event::FingerPressed {
-                    id: touch::Finger(3),
-                    position: point,
-                },
-                touch::Event::FingerLifted {
-                    id: touch::Finger(3),
-                    position: point,
-                },
-            ] {
-                let _ = ui.update(
-                    &[Event::Touch(event)],
-                    mouse::Cursor::Available(point),
-                    &mut renderer,
-                    &mut iced::advanced::clipboard::Null,
-                    &mut messages,
-                );
-            }
-            drop(ui);
-            assert!(messages.iter().any(|m| matches!(m, Message::Back)));
+            let (messages, _) = tap(&app, &mut renderer, cache, back);
+            assert!(messages.iter().any(|m| matches!(m, Message::Back)), "the nested page's Back is at the same spot");
             for message in messages {
                 let _ = app.update(message);
             }
@@ -2619,4 +2631,198 @@ fn failed_connect_preserves_the_form_for_retry() {
     let _ = app.update(Message::InviteAccepted { from_form: true, result: Ok("Request sent.".into()) });
     assert!(!app.compose_open);
     assert!(app.invite_input().is_empty());
+}
+
+/// A tap on the group chat's title bar opens the group page — and the same
+/// tap's release must not then land on the page it opened (the owner's group
+/// picture sat under the finger and opened its photo sheet).
+#[test]
+fn chat_header_tap_opens_the_profile_and_nothing_under_it() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use iced::{mouse, touch, Event, Point};
+    load_fonts();
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+        iced::Font::with_name("Noto Sans"),
+        iced::Pixels(16.0),
+        Some("tiny-skia"),
+    ))
+    .unwrap();
+    let size = Size::new(400.0, 900.0);
+    for touch_input in [false, true] {
+        let mut app = demo_app(true, size.width, size.height);
+        select(&mut app, 1);
+        assert!(app.group_settings.is_none());
+        // Over the title, which is where the group picture is once the page opens.
+        let at = Point::new(200.0, 36.0);
+        let (press, release) = if touch_input {
+            (
+                Event::Touch(touch::Event::FingerPressed { id: touch::Finger(7), position: at }),
+                Event::Touch(touch::Event::FingerLifted { id: touch::Finger(7), position: at }),
+            )
+        } else {
+            (
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            )
+        };
+        let mut cache = Cache::default();
+        let mut all = Vec::new();
+        // Press and release in separate frames: the view is rebuilt from the
+        // app after each, as when running.
+        for event in [press, release] {
+            let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), size, cache, &mut renderer);
+            let mut messages = Vec::new();
+            let _ = ui.update(&[event], mouse::Cursor::Available(at), &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
+            cache = ui.into_cache();
+            for m in messages {
+                all.push(format!("{m:?}"));
+                let _ = app.update(m);
+            }
+        }
+        assert!(app.group_settings.is_some(), "the tap opened the group page ({all:?})");
+        assert!(app.photo_menu.is_none(), "…and not its photo sheet ({all:?})");
+    }
+}
+
+/// Escape on a phone's profile page slides it out once: the held-back
+/// Escape, applied when the slide ends, used to start a second slide.
+#[test]
+fn escape_slides_a_profile_out_once() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    struct Slide;
+    impl Drop for Slide {
+        fn drop(&mut self) {
+            crate::TEST_PAGES_SLIDE.with(|s| s.set(false));
+        }
+    }
+    crate::TEST_PAGES_SLIDE.with(|s| s.set(true));
+    let _slide = Slide;
+    for group in [false, true] {
+        let mut app = demo_app(true, MOBILE.width, MOBILE.height);
+        if group {
+            group_page(&mut app, GroupSettingsPane::Overview);
+        } else {
+            select(&mut app, 0);
+            let _ = app.open_contact_profile();
+        }
+        app.page_key = app.current_page();
+        let _ = app.update(Message::Escape);
+        assert!(app.page_motion.is_some(), "Escape slides the page out (group={group})");
+        // The slide ends.
+        let later = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let _ = app.update(Message::MotionFrame(later));
+        assert!(app.page_motion.is_none(), "no second slide (group={group})");
+        assert!(app.group_settings.is_none() && app.contact_profile.is_none(), "the page closed (group={group})");
+        assert!(app.selected.is_some(), "…back to the conversation (group={group})");
+    }
+}
+
+/// "Show more" after the folded description unfolds it — and on your own
+/// group, where the text is a button that edits it, it only unfolds.
+#[test]
+fn show_more_unfolds_and_does_not_edit() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use iced::{mouse, touch, Event, Point};
+    load_fonts();
+    let size = Size::new(400.0, 820.0);
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+        iced::Font::with_name("Noto Sans"),
+        iced::Pixels(16.0),
+        Some("tiny-skia"),
+    ))
+    .unwrap();
+    let long = "Climber, coffee person and part-time map collector. Usually somewhere between Arco and the \
+                Dolomites, planning the next trip. Ask me about routes, gear or where the good espresso is.";
+    for touch_input in [false, true] {
+        let mut app = demo_app(false, size.width, size.height);
+        group_page(&mut app, GroupSettingsPane::Overview);
+        let g = app.group_settings.as_mut().unwrap();
+        assert_eq!(g.my_role, "owner", "your own group: the text edits");
+        g.short_descr = long.into();
+        // Where "Show more" is drawn: the accent text right of the rows' icons.
+        let theme = app.iced_theme();
+        let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), size, Cache::default(), &mut renderer);
+        let mut sink = Vec::new();
+        let _ = ui.update(
+            &[Event::Window(iced::window::Event::RedrawRequested(iced::time::Instant::now()))],
+            mouse::Cursor::Unavailable, &mut renderer, &mut iced::advanced::clipboard::Null, &mut sink,
+        );
+        let base = iced::theme::Base::base(&theme);
+        ui.draw(&mut renderer, &theme, &iced::advanced::renderer::Style { text_color: base.text_color }, mouse::Cursor::Unavailable);
+        let rgba = renderer.screenshot(iced::Size::new(size.width as u32, size.height as u32), 1.0, base.background_color);
+        // The palette is process-wide and other tests switch it: accept the
+        // accent of either appearance.
+        let targets = [false, true].map(|light| {
+            let a = crate::theme::Tokens::for_light(light).accent;
+            [a.r, a.g, a.b].map(|c| (c * 255.0) as i32)
+        });
+        let mut hits = Vec::new();
+        for y in 300..560 {
+            for x in 120..390 {
+                let i = ((y * size.width as usize) + x) * 4;
+                let px = [rgba[i] as i32, rgba[i + 1] as i32, rgba[i + 2] as i32];
+                if targets.iter().any(|t| (0..3).map(|k| (px[k] - t[k]).abs()).sum::<i32>() < 30) {
+                    hits.push((x as f32, y as f32));
+                }
+            }
+        }
+        assert!(hits.len() > 20, "\"Show more\" is drawn");
+        let at = Point::new(
+            hits.iter().map(|h| h.0).sum::<f32>() / hits.len() as f32,
+            hits.iter().map(|h| h.1).sum::<f32>() / hits.len() as f32,
+        );
+        let events = if touch_input {
+            vec![
+                Event::Touch(touch::Event::FingerPressed { id: touch::Finger(4), position: at }),
+                Event::Touch(touch::Event::FingerLifted { id: touch::Finger(4), position: at }),
+            ]
+        } else {
+            vec![
+                Event::Mouse(mouse::Event::CursorMoved { position: at }),
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            ]
+        };
+        let mut messages = Vec::new();
+        for event in events {
+            let _ = ui.update(&[event], mouse::Cursor::Available(at), &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
+        }
+        let names: Vec<String> = messages.iter().map(|m| format!("{m:?}")).collect();
+        assert!(messages.iter().any(|m| matches!(m, Message::ToggleAbout)), "it unfolds (touch={touch_input}): {names:?}");
+        assert!(!messages.iter().any(|m| matches!(m, Message::OpenFieldEditor(_))), "and doesn't edit (touch={touch_input}): {names:?}");
+    }
+}
+
+/// Phone: changing destination slides the lists sideways, in the bar's order,
+/// and the slide ends at rest on the new list.
+#[test]
+fn destinations_slide_sideways() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    struct Slide;
+    impl Drop for Slide {
+        fn drop(&mut self) {
+            crate::TEST_PAGES_SLIDE.with(|s| s.set(false));
+        }
+    }
+    crate::TEST_PAGES_SLIDE.with(|s| s.set(true));
+    let _slide = Slide;
+    let mut app = demo_app(true, MOBILE.width, MOBILE.height);
+    let _ = app.update(Message::Navigate(NavSection::Settings));
+    let (from, out, inc) = app.section_slide().expect("Chats → Settings slides");
+    assert_eq!(from, NavSection::Chats);
+    assert!(inc > 0.9 && out > -0.1, "Settings comes in from the right ({out}, {inc})");
+    // Half way: both lists show, side by side.
+    app.motion_now += std::time::Duration::from_millis(40);
+    let (_, out, inc) = app.section_slide().unwrap();
+    assert!((inc - out - 1.0).abs() < 1e-4 && inc > 0.0 && inc < 1.0, "side by side ({out}, {inc})");
+    let _ = app.update(Message::MotionFrame(std::time::Instant::now() + std::time::Duration::from_secs(2)));
+    assert!(app.section_slide().is_none(), "at rest after the slide");
+    // Back to Chats: from the left.
+    let _ = app.update(Message::Navigate(NavSection::Chats));
+    let (_, _, inc) = app.section_slide().unwrap();
+    assert!(inc < -0.9, "Chats comes in from the left ({inc})");
+    // Tapping the destination you're on doesn't slide.
+    let _ = app.update(Message::MotionFrame(std::time::Instant::now() + std::time::Duration::from_secs(2)));
+    let _ = app.update(Message::Navigate(NavSection::Chats));
+    assert!(app.section_slide().is_none());
 }

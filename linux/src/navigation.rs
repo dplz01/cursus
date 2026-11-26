@@ -147,13 +147,16 @@ impl App {
                 g.selected_member_id = None;
                 return Task::none();
             }
-            return self.update(Message::CloseGroupSettings);
+            // `update_inner`, not `update`: on a phone this runs once the
+            // Back/Escape slide has finished, and `update` would slide the
+            // page out a second time before closing it.
+            return self.update_inner(Message::CloseGroupSettings);
         }
         if let Some(p) = self.contact_profile.as_mut() {
             if matches!(p.pane, ContactProfilePane::Preferences) {
-                return self.update(Message::CloseContactPreferences);
+                return self.update_inner(Message::CloseContactPreferences);
             }
-            return self.update(Message::CloseContactProfile);
+            return self.update_inner(Message::CloseContactProfile);
         }
         if self.editing.take().is_some() {
             self.clear_composer();

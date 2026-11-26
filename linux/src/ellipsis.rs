@@ -45,7 +45,7 @@ fn ui_font(bold: bool) -> Font {
     }
 }
 
-fn measured_lines_font(
+pub(crate) fn measured_lines_font(
     s: &str,
     max_w: f32,
     size: f32,
@@ -145,7 +145,7 @@ const WINDOW: usize = 10;
 
 /// Largest `n` in `0..=upper` with `fits(n)` (approximately — exact whenever
 /// non-monotonic dips are narrower than [`WINDOW`]).
-fn longest_fitting(upper: usize, mut fits: impl FnMut(usize) -> bool) -> Option<usize> {
+pub(crate) fn longest_fitting(upper: usize, mut fits: impl FnMut(usize) -> bool) -> Option<usize> {
     let (mut lo, mut hi) = (0usize, upper);
     if !fits(0) {
         return None;

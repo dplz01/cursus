@@ -832,13 +832,18 @@ struct AttachmentView<Stamp: View>: View {
 
     var body: some View {
         if file.kind == "image" && file.isComplete {
+            // The photo (decoded now or earlier), else the sender's preview;
+            // the frame comes from the preview so it never changes size.
+            let photo = image ?? BubbleImages.cached(file.path)
+            let stand = BubbleImages.preview(id: file.id, dataURL: file.preview)
+            let frame = (stand ?? photo).map { BubbleImages.frame(for: $0.size, natural: BubbleImages.naturalSize(file.path)) }
             Group {
-                if let image = image {
-                    Image(nsImage: image)
+                if let shown = photo ?? stand, let frame = frame {
+                    Image(nsImage: shown)
                         .resizable()
-                        .scaledToFit()
-                        .frame(width: image.size.width * min(1, min(300 / max(1, image.size.width), 320 / max(1, image.size.height))),
-                               height: image.size.height * min(1, min(300 / max(1, image.size.width), 320 / max(1, image.size.height))))
+                        .scaledToFill()
+                        .frame(width: frame.width, height: frame.height)
+                        .clipped()
                         .blur(radius: hidden ? 24 : 0)
                         .clipShape(RoundedRectangle(cornerRadius: Radius.mediaInset, style: .continuous))
                         .overlay {
@@ -871,9 +876,10 @@ struct AttachmentView<Stamp: View>: View {
                     .allowsHitTesting(false)
             }
             .task(id: file.path) {
-                if let url = await model.readablePath(file) {
-                    image = NSImage(contentsOf: url)
-                }
+                guard let path = file.path else { return }
+                if let hit = BubbleImages.cached(path) { image = hit; return }
+                guard let url = await model.readablePath(file), !Task.isCancelled else { return }
+                image = await BubbleImages.load(url, key: path)
             }
         } else if file.kind == "video" && file.isComplete {
             VideoThumbnail(file: file, messageId: messageId, hidden: hidden)

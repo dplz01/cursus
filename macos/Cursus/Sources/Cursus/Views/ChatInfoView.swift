@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Pages of a chat's profile (Back returns to the overview, then to the chat).
-enum InfoPage: Hashable {
+enum InfoPage: Equatable {
     case overview
     case preferences
     case member(Int64)
@@ -14,8 +14,9 @@ enum InfoPage: Hashable {
 }
 
 /// Contact / group / channel page (⌘I). Fills the detail pane like the Linux
-/// contact and group pages: header with Back (Esc), title and the favourite /
-/// mute / preferences actions, then the same cards in the same order.
+/// contact and group pages: a floating glass bar with Back (Esc) and the
+/// call / favourite / mute / preferences actions — no title — then the same
+/// cards in the same order. Inner pages float only Back.
 struct ChatInfoView: View {
     @EnvironmentObject private var model: AppModel
     let chat: Chat
@@ -39,27 +40,18 @@ struct ChatInfoView: View {
         }
     }
 
+    /// The floating bar's height and its inset from the pane's edges.
+    private let barHeight: CGFloat = 56
+    private let barInset: CGFloat = 8
+
     var body: some View {
-        VStack(spacing: 0) {
-            PaneHeader(title: pageTitle, back: back) {
-                if page == .overview {
-                    IconTool(icon: chat.favorite ? "star-filled" : "star", help: chat.favorite ? "Remove from favorites" : "Add to favorites",
-                             active: chat.favorite, size: 18) {
-                        Task { await model.setFavorite(chat, !chat.favorite) }
-                    }
-                    IconTool(icon: chat.muted ? "notifications-off" : "notifications-off-outline", help: chat.muted ? "Unmute" : "Mute",
-                             active: chat.muted, size: 18) {
-                        Task { await model.setMuted(chat, !chat.muted) }
-                    }
-                    IconTool(icon: "settings", help: pageTitleFor(.preferences), size: 18) {
-                        page = .preferences
-                    }
-                }
-            }
+        // The page scrolls under the bar, which blurs it (glass).
+        ZStack(alignment: .topLeading) {
             pages
+            bar
+                .padding(.horizontal, 10)
+                .padding(.top, barInset)
         }
-        // A page inside the profile (settings, a member…) slides in.
-        .pageEntrance(page, forward: page != .overview)
         .background(Theme.panel)
         .onExitCommand(perform: back)
         .onAppear {
@@ -71,8 +63,43 @@ struct ChatInfoView: View {
         }
     }
 
+    /// Back, and on the overview the profile's actions; no title.
+    private var bar: some View {
+        let overview = page == .overview
+        return HStack(spacing: 4) {
+            Button(action: back) { CIcon("back", size: 18) }
+                .buttonStyle(IconToolStyle())
+                .keyboardShortcut(.cancelAction)
+                .help("Back (Esc)")
+            if overview {
+                Spacer(minLength: 8)
+                if chat.isDirect && chat.pendingRequestId == nil {
+                    IconTool(icon: "calls", help: "Audio call", size: 18) { model.calls.start(chat) }
+                        .disabled(model.calls.state.active != nil || model.calls.busy)
+                }
+                IconTool(icon: chat.favorite ? "star-filled" : "star", help: chat.favorite ? "Remove from favorites" : "Add to favorites",
+                         active: chat.favorite, size: 18) {
+                    Task { await model.setFavorite(chat, !chat.favorite) }
+                }
+                IconTool(icon: chat.muted ? "notifications-off" : "notifications-off-outline", help: chat.muted ? "Unmute" : "Mute",
+                         active: chat.muted, size: 18) {
+                    Task { await model.setMuted(chat, !chat.muted) }
+                }
+                IconTool(icon: "settings", help: pageTitleFor(.preferences), size: 18) {
+                    page = .preferences
+                }
+            }
+        }
+        .padding(.horizontal, overview ? 8 : 0)
+        .frame(width: overview ? nil : barHeight, height: barHeight)
+        .frame(maxWidth: overview ? .infinity : nil)
+        .floatingSurface(radius: Radius.control)
+    }
+
     private var pages: some View {
-        Page {
+        // Everything starts right under the floating bar (the overview's
+        // picture a little closer, its hero has no top padding).
+        Page(topInset: page == .overview ? barHeight - 8 : barHeight) {
             switch page {
             case .overview:
                 InfoOverview(chat: chat, page: $page)
@@ -205,7 +232,7 @@ private struct InfoOverview: View {
                 if ownsGroup {
                     // Clicking the picture changes it (no inline buttons).
                     Button { photoMenu = true } label: {
-                        Avatar(image: chat.image, name: chat.title, size: 96, kind: chat.avatarKind)
+                        Avatar(image: chat.image, name: chat.title, size: 112, kind: chat.avatarKind)
                     }
                     .buttonStyle(.plain)
                     .help("Change picture")
@@ -218,7 +245,7 @@ private struct InfoOverview: View {
                         }
                     }
                 } else {
-                    Avatar(image: chat.image, name: chat.title, size: 96, kind: chat.avatarKind)
+                    Avatar(image: chat.image, name: chat.title, size: 112, kind: chat.avatarKind)
                 }
                 Spacer().frame(height: 4)
                 EditableLine(text: publicName, placeholder: "Name", style: .name,
@@ -236,15 +263,18 @@ private struct InfoOverview: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
+            .padding(.bottom, 8)
             if paragraph {
                 VStack(alignment: .leading, spacing: 8) {
                     SectionHeading("Description")
-                    Panel {
-                        EditableLine(text: chat.shortDescr, placeholder: "Add a short description", style: .body,
-                                     editable: ownsGroup) { editing = .groupBio }
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 8)
+                    // Folded to two lines; "More" shows the rest.
+                    Foldable(key: chat.shortDescr) {
+                        Panel {
+                            EditableLine(text: chat.shortDescr, placeholder: "Add a short description", style: .body,
+                                         editable: ownsGroup) { editing = .groupBio }
+                                .padding(.vertical, 8)
+                                .padding(.horizontal, 8)
+                        }
                     }
                 }
             }
@@ -258,12 +288,15 @@ private struct InfoOverview: View {
     }
 
     private func about(_ text: String) -> some View {
-        ProfileText(text)
-            .font(.cBody)
-            .foregroundColor(Theme.secondaryText)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, sectionInset)
+        // Folded to two lines; "More" shows the rest.
+        Foldable(key: text) {
+            ProfileText(text)
+                .font(.cBody)
+                .foregroundColor(Theme.secondaryText)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, sectionInset)
+        }
     }
 
     private func pickImage() {
@@ -398,6 +431,54 @@ private struct InfoOverview: View {
 
 /// Profile text shown as plain text, with a pencil right after it that opens
 /// the edit sheet (Linux: the same line and pencil). Empty: a muted hint.
+/// Text folded to two lines, with "More" when it is longer (a profile's
+/// About / Description). A hidden unfolded copy is measured to know.
+struct Foldable<Content: View>: View {
+    /// What is shown: a new text folds again.
+    let key: String
+    @ViewBuilder let content: Content
+
+    @State private var open = false
+    @State private var folded: CGFloat = 0
+    @State private var full: CGFloat = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            content
+                .lineLimit(open ? nil : 2)
+                .background(HeightReader(height: $folded))
+                .background(alignment: .top) {
+                    content
+                        .lineLimit(nil)
+                        .hidden()
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                        .background(HeightReader(height: $full))
+                }
+            if open || full > folded + 1 {
+                Button(open ? "Less" : "More") { open.toggle() }
+                    .buttonStyle(.plain)
+                    .font(.cBody.weight(.semibold))
+                    .foregroundColor(Theme.accent)
+                    .padding(.horizontal, 12)
+            }
+        }
+        .onChange(of: key) { _ in open = false }
+    }
+}
+
+/// Reports the height of the view it is the background of.
+private struct HeightReader: View {
+    @Binding var height: CGFloat
+    var body: some View {
+        GeometryReader { g in
+            Color.clear
+                .onAppear { height = g.size.height }
+                .onChange(of: g.size.height) { h in height = h }
+        }
+    }
+}
+
 struct EditableLine: View {
     enum Style { case name, sub, body }
 

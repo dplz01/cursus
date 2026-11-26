@@ -356,10 +356,7 @@ or crossfaded per tab.
 Pointer hover retains the ordinary Cursus hover fill and does not move the lens.
 The dock floats exactly like the composer field on every platform: the same
 glass surface (`FloatingSurface` on macOS, Linux `glass_fill`/`glass_edge`/
-`glass_shadow`, Android `glass`). Linux and Android put the 8 px fade strip under
-it too, fading into the list's own colour (`glass_scrim_on(bg.list)`): a fade
-into another colour reads as a band and the bar looks docked. macOS has no
-fade there, since the sidebar is the split view's own material.
+`glass_shadow`, Android `glass`), with nothing drawn around it.
 The selection lens uses native clear Liquid Glass on macOS 26 and stays below
 the controls so its material cannot blur icons or text.
 A small animated glyph displacement peaks as a moving lens edge crosses each
@@ -629,23 +626,38 @@ tab hit shapes share the same geometry throughout the sliding animation.
 - **Floating composer.** The composer is layered over the chat history,
   which scrolls underneath it and keeps the composer's measured height
   as room at its end, with no extra history padding: at rest the last
-  message sits exactly 8 px (the composer's top inset) above the field, as
+  message sits exactly 8 px (the composer's empty top inset) above the field, as
   in WhatsApp and Telegram (Linux `measure::height_probe`, Android `onSizeChanged`,
   macOS `safeAreaInset`). Lift per platform: macOS 26 Liquid Glass
   (`FloatingSurface`, opaque card + shadow before 26 or with Reduce
   Transparency); Android Material elevation (6 dp shadow, level 3); Linux an
   iced container shadow. Reply / edit bars, a pasted image, emoji
   suggestions and voice drafts float on their own cards of the same style.
-- **Glass.** Floating surfaces are heavily frosted (0.94 dark / 0.95 light
-  of the elevated colour; Linux and Android have no backdrop blur, so
-  density stands in for it) with a light edge (white 14 % dark / black
-  10 % light) and a
-  wide soft shadow (y 8, blur 28). The fade is only the bar's 8 px top
-  inset: the surface underneath goes from clear to 0.92 across that strip
-  and holds, so messages dissolve as they slide under it but a resting last
-  message is never dimmed. macOS: Liquid Glass on 26, the system `.regularMaterial` blur
-  before; Linux and Android have no backdrop blur, so translucency + fade
-  carry the effect.
+- **Glass.** Only the floating surface itself is glass (composer field,
+  its cards, the destinations bar): nothing is drawn around it — no fade,
+  no band, no box — and the content keeps scrolling around and under it.
+  Each platform uses its own toolkit's material:
+  - macOS: Liquid Glass on 26, the system `.regularMaterial` blur before.
+  - Android: real backdrop blur on Android 12+ (`ui/components/Glass.kt`):
+    the content underneath records into a `GraphicsLayer`, each surface
+    redraws its part through a 24 dp `RenderEffect` blur clipped to its
+    shape, under a 0.62 dark / 0.70 light tint. Before 12, a dense fill.
+  - Linux: real backdrop blur on the GPU (`linux/src/glass.rs`). Our
+    vendored `iced_wgpu` (`third_party/iced_wgpu/CURSUS_PATCH.md`) makes
+    the window surface sampleable; a shader primitive under each surface
+    (`Stack::push_under`) reads the frame around it, blurs it (¼
+    downsample, separable Gaussian H/V/H/V) and draws it back clipped to
+    the rounded shape, under a 0.62 dark / 0.70 light tint. With the
+    software renderer or an unsampleable surface: a dense fill (0.94 /
+    0.95), as before.
+  A light edge (white 12–14 % dark / black 8–10 % light) and a subtle
+  shadow (Linux y 2 / blur 10, Android 3 dp elevation) separate it; a large
+  halo read as a box around the bar.
+- **Chat title bar.** Floats over the top of the history like the
+  composer (Linux, Android): a 56 px glass card (radius 20) inset 8 px from
+  the top and 6/10 px from the sides, the history scrolling underneath and
+  keeping 8 + 56 + 8 px at its top so the first message rests 8 px below
+  it. macOS keeps its native unified toolbar.
 - **Emoji suggestions.** A fixed 5-row list of `glyph :shortcode:` rows on
   the composer field's own surface, exactly as wide as the field (it ends
   where the field ends, not under the action button), hits glued to the

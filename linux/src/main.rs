@@ -30,6 +30,7 @@ mod preference_ui;
 mod retained;
 #[cfg(test)]
 mod shots;
+mod glass;
 mod single_instance;
 mod tap;
 mod theme;

@@ -50,6 +50,7 @@ import chat.cursus.AppModel
 import chat.cursus.ComposeMode
 import chat.cursus.R
 import chat.cursus.ui.components.IconTool
+import chat.cursus.ui.components.glass
 import chat.cursus.ui.theme.Cursus
 import chat.cursus.ui.theme.Radius
 
@@ -57,38 +58,8 @@ import chat.cursus.ui.theme.Radius
  *  48dp of other messengers), radius 12 like the "+", so corners match. */
 private val ROW_HIT = 42.dp
 private val FieldShape get() = Radius.smallControl
-/** Material elevation of everything that floats over the chat (level 4). */
-private val FLOAT_ELEVATION = 12.dp
-
-/** Glass: Compose can't blur what's behind a view, so the look comes from
- *  a translucent fill, a thin light edge, a soft wide shadow and the fade
- *  under the composer that messages slide into (as on Linux). */
-// Heavily frosted (Linux glass_fill): with no backdrop blur, a dense fill is
-// what keeps whatever slides underneath a soft shape rather than legible.
-private val glassFill @Composable get() = Cursus.colors.bgElevated.copy(alpha = if (Cursus.colors.isDark) 0.94f else 0.95f)
-private val glassEdge @Composable get() = if (Cursus.colors.isDark) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.10f)
-
-@Composable
-internal fun Modifier.glass(shape: androidx.compose.ui.graphics.Shape): Modifier = this
-    .shadow(FLOAT_ELEVATION, shape, clip = false,
-        ambientColor = Color.Black.copy(alpha = 0.55f), spotColor = Color.Black.copy(alpha = 0.65f))
-    .clip(shape).background(glassFill).border(1.dp, glassEdge, shape)
-
-/** Fade behind a floating bar: the surface underneath goes from clear to
- *  nearly opaque across the bar's top GLASS_FADE inset only, then holds,
- *  so a resting last message just above it is never dimmed (Linux
- *  `glass_scrim`). Fade into the surface it sits on: another colour reads
- *  as a band. */
-@Composable
-internal fun Modifier.glassScrim(base: Color = Cursus.colors.bgPanel): Modifier {
-    val strip = with(androidx.compose.ui.platform.LocalDensity.current) { GLASS_FADE.toPx() }
-    return background(androidx.compose.ui.graphics.Brush.verticalGradient(
-        listOf(base.copy(alpha = 0f), base.copy(alpha = 0.92f)), startY = 0f, endY = strip,
-    ))
-}
-
-/** The fade strip above floating bars: their 8dp top inset (Linux `GLASS_FADE`). */
-internal val GLASS_FADE = 8.dp
+/** Soft lift of the square action beside the field (as the glass card). */
+private val FLOAT_ELEVATION = 3.dp
 
 /** A card floating above the field (reply / edit bar, pasted image). */
 @Composable
@@ -132,7 +103,9 @@ fun Composer(model: AppModel) {
     // No bar behind it: the field and its action float over the chat with
     // Material elevation; anything above the field (reply / edit, pasted
     // image) floats on its own card.
-    Column(Modifier.fillMaxWidth().glassScrim()) {
+    // No bar or fade behind it: only the field, its action and the cards
+    // above it float, each on its own glass (`glass`, blurred backdrop).
+    Column(Modifier.fillMaxWidth()) {
         EmojiSuggestions(model)
         if (model.composeMode !is ComposeMode.New) FloatingCard { ContextBar(model) }
         model.pastedImage?.let { file ->
@@ -222,7 +195,7 @@ private fun SquareAction(icon: Int, description: String, soft: Boolean = false, 
     }
     Box(
         Modifier.size(ROW_HIT).shadow(FLOAT_ELEVATION, Radius.smallControl, clip = false,
-            ambientColor = Color.Black.copy(alpha = 0.5f), spotColor = Color.Black.copy(alpha = 0.6f)).clip(Radius.smallControl)
+            ambientColor = Color.Black.copy(alpha = 0.25f), spotColor = Color.Black.copy(alpha = 0.3f)).clip(Radius.smallControl)
             .background(fill).clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -290,7 +263,7 @@ private fun VoiceDraftBar(model: AppModel, secs: Long, peaks: List<Float>) {
     val c = Cursus.colors
     // Same floating field + square action as the composer.
     Row(
-        Modifier.fillMaxWidth().glassScrim().padding(horizontal = 10.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {

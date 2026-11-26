@@ -35,3 +35,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-segmentation = "1"
+
+# Backdrop blur under floating glass: iced_wgpu with a readable window
+# surface (third_party/iced_wgpu/CURSUS_PATCH.md).
+[patch.crates-io]
+iced_wgpu = { path = "third_party/iced_wgpu" }

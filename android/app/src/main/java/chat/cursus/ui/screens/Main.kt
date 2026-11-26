@@ -5,6 +5,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
+import chat.cursus.ui.components.backdropSource
+import chat.cursus.ui.components.glass
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
@@ -183,11 +185,17 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
     // scrolls underneath it and keeps room at its end so nothing hides.
     val sidebar: @Composable () -> Unit = {
         val labelGrowth = 14.dp * (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f)
+        // The list is the backdrop the bar's glass blurs.
+        val backdrop = chat.cursus.ui.components.rememberBackdrop()
         Box(Modifier.fillMaxSize().background(listTone)) {
-            CompositionLocalProvider(LocalNavClearance provides NavBarHeight + labelGrowth + NavInset + GLASS_FADE + 12.dp) {
-                list()
+            Box(Modifier.fillMaxSize().backdropSource(backdrop, listTone)) {
+                CompositionLocalProvider(LocalNavClearance provides NavBarHeight + labelGrowth + NavInset + 12.dp) {
+                    list()
+                }
             }
-            BottomBar(model, listTone, Modifier.align(Alignment.BottomCenter))
+            CompositionLocalProvider(chat.cursus.ui.components.LocalBackdrop provides backdrop) {
+                BottomBar(model, Modifier.align(Alignment.BottomCenter))
+            }
         }
     }
     Box(Modifier.fillMaxSize().background(c.bgApp)) {
@@ -225,20 +233,18 @@ private val NavItemShape = chat.cursus.ui.theme.Radius.dockSelection
 
 /**
  * Linux `bottom_nav` + `floating_nav_style`: the composer's glass card
- * (translucent fill, light edge, soft wide shadow) inset 12dp from the
- * edges, over the same fade the list dissolves into; each destination
+ * (the list blurred behind it, a translucent tint, a light edge) inset
+ * 12dp from the edges, with nothing drawn around it; each destination
  * fills an equal cell, the active one on an accent-soft rounded square.
  */
 @Composable
-private fun BottomBar(model: AppModel, surface: Color, modifier: Modifier = Modifier) {
+private fun BottomBar(model: AppModel, modifier: Modifier = Modifier) {
     val c = Cursus.colors
     val labelStyle = TextStyle(fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium)
     val labelGrowth = 14.dp * (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f)
     Row(
         modifier
             .fillMaxWidth()
-            .glassScrim(surface)
-            .padding(top = GLASS_FADE)
             .padding(start = NavInset, end = NavInset, bottom = NavInset)
             .height(NavBarHeight + labelGrowth)
             .glass(NavShape)

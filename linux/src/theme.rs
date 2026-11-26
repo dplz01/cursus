@@ -342,7 +342,7 @@ pub const DOCK_SELECTION_RADIUS: f32 = CONTROL_RADIUS - DOCK_INSET;
 
 /// Rounded floating section nav that sits over the list page: the same
 /// glass surface as the composer field (translucent fill, light edge, wide
-/// soft shadow), over the same fade (`glass_scrim`).
+/// soft shadow), with nothing drawn around it.
 pub fn floating_nav_style() -> impl Fn(&iced::Theme) -> container::Style {
     |_| container::Style {
         background: Some(Background::Color(glass_fill())),
@@ -915,16 +915,24 @@ mod contrast_tests {
 }
 
 // ── Glass: surfaces floating over the chat (composer and its cards) ─────
-// Iced has no backdrop blur, so the effect comes from a translucent fill,
-// a thin light edge, a wide soft shadow and the fade under the composer
-// (`glass_scrim`) that the messages slide into.
+// The surface blurs what is behind it (crate::glass: a GPU backdrop blur
+// through our patched iced_wgpu), under a translucent tint, a thin light
+// edge and a subtle shadow. Nothing is drawn around it. Without a readable
+// GPU surface the tint turns into a dense frosted fill.
 
 /// Translucent fill of a floating surface.
 pub fn glass_fill() -> Color {
     let c = t().bg_elevated;
-    // Heavily frosted: iced has no backdrop blur, so a dense fill is what
-    // keeps whatever slides underneath a soft shape rather than legible.
-    Color { a: if is_light_active() { 0.95 } else { 0.94 }, ..c }
+    // Over the real backdrop blur (crate::glass) the tint can be light, as
+    // on Android; without it (software renderer, unsampleable surface) it
+    // must be dense, or text sliding underneath stays legible through it.
+    let a = match (crate::glass::available(), is_light_active()) {
+        (true, true) => 0.70,
+        (true, false) => 0.62,
+        (false, true) => 0.95,
+        (false, false) => 0.94,
+    };
+    Color { a, ..c }
 }
 
 /// Thin edge that catches the light on a floating surface.
@@ -939,28 +947,10 @@ pub fn glass_edge() -> Color {
 /// Wide, soft shadow that lifts a floating surface off the chat.
 pub fn glass_shadow() -> iced::Shadow {
     iced::Shadow {
-        color: Color::from_rgba(0.0, 0.0, 0.0, if is_light_active() { 0.16 } else { 0.45 }),
-        offset: iced::Vector::new(0.0, 8.0),
-        blur_radius: 28.0,
+        // Subtle: the edge separates the surface; a big halo read as a box.
+        color: Color::from_rgba(0.0, 0.0, 0.0, if is_light_active() { 0.10 } else { 0.30 }),
+        offset: iced::Vector::new(0.0, 2.0),
+        blur_radius: 10.0,
     }
 }
 
-/// Fade behind a floating bar `height` px tall whose top `strip` px are
-/// empty inset: the chat background goes from clear to nearly opaque
-/// across that strip only, so messages dissolve as they slide under it but
-/// one resting just above the strip is never dimmed.
-pub fn glass_scrim(strip: f32, height: f32) -> Background {
-    glass_scrim_on(t().bg_panel, strip, height)
-}
-
-/// The same fade into another surface's colour (the chat list under the
-/// destinations bar): fading into a different colour reads as a band.
-pub fn glass_scrim_on(base: Color, strip: f32, height: f32) -> Background {
-    let end = if height > 0.0 { (strip / height).clamp(0.01, 1.0) } else { 0.2 };
-    Background::Gradient(iced::Gradient::Linear(
-        iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI))
-            .add_stop(0.0, Color { a: 0.0, ..base })
-            .add_stop(end, Color { a: 0.92, ..base })
-            .add_stop(1.0, Color { a: 0.92, ..base }),
-    ))
-}

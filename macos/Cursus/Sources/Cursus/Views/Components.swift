@@ -92,36 +92,6 @@ struct FloatingSurface: ViewModifier {
     }
 }
 
-/// Fade behind the floating composer before Liquid Glass: the chat
-/// background from clear to nearly opaque, so messages dissolve under it.
-struct GlassScrim: View {
-    var body: some View {
-        #if compiler(>=6.2) && CURSUS_GLASS
-        if #available(macOS 26.0, *) {
-            Color.clear
-        } else {
-            gradient
-        }
-        #else
-        gradient
-        #endif
-    }
-
-    /// Clear to nearly opaque across the composer's 8pt top inset only,
-    /// then held, so a resting last message just above it is never dimmed.
-    private var gradient: some View {
-        VStack(spacing: 0) {
-            LinearGradient(colors: [Theme.panel.opacity(0), Theme.panel.opacity(0.92)],
-                           startPoint: .top, endPoint: .bottom)
-                .frame(height: GlassScrim.strip)
-            Theme.panel.opacity(0.92)
-        }
-    }
-
-    /// The fade strip: the composer's top inset (Linux `GLASS_FADE`).
-    static let strip: CGFloat = 8
-}
-
 extension View {
     func floatingSurface(radius: CGFloat = Radius.smallControl) -> some View {
         modifier(FloatingSurface(radius: radius))

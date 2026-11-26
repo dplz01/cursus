@@ -77,6 +77,10 @@ import chat.cursus.R
 import chat.cursus.core.Chat
 import chat.cursus.core.Message
 import chat.cursus.core.Quote
+import chat.cursus.ui.components.backdropSource
+import chat.cursus.ui.components.rememberBackdrop
+import chat.cursus.ui.components.LocalBackdrop
+import chat.cursus.ui.components.glass
 import chat.cursus.core.Segment
 import chat.cursus.core.Stamps
 import chat.cursus.ui.components.AccentSquare
@@ -99,56 +103,68 @@ fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () 
     val c = Cursus.colors
     val callPermission = rememberCallPermission(model)
     Column(Modifier.fillMaxSize().background(c.bgPanel).windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
-        // Header and composer are bars (sidebar tone); the history sits on the panel.
-        Row(
-            Modifier.fillMaxWidth().background(c.bgSidebar).height(56.dp).padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (showBack) IconTool(R.drawable.ic_back, "Back", systemBack { model.select(null) })
-            Row(
-                Modifier.weight(1f).clip(Radius.lg).clickable(onClick = onInfo).padding(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Avatar(chat.title, chat.image, 36.dp, group = chat.isGroup)
-                Column {
-                    Text(chat.title, style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    val sub = when {
-                        chat.isChannel -> "Channel"
-                        chat.isGroup -> "Group"
-                        chat.isNotes -> "Notes"
-                        else -> chat.shortDescr.ifBlank { null }
-                    }
-                    if (sub != null) Text(sub, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-            // Unread support messages: the yellow counter (Linux header).
-            if (chat.isGroup && !chat.isChannel && chat.supportBadge > 0) {
-                AttentionButton(R.drawable.ic_flag_outline, chat.supportBadge, if (chat.canModerate) "Chats with members" else "Chat with admins") {
-                    if (chat.canModerate) onInfo() else model.select("${chat.ref}(_support)")
-                }
-            }
-            if (chat.isContact && !chat.isRequest) IconTool(R.drawable.ic_calls, "Audio call", {
-                callPermission { model.calls.start(chat.apiId, chat.title) }
-            }, enabled = model.calls.state.active == null && !model.calls.starting)
-            // No (i): tapping the name / picture opens the profile.
-        }
-        Box(Modifier.fillMaxWidth().background(c.border).heightIn(min = 1.dp, max = 1.dp))
-
         // The composer floats over the history (which scrolls underneath
         // it); the list keeps its height as bottom padding so the newest
         // message can still be scrolled clear of the field.
         val floating = model.selected.isEmpty() && !chat.isRequest && !(chat.isChannel && chat.role != "owner")
         var composerHeight by remember { mutableStateOf(0.dp) }
         val density = androidx.compose.ui.platform.LocalDensity.current
+        // The history is the backdrop the composer's glass blurs.
+        val backdrop = rememberBackdrop()
         Box(Modifier.weight(1f)) {
-            // Its 8dp top inset (the fade strip) is the whole gap above the
-            // field (Linux composer_inset).
-            MessageList(model, chat, bottomInset = if (floating) composerHeight else 0.dp)
+            // Its 8dp top inset is the whole gap above the field (Linux
+            // composer_inset).
+            Box(Modifier.fillMaxSize().backdropSource(backdrop, c.bgPanel)) {
+                MessageList(model, chat, bottomInset = if (floating) composerHeight else 0.dp)
+            }
+            // The title bar floats over the top of the history like the
+            // composer and the destinations bar: a glass card over the
+            // blurred history (Linux CHAT_HEADER_*).
+            androidx.compose.runtime.CompositionLocalProvider(LocalBackdrop provides backdrop) {
+                Row(
+                    Modifier.align(Alignment.TopCenter).fillMaxWidth()
+                        .padding(start = 10.dp, end = 10.dp, top = HEADER_INSET)
+                        .height(HEADER_HEIGHT).glass(Radius.control).padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (showBack) IconTool(R.drawable.ic_back, "Back", systemBack { model.select(null) })
+                    Row(
+                        Modifier.weight(1f).clip(Radius.lg).clickable(onClick = onInfo).padding(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Avatar(chat.title, chat.image, 36.dp, group = chat.isGroup)
+                        Column {
+                            Text(chat.title, style = Cursus.type.body, color = c.textPrimary, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            val sub = when {
+                                chat.isChannel -> "Channel"
+                                chat.isGroup -> "Group"
+                                chat.isNotes -> "Notes"
+                                else -> chat.shortDescr.ifBlank { null }
+                            }
+                            if (sub != null) Text(sub, style = Cursus.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                    // Unread support messages: the yellow counter (Linux header).
+                    if (chat.isGroup && !chat.isChannel && chat.supportBadge > 0) {
+                        AttentionButton(R.drawable.ic_flag_outline, chat.supportBadge, if (chat.canModerate) "Chats with members" else "Chat with admins") {
+                            if (chat.canModerate) onInfo() else model.select("${chat.ref}(_support)")
+                        }
+                    }
+                    if (chat.isContact && !chat.isRequest) IconTool(R.drawable.ic_calls, "Audio call", {
+                        callPermission { model.calls.start(chat.apiId, chat.title) }
+                    }, enabled = model.calls.state.active == null && !model.calls.starting)
+                    // No (i): tapping the name / picture opens the profile.
+                }
+            }
             if (floating) Box(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .onSizeChanged { composerHeight = with(density) { it.height.toDp() } },
-            ) { Composer(model) }
+            ) {
+                androidx.compose.runtime.CompositionLocalProvider(LocalBackdrop provides backdrop) {
+                    Composer(model)
+                }
+            }
         }
 
         when {
@@ -159,6 +175,12 @@ fun ConversationPane(model: AppModel, chat: Chat, showBack: Boolean, onInfo: () 
     }
     androidx.activity.compose.BackHandler(model.selected.isNotEmpty()) { model.selected.clear() }
 }
+
+/** Floating title bar: height, inset from the top, and the room the
+ *  history keeps above its first message (bar + inset + 8dp gap). */
+private val HEADER_HEIGHT = 56.dp
+private val HEADER_INSET = 8.dp
+private val HEADER_ROOM = HEADER_INSET + HEADER_HEIGHT + 8.dp
 
 /** Selection mode (message menu → Select): count, forward, delete, cancel. */
 @Composable
@@ -267,7 +289,7 @@ private fun MessageList(model: AppModel, chat: Chat, bottomInset: androidx.compo
         Modifier.fillMaxSize(),
         state = state,
         reverseLayout = true,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 8.dp, bottom = if (bottomInset > 0.dp) bottomInset else 8.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = HEADER_ROOM, bottom = if (bottomInset > 0.dp) bottomInset else 8.dp),
     ) {
         items(rows.size, key = { i ->
             when (val r = rows[i]) {

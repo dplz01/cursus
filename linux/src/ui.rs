@@ -690,22 +690,12 @@ fn list_with_bottom_nav(app: &App) -> Element<'_, Message> {
     let float_inset = if app.layout() == LayoutMode::Mobile { 12.0 } else { 8.0 };
     // On a wide one-column window the list and the bar keep a readable
     // width in the middle instead of stretching edge to edge.
-    // Like the composer: the bar floats on glass over a fade that the list
-    // dissolves into as it scrolls underneath.
+    // Like the composer: only the bar itself is glass; nothing is drawn
+    // around it, and the list scrolls underneath.
     let bar = container(container(bottom_nav(app)).max_width(PHONE_LIST_MAX))
-        .padding(Padding { top: GLASS_FADE, right: float_inset, bottom: float_inset, left: float_inset })
+        .padding(Padding { top: 0.0, right: float_inset, bottom: float_inset, left: float_inset })
         .width(Length::Fill)
-        .align_x(Alignment::Center)
-        .style(move |_| container::Style {
-            // Settings sits on the panel colour, the chat / call lists on
-            // the list colour: fade into whichever is underneath.
-            background: Some(theme::glass_scrim_on(
-                if app.nav() == NavSection::Settings { theme::t().bg_panel } else { theme::t().bg_list },
-                GLASS_FADE,
-                GLASS_FADE + app.density().nav_bar_height + float_inset,
-            )),
-            ..container::Style::default()
-        });
+        .align_x(Alignment::Center);
     let nav = container(bar)
         .width(Length::Fill)
         .height(Length::Fill)
@@ -829,11 +819,13 @@ fn bottom_nav(app: &App) -> Element<'_, Message> {
         );
     }
 
-    container(r)
-        .width(Length::Fill)
-        .height(d.nav_bar_height)
-        .style(theme::floating_nav_style())
-        .into()
+    crate::glass::surface(
+        container(r)
+            .width(Length::Fill)
+            .height(d.nav_bar_height)
+            .style(theme::floating_nav_style()),
+        theme::CONTROL_RADIUS,
+    )
 }
 
 fn nav_destination(
@@ -1321,14 +1313,20 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
         composer_bar(app, d)
     };
 
-    let header = container(title_row)
-        .height(56)
-        .align_y(Alignment::Center)
-        .width(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().bg_sidebar)),
-            ..container::Style::default()
-        });
+    // The title bar floats over the top of the history like the composer
+    // and the destinations bar: a glass card inset from the edges, the
+    // history scrolling underneath it (it keeps CHAT_HEADER_ROOM at its top).
+    let side = if app.layout() == LayoutMode::Mobile { 6.0 } else { 10.0 };
+    let header = container(crate::glass::surface(
+        container(title_row)
+            .height(CHAT_HEADER_HEIGHT)
+            .align_y(Alignment::Center)
+            .width(Length::Fill)
+            .style(theme::floating_nav_style()),
+        theme::CONTROL_RADIUS,
+    ))
+    .padding(Padding { top: CHAT_HEADER_INSET, right: side, bottom: 0.0, left: side })
+    .width(Length::Fill);
     // Taps anywhere below the header keep the composer (and the on-screen
     // keyboard) up; only the header and other panes dismiss it.
     // The composer floats over the history (which scrolls underneath it);
@@ -1349,10 +1347,21 @@ fn conversation_pane(app: &App, with_back: bool) -> Element<'_, Message> {
         column![history, footer].height(Length::Fill).into()
     };
     let body = crate::touch_mouse::keep_focus_zone(content);
-    column![header, hairline(), body]
+    Stack::new()
+        .width(Length::Fill)
         .height(Length::Fill)
+        .push(body)
+        .push(header)
         .into()
 }
+
+/// Floating chat title bar: its height and its inset from the pane's top.
+const CHAT_HEADER_HEIGHT: f32 = 56.0;
+const CHAT_HEADER_INSET: f32 = 8.0;
+/// Room the history keeps at its top so the first message can scroll clear
+/// of the floating title bar (bar + inset above + 8 px gap below, as above
+/// the composer).
+const CHAT_HEADER_ROOM: f32 = CHAT_HEADER_INSET + CHAT_HEADER_HEIGHT + 8.0;
 
 /// Whether both sides allow calls (`mergedPreferences.calls`); unknown → yes.
 fn contact_calls_allowed(chat: &cursus_core::ChatPreview) -> bool {
@@ -1675,9 +1684,12 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     // A floating field with the control radius of every other button; the
     // paperclip (or ✕ while recording) sits inside it at the end. The tree
     // shape is the same in every state, so the editor keeps its focus.
-    let pill = container(row![editor, inner].align_y(Alignment::End))
-        .width(Length::Fill)
-        .style(|_| floating_card());
+    let pill = crate::glass::surface(
+        container(row![editor, inner].align_y(Alignment::End))
+            .width(Length::Fill)
+            .style(|_| floating_card()),
+        theme::SMALL_CONTROL_RADIUS,
+    );
     // Always End: equal-height single-line looks centered; multi-line grows up.
     let input_row = row![pill, trailing]
         .spacing(8)
@@ -1686,7 +1698,6 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     // Even inset above and below the text field on every layout. The top
     // one is also the fade strip (GLASS_FADE).
     let (bar_pad_top, bar_pad_bottom) = (GLASS_FADE, 8.0);
-    let scrim_h = app.composer_inset();
 
     // Keep a fixed 3-slot column ([suggest][reply][input]) so showing the
     // `:shortcode` list doesn't shift the editor's tree index and steal focus.
@@ -1745,10 +1756,13 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         // Same surface and width as the text field it completes: the
         // field's floating card, ending where the field ends (the send /
         // mic button sits beside the field, not under the list).
-        let suggest_panel = container(list)
-            .padding(theme::SUGGEST_INSET)
-            .width(Length::Fill)
-            .style(|_| floating_card());
+        let suggest_panel = crate::glass::surface(
+            container(list)
+                .padding(theme::SUGGEST_INSET)
+                .width(Length::Fill)
+                .style(|_| floating_card()),
+            theme::SMALL_CONTROL_RADIUS,
+        );
         column![
             row![suggest_panel, Space::new().width(send_size + 8.0)],
             vertical().height(6)
@@ -1776,7 +1790,14 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         .spacing(12)
         .padding(12)
         .align_y(Alignment::Center);
-        column![container(card).width(Length::Fill).style(|_| floating_card()), vertical().height(8)].into()
+        column![
+            crate::glass::surface(
+                container(card).width(Length::Fill).style(|_| floating_card()),
+                theme::SMALL_CONTROL_RADIUS,
+            ),
+            vertical().height(8)
+        ]
+        .into()
     } else {
         Column::new().into()
     };
@@ -1805,7 +1826,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     // A recording that couldn't become a draft says why (the status line
     // isn't shown in chats).
     let voice_error_slot: Element<'_, Message> = match app.voice_error() {
-        Some(err) => column![container(row![
+        Some(err) => column![crate::glass::surface(container(row![
             icons::mic_icon(16.0, theme::t().danger),
             text(err.to_string())
                 .size(d.meta)
@@ -1818,7 +1839,7 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
         .align_y(Alignment::Center)
         .padding(Padding::from([6, 10])))
         .width(Length::Fill)
-        .style(|_| floating_card()), vertical().height(8)]
+        .style(|_| floating_card()), theme::SMALL_CONTROL_RADIUS), vertical().height(8)]
         .into(),
         None => Column::new().width(Length::Fill).into(),
     };
@@ -1833,8 +1854,8 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     } else {
         10.0
     };
-    // No bar behind it: the field and its button float over the chat; a
-    // fade above them lets the messages dissolve as they slide underneath.
+    // No bar behind it: only the field, its button and the cards above
+    // them float over the chat, each on its own glass.
     container(body)
         .padding(Padding {
             top: bar_pad_top,
@@ -1843,10 +1864,6 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             left: bar_pad_x,
         })
         .width(Length::Fill)
-        .style(move |_| container::Style {
-            background: Some(theme::glass_scrim(bar_pad_top, scrim_h)),
-            ..container::Style::default()
-        })
         .into()
 }
 
@@ -1866,8 +1883,9 @@ fn floating_card() -> container::Style {
 }
 
 /// Height of the fade above the floating composer.
-/// The fade above floating bars: just their 8 px top inset, so the list
-/// dissolves in that strip and a resting last message is never dimmed.
+/// Empty inset above floating bars (composer, destinations bar): the whole
+/// gap between them and the content resting above. Nothing is painted in
+/// it; only the bars themselves are glass.
 pub(crate) const GLASS_FADE: f32 = 8.0;
 
 /// Soft shadow under floating controls (composer field and its button).
@@ -1929,19 +1947,8 @@ fn composer_context_bar(
     .padding(Padding::from([8, 10]))
     .width(Length::Fill)
     .style(|_| floating_card());
+    let bar = crate::glass::surface(bar, theme::SMALL_CONTROL_RADIUS);
     column![bar, vertical().height(8)].width(Length::Fill).into()
-}
-
-/// 1px horizontal rule in the border colour (top of bars, under headers).
-fn hairline<'a>() -> Element<'a, Message> {
-    container(Space::new().width(Length::Fill).height(1))
-        .width(Length::Fill)
-        .height(1)
-        .style(|_| container::Style {
-            background: Some(iced::Background::Color(theme::t().border)),
-            ..container::Style::default()
-        })
-        .into()
 }
 
 fn contact_request_bar(app: &App, req_id: i64, d: Density) -> Element<'_, Message> {
@@ -2100,7 +2107,7 @@ fn history_column(app: &App, d: Density) -> Element<'static, Message> {
     // No extra bottom padding: the composer's 8 px top inset is the whole
     // gap under the last message, as in WhatsApp / Telegram.
     let mut col = Column::new().spacing(0).padding(Padding {
-        top: 4.0,
+        top: CHAT_HEADER_ROOM,
         right: d.pad,
         bottom: if inset > 0.0 { inset } else { 10.0 },
         left: d.pad,
@@ -3112,6 +3119,7 @@ fn voice_draft_bar(
     .padding(Padding { top: 6.0, right: 12.0, bottom: 6.0, left: 0.0 })
     .width(Length::Fill)
     .style(|_| floating_card());
+    let field = crate::glass::surface(field, theme::SMALL_CONTROL_RADIUS);
     container(
         row![
             field,
@@ -3127,11 +3135,6 @@ fn voice_draft_bar(
     )
     .padding(Padding { top: GLASS_FADE, right: 10.0, bottom: 8.0, left: 10.0 })
     .width(Length::Fill)
-    .style(move |_| container::Style {
-        // The bar is about one control tall; the strip ends GLASS_FADE down.
-        background: Some(theme::glass_scrim(GLASS_FADE, GLASS_FADE + send_size + 8.0)),
-        ..container::Style::default()
-    })
     .into()
 }
 

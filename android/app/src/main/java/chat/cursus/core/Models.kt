@@ -1,5 +1,7 @@
 package chat.cursus.core
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import kotlinx.serialization.Serializable
 import java.time.Instant
 import java.time.LocalDate
@@ -193,6 +195,7 @@ data class CoreEvent(
     val type: String = "",
     val refreshChats: Boolean = false,
     val refreshMessages: Boolean = false,
+    val refreshCallHistory: Boolean = false,
     val chat: String? = null,
     val progress: FileProgress? = null,
     val incoming: List<Incoming> = emptyList(),
@@ -209,16 +212,26 @@ data class ReceiveReply(val accepted: Boolean = true, val servers: List<String> 
 @Serializable
 data class PreparedLink(val url: String? = null, val simplex: String? = null)
 
-/** Core timestamps are ISO-8601 UTC with up to nanoseconds. */
+/** Core timestamps are ISO-8601 UTC with up to nanoseconds. Times of day
+ *  follow the 12-hour / 24-hour setting (cursus_core::clock). */
 object Stamps {
-    private val time = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
+    /** Settings → Appearance → Time format; Compose state, so every stamp redraws. */
+    var clock24 by androidx.compose.runtime.mutableStateOf(false)
+
+    private val time12 = DateTimeFormatter.ofPattern("h:mm a", java.util.Locale.ENGLISH)
+    private val time24 = DateTimeFormatter.ofPattern("HH:mm")
+    private val time get() = if (clock24) time24 else time12
     private val day = DateTimeFormatter.ofPattern("d MMM")
+    private val dateOfInfo = DateTimeFormatter.ofPattern("d MMM yyyy")
     private val fullDay = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
 
     fun parse(raw: String?): Instant? = raw?.let { runCatching { Instant.parse(it) }.getOrNull() }
 
     fun time(raw: String?): String =
         parse(raw)?.atZone(ZoneId.systemDefault())?.format(time) ?: ""
+
+    /** Message info: `3 Nov 2026, 14:05` / `3 Nov 2026, 2:05 PM`. */
+    fun dateTime(at: java.time.ZonedDateTime): String = "${at.format(dateOfInfo)}, ${at.format(time)}"
 
     /** Chat list stamp: time today, else a short date. */
     fun list(raw: String?): String {

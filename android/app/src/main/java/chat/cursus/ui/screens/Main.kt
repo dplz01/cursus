@@ -2,6 +2,7 @@ package chat.cursus.ui.screens
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.activity.compose.BackHandler
+import chat.cursus.ui.components.pageSlide
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
@@ -130,6 +131,14 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
     val inChatSection = model.section == Section.Chats || model.section == Section.Channels
     val chatOpen = inChatSection && model.selectedChat?.isChannel == (model.section == Section.Channels)
 
+    // A newly opened chat / profile / settings page slides in.
+    val openChat = if (chatOpen) model.selection else null
+    val motion = chat.cursus.ui.components.rememberPageMotion(
+        key = Triple(model.section, openChat, page),
+        depth = (if (openChat != null) 1 else 0) + (if (page != null) 1 else 0),
+        onePane = !twoPane,
+    )
+
     BackHandler(enabled = page != null) { page = null }
     BackHandler(enabled = page == null && chatOpen) { model.select(null) }
 
@@ -203,10 +212,17 @@ private fun MainContent(model: AppModel, twoPane: Boolean, listWidth: androidx.c
             Row(Modifier.fillMaxSize()) {
                 Box(Modifier.width(listWidth).fillMaxHeight()) { sidebar() }
                 VerticalDivider(color = c.border, thickness = 1.dp)
-                Box(Modifier.weight(1f).fillMaxHeight().background(c.bgPanel)) { detail() }
+                Box(Modifier.weight(1f).fillMaxHeight().background(c.bgPanel)) {
+                    Box(Modifier.fillMaxSize().pageSlide(motion)) { detail() }
+                }
             }
         } else if (page != null || chatOpen) {
-            Box(Modifier.fillMaxSize().background(c.bgPanel)) { detail() }
+            // Opened from the list: the page slides over it while it dims.
+            if (motion.full && motion.remaining > 0f) {
+                sidebar()
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.18f * (1f - motion.remaining))))
+            }
+            Box(Modifier.fillMaxSize().pageSlide(motion).background(c.bgPanel)) { detail() }
         } else {
             sidebar()
         }
@@ -303,24 +319,32 @@ fun EmptyPane(text: String) {
 @Composable
 fun CallsPane(model: AppModel) {
     val permission = rememberCallPermission(model)
-    var calls by remember { mutableStateOf<List<chat.cursus.core.CallRecord>?>(null) }
+    val calls = model.calls.history
     var failure by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(model.calls.historyRevision) {
-        runCatching { chat.cursus.core.Core.call<List<chat.cursus.core.CallRecord>>("callHistory") }
-            .onSuccess { calls = it }.onFailure { failure = it.message }
+        failure = null
+        try {
+            model.calls.loadHistory()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failure = e.message ?: "Could not load calls."
+        }
     }
     val c = Cursus.colors
-    val contactsById = model.chats.filter { it.isContact }.associateBy { it.apiId }
+    val contactsById = remember(model.chats.toList()) {
+        model.chats.filter { it.isContact }.associateBy { it.apiId }
+    }
     Column(Modifier.fillMaxSize()) {
         PaneHeader("Calls", actions = { NewCallButton(model) })
         when {
-            failure != null -> EmptyPane(failure ?: "Could not load calls.")
+            calls == null && failure != null -> EmptyPane(failure.orEmpty())
             calls == null -> EmptyPane("Loading calls…")
-            calls!!.isEmpty() -> EmptyPane("Your recent calls will appear here.")
+            calls.isEmpty() -> EmptyPane("Your recent calls will appear here.")
             else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f),
                 contentPadding = PaddingValues(bottom = LocalNavClearance.current)) {
-                items(calls!!.size, key = { calls!![it].itemId }) { index ->
-                    val call = calls!![index]
+                items(calls.size, key = { calls[it].itemId }) { index ->
+                    val call = calls[index]
                     val contact = contactsById[call.contactId]
                     val icon = when {
                         call.missed -> chat.cursus.R.drawable.ic_call_missed

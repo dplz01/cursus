@@ -380,6 +380,7 @@ pub fn event(e: &Event) -> Value {
         "type": event_name(e),
         "refreshChats": e.refreshes_chats(),
         "refreshMessages": e.refreshes_messages(),
+        "refreshCallHistory": e.refreshes_call_history(),
         "chat": e.chat_hint().map(|c| c.command_ref()),
         "progress": progress,
         "incoming": incoming(e),

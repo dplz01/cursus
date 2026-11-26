@@ -137,6 +137,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private var pumpStarted = false
     private var chatsReload: Job? = null
     private var messagesReload: Job? = null
+    private var historyRequest: Job? = null
+    private var historyMedia: Job? = null
 
     /** The open chat; a group's support thread (`#9(_support:4)`) is shown as its group, retitled. */
     val selectedChat: Chat?
@@ -254,6 +256,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         VoicePlayer.stop()
         discardRecording()
         discardVoiceDraft()
+        historyMedia?.cancel()
         plainFiles.clear()
         gallery = null
         revealedMedia.clear()
@@ -321,6 +324,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     fun lock() {
         calls.end()
+        calls.clearHistory()
+        historyRequest?.cancel()
         dropPlaintext()
         busy = true
         viewModelScope.launch {
@@ -346,6 +351,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 Core.run("wipeLocalData")
+                calls.clearHistory()
+                historyRequest?.cancel()
                 passwords.delete()
                 selection = null
                 chats.clear()
@@ -389,6 +396,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private fun handle(e: CoreEvent) {
         if (phase != Phase.Ready) return
         if (e.refreshChats) scheduleChatsReload()
+        if (e.refreshCallHistory) calls.invalidateHistory()
         val open = selection
         // Transfer progress arrives many times a second: move the bar of the
         // message that shows the file instead of reloading the history.
@@ -448,6 +456,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     fun select(ref: String?) {
         val old = selection
         if (old == ref) return
+        historyRequest?.cancel()
+        historyMedia?.cancel()
+        messagesReload?.cancel()
         if (old != null) drafts[old] = draft
         discardPastedImage()
         selection = ref
@@ -471,9 +482,12 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun reloadMessages(ref: String) {
-        viewModelScope.launch {
+        if (selection != ref) return
+        historyRequest?.cancel()
+        val count = historyCount
+        historyRequest = viewModelScope.launch {
             try {
-                val list: List<Message> = Core.call("listMessages", mapOf("chat" to ref, "count" to historyCount))
+                val list: List<Message> = Core.call("listMessages", mapOf("chat" to ref, "count" to count))
                 if (selection != ref) return@launch
                 if (messagesFor != ref) {
                     openingReadAnchor = chat.cursus.core.latestReadAnchor(list, openingUnread)
@@ -484,8 +498,10 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 messagesFor = ref
                 loadImages(list)
                 autoDownload(list)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                notice = e.message
+                if (selection == ref) notice = e.message
             }
         }
     }
@@ -501,13 +517,19 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun loadImages(list: List<Message>) {
-        for (m in list) {
-            val f = m.file ?: continue
-            if (f.kind !in setOf("image", "voice") || f.state != "complete" || f.path == null || plainFiles.containsKey(f.id)) continue
-            viewModelScope.launch {
-                runCatching {
-                    val path: String = Core.call("plainFile", mapOf("path" to f.path, "key" to f.key, "nonce" to f.nonce))
-                    plainFiles[f.id] = path
+        if (appLocked) return
+        historyMedia?.cancel()
+        historyMedia = viewModelScope.launch {
+            for (message in list.asReversed()) {
+                val file = message.file ?: continue
+                if ((file.kind != "image" && file.kind != "voice") || file.state != "complete" ||
+                    file.path == null || plainFiles.containsKey(file.id)) continue
+                try {
+                    plainFiles[file.id] = Core.call("plainFile", mapOf("path" to file.path, "key" to file.key, "nonce" to file.nonce))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // An unavailable attachment should not stop the rest of the batch.
                 }
             }
         }
@@ -533,11 +555,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     fun clear(chat: Chat) = act {
         Core.run("clearChat", mapOf("chat" to chat.ref))
+        calls.invalidateHistory()
         if (selection == chat.ref) reloadMessages(chat.ref)
     }
 
     fun delete(chat: Chat) = act {
         Core.run("deleteChat", mapOf("chat" to chat.ref))
+        calls.invalidateHistory()
         if (selection == chat.ref) select(null)
     }
 
@@ -627,6 +651,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     private fun deleteMessages(ids: List<Long>, forEveryone: Boolean) = act {
         Core.run("deleteItems", mapOf("chat" to selection, "itemIds" to ids, "forEveryone" to forEveryone))
+        calls.invalidateHistory()
         selection?.let { reloadMessages(it) }
     }
 

@@ -290,6 +290,34 @@ fn shots() {
             app.own_profile.fields = profile("Davide", "Building Cursus");
             render(&app, DESKTOP, &format!("settings-{t}"));
         }
+        if want("clock24") {
+            // 24-hour clock: Appearance, then the stamps in a chat.
+            let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);
+            app.desktop_prefs.time_format = cursus_core::TimeFormat::H24;
+            super::ui::set_clock(cursus_core::TimeFormat::H24);
+            app.nav = NavSection::Settings;
+            app.settings_open = true;
+            app.settings_section = crate::SettingsSection::Appearance;
+            render(&app, DESKTOP, &format!("clock24-appearance-{t}"));
+            app.nav = NavSection::Chats;
+            select(&mut app, 0);
+            render(&app, DESKTOP, &format!("clock24-chat-{t}"));
+            super::ui::set_clock(cursus_core::TimeFormat::H12);
+        }
+        if want("motion") {
+            // Page transitions frozen mid-way (~40% travelled).
+            for (size, name, two_panes) in [(MOBILE, "mmotion", false), (DESKTOP, "motion", true)] {
+                let mut app = demo_app(dark, size.width, size.height);
+                let list = app.current_page();
+                select(&mut app, 0);
+                app.page_key = app.current_page();
+                let now = std::time::Instant::now();
+                app.page_motion = super::page_motion::motion_for(&list, &app.page_key, two_panes, false, now);
+                assert!(app.page_motion.is_some());
+                app.motion_now = now + std::time::Duration::from_millis(60);
+                render(&app, size, &format!("{name}-{t}"));
+            }
+        }
         if want("contact") {
             let mut app = demo_app(dark, DESKTOP.width, DESKTOP.height);
             select(&mut app, 0);
@@ -1088,7 +1116,7 @@ fn new_messages_follow_and_label() {
     app.history_away_from_end = true;
     let load = |app: &mut App, messages: Vec<ChatMessage>| {
         let gen = app.messages_load_gen;
-        let _ = app.update(Message::MessagesLoaded { gen, result: Ok(messages) });
+        let _ = app.update(Message::MessagesLoaded { gen, chat: app.selected_id.clone().unwrap(), result: Ok(messages.into()) });
     };
 
     // Same list: nothing happens.
@@ -1110,15 +1138,17 @@ fn new_messages_follow_and_label() {
     load(&mut app, away.clone());
     assert!(app.history_away_from_end, "incoming messages don't scroll");
     assert_eq!(app.new_messages_from(), Some(31));
+    let stale_timer = app.new_messages_marker.unwrap().1;
     render(&app, MOBILE, "fix-new-messages-dark");
     away.push(msg(33, "😄", false, "09:12"));
     load(&mut app, away.clone());
     assert_eq!(app.new_messages_from(), Some(31));
 
     // Only the latest timer clears it.
-    let _ = app.update(Message::ClearNewMessagesMarker(0));
+    let latest_timer = app.new_messages_marker.unwrap().1;
+    let _ = app.update(Message::ClearNewMessagesMarker(stale_timer));
     assert_eq!(app.new_messages_from(), Some(31), "stale timer ignored");
-    let _ = app.update(Message::ClearNewMessagesMarker(1));
+    let _ = app.update(Message::ClearNewMessagesMarker(latest_timer));
     assert_eq!(app.new_messages_from(), None);
 
     // Opening a chat never labels its history.
@@ -1176,7 +1206,7 @@ fn opening_a_chat_labels_unread_messages() {
         app.pin_history_end = true;
         app.open_unread = unread;
         let gen = app.messages_load_gen;
-        let _ = app.update(Message::MessagesLoaded { gen, result: Ok(history.clone()) });
+        let _ = app.update(Message::MessagesLoaded { gen, chat: app.selected_id.clone().unwrap(), result: Ok(history.clone().into()) });
     };
 
     open(&mut app, 2);
@@ -1249,6 +1279,7 @@ fn section_switches_drop_foreign_pages_and_invalidate_history() {
             app.photo_menu = Some(crate::PhotoTarget::Own);
             app.pending_links_open = true;
             let old_gen = app.messages_load_gen;
+            let old_chat = app.selected_id.clone().unwrap();
             let _ = app.update(Message::Navigate(destination));
             assert_eq!(app.nav, destination);
             assert!(app.contact_profile.is_none() && app.group_settings.is_none());
@@ -1258,7 +1289,7 @@ fn section_switches_drop_foreign_pages_and_invalidate_history() {
                 assert!(app.selected.is_none());
                 assert_ne!(app.messages_load_gen, old_gen);
                 let _ = app.update(Message::MessagesLoaded {
-                    gen: old_gen, result: Ok(vec![msg(999, "stale history", false, "09:00")]),
+                    gen: old_gen, chat: old_chat, result: Ok(vec![msg(999, "stale history", false, "09:00")].into()),
                 });
                 assert!(app.messages.is_empty(), "history from the previous section must stay hidden");
             }
@@ -1827,7 +1858,8 @@ fn shots_image_viewer_and_paste() {
         let mut app = demo_app(dark, 800.0, 760.0);
         select(&mut app, 0);
         app.image_viewer = Some((path.clone(), 1.0));
-        let jobs = app.gallery_cache.plan(std::slice::from_ref(&path), 0);
+        app.gallery_cache.begin(vec![(path.clone(), "example.png".into())]);
+        let jobs = app.gallery_cache.plan(&path);
         for (file, generation) in jobs { app.gallery_cache.complete(file.clone(), generation, crate::gallery::decode(&file)); }
         render(&app, Size::new(800.0, 760.0), if dark { "viewer-dark" } else { "viewer-light" });
         app.image_viewer = None;
@@ -2033,17 +2065,17 @@ fn gallery_navigation_stops_at_both_ends() {
         })
         .collect::<Vec<_>>()
         .into();
-    assert_eq!(app.gallery_name(&paths[0]), "first.png");
-    assert_eq!(app.gallery_name(&paths[1]), "second.png");
     assert!(paths[0]
         .file_name()
         .unwrap()
         .to_string_lossy()
         .starts_with("cachehash_"));
     let items = app.chat_gallery_items();
+    assert_eq!(items[0].1, "first.png");
+    assert_eq!(items[1].1, "second.png");
     app.gallery_cache.begin(items);
     app.messages.clear(); // Incoming reloads must not replace the visible name or gallery order.
-    assert_eq!(app.gallery_name(&paths[0]), "first.png");
+    assert_eq!(app.gallery_cache.items()[0].1, "first.png");
     app.image_viewer = Some((paths[0].clone(), 2.0));
     let _ = app.update(Message::ImageStep(-1));
     assert_eq!(
@@ -2559,4 +2591,32 @@ fn rejected_dm_keeps_the_composer_blocked_until_the_chat_is_removed() {
     let _ = app.update(Message::ContactRequestHandled { req_id: 42, member: true, accepted: false, result: Ok("Rejected".into()) });
     assert_eq!(app.chats[0].pending_request_id, Some(42));
     assert!(app.handled_contact_requests.contains(&(true, 42)));
+}
+
+
+#[test]
+fn failed_connect_preserves_the_form_for_retry() {
+    let mut app = demo_app(true, MOBILE.width, MOBILE.height);
+    app.compose_open = true;
+    app.invite_connecting = true;
+    let link = "https://example.com/i#test";
+    app.invite_input = link.into();
+
+    let _ = app.update(Message::InviteInputChanged("different".into()));
+    assert_eq!(app.invite_input(), link);
+
+    let _ = app.update(Message::InviteAccepted {
+        from_form: true,
+        result: Err("Could not connect.".into()),
+    });
+    assert!(app.compose_open);
+    assert!(!app.invite_connecting());
+    assert_eq!(app.invite_input(), link);
+    assert_eq!(app.invite_error(), Some("Could not connect."));
+
+    let _ = app.update(Message::InviteInputChanged("corrected".into()));
+    assert!(app.invite_error().is_none());
+    let _ = app.update(Message::InviteAccepted { from_form: true, result: Ok("Request sent.".into()) });
+    assert!(!app.compose_open);
+    assert!(app.invite_input().is_empty());
 }

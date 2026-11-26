@@ -647,11 +647,15 @@ impl Session {
     /// `simplex:` URI), with a new random profile when `incognito`.
     pub fn connect_link(&self, link: &str, incognito: bool) -> Result<Value> {
         let link = link.trim().trim_matches(['"', '\'', '`', '“', '”']).trim();
-        if link.is_empty() {
-            return Err(command_error("that is not a SimpleX link"));
+        if link.is_empty() || link.chars().any(char::is_whitespace) {
+            return Err(command_error("Paste a single SimpleX link."));
         }
         // `/connect` resolves short links; `/_connect <userId> …` does not.
-        self.send(&Commands::connect_link(link, incognito))
+        let result = self.send(&Commands::connect_link(link, incognito))?;
+        if result.tag() == "connectionPlan" {
+            return Err(command_error("The link was recognized, but the core did not start a connection."));
+        }
+        Ok(result)
     }
 
     // ── Groups and channels ─────────────────────────────────────────────
@@ -839,7 +843,13 @@ impl Session {
     /// back through the newest items of all chats (at most `scan_items`)
     /// until `limit` calls are found.
     pub fn call_history(&self, limit: usize, scan_items: u32) -> Result<Vec<CallRecord>> {
-        self.call_history_progress(limit, scan_items, |_| {})
+        scan_call_history(
+            limit,
+            scan_items,
+            250,
+            |count, before| self.send(&Commands::get_items(count, before)),
+            |_| {},
+        )
     }
 
     /// Publish useful results after each page instead of hiding them until the
@@ -853,6 +863,7 @@ impl Session {
         scan_call_history(
             limit,
             scan_items,
+            100,
             |count, before| self.send(&Commands::get_items(count, before)),
             progress,
         )
@@ -862,6 +873,7 @@ impl Session {
 fn scan_call_history(
     limit: usize,
     scan_items: u32,
+    first_page: u32,
     mut fetch: impl FnMut(u32, Option<i64>) -> Result<Value>,
     mut progress: impl FnMut(&[CallRecord]),
 ) -> Result<Vec<CallRecord>> {
@@ -870,7 +882,8 @@ fn scan_call_history(
     let mut before = None;
     let mut scanned = 0;
     while scanned < scan_items && calls.len() < limit {
-        let count = PAGE.min(scan_items - scanned);
+        let page = if before.is_none() { first_page } else { PAGE };
+        let count = page.min(scan_items - scanned);
         let value = fetch(count, before)?;
         let items = value.array_at("/chatItems");
         scanned += items.len() as u32;
@@ -1002,7 +1015,7 @@ mod tests {
         let published = std::cell::Cell::new(0);
         let mut requested = Vec::new();
         let mut updates = Vec::new();
-        let calls = scan_call_history(100, 350, |count, before| {
+        let calls = scan_call_history(100, 350, 100, |count, before| {
             if before.is_some() { assert_eq!(published.get(), 1, "first calls must be visible before the next query"); }
             requested.push((count, before));
             let newest = before.map_or(500, |id| id - 1);
@@ -1011,15 +1024,16 @@ mod tests {
                 "chatItem": {"meta": {"itemId": newest - i64::from(offset)}, "content": {"type": if offset == 0 { "rcvCall" } else { "rcvMsgContent" }, "status": "ended", "duration": 42}}
             })).collect::<Vec<_>>() }))
         }, |calls| { published.set(published.get() + 1); updates.push(calls.to_vec()); }).unwrap();
-        assert_eq!(requested, vec![(250, None), (100, Some(251))]);
+        assert_eq!(requested, vec![(100, None), (250, Some(401))]);
         assert_eq!(updates.iter().map(Vec::len).collect::<Vec<_>>(), vec![1, 2]);
         assert_eq!(
             calls.iter().map(|call| call.item_id).collect::<Vec<_>>(),
-            vec![500, 250]
+            vec![500, 400]
         );
         assert!(scan_call_history(
             0,
             350,
+            100,
             |_, _| panic!("empty request must not query"),
             |_| {}
         )

@@ -34,16 +34,24 @@ impl Cache {
     pub fn failed(&self, path: &Path) -> bool {
         self.failed.contains(path)
     }
-    pub fn plan(&mut self, paths: &[PathBuf], index: usize) -> Vec<(PathBuf, u64)> {
+    pub fn plan(&mut self, current: &Path) -> Vec<(PathBuf, u64)> {
+        let Some(index) = self.items.iter().position(|(path, _)| path == current) else {
+            return vec![];
+        };
         self.window = [Some(index), index.checked_add(1), index.checked_sub(1)]
             .into_iter()
             .flatten()
-            .filter_map(|i| paths.get(i).cloned())
+            .filter_map(|i| self.items.get(i).map(|(path, _)| path.clone()))
             .collect();
         self.ready.retain(|path, _| self.window.contains(path));
         self.failed.retain(|path| self.window.contains(path));
         let mut jobs = vec![];
-        for path in &self.window {
+        let Some(current) = self.window.first() else {
+            return jobs;
+        };
+        // Finish the visible image before spending CPU on its neighbours.
+        let current_resolved = self.ready.contains_key(current) || self.failed.contains(current);
+        for path in self.window.iter().take(if current_resolved { 3 } else { 1 }) {
             if self.pending.len() >= 2 {
                 break;
             }
@@ -77,9 +85,13 @@ impl Cache {
 
 pub(crate) fn decode(path: &Path) -> Result<Handle, String> {
     let started = std::time::Instant::now();
-    let image = crate::media::open_upright(path)?
-        .thumbnail(2048, 2048)
-        .to_rgba8();
+    let image = crate::media::open_upright(path)?;
+    let image = if image.width() > 2048 || image.height() > 2048 {
+        image.thumbnail(2048, 2048)
+    } else {
+        image
+    };
+    let image = image.into_rgba8();
     let (width, height) = image.dimensions();
     tracing::debug!(
         elapsed_ms = started.elapsed().as_millis(),
@@ -102,31 +114,36 @@ mod tests {
             .map(|i| PathBuf::from(format!("image-{i}.png")))
             .collect();
         let mut cache = Cache::default();
-        let jobs = cache.plan(&paths, 50);
+        cache.begin(paths.iter().cloned().map(|path| (path, String::new())).collect());
+        let jobs = cache.plan(&paths[50]);
         assert_eq!(
             jobs.iter().map(|j| j.0.clone()).collect::<Vec<_>>(),
-            vec![paths[50].clone(), paths[51].clone()]
+            vec![paths[50].clone()]
         );
-        assert!(cache.plan(&paths, 50).is_empty());
+        assert!(cache.plan(&paths[50]).is_empty());
         for (path, generation) in jobs {
             cache.complete(path, generation, Ok(pixel()));
         }
-        let jobs = cache.plan(&paths, 50);
-        assert_eq!(jobs[0].0, paths[49]);
+        let jobs = cache.plan(&paths[50]);
+        assert_eq!(
+            jobs.iter().map(|job| &job.0).collect::<Vec<_>>(),
+            vec![&paths[51], &paths[49]]
+        );
         for (path, generation) in jobs {
             cache.complete(path, generation, Ok(pixel()));
         }
-        assert!(cache.plan(&paths, 50).is_empty());
+        assert!(cache.plan(&paths[50]).is_empty());
         assert!(cache.get(&paths[50]).is_some());
         assert_eq!(cache.ready.len(), 3);
-        let _ = cache.plan(&paths, 80);
+        let _ = cache.plan(&paths[80]);
         assert!(cache.ready.is_empty());
     }
     #[test]
     fn closing_or_locking_rejects_late_results() {
         let mut cache = Cache::default();
-        let paths = vec![PathBuf::from("private.png")];
-        let job = cache.plan(&paths, 0).remove(0);
+        let path = PathBuf::from("private.png");
+        cache.begin(vec![(path.clone(), String::new())]);
+        let job = cache.plan(&path).remove(0);
         cache.reset();
         cache.complete(job.0.clone(), job.1, Ok(pixel()));
         assert!(cache.get(&job.0).is_none());

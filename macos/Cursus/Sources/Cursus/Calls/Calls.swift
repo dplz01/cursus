@@ -69,7 +69,8 @@ final class MacCalls: ObservableObject {
     private var monitor: Task<Void, Never>?
     private var epoch = 0
     private var lastError: String?
-    private var historyStale = true
+    private var historyRevision = 0
+    private var loadedHistoryRevision: Int?
     private var ringtone: NSSound?
     private var activity: NSObjectProtocol?
     private var notificationObserver: NSObjectProtocol?
@@ -157,7 +158,9 @@ final class MacCalls: ObservableObject {
     func stopForLock() {
         epoch += 1; busy = false
         update(.empty)
-        history = []; historyStale = true
+        history = []
+        loadedHistoryRevision = nil
+        historyRevision &+= 1
     }
     private func update(_ next: NativeCallState) {
         let previous = state.active
@@ -170,7 +173,7 @@ final class MacCalls: ObservableObject {
             MacCallNotifications.clear()
             if let activity = activity { ProcessInfo.processInfo.endActivity(activity); self.activity = nil }
             expanded = false
-            if previous != nil { historyStale = true; Task { await loadHistory() } }
+            if previous != nil { invalidateHistory() }
             return
         }
         if activity == nil {
@@ -200,17 +203,31 @@ final class MacCalls: ObservableObject {
             }
         }
     }
+    func invalidateHistory() {
+        historyRevision &+= 1
+        if model?.destination == .calls { Task { await loadHistory() } }
+    }
+
     func loadHistory() async {
-        guard !loadingHistory, historyStale, model?.phase == .ready else { return }
+        guard !loadingHistory, loadedHistoryRevision != historyRevision, model?.phase == .ready else { return }
         loadingHistory = true
-        let ticket = epoch
         defer { loadingHistory = false }
-        do {
-            let entries = try await Core.call("callHistory", as: [CallRecord].self)
-            guard model?.phase == .ready else { return }
-            guard ticket == epoch else { Task { await loadHistory() }; return }
-            history = entries; historyStale = false
-        } catch { if model?.phase == .ready && ticket == epoch { model?.report(error) } }
+        while model?.phase == .ready, loadedHistoryRevision != historyRevision {
+            let revision = historyRevision
+            do {
+                let entries = try await Core.call("callHistory", as: [CallRecord].self)
+                guard model?.phase == .ready else { return }
+                if revision == historyRevision {
+                    history = entries
+                    loadedHistoryRevision = revision
+                } else if model?.destination != .calls {
+                    return
+                }
+            } catch {
+                if model?.phase == .ready && revision == historyRevision { model?.report(error) }
+                return
+            }
+        }
     }
 }
 

@@ -639,7 +639,7 @@ fn auth_gate(app: &App) -> Element<'_, Message> {
     }
 }
 
-fn desktop_shell(app: &App) -> Element<'_, Message> {
+fn desktop_shell<'a>(app: &'a App) -> Element<'a, Message> {
     let d = app.density();
     let mut columns = Row::new().height(Length::Fill);
     // Destinations: a rail when there is room, else a bar under the list.
@@ -650,12 +650,23 @@ fn desktop_shell(app: &App) -> Element<'_, Message> {
     }
     columns = columns.push(pane_divider());
     // Wide windows: an open profile sits beside its chat instead of over it.
+    use crate::page_motion::{slide, Slot};
+    let moving = |content: Element<'a, Message>, slot: Slot| {
+        let (remaining, _) = app.page_slide(slot);
+        slide(content, remaining, false, theme::t().bg_panel)
+    };
     match info_column(app) {
         Some(info) => columns
-            .push(container(conversation_pane(app, false)).width(Length::Fill).height(Length::Fill).style(theme::panel_style()))
+            .push(moving(
+                container(conversation_pane(app, false)).width(Length::Fill).height(Length::Fill).style(theme::panel_style()).into(),
+                Slot::Detail,
+            ))
             .push(pane_divider())
-            .push(container(info).width(d.info_width).height(Length::Fill).style(theme::panel_style())),
-        None => columns.push(content_pane(app, false)),
+            .push(moving(
+                container(info).width(d.info_width).height(Length::Fill).style(theme::panel_style()).into(),
+                Slot::Info,
+            )),
+        None => columns.push(moving(content_pane(app, false), Slot::Detail)),
     }
     .into()
 }
@@ -737,10 +748,36 @@ fn stacked_shell(app: &App) -> Element<'_, Message> {
     // Exclusive pages: a chat / settings page fully replaces the list and
     // its bar.
     if show_detail {
-        return container(content_pane(app, true))
+        let page = container(content_pane(app, true))
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(theme::panel_style())
+            .style(theme::panel_style());
+        // Opened from the list, the page slides over it while it dims.
+        let (remaining, full) = app.page_slide(crate::page_motion::Slot::Detail);
+        let under: Element<'_, Message> = if full && remaining > 0.0 {
+            Stack::new()
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .push(list_with_bottom_nav(app))
+                .push(
+                    container(Space::new().width(Length::Fill).height(Length::Fill))
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .style(move |_| container::Style {
+                            background: Some(iced::Background::Color(Color { a: 0.18 * (1.0 - remaining), ..Color::BLACK })),
+                            ..container::Style::default()
+                        }),
+                )
+                .into()
+        } else {
+            Space::new().width(Length::Fill).height(Length::Fill).into()
+        };
+        // Same tree at rest and in motion, so the page keeps its state.
+        return Stack::new()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .push(under)
+            .push(crate::page_motion::slide(page, remaining, full, theme::t().bg_panel))
             .into();
     }
     list_with_bottom_nav(app)
@@ -2045,6 +2082,7 @@ fn history_key(app: &App, d: Density) -> u64 {
     app.hover_ok().hash(&mut h);
     // "Today" / "Yesterday" dividers roll over at midnight.
     chrono::Local::now().date_naive().hash(&mut h);
+    clock().hash(&mut h);
 
     // Open chat (channel header name/avatar, member-header mode).
     if let Some(chat) = app.selected().and_then(|i| app.chats().get(i)) {
@@ -3280,10 +3318,7 @@ fn format_list_time(iso: Option<&str>) -> Option<String> {
     let now = chrono::Local::now();
     let days = now.date_naive().signed_duration_since(at.date_naive()).num_days();
     Some(match days {
-        i64::MIN..=0 => {
-            let t = at.format("%I:%M %p").to_string();
-            t.strip_prefix('0').map(str::to_string).unwrap_or(t)
-        }
+        i64::MIN..=0 => clock().time(&at),
         1 => "Yesterday".into(),
         2..=6 => at.format("%a").to_string(),
         _ if at.format("%Y").to_string() == now.format("%Y").to_string() => {
@@ -3316,7 +3351,24 @@ fn format_day_label(at: &chrono::DateTime<chrono::Local>) -> String {
     }
 }
 
-/// Format SimpleX `itemTs` (`2026-11-03T03:23:21Z`) as a local wall-clock like Telegram.
+/// 12-hour / 24-hour clock (Settings → Appearance), read by every time
+/// label; set at start and when the setting changes.
+static CLOCK_24: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn set_clock(format: cursus_core::TimeFormat) {
+    CLOCK_24.store(format == cursus_core::TimeFormat::H24, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn clock() -> cursus_core::TimeFormat {
+    if CLOCK_24.load(std::sync::atomic::Ordering::Relaxed) {
+        cursus_core::TimeFormat::H24
+    } else {
+        cursus_core::TimeFormat::H12
+    }
+}
+
+/// Format SimpleX `itemTs` (`2026-11-03T03:23:21Z`) as a local wall-clock
+/// in the chosen clock.
 pub(crate) fn format_bubble_time(iso: Option<&str>) -> Option<String> {
     let raw = iso?.trim();
     if raw.is_empty() {
@@ -3334,14 +3386,7 @@ pub(crate) fn format_bubble_time(iso: Option<&str>) -> Option<String> {
                 .map(|ndt| ndt.and_utc()
                         .with_timezone(&chrono::Local))
         })?;
-    // Prefer 12h like Telegram; strip a leading zero manually for portability.
-    let stamped = parsed.format("%I:%M %p").to_string();
-    Some(
-        stamped
-            .strip_prefix('0')
-            .unwrap_or(stamped.as_str())
-            .to_string(),
-    )
+    Some(clock().time(&parsed))
 }
 
 fn receipt_icon(status: DeliveryStatus, size: f32) -> Element<'static, Message> {
@@ -4059,12 +4104,16 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
     let field_row = row![link_field, paste_btn]
         .spacing(6)
         .align_y(Alignment::Center);
+    let label = if app.invite_connecting() { "Connecting…" } else { "Connect" };
     let connect_btn = button(
-        container(text("Connect").size(d.meta))
+        container(text(label).size(d.meta))
             .width(Length::Fill)
             .center_x(Length::Fill),
     )
-    .on_press(Message::AcceptInvite)
+    .on_press_maybe(
+        (!app.invite_connecting() && !app.invite_input().trim().is_empty())
+            .then_some(Message::AcceptInvite),
+    )
     .padding(Padding::from([9, 18]))
     .width(if narrow { Length::Fill } else { Length::Shrink })
     .style(theme::primary_action(hover));
@@ -4079,6 +4128,9 @@ fn compose_page(app: &App, with_back: bool) -> Element<'_, Message> {
             .into()
     };
     connect = connect.push(container(join).padding(Padding::from([0, 8])));
+    if let Some(error) = app.invite_error() {
+        connect = connect.push(container(text(error).size(d.meta).color(theme::t().danger)).padding([0, 8]));
+    }
 
     // Same tiles as a profile's quick actions: glyph over a centred label.
     let choice = |icon, title: &'static str, message| button(column![
@@ -4134,10 +4186,9 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
         crate::SettingsSection::Profile,
     ));
     col = col.push(vertical().height(12));
-    // Categories in floating panels, grouped like Android / macOS settings:
+    // Categories in named groups, the same on Android / macOS:
     // you · the app · about.
-    use crate::SettingsSection as S;
-    for group in [&[S::Profile, S::Address][..], &[S::Privacy, S::Notifications, S::Appearance], &[S::About]] {
+    for (heading, group) in SETTINGS_GROUPS {
         let mut rows = Column::new().width(Length::Fill);
         for &section in group {
             let (icon, title) = settings_section_meta(section);
@@ -4161,12 +4212,22 @@ fn settings_panel(app: &App) -> Element<'_, Message> {
                 )),
             );
         }
-        col = col.push(button_card(rows));
+        col = col.push(crate::preference_ui::group(Some(heading), None, rows, d));
         col = col.push(vertical().height(4));
     }
     let bottom = nav_clearance(d).max(24.0);
     page_scroll_y(col.spacing(8).padding(Padding { top: 0.0, right: 12.0, bottom, left: 12.0 }))
 }
+
+/// The settings list's groups, in order, with their headings.
+const SETTINGS_GROUPS: [(&str, &[crate::SettingsSection]); 3] = {
+    use crate::SettingsSection as S;
+    [
+        ("Account", &[S::Profile, S::Address]),
+        ("Preferences", &[S::Privacy, S::Notifications, S::Appearance]),
+        ("Cursus", &[S::About]),
+    ]
+};
 
 fn settings_section_meta(section: crate::SettingsSection) -> (Element<'static, Message>, &'static str) {
     use crate::SettingsSection as S;
@@ -4339,6 +4400,13 @@ fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<
                 "Text size",
                 prefs.text_size.label(),
                 Message::OpenPrefMenu(PrefMenu::TextSize),
+                d,
+                hover,
+            ));
+            col = col.push(settings_choice_row(
+                "Time format",
+                prefs.time_format.label(),
+                Message::OpenPrefMenu(PrefMenu::TimeFormat),
                 d,
                 hover,
             ));
@@ -5171,6 +5239,16 @@ fn pref_menu_overlay(app: &App) -> Element<'_, Message> {
                     .collect(),
             )
         }
+        PrefMenu::TimeFormat => {
+            let cur = app.desktop_prefs().time_format;
+            (
+                "Time format",
+                cursus_core::TimeFormat::ALL
+                    .into_iter()
+                    .map(|t| (t.label().to_string(), t == cur, Message::SetTimeFormat(t)))
+                    .collect(),
+            )
+        }
         PrefMenu::ContactTimed => {
             let cur = app
                 .contact_profile()
@@ -5690,7 +5768,7 @@ fn message_menu_overlay(app: &App) -> Element<'_, Message> {
             if let Some(when) = time.as_deref().and_then(parse_local_ts) {
                 info_col = info_col.push(info_row(
                     if outgoing { "Sent" } else { "Received" },
-                    txt(when.format("%-d %b %Y, %H:%M").to_string()).size(d.meta).color(theme::t().text_primary).into(),
+                    txt(clock().date_time(&when)).size(d.meta).color(theme::t().text_primary).into(),
                 ));
             }
             if let Some(st) = status {
@@ -6749,7 +6827,12 @@ fn calls_panel(app: &App) -> Element<'_, Message> {
         }
     }
 
-    if history.is_empty() && !app.call.history_loading() {
+    if let Some(error) = app.call.history_error() {
+        col = col.push(row![
+            text(error).size(d.meta).color(theme::t().danger),
+            button(text("Retry").size(d.meta)).on_press(Message::Call(crate::call_flow::CallMsg::ReloadHistory)),
+        ].spacing(8).align_y(Alignment::Center));
+    } else if history.is_empty() && !app.call.history_loading() {
         col = col.push(placeholder("No recent calls", "Your recent calls will appear here.", d));
     }
     page_scroll_y(col.push(vertical().height(nav_clearance(d))))
@@ -9871,15 +9954,15 @@ fn image_gallery(app: &App) -> Element<'_, Message> {
     let Some((path, zoom)) = &app.image_viewer else {
         return Space::new().into();
     };
-    let paths = app.gallery_paths();
-    let index = paths.iter().position(|p| p == path).unwrap_or(0);
+    let items = app.gallery_cache.items();
+    let index = items.iter().position(|(item, _)| item == path).unwrap_or(0);
     let tool = |icon, message| {
         button(icons::centered_hit(icon, 36.0))
             .padding(0)
             .on_press(message)
             .style(theme::icon_action(app.hover_ok()))
     };
-    let title = app.gallery_name(path);
+    let title = items.get(index).map_or_else(String::new, |(_, name)| name.clone());
     let header = row![
         tool(icons::cancel_icon(20.0, iced::Color::WHITE), Message::CloseImage),
         container(crate::ellipsis::ellipsis_text(title, 16.0, iced::Color::WHITE, 1)).width(Length::Fill).clip(true),
@@ -9898,9 +9981,9 @@ fn image_gallery(app: &App) -> Element<'_, Message> {
     .height(56);
     let previous = button(icons::centered_hit(icons::back_icon(20.0, iced::Color { a: if index > 0 { 1.0 } else { 0.3 }, ..iced::Color::WHITE }), 36.0))
         .on_press_maybe((index > 0).then_some(Message::ImageStep(-1))).padding(0).style(theme::icon_action(app.hover_ok()));
-    let next = button(icons::centered_hit(icons::next_icon(20.0, iced::Color { a: if index + 1 < paths.len() { 1.0 } else { 0.3 }, ..iced::Color::WHITE }), 36.0))
-        .on_press_maybe((index + 1 < paths.len()).then_some(Message::ImageStep(1))).padding(0).style(theme::icon_action(app.hover_ok()));
-    let footer = row![previous, text(format!("{} / {}", index + 1, paths.len().max(1))).color(iced::Color::WHITE), next]
+    let next = button(icons::centered_hit(icons::next_icon(20.0, iced::Color { a: if index + 1 < items.len() { 1.0 } else { 0.3 }, ..iced::Color::WHITE }), 36.0))
+        .on_press_maybe((index + 1 < items.len()).then_some(Message::ImageStep(1))).padding(0).style(theme::icon_action(app.hover_ok()));
+    let footer = row![previous, text(format!("{} / {}", index + 1, items.len().max(1))).color(iced::Color::WHITE), next]
     .spacing(16)
     .align_y(Alignment::Center);
     container(column![

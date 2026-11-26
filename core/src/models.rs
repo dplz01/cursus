@@ -816,6 +816,20 @@ pub enum Event {
 }
 
 impl Event {
+    /// Whether the event may have changed the recent call records.
+    pub fn refreshes_call_history(&self) -> bool {
+        match self {
+            Self::NewChatItems(body) => CallRecord::touches_calls(body),
+            Self::Other { type_name, body } => {
+                matches!(
+                    type_name.as_str(),
+                    "callEnded" | "callInvitation" | "chatCleared" | "contactDeleted" | "chatItemDeleted"
+                ) || CallRecord::touches_calls(body)
+            }
+            _ => false,
+        }
+    }
+
     /// Whether the chat list should be refreshed after this event.
     pub fn refreshes_chats(&self) -> bool {
         match self {

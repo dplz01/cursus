@@ -28,7 +28,9 @@ object Core {
         withContext(Dispatchers.IO) { callBlocking(method, params) }
 
     suspend inline fun <reified T> call(method: String, params: Map<String, Any?> = emptyMap()): T =
-        CoreJson.decodeFromJsonElement(raw(method, params))
+        withContext(Dispatchers.IO) {
+            CoreJson.decodeFromJsonElement(callBlocking(method, params))
+        }
 
     /** A method whose result is not needed. */
     suspend fun run(method: String, params: Map<String, Any?> = emptyMap()) {

@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
+import chat.cursus.core.CallRecord
 import chat.cursus.core.Core
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +36,27 @@ class AndroidCalls(private val context: Context, private val scope: CoroutineSco
     var answerRequested by mutableStateOf(false)
     var starting by mutableStateOf(false); private set
     var historyRevision by androidx.compose.runtime.mutableIntStateOf(0); private set
+    var history by mutableStateOf<List<CallRecord>?>(null); private set
+    private var loadedHistoryRevision: Int? = null
+
+    fun invalidateHistory() { historyRevision++ }
+
+    fun clearHistory() {
+        history = null
+        loadedHistoryRevision = null
+        invalidateHistory()
+    }
+
+    suspend fun loadHistory() {
+        val revision = historyRevision
+        if (loadedHistoryRevision == revision || !ready()) return
+        val records = Core.call<List<CallRecord>>("callHistory")
+        if (revision == historyRevision && ready()) {
+            history = records
+            loadedHistoryRevision = revision
+        }
+    }
+
     private var poll: Job? = null
     private var audio: CallAudio? = null
     private val mediaLock = Mutex()
@@ -114,7 +136,7 @@ class AndroidCalls(private val context: Context, private val scope: CoroutineSco
         val previous = state.active
         state = next
         val call = next.active
-        if (previous != null && call == null) historyRevision++
+        if (previous != null && call == null) invalidateHistory()
         if (call != null && (previous?.contactId != call.contactId)) expanded = true
         if (next.error != null && next.error != lastError) report(next.error)
         lastError = next.error

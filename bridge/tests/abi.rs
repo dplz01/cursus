@@ -49,11 +49,12 @@ fn abi_round_trip() {
     assert_eq!(user["displayName"], "Abi");
     assert_eq!(call("appInfo", json!({}), &mut dump)["setupComplete"], true);
 
+    assert_eq!(call("callHistory", json!({}), &mut dump), json!([]));
     let chats = call("listChats", json!({}), &mut dump);
     let notes = chats.as_array().unwrap().iter().find(|c| c["type"] == "local").cloned();
     if let Some(notes) = notes {
         let r = notes["ref"].as_str().unwrap().to_string();
-        call("sendText", json!({ "chat": r, "text": "hello *bold* https://example.com" }), &mut dump);
+        call("sendText", json!({ "chat": r, "text": "hello **bold** https://example.com" }), &mut dump);
         let msgs = call("listMessages", json!({ "chat": r, "count": 20 }), &mut dump);
         let last = msgs.as_array().unwrap().last().unwrap().clone();
         assert_eq!(last["outgoing"], true);

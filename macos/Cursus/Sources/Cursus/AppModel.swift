@@ -148,6 +148,8 @@ final class AppModel: ObservableObject {
     /// The profile page to show when it opens next (back from a thread).
     @Published var infoReturnPage: InfoPage?
     @Published var isLoadingMessages = false
+    private var historyRequest = 0
+    private var openingConversation = 0
 
     /// Settings → Notifications (`@AppStorage` with these keys in the view).
     static let notificationsEnabledKey = "notificationsEnabled"
@@ -362,25 +364,38 @@ final class AppModel: ObservableObject {
         support = nil
         openUnread = selection.flatMap { ref in chats.first { $0.ref == ref }?.unread } ?? 0
         historyLimit = max(pageSize, min(5000, openUnread * 2 + pageSize))
-        guard let ref = selection else { return }
-        isLoadingMessages = true
+        openConversationHistory(selection) { ref in
+            await self.markRead(ref)
+        }
+    }
+
+    private func openConversationHistory(_ ref: String?, markRead: @escaping (String) async -> Void) {
+        openingConversation &+= 1
+        let opening = openingConversation
+        isLoadingMessages = ref != nil
+        guard let ref = ref else { return }
         Task {
+            guard opening == openingConversation, activeRef == ref else { return }
             await reloadMessages(for: ref)
+            guard opening == openingConversation, activeRef == ref else { return }
             isLoadingMessages = false
             await markRead(ref)
         }
     }
 
     func reloadMessages(for ref: String) async {
+        guard activeRef == ref, phase == .ready else { return }
+        historyRequest &+= 1
+        let request = historyRequest
         do {
             let list = try await Core.call("listMessages", ["chat": ref, "count": historyLimit], as: [Message].self)
-            guard activeRef == ref else { return }
+            guard historyRequest == request, activeRef == ref, phase == .ready else { return }
             let old = messages
             if list != messages { messages = list }
             markNewMessages(old: old, new: list)
             autoDownload(list)
         } catch {
-            report(error)
+            if historyRequest == request, activeRef == ref, phase == .ready { report(error) }
         }
     }
 
@@ -480,11 +495,13 @@ final class AppModel: ObservableObject {
 
     func clear(_ chat: Chat) async {
         await perform { try await Core.run("clearChat", ["chat": chat.ref]) }
+        calls.invalidateHistory()
         if selection == chat.ref { await reloadMessages(for: chat.ref) }
     }
 
     func delete(_ chat: Chat) async {
         await perform { try await Core.run("deleteChat", ["chat": chat.ref]) }
+        calls.invalidateHistory()
         if selection == chat.ref {
             selection = nil
             showInfo = false
@@ -703,13 +720,9 @@ final class AppModel: ObservableObject {
         messages = []
         composeMode = .new
         stopSelecting()
-        guard let ref = activeRef else { return }
-        isLoadingMessages = true
-        Task {
-            await reloadMessages(for: ref)
-            isLoadingMessages = false
+        openConversationHistory(activeRef) { ref in
             try? await Core.run("markRead", ["chat": ref])
-            scheduleChatsReload()
+            self.scheduleChatsReload()
         }
     }
 
@@ -718,8 +731,7 @@ final class AppModel: ObservableObject {
         let fromList = support?.fromList ?? false
         support = nil
         messages = []
-        guard let ref = selection else { return }
-        Task { await reloadMessages(for: ref) }
+        openConversationHistory(selection) { _ in }
         if fromList {
             infoReturnPage = .supportList
             showInfo = true
@@ -810,6 +822,7 @@ final class AppModel: ObservableObject {
         guard let ref = activeRef else { return }
         await perform {
             try await Core.run("deleteItems", ["chat": ref, "itemIds": [message.id], "forEveryone": forEveryone])
+            calls.invalidateHistory()
         }
         await reloadMessages(for: ref)
     }
@@ -840,6 +853,7 @@ final class AppModel: ObservableObject {
         let ids = Array(selectedMessages)
         stopSelecting()
         await perform { try await Core.run("deleteItems", ["chat": ref, "itemIds": ids, "forEveryone": false]) }
+        calls.invalidateHistory()
         await reloadMessages(for: ref)
     }
 
@@ -1328,6 +1342,7 @@ final class AppModel: ObservableObject {
             fileProgress[p.fileId] = Double(p.transferred) / Double(p.total)
         }
         if event.refreshChats { scheduleChatsReload() }
+        if event.refreshCallHistory == true { calls.invalidateHistory() }
         // A support thread's events may carry the scoped or the plain group
         // reference: compare the chat part.
         if event.refreshMessages, let active = activeRef,

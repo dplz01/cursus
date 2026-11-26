@@ -25,6 +25,7 @@ mod layout;
 mod measure;
 mod media;
 mod navigation;
+mod page_motion;
 mod preference_row;
 mod preference_ui;
 mod retained;
@@ -625,6 +626,7 @@ impl SettingsSection {
 pub enum PrefMenu {
     Theme,
     TextSize,
+    TimeFormat,
     LockAfter,
     ContactTimed,
     ContactTtl,
@@ -954,6 +956,8 @@ pub enum Message {
     SetLockAfter(crate::desktop::LockAfter),
     LockNow,
     LockTick,
+    /// A frame while a page slides in.
+    MotionFrame(Instant),
     LockPasswordChanged(Secret),
     LockToggleReveal,
     AuthToggleReveal,
@@ -1107,6 +1111,7 @@ pub enum Message {
     SetContactCalls(FeatureAllow),
     SetThemePreference(crate::desktop::ThemePreference),
     SetTextSize(crate::desktop::TextSizePreference),
+    SetTimeFormat(cursus_core::TimeFormat),
     SetDesktopNotifications(bool),
     SetTray(bool),
     SetCloseToTray(bool),
@@ -1266,7 +1271,7 @@ pub enum Message {
         peaks: Result<Vec<f32>, String>,
     },
     /// Deferred media warm-up after the chat view has painted once.
-    WarmChatMedia,
+    WarmChatMedia(u64),
     ImagePreviewReady {
         path: PathBuf,
         preview: Option<(PathBuf, u32, u32)>,
@@ -1278,10 +1283,11 @@ pub enum Message {
     /// `gen` discards stale loads when the user switches chats quickly.
     MessagesLoaded {
         gen: u64,
-        result: Result<Vec<ChatMessage>, String>,
+        chat: ChatId,
+        result: Result<history::History, String>,
     },
     /// Second-phase media warm (image previews) after decrypt/waveforms start.
-    WarmChatVisuals,
+    WarmChatVisuals(u64),
     ChatMarkedRead(Result<ChatId, String>),
     AcceptContactRequest { req_id: i64, member: bool },
     RejectContactRequest { req_id: i64, member: bool },
@@ -1334,7 +1340,10 @@ pub enum Message {
     /// Paste the clipboard into the invite field (no connect).
     PasteInviteLink,
     InviteLinkPasted(Option<String>),
-    InviteAccepted(Result<String, String>),
+    InviteAccepted {
+        from_form: bool,
+        result: Result<String, String>,
+    },
     CopyInviteLink,
     OpenCompose,
     CloseCompose,
@@ -1436,6 +1445,8 @@ struct App {
     gallery_cache: gallery::Cache,
     connecting: bool,
     invite_input: String,
+    invite_connecting: bool,
+    invite_error: Option<String>,
     /// One-time link on the New page's Connect card (core keeps it until
     /// used; see `cursus_core::Invitation`), and whether a request is running.
     invitation: Option<cursus_core::Invitation>,
@@ -1510,6 +1521,7 @@ struct App {
     pin_history_end: bool,
     /// "New messages" divider above this incoming item (id, timer generation).
     new_messages_marker: Option<(i64, u64)>,
+    new_messages_marker_gen: u64,
     /// Unread count of the chat being opened (its badge is cleared at once);
     /// the first load puts the "New messages" divider above that many items.
     open_unread: i64,
@@ -1570,6 +1582,11 @@ struct App {
     main_window: Option<iced::window::Id>,
     /// Start time while the phone-size decoration check is armed (see `WindowResized`).
     decorations_checked: Option<Instant>,
+    /// The page showing, to tell when a new one opens (see `page_motion`).
+    page_key: page_motion::PageKey,
+    /// A page sliding in, and the time of the last animation frame.
+    page_motion: Option<page_motion::Motion>,
+    motion_now: Instant,
     /// Ensures libsimplex is loaded only after the first GPU window is up.
     core_connect_launched: bool,
     /// Settings → My profile draft.
@@ -1577,6 +1594,7 @@ struct App {
     /// Active inertial fling after a touch scroll (GTK-style kinetic feel).
     /// Bumps on each message history request; stale `MessagesLoaded` are ignored.
     messages_load_gen: u64,
+    messages_snapshot_gen: u64,
     /// Bumps on each scheduled chat-list refresh; only the latest debounce fires.
     chats_refresh_gen: u64,
     /// Direct-contact profile overlay.
@@ -1633,6 +1651,7 @@ struct VoicePlayback {
 impl App {
     fn new() -> (Self, Task<Message>) {
         let mut prefs = desktop::load_prefs();
+        ui::set_clock(prefs.time_format);
         let tray = if prefs.tray {
             desktop::AppTray::try_new()
         } else {
@@ -1696,6 +1715,8 @@ impl App {
                 gallery_cache: gallery::Cache::default(),
                 connecting: false,
                 invite_input: String::new(),
+                invite_connecting: false,
+                invite_error: None,
                 invitation: None,
                 invitation_busy: false,
                 invitation_copied: false,
@@ -1734,8 +1755,10 @@ impl App {
                 image_previews_failed: HashSet::new(),
                 pin_history_end: false,
                 new_messages_marker: None,
+                new_messages_marker_gen: 0,
                 open_unread: 0,
                 messages_load_gen: 0,
+                messages_snapshot_gen: 0,
                 chats_refresh_gen: 0,
                 pending_url: None,
                 privacy_confirm: None,
@@ -1770,6 +1793,9 @@ impl App {
                 window_focused: true,
                 main_window: Some(main_window),
                 decorations_checked: want_decorations().then(Instant::now),
+                page_key: page_motion::PageKey::default(),
+                page_motion: None,
+                motion_now: Instant::now(),
                 core_connect_launched: false,
                 own_profile: OwnProfileDraft {
                     fields: ProfileFields {
@@ -1954,6 +1980,13 @@ impl App {
 
         let relaunch = Subscription::run(relaunch_stream);
 
+        // Frames only while a page slides in.
+        let motion = if self.page_motion.is_some() {
+            iced::window::frames().map(Message::MotionFrame)
+        } else {
+            Subscription::none()
+        };
+
         Subscription::batch([
             window,
             events,
@@ -1962,6 +1995,7 @@ impl App {
             tray_tick,
             lock_tick,
             relaunch,
+            motion,
             self.call_subscription(),
         ])
     }
@@ -1979,6 +2013,7 @@ impl App {
             self.photo_menu = None;
         }
         let task = self.update_inner(message);
+        self.track_page();
         if was_composing && !self.compose_open {
             return Task::batch([task, self.drop_unshared_invitation()]);
         }
@@ -2120,6 +2155,10 @@ impl App {
                 if !self.tap_allowed() {
                     return Task::none();
                 }
+                let Some(chat) = self.chats.get(index) else {
+                    return Task::none();
+                };
+                let needs_read = chat.unread > 0 || chat.unread_chat;
                 self.clear_pointer_gesture();
                 self.pasted_image = None;
                 self.clear_gallery();
@@ -2138,7 +2177,9 @@ impl App {
                     chat.unread = 0;
                 }
                 self.messages.clear();
-                self.history_count = (self.open_unread.clamp(0, 5000) as u32 * 2 + HISTORY_PAGE).clamp(HISTORY_PAGE, 5000);
+                self.new_messages_marker = None;
+                self.pending_auto_receives.clear();
+                self.history_count = (self.open_unread.clamp(0, 5000) as u32 * 2 + HISTORY_PAGE).min(5000);
                 self.pin_history_end = true;
                 self.reply_to = None;
                 self.editing = None;
@@ -2153,8 +2194,12 @@ impl App {
                 self.history_away_from_end = false;
                 HISTORY_AWAY_GATE.reset();
                 Task::batch([
-                    self.mark_selected_read(),
                     self.reload_messages(),
+                    if needs_read {
+                        self.mark_selected_read()
+                    } else {
+                        Task::none()
+                    },
                     iced::widget::operation::focus(iced::widget::Id::new("composer-input")),
                 ])
             }
@@ -2386,7 +2431,14 @@ impl App {
             }
             Message::OpenImage(path) => {
                 if self.tap_allowed() && !self.selection_mode {
-                    let items = self.chat_gallery_items();
+                    let mut items = self.chat_gallery_items();
+                    if !items.iter().any(|(item, _)| item == &path) {
+                        let name = path.file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned();
+                        items = vec![(path.clone(), name)];
+                    }
                     self.gallery_cache.begin(items);
                     self.image_viewer = Some((path, 1.0));
                     return self.load_gallery();
@@ -2405,11 +2457,11 @@ impl App {
                 if self.image_viewer.is_some() { crate::image_gestures::zoom(factor) } else { Task::none() }
             }
             Message::ImageStep(step) => {
-                let paths = self.gallery_paths();
+                let items = self.gallery_cache.items();
                 if let Some((path, zoom)) = &mut self.image_viewer {
-                    if let Some(index) = paths.iter().position(|p| p == path) {
-                        let next = (index as i32 + step).clamp(0, paths.len() as i32 - 1) as usize;
-                        if next != index { *path = paths[next].clone(); *zoom = 1.0; }
+                    if let Some(index) = items.iter().position(|(item, _)| item == path) {
+                        let next = (index as i32 + step).clamp(0, items.len() as i32 - 1) as usize;
+                        if next != index { *path = items[next].0.clone(); *zoom = 1.0; }
                     }
                 }
                 self.load_gallery()
@@ -2585,6 +2637,13 @@ impl App {
                 } else {
                     Task::none()
                 }
+            }
+            Message::MotionFrame(now) => {
+                self.motion_now = now;
+                if self.page_motion.is_some_and(|m| m.done(now)) {
+                    self.page_motion = None;
+                }
+                Task::none()
             }
             Message::LockTick => {
                 let after = self.desktop_prefs.lock_after.secs();
@@ -3215,6 +3274,17 @@ impl App {
                 self.desktop_prefs.text_size = pref;
                 desktop::save_prefs(&self.desktop_prefs);
                 self.status = format!("Text size: {}.", pref.label());
+                Task::none()
+            }
+            Message::SetTimeFormat(format) => {
+                if !self.tap_allowed() {
+                    return Task::none();
+                }
+                self.pref_menu = None;
+                self.desktop_prefs.time_format = format;
+                ui::set_clock(format);
+                desktop::save_prefs(&self.desktop_prefs);
+                self.status = format!("Time format: {}.", format.label());
                 Task::none()
             }
             Message::SetAddressAutoAccept(enable) => {
@@ -5434,8 +5504,8 @@ impl App {
                 self.history_count = self.history_count.saturating_add(HISTORY_PAGE);
                 self.reload_messages()
             }
-            Message::MessagesLoaded { gen, result } => {
-                if gen != self.messages_load_gen {
+            Message::MessagesLoaded { gen, chat, result } => {
+                if gen != self.messages_load_gen || self.selected_id.as_ref() != Some(&chat) {
                     return Task::none();
                 }
                 match result {
@@ -5454,7 +5524,8 @@ impl App {
                             self.new_messages_marker = None;
                             None
                         };
-                        self.messages = messages.into();
+                        self.messages = messages;
+                        self.messages_snapshot_gen = gen;
                         let follow = match arrived {
                             Some((sent, first_incoming)) => {
                                 // Your own message: jump to it. Incoming ones
@@ -5464,7 +5535,8 @@ impl App {
                                     tasks.push(self.update(Message::ScrollToLatest));
                                 }
                                 if let Some(id) = first_incoming {
-                                    let gen = self.new_messages_marker.map_or(0, |(_, g)| g + 1);
+                                    self.new_messages_marker_gen = self.new_messages_marker_gen.wrapping_add(1);
+                                    let gen = self.new_messages_marker_gen;
                                     // Keep the oldest unseen one while the label shows.
                                     let at = self.new_messages_marker.map_or(id, |(old, _)| old);
                                     self.new_messages_marker = Some((at, gen));
@@ -5490,7 +5562,8 @@ impl App {
                             let mut y = 0.0;
                             let mut timer = Task::none();
                             if let Some(index) = first {
-                                let gen = self.new_messages_marker.map_or(0, |(_, g)| g + 1);
+                                self.new_messages_marker_gen = self.new_messages_marker_gen.wrapping_add(1);
+                                let gen = self.new_messages_marker_gen;
                                 self.new_messages_marker =
                                     Some((self.messages[index].item_id, gen));
                                 y = unread_scroll_offset(self.messages.len(), index.saturating_sub(1));
@@ -5515,9 +5588,9 @@ impl App {
                         // Paint first; media warm starts after a frame so open-chat
                         // never competes with the first scrollable layout.
                         let defer_media = Task::perform(
-                            async {
+                            async move {
                                 tokio::time::sleep(std::time::Duration::from_millis(32)).await;
-                                Message::WarmChatMedia
+                                Message::WarmChatMedia(gen)
                             },
                             |m| m,
                         );
@@ -5529,14 +5602,17 @@ impl App {
                     }
                 }
             }
-            Message::WarmChatMedia => {
+            Message::WarmChatMedia(gen) => {
+                if gen != self.messages_snapshot_gen || self.messages.is_empty() || self.locked.is_some() {
+                    return Task::none();
+                }
                 // Decrypt + waveforms first (unlocks plaintext paths). Posters
                 // follow on WarmChatVisuals so ffmpeg does not fight decrypt.
                 let auto = std::mem::take(&mut self.pending_auto_receives);
                 let defer_visuals = Task::perform(
-                    async {
+                    async move {
                         tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-                        Message::WarmChatVisuals
+                        Message::WarmChatVisuals(gen)
                     },
                     |m| m,
                 );
@@ -5547,7 +5623,13 @@ impl App {
                     defer_visuals,
                 ])
             }
-            Message::WarmChatVisuals => self.enqueue_missing_image_previews(),
+            Message::WarmChatVisuals(gen) => {
+                if gen == self.messages_snapshot_gen && !self.messages.is_empty() && self.locked.is_none() {
+                    self.enqueue_missing_image_previews()
+                } else {
+                    Task::none()
+                }
+            }
             Message::ImagePreviewReady { path, preview } => {
                 self.image_previews_pending.remove(&path);
                 if self.locked.is_some() {
@@ -5646,7 +5728,10 @@ impl App {
                 }
             }
             Message::InviteInputChanged(value) => {
-                self.invite_input = value;
+                if !self.invite_connecting {
+                    self.invite_input = value;
+                    self.invite_error = None;
+                }
                 Task::none()
             }
             Message::RegenerateInvitation => {
@@ -5918,35 +6003,49 @@ impl App {
                 }
                 None => Task::none(),
             },
-            Message::AcceptInvite => {
-                let incognito = self.desktop_prefs.incognito;
-                let task = self.accept_invite_link_as(self.invite_input.clone(), incognito);
-                // Connecting started (non-empty link): leave the New page.
-                if !self.invite_input.trim().is_empty() {
-                    self.close_compose_to_chats();
-                }
-                task
+            Message::AcceptInvite => self.accept_invite_link_as(
+                self.invite_input.clone(),
+                self.desktop_prefs.incognito,
+                true,
+            ),
+            Message::PasteInviteLink if !self.invite_connecting => {
+                iced::clipboard::read().map(Message::InviteLinkPasted)
             }
-            Message::PasteInviteLink => iced::clipboard::read().map(Message::InviteLinkPasted),
+            Message::PasteInviteLink => Task::none(),
             Message::InviteLinkPasted(contents) => {
-                match contents
-                    .map(|c| c.trim().to_string())
-                    .filter(|c| !c.is_empty())
-                {
-                    Some(link) => self.invite_input = link,
-                    None => self.status = "Clipboard is empty — copy a link first.".into(),
+                if !self.compose_open || self.invite_connecting {
+                    return Task::none();
+                }
+                match contents.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
+                    Some(link) => {
+                        self.invite_input = link;
+                        self.invite_error = None;
+                    }
+                    None => self.invite_error = Some("Clipboard is empty — copy a link first.".into()),
                 }
                 Task::none()
             }
-            Message::InviteAccepted(Ok(summary)) => {
-                self.invite_input.clear();
-                self.compose_open = false;
-                self.status = summary;
-                self.reload_chats()
-            }
-            Message::InviteAccepted(Err(err)) => {
-                self.status = err;
-                Task::none()
+            Message::InviteAccepted { from_form, result } => {
+                self.invite_connecting = false;
+                match result {
+                    Ok(summary) => {
+                        if from_form {
+                            self.invite_input.clear();
+                            if self.compose_open && self.create_chat.is_none() {
+                                self.close_compose_to_chats();
+                            }
+                        }
+                        self.status = summary;
+                        self.reload_chats()
+                    }
+                    Err(err) => {
+                        if from_form {
+                            self.invite_error = Some(err.clone());
+                        }
+                        self.status = err;
+                        Task::none()
+                    }
+                }
             }
             Message::CopyInviteLink => {
                 if let Some(link) = self.invitation.as_ref().map(|i| i.link.display.clone()) {
@@ -6379,46 +6478,36 @@ impl App {
         // Apply delivery/read receipt ticks without a full history reload when possible.
         let status_updates = event.status_updates();
         if !status_updates.is_empty() {
-            let selected = self.selected_id.clone();
-            let mut touched_open = false;
-            for (chat_id, item_id, status) in &status_updates {
-                if selected.as_ref() == Some(chat_id) {
-                    let patched = self
-                        .messages
-                        .edit()
-                        .iter_mut()
-                        .find(|m| m.item_id == *item_id)
-                        .map(|msg| {
-                            msg.delivery = *status;
-                            // Outgoing file rows often lag on XFTP status; receipt
-                            // progress means the transfer finished from our POV.
-                            let done = matches!(
-                                status,
-                                cursus_core::DeliveryStatus::Sent
-                                    | cursus_core::DeliveryStatus::Delivered
-                            );
-                            if let Some(file) = msg.file.as_mut().filter(|_| msg.outgoing && done) {
-                                file.state = cursus_core::FileTransferState::Complete;
-                            }
-                        });
-                    if patched.is_some() {
-                        touched_open = true;
-                    } else if !messages_reload_queued {
-                        touched_open = false;
-                        tasks.push(self.reload_messages());
-                        break;
+            let mut missing = false;
+            {
+                let mut history = self.messages.edit();
+                for (chat_id, item_id, status) in status_updates {
+                    if self.selected_id.as_ref() != Some(&chat_id) {
+                        continue;
+                    }
+                    let Some(index) = history.iter().position(|m| m.item_id == item_id) else {
+                        missing = true;
+                        continue;
+                    };
+                    let msg = &mut history[index];
+                    msg.delivery = status;
+                    // Receipt progress confirms an outgoing transfer finished.
+                    let done = matches!(status, cursus_core::DeliveryStatus::Sent | cursus_core::DeliveryStatus::Delivered);
+                    if let Some(file) = msg.file.as_mut().filter(|_| msg.outgoing && done) {
+                        file.state = cursus_core::FileTransferState::Complete;
                     }
                 }
             }
-            if touched_open {
-                tracing::debug!("applied delivery status update(s)");
+            if missing && !messages_reload_queued {
+                tasks.push(self.reload_messages());
             }
         } else if let Some((file_id, transferred, total)) = event.file_progress_updates() {
-            // Patch progress in place — avoids scroll jumps on every XFTP tick.
             let mut touched = false;
-            for msg in self.messages.edit().iter_mut() {
-                if let Some(file) = msg.file.as_mut() {
-                    if file.file_id == file_id {
+            {
+                let mut history = self.messages.edit();
+                for index in 0..history.len() {
+                    if history[index].file.as_ref().is_some_and(|file| file.file_id == file_id) {
+                        let Some(file) = history[index].file.as_mut() else { continue };
                         file.state = cursus_core::FileTransferState::InProgress;
                         file.transferred = Some(transferred);
                         file.transfer_total = Some(total);
@@ -6608,8 +6697,8 @@ impl App {
         let count = self.history_count;
         Task::perform(
             async move {
-                let result = load_messages(session, id, count).await;
-                Message::MessagesLoaded { gen, result }
+                let result = load_messages(session, id.clone(), count).await;
+                Message::MessagesLoaded { gen, chat: id, result }
             },
             |m| m,
         )
@@ -6693,32 +6782,22 @@ impl App {
         self.gallery_cache.reset();
     }
     fn load_gallery(&mut self) -> Task<Message> {
-        let Some((path, _)) = &self.image_viewer else { return Task::none(); };
-        let paths = self.gallery_paths();
-        // A standalone local preview may not be in history yet.
-        let paths = if paths.contains(path) { paths } else { vec![path.clone()] };
-        let index = paths.iter().position(|p| p == path).unwrap_or(0);
-        Task::batch(self.gallery_cache.plan(&paths, index).into_iter().map(|(path, generation)| {
-            Task::perform(async move {
-                let worker_path = path.clone();
-                let result = tokio::task::spawn_blocking(move || gallery::decode(&worker_path)).await.unwrap_or_else(|e| Err(e.to_string()));
-                Message::GalleryReady { path, generation, result }
-            }, |message| message)
+        let Some((path, _)) = &self.image_viewer else {
+            return Task::none();
+        };
+        let jobs = self.gallery_cache.plan(path);
+        Task::batch(jobs.into_iter().map(|(path, generation)| {
+            Task::perform(
+                async move {
+                    let worker_path = path.clone();
+                    let result = tokio::task::spawn_blocking(move || gallery::decode(&worker_path))
+                        .await
+                        .unwrap_or_else(|err| Err(err.to_string()));
+                    Message::GalleryReady { path, generation, result }
+                },
+                |message| message,
+            )
         }))
-    }
-    pub(crate) fn gallery_name(&self, path: &std::path::Path) -> String {
-        if let Some((_, name)) = self.gallery_cache.items().iter().find(|(item, _)| item == path) { return name.clone(); }
-        self.messages.iter().filter_map(|m| m.file.as_ref())
-            .find(|file| self.plaintext_path_for(file).as_deref() == Some(path))
-            .map(|file| file.file_name.clone())
-            .unwrap_or_else(|| path.file_name().unwrap_or_default().to_string_lossy().into_owned())
-    }
-
-    pub(crate) fn gallery_paths(&self) -> Vec<PathBuf> {
-        if !self.gallery_cache.items().is_empty() {
-            return self.gallery_cache.items().iter().map(|(path, _)| path.clone()).collect();
-        }
-        self.chat_gallery_items().into_iter().map(|(path, _)| path).collect()
     }
     fn chat_gallery_items(&self) -> Vec<(PathBuf, String)> {
         self.messages.iter().filter_map(|m| m.file.as_ref()).filter(|file| {
@@ -7236,6 +7315,66 @@ impl App {
         self.settings_open
     }
 
+    /// The page showing now, for page transitions.
+    fn current_page(&self) -> page_motion::PageKey {
+        let in_chats = matches!(self.nav, NavSection::Chats | NavSection::Channels);
+        let (info_level, info_page) = if !in_chats {
+            (0, 0)
+        } else if let Some(p) = &self.contact_profile {
+            match p.pane {
+                ContactProfilePane::Overview => (1, 10),
+                ContactProfilePane::Preferences => (2, 11),
+            }
+        } else if let Some(g) = &self.group_settings {
+            (if g.pane == GroupSettingsPane::Overview { 1 } else { 2 }, 20 + g.pane as u8)
+        } else if let Some(s) = &self.support {
+            match s.pane {
+                SupportPane::List => (1, 30),
+                SupportPane::Thread { .. } => (2, 31),
+            }
+        } else {
+            (0, 0)
+        };
+        page_motion::PageKey {
+            nav: Some(self.nav),
+            chat: in_chats
+                .then(|| self.selected.and_then(|i| self.chats.get(i)).map(|c| c.id.clone()))
+                .flatten(),
+            info_level,
+            info_page,
+            settings: (self.nav == NavSection::Settings && self.settings_open).then_some(self.settings_section),
+        }
+    }
+
+    /// Start a slide when the last message opened a page.
+    fn track_page(&mut self) {
+        let page = self.current_page();
+        if page == self.page_key {
+            return;
+        }
+        let old = std::mem::replace(&mut self.page_key, page);
+        // Screenshots and tests render pages at rest.
+        if cfg!(test) {
+            return;
+        }
+        let now = Instant::now();
+        let two_panes = self.layout() == LayoutMode::Desktop;
+        let info_column = two_panes && self.density().info_width > 0.0;
+        if let Some(motion) = page_motion::motion_for(&old, &self.page_key, two_panes, info_column, now) {
+            self.page_motion = Some(motion);
+            self.motion_now = now;
+        }
+    }
+
+    /// How far the page in `slot` still has to travel (1 → 0), and whether
+    /// it travels the full width over the list.
+    pub(crate) fn page_slide(&self, slot: page_motion::Slot) -> (f32, bool) {
+        match self.page_motion {
+            Some(m) if m.slot == slot => (m.remaining(self.motion_now), m.full),
+            _ => (0.0, false),
+        }
+    }
+
     pub(crate) fn connected(&self) -> bool {
         self.session.is_some() || self.demo
     }
@@ -7261,23 +7400,41 @@ impl App {
     }
 
     fn accept_invite_link(&mut self, raw: String) -> Task<Message> {
-        self.accept_invite_link_as(raw, false)
+        self.accept_invite_link_as(raw, false, false)
     }
 
     /// Connect via a pasted link, with a new incognito profile if asked.
-    fn accept_invite_link_as(&mut self, raw: String, incognito: bool) -> Task<Message> {
+    pub(crate) fn invite_connecting(&self) -> bool {
+        self.invite_connecting
+    }
+
+    pub(crate) fn invite_error(&self) -> Option<&str> {
+        self.invite_error.as_deref()
+    }
+
+    fn accept_invite_link_as(
+        &mut self,
+        raw: String,
+        incognito: bool,
+        from_form: bool,
+    ) -> Task<Message> {
+        if self.invite_connecting {
+            return Task::none();
+        }
         let Some(session) = self.session.clone() else {
             return Task::none();
         };
         let link = raw.trim().to_string();
         if link.is_empty() {
-            self.status = "Paste an invite or address link first.".into();
+            self.invite_error = Some("Paste an invite or address link first.".into());
             return Task::none();
         }
+        self.invite_connecting = true;
+        self.invite_error = None;
         self.status = "Accepting link…".into();
         Task::perform(
             accept_invite(session, link, incognito),
-            Message::InviteAccepted,
+            move |result| Message::InviteAccepted { from_form, result },
         )
     }
 
@@ -8806,8 +8963,8 @@ async fn load_messages(
     session: Arc<Session>,
     chat: ChatId,
     count: u32,
-) -> Result<Vec<ChatMessage>, String> {
-    blocking(move || session.list_messages(&chat, count)).await
+) -> Result<history::History, String> {
+    blocking(move || session.list_messages(&chat, count).map(history::History::from)).await
 }
 
 async fn send_text(
@@ -10048,9 +10205,6 @@ async fn accept_invite(session: Arc<Session>, link: String, incognito: bool) -> 
             "sentConfirmation" => "Invite accepted — waiting for the other side to confirm.".into(),
             "sentInvitation" => "Request sent to their address — waiting for acceptance.".into(),
             "contactAlreadyExists" => "That contact is already in your chats.".into(),
-            "connectionPlan" => {
-                "Link recognized — finish connecting from the plan UI (next).".into()
-            }
             other => format!("Link accepted ({other})."),
         })
     })

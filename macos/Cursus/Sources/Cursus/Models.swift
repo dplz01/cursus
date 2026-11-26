@@ -393,6 +393,7 @@ struct CoreEvent: Decodable {
     let type: String
     let refreshChats: Bool
     let refreshMessages: Bool
+    let refreshCallHistory: Bool?
     let chat: String?
     let progress: FileProgress?
     let incoming: [IncomingMessage]
@@ -448,10 +449,26 @@ enum Dates {
         return plain.date(from: String(raw[..<dot]) + String(rest[zone...]))
     }
 
-    private static let time: DateFormatter = {
+    /// Fixed patterns, so the Time format setting wins over the system's.
+    private static let time12: DateFormatter = {
         let f = DateFormatter()
-        f.timeStyle = .short
-        f.dateStyle = .none
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "h:mm a"
+        return f
+    }()
+    private static let time24: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+    private static var time: DateFormatter {
+        Prefs.currentTimeFormat == .h24 ? time24 : time12
+    }
+    private static let infoDay: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "d MMM yyyy"
         return f
     }()
     private static let day: DateFormatter = {
@@ -467,6 +484,11 @@ enum Dates {
 
     static func clock(_ date: Date) -> String {
         time.string(from: date)
+    }
+
+    /// Message info: "3 Nov 2026, 14:05" / "3 Nov 2026, 2:05 PM".
+    static func dateTime(_ date: Date) -> String {
+        "\(infoDay.string(from: date)), \(time.string(from: date))"
     }
 }
 

@@ -10,8 +10,8 @@ use std::ops::{Deref, DerefMut};
 
 use cursus_core::ChatMessage;
 
-#[derive(Default)]
-pub(crate) struct History {
+#[derive(Clone, Debug, Default)]
+pub struct History {
     messages: Vec<ChatMessage>,
     fingerprint: u64,
 }
@@ -36,7 +36,7 @@ impl History {
     /// Change messages in place (delivery status, transfer progress); the
     /// fingerprint follows when the returned guard is dropped.
     pub(crate) fn edit(&mut self) -> HistoryEdit<'_> {
-        HistoryEdit(self)
+        HistoryEdit { history: self, dirty: false }
     }
 }
 
@@ -56,24 +56,30 @@ impl Deref for History {
     }
 }
 
-pub(crate) struct HistoryEdit<'a>(&'a mut History);
+pub(crate) struct HistoryEdit<'a> {
+    history: &'a mut History,
+    dirty: bool,
+}
 
 impl Deref for HistoryEdit<'_> {
     type Target = [ChatMessage];
 
     fn deref(&self) -> &[ChatMessage] {
-        &self.0.messages
+        &self.history.messages
     }
 }
 
 impl DerefMut for HistoryEdit<'_> {
     fn deref_mut(&mut self) -> &mut [ChatMessage] {
-        &mut self.0.messages
+        self.dirty = true;
+        &mut self.history.messages
     }
 }
 
 impl Drop for HistoryEdit<'_> {
     fn drop(&mut self) {
-        *self.0 = History::from(std::mem::take(&mut self.0.messages));
+        if self.dirty {
+            *self.history = History::from(std::mem::take(&mut self.history.messages));
+        }
     }
 }

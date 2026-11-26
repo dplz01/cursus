@@ -64,6 +64,7 @@ pub(crate) struct CallState {
     history: Vec<CallRecord>,
     history_loading: bool,
     history_loaded: bool,
+    history_error: Option<String>,
     /// A change arrived while loading: load again when this one lands.
     history_stale: bool,
 }
@@ -86,6 +87,9 @@ impl CallState {
     }
     pub(crate) fn history_loading(&self) -> bool {
         self.history_loading
+    }
+    pub(crate) fn history_error(&self) -> Option<&str> {
+        self.history_error.as_deref()
     }
     pub(crate) fn invalidate_history(&mut self) {
         self.history_stale = true;
@@ -307,6 +311,7 @@ impl App {
             return iced::Task::none();
         };
         self.call.history_loading = true;
+        self.call.history_error = None;
         self.call.history_stale = false;
         iced::Task::run(
             iced::stream::channel(
@@ -315,19 +320,19 @@ impl App {
                     use iced::futures::SinkExt;
                     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
                     let worker = tokio::task::spawn_blocking(move || {
-                        let result = session
+                        session
                             .call_history_progress(HISTORY_LIMIT, HISTORY_SCAN_ITEMS, |calls| {
-                                let _ = tx.send(CallMsg::HistoryProgress(calls.to_vec()));
+                                let _ = tx.send(calls.to_vec());
                             })
-                            .map_err(|e| e.to_string());
-                        let _ = tx.send(CallMsg::HistoryLoaded(result));
+                            .map_err(|e| e.to_string())
                     });
-                    while let Some(message) = rx.recv().await {
-                        if out.send(Message::Call(message)).await.is_err() {
-                            break;
+                    while let Some(calls) = rx.recv().await {
+                        if out.send(Message::Call(CallMsg::HistoryProgress(calls))).await.is_err() {
+                            return;
                         }
                     }
-                    let _ = worker.await;
+                    let result = worker.await.unwrap_or_else(|err| Err(err.to_string()));
+                    let _ = out.send(Message::Call(CallMsg::HistoryLoaded(result))).await;
                 },
             ),
             |message| message,
@@ -337,21 +342,7 @@ impl App {
     /// A core event that adds / updates / deletes a call item: refresh the
     /// history if the Calls page shows it, otherwise invalidate the cached view.
     pub(crate) fn call_history_event(&mut self, event: &Event) -> iced::Task<Message> {
-        let touches = match event {
-            Event::NewChatItems(body) => CallRecord::touches_calls(body),
-            Event::Other { type_name, body } => {
-                matches!(
-                    type_name.as_str(),
-                    "callEnded"
-                        | "callInvitation"
-                        | "chatCleared"
-                        | "contactDeleted"
-                        | "chatItemDeleted"
-                ) || CallRecord::touches_calls(body)
-            }
-            _ => false,
-        };
-        if !touches {
+        if !event.refreshes_call_history() {
             return iced::Task::none();
         }
         self.call.history_stale = true;
@@ -379,11 +370,13 @@ impl App {
                         self.call.history_loaded = true;
                     }
                     Err(err) => {
-                        self.call.history_loaded = false;
+                        self.call.history_error = Some(err.clone());
+                        self.call.history_stale = true;
                         tracing::warn!(%err, "call history");
+                        return iced::Task::none();
                     }
                 }
-                if self.call.history_stale {
+                if self.call.history_stale && self.nav == NavSection::Calls {
                     return self.reload_call_history();
                 }
                 iced::Task::none()

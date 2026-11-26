@@ -106,7 +106,7 @@ fun ChatInfoPage(model: AppModel, chat: Chat, onClose: () -> Unit, onOpenChat: (
 // ── shared pieces ─────────────────────────────────────────────────────
 
 @Composable
-private fun PageScaffold(
+internal fun PageScaffold(
     onBack: () -> Unit,
     actions: (@Composable () -> Unit)? = null,
     hero: Boolean = false,

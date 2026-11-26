@@ -704,6 +704,27 @@ struct PrefRow<Control: View>: View {
     }
 }
 
+/// The floating Back control shared by chat profiles and settings pages.
+struct FloatingPageBack: View {
+    static let height: CGFloat = 56
+    static let topInset: CGFloat = 8
+
+    let action: () -> Void
+
+    var body: some View {
+        button
+            .frame(width: Self.height, height: Self.height)
+            .floatingSurface(radius: Radius.control)
+    }
+
+    var button: some View {
+        Button(action: action) { CIcon("back", size: 18) }
+            .buttonStyle(IconToolStyle())
+            .keyboardShortcut(.cancelAction)
+            .help("Back (Esc)")
+    }
+}
+
 /// A scrolling column of sections, centred and capped at 620pt (the same
 /// column on every Cursus app).
 struct Page<Content: View>: View {

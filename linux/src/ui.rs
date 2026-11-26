@@ -1193,7 +1193,7 @@ fn content_pane(app: &App, with_back: bool) -> Element<'_, Message> {
     let content: Element<'_, Message> = match app.nav() {
         NavSection::Chats | NavSection::Channels => conversation_pane(app, with_back),
         NavSection::Calls => calls_detail(app),
-        NavSection::Settings => settings_detail(app, with_back),
+        NavSection::Settings => settings_detail(app),
     };
 
     // Desktop chat: no outer inset so the composer can span the full pane
@@ -3056,6 +3056,7 @@ fn profile_span(segment: &TextSegment, size: f32, color: Color) -> iced::widget:
     if matches!(
         segment.style,
         TextStyle::Plain | TextStyle::Bold | TextStyle::Italic | TextStyle::Strike
+            | TextStyle::Snippet | TextStyle::Command
     ) {
         styled.color(color)
     } else {
@@ -3111,8 +3112,7 @@ fn styled_span(
         TextStyle::Snippet | TextStyle::Command => {
             s = s
                 .font(Font::MONOSPACE)
-                .color(theme::t().accent)
-                .background(iced::Background::Color(theme::t().bg_app));
+                .background(iced::Background::Color(theme::t().bg_field));
         }
         TextStyle::Secret => {
             s = s
@@ -4298,24 +4298,19 @@ fn settings_section_meta(section: crate::SettingsSection) -> (Element<'static, M
 }
 
 /// A settings page: its name (with Back when it covers the list) and its rows.
-fn settings_detail(app: &App, with_back: bool) -> Element<'_, Message> {
+fn settings_detail(app: &App) -> Element<'_, Message> {
     let d = app.density();
     if !app.settings_open() {
         return empty_detail(icons::nav_icon(NavIcon::Settings, false, 36.0),
             "Your settings", "Choose a category to make Cursus your own.", None, d, app.hover_ok());
     }
     let (_, title) = settings_section_meta(app.settings_section());
-    let pad = if with_back {
-        Padding { top: d.pad_tight, right: d.pad, bottom: d.pad_tight, left: 8.0 }
-    } else {
-        Padding::from([d.pad_tight, 0.0])
-    };
-    column![
-        container(page_title(title, Some(Message::Back), d, app.hover_ok())).padding(pad),
-        page_scroll(settings_section_card(app, app.settings_section()), d),
+    let body = column![
+        page_title(title, None, d, app.hover_ok()),
+        settings_section_card(app, app.settings_section()),
     ]
-    .height(Length::Fill)
-    .into()
+    .spacing(PAGE_GAP);
+    floating_header_page(Some(Message::Back), None, false, body, d, app.hover_ok())
 }
 
 fn settings_section_card(app: &App, section: crate::SettingsSection) -> Element<'_, Message> {

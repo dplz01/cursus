@@ -61,9 +61,9 @@ struct SettingsDetailView: View {
     var body: some View {
         Group {
             if let page = model.settingsPage {
-                VStack(spacing: 0) {
-                    PaneHeader(title: page.title, back: { model.settingsPage = nil })
-                    Page {
+                ZStack(alignment: .topLeading) {
+                    Page(topInset: FloatingPageBack.height) {
+                        Text(page.title).font(.cTitle).foregroundColor(Theme.primaryText)
                         switch page {
                         case .profile: ProfilePage()
                         case .address: AddressPage()
@@ -73,7 +73,11 @@ struct SettingsDetailView: View {
                         case .about: AboutPage()
                         }
                     }
+                    FloatingPageBack { model.settingsPage = nil }
+                        .padding(.horizontal, 10)
+                        .padding(.top, FloatingPageBack.topInset)
                 }
+                .onExitCommand { model.settingsPage = nil }
             } else {
                 Placeholder(icon: "settings", text: "Choose a settings category")
             }

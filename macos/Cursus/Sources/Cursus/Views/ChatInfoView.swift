@@ -40,17 +40,13 @@ struct ChatInfoView: View {
         }
     }
 
-    /// The floating bar's height and its inset from the pane's edges.
-    private let barHeight: CGFloat = 56
-    private let barInset: CGFloat = 8
-
     var body: some View {
         // The page scrolls under the bar, which blurs it (glass).
         ZStack(alignment: .topLeading) {
             pages
             bar
                 .padding(.horizontal, 10)
-                .padding(.top, barInset)
+                .padding(.top, FloatingPageBack.topInset)
         }
         .background(Theme.panel)
         .onExitCommand(perform: back)
@@ -64,14 +60,11 @@ struct ChatInfoView: View {
     }
 
     /// Back, and on the overview the profile's actions; no title.
-    private var bar: some View {
-        let overview = page == .overview
-        return HStack(spacing: 4) {
-            Button(action: back) { CIcon("back", size: 18) }
-                .buttonStyle(IconToolStyle())
-                .keyboardShortcut(.cancelAction)
-                .help("Back (Esc)")
-            if overview {
+    @ViewBuilder private var bar: some View {
+        let control = FloatingPageBack(action: back)
+        if page == .overview {
+            HStack(spacing: 4) {
+                control.button
                 Spacer(minLength: 8)
                 if chat.isDirect && chat.pendingRequestId == nil {
                     IconTool(icon: "calls", help: "Audio call", size: 18) { model.calls.start(chat) }
@@ -89,17 +82,19 @@ struct ChatInfoView: View {
                     page = .preferences
                 }
             }
+            .padding(.horizontal, 8)
+            .frame(height: FloatingPageBack.height)
+            .frame(maxWidth: .infinity)
+            .floatingSurface(radius: Radius.control)
+        } else {
+            control
         }
-        .padding(.horizontal, overview ? 8 : 0)
-        .frame(width: overview ? nil : barHeight, height: barHeight)
-        .frame(maxWidth: overview ? .infinity : nil)
-        .floatingSurface(radius: Radius.control)
     }
 
     private var pages: some View {
         // Everything starts right under the floating bar (the overview's
         // picture a little closer, its hero has no top padding).
-        Page(topInset: page == .overview ? barHeight - 8 : barHeight) {
+        Page(topInset: page == .overview ? FloatingPageBack.height - FloatingPageBack.topInset : FloatingPageBack.height) {
             switch page {
             case .overview:
                 InfoOverview(chat: chat, page: $page)

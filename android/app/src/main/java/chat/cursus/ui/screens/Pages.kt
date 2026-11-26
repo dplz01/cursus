@@ -368,77 +368,73 @@ fun SettingsDetailPane(model: AppModel, page: SettingsPage, onBack: () -> Unit) 
     val user = model.user
     var editing by remember { mutableStateOf<EditField?>(null) }
     var showLicences by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize()) {
-        PaneHeader(page.title, onBack = onBack)
-        Column(Modifier.verticalScroll(rememberScrollState())) {
-            PageColumn {
-                Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                    when (page) {
-                        SettingsPage.Profile -> {
-                            val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-                                uri?.let { model.withProfileImage(it) { url -> model.setOwnImage(url) } }
-                            }
-                            val photo = PhotoActions(
-                                hasImage = user?.image != null,
-                                onPick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                                onClear = { model.setOwnImage("") },
-                            )
-                            ProfileIdentity(user?.displayName ?: "", user?.image, photo = photo) {
-                                EditableLine(user?.displayName ?: "", "Your name", LineStyle.Name) { editing = EditField.OwnName }
-                                EditableLine(user?.shortDescr ?: "", "Add a bio", LineStyle.Sub) { editing = EditField.OwnBio }
-                            }
-                            Box(Modifier.size(18.dp))
-                            CardTitle(0, "Description")
-                            EditableLine(user?.description ?: "", "Tell people about yourself", LineStyle.Body) { editing = EditField.OwnDescription }
+    PageScaffold(onBack) {
+        Text(page.title, style = Cursus.type.title, color = c.textPrimary)
+        Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            when (page) {
+                SettingsPage.Profile -> {
+                    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+                        uri?.let { model.withProfileImage(it) { url -> model.setOwnImage(url) } }
+                    }
+                    val photo = PhotoActions(
+                        hasImage = user?.image != null,
+                        onPick = { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                        onClear = { model.setOwnImage("") },
+                    )
+                    ProfileIdentity(user?.displayName ?: "", user?.image, photo = photo) {
+                        EditableLine(user?.displayName ?: "", "Your name", LineStyle.Name) { editing = EditField.OwnName }
+                        EditableLine(user?.shortDescr ?: "", "Add a bio", LineStyle.Sub) { editing = EditField.OwnBio }
+                    }
+                    Box(Modifier.size(18.dp))
+                    CardTitle(0, "Description")
+                    EditableLine(user?.description ?: "", "Tell people about yourself", LineStyle.Body) { editing = EditField.OwnDescription }
+                }
+                SettingsPage.Address -> AddressCard(model)
+                SettingsPage.Appearance -> {
+                    var themes by remember { mutableStateOf(false) }
+                    var sizes by remember { mutableStateOf(false) }
+                    var clocks by remember { mutableStateOf(false) }
+                    PreferenceGroup("Display") {
+                        chat.cursus.ui.components.PrefRow("Theme") {
+                            chat.cursus.ui.components.ChoiceChip(model.prefs.theme.name, { themes = true })
                         }
-                        SettingsPage.Address -> AddressCard(model)
-                        SettingsPage.Appearance -> {
-                            var themes by remember { mutableStateOf(false) }
-                            var sizes by remember { mutableStateOf(false) }
-                            var clocks by remember { mutableStateOf(false) }
-                            PreferenceGroup("Display") {
-                            chat.cursus.ui.components.PrefRow("Theme") {
-                                chat.cursus.ui.components.ChoiceChip(model.prefs.theme.name, { themes = true })
-                            }
-                            chat.cursus.ui.components.PrefRow("Text size") {
-                                chat.cursus.ui.components.ChoiceChip(model.prefs.textSize.label, { sizes = true })
-                            }
-                            chat.cursus.ui.components.PrefRow("Time format") {
-                                chat.cursus.ui.components.ChoiceChip(model.prefs.timeFormat.label, { clocks = true })
-                            }
-                            }
-                            if (themes) {
-                                chat.cursus.ui.components.ChoiceMenu(
-                                    "Theme", ThemeMode.entries.map { it to it.name }, model.prefs.theme, { themes = false },
-                                ) { model.prefs.theme = it; themes = false }
-                            }
-                            if (sizes) {
-                                chat.cursus.ui.components.ChoiceMenu(
-                                    "Text size", chat.cursus.TextSize.entries.map { it to it.label }, model.prefs.textSize, { sizes = false },
-                                ) { model.prefs.textSize = it; sizes = false }
-                            }
-                            if (clocks) {
-                                chat.cursus.ui.components.ChoiceMenu(
-                                    "Time format", chat.cursus.TimeFormat.entries.map { it to it.label }, model.prefs.timeFormat, { clocks = false },
-                                ) { model.prefs.timeFormat = it; clocks = false }
-                            }
+                        chat.cursus.ui.components.PrefRow("Text size") {
+                            chat.cursus.ui.components.ChoiceChip(model.prefs.textSize.label, { sizes = true })
                         }
-                        SettingsPage.About -> {
-                            Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text("Cursus ${model.info?.version ?: ""} for Android", style = Cursus.type.body, color = c.textPrimary)
-                                Text(
-                                    "Free software under AGPL-3.0-or-later, built on the official SimpleX Chat core.",
-                                    style = Cursus.type.meta, color = c.textSecondary,
-                                )
-                            }
-                            NavRow(R.drawable.ic_link_minimalistic_2, "Source code", "github.com/dplz01/cursus") {
-                                uri.openUri("https://github.com/dplz01/cursus")
-                            }
-                            NavRow(R.drawable.ic_scripture_scroll, "Licences and credits") { showLicences = true }
+                        chat.cursus.ui.components.PrefRow("Time format") {
+                            chat.cursus.ui.components.ChoiceChip(model.prefs.timeFormat.label, { clocks = true })
                         }
-                        else -> PrivacyRows(model, page)
+                    }
+                    if (themes) {
+                        chat.cursus.ui.components.ChoiceMenu(
+                            "Theme", ThemeMode.entries.map { it to it.name }, model.prefs.theme, { themes = false },
+                        ) { model.prefs.theme = it; themes = false }
+                    }
+                    if (sizes) {
+                        chat.cursus.ui.components.ChoiceMenu(
+                            "Text size", chat.cursus.TextSize.entries.map { it to it.label }, model.prefs.textSize, { sizes = false },
+                        ) { model.prefs.textSize = it; sizes = false }
+                    }
+                    if (clocks) {
+                        chat.cursus.ui.components.ChoiceMenu(
+                            "Time format", chat.cursus.TimeFormat.entries.map { it to it.label }, model.prefs.timeFormat, { clocks = false },
+                        ) { model.prefs.timeFormat = it; clocks = false }
                     }
                 }
+                SettingsPage.About -> {
+                    Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Cursus ${model.info?.version ?: ""} for Android", style = Cursus.type.body, color = c.textPrimary)
+                        Text(
+                            "Free software under AGPL-3.0-or-later, built on the official SimpleX Chat core.",
+                            style = Cursus.type.meta, color = c.textSecondary,
+                        )
+                    }
+                    NavRow(R.drawable.ic_link_minimalistic_2, "Source code", "github.com/dplz01/cursus") {
+                        uri.openUri("https://github.com/dplz01/cursus")
+                    }
+                    NavRow(R.drawable.ic_scripture_scroll, "Licences and credits") { showLicences = true }
+                }
+                else -> PrivacyRows(model, page)
             }
         }
     }

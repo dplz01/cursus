@@ -106,6 +106,9 @@ impl LibSimplex {
             return Err(Error::LibraryLoad(hint));
         }
 
+        #[cfg(target_os = "linux")]
+        pin_system_zstd();
+
         // SAFETY: we only call C ABI symbols exported by libsimplex, with
         // the signatures of its header.
         let library = unsafe { Library::new(&path) }
@@ -301,6 +304,27 @@ fn is_musl_host() -> bool {
     {
         false
     }
+}
+
+/// libsimplex bundles libHSzstd, which exports its own (older) `ZSTD_*`
+/// symbols. When the system libzstd is first mapped while libsimplex is in
+/// its lookup scope — Mesa's Vulkan driver loads it to read the shader cache,
+/// which the background preload now races — libzstd's lazily bound internal
+/// calls (`ZSTD_decompressDCtx`, `ZSTD_freeDDict`) bind to libHSzstd and
+/// Mesa segfaults in `wgpu` device creation. Mapping libzstd first with
+/// RTLD_NOW binds all of its symbols to itself, so nothing loaded later can
+/// interpose. Missing libzstd is fine: then nothing can be confused either.
+#[cfg(target_os = "linux")]
+fn pin_system_zstd() {
+    use libloading::os::unix::{Library, RTLD_GLOBAL, RTLD_NOW};
+    static PINNED: std::sync::Once = std::sync::Once::new();
+    PINNED.call_once(|| {
+        // SAFETY: the system zstd library; loading it runs no init code of
+        // ours, and it stays mapped for the rest of the process.
+        if let Ok(lib) = unsafe { Library::open(Some("libzstd.so.1"), RTLD_NOW | RTLD_GLOBAL) } {
+            std::mem::forget(lib);
+        }
+    });
 }
 
 /// Kept alive so RTLD_GLOBAL symbols from gcompat / our shim stay mapped.

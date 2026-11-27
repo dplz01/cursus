@@ -1220,7 +1220,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "cursus-android"
-version = "0.1.2"
+version = "0.0.4"
 dependencies = [
  "cursus-bridge",
  "cursus-core",
@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "cursus-bridge"
-version = "0.1.2"
+version = "0.0.4"
 dependencies = [
  "cursus-call",
  "cursus-core",
@@ -1244,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "cursus-call"
-version = "0.1.2"
+version = "0.0.4"
 dependencies = [
  "aes-gcm",
  "audiopus_sys",
@@ -1262,7 +1262,7 @@ dependencies = [
 
 [[package]]
 name = "cursus-core"
-version = "0.1.2"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1285,7 +1285,7 @@ dependencies = [
 
 [[package]]
 name = "cursus-linux"
-version = "0.1.2"
+version = "0.0.4"
 dependencies = [
  "arboard",
  "audiopus_sys",

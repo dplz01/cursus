@@ -891,28 +891,6 @@ pub fn profile_action(hover_ok: bool) -> impl Fn(&iced::Theme, button::Status) -
     }
 }
 
-#[cfg(test)]
-mod contrast_tests {
-    use super::*;
-
-    fn luminance(color: Color) -> f32 {
-        let linear = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
-        0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
-    }
-
-    #[test]
-    fn ordinary_text_remains_readable_on_standard_surfaces() {
-        for palette in [Tokens::light(), Tokens::dark()] {
-            for background in [palette.bg_panel, palette.bg_elevated, palette.bg_sidebar, palette.bg_field] {
-                for foreground in [palette.text_primary, palette.text_secondary, palette.text_muted] {
-                    let (a, b) = (luminance(foreground), luminance(background));
-                    let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
-                    assert!(ratio >= 4.5, "text contrast is only {ratio:.2}:1");
-                }
-            }
-        }
-    }
-}
 
 // ── Glass: surfaces floating over the chat (composer and its cards) ─────
 // The surface blurs what is behind it (crate::glass: a GPU backdrop blur
@@ -954,3 +932,25 @@ pub fn glass_shadow() -> iced::Shadow {
     }
 }
 
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+
+    fn luminance(color: Color) -> f32 {
+        let linear = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+    }
+
+    #[test]
+    fn ordinary_text_remains_readable_on_standard_surfaces() {
+        for palette in [Tokens::light(), Tokens::dark()] {
+            for background in [palette.bg_panel, palette.bg_elevated, palette.bg_sidebar, palette.bg_field] {
+                for foreground in [palette.text_primary, palette.text_secondary, palette.text_muted] {
+                    let (a, b) = (luminance(foreground), luminance(background));
+                    let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+                    assert!(ratio >= 4.5, "text contrast is only {ratio:.2}:1");
+                }
+            }
+        }
+    }
+}

@@ -34,7 +34,18 @@
     <display_length compare="ge">360</display_length>
   </requires>
   <releases>
-    <release version="0.1.2" date="2026-11-18">
+    <release version="0.0.4" date="2026-11-27">
+      <description>
+        <p>Glass floating bars, page transitions and fixes. Releases are renumbered from 0.0.x.</p>
+        <ul>
+          <li>Floating glass navigation, title bar and composer with a blurred backdrop</li>
+          <li>Page transitions, clock preferences and plain-language settings</li>
+          <li>Calls page no longer fails on chats the core can't load</li>
+          <li>Voice message recording works again</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.0.3" date="2026-11-18">
       <description>
         <p>Android preview and shared navigation, touch and layout improvements.</p>
         <ul>
@@ -44,7 +55,7 @@
         </ul>
       </description>
     </release>
-    <release version="0.1.1" date="2026-11-09">
+    <release version="0.0.2" date="2026-11-09">
       <description>
         <p>Bug fixes and UI polish.</p>
         <ul>
@@ -56,7 +67,7 @@
         </ul>
       </description>
     </release>
-    <release version="0.1.0" date="2026-11-06">
+    <release version="0.0.1" date="2026-11-06">
       <description>
         <p>First release.</p>
         <ul>

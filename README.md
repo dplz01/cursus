@@ -19,8 +19,8 @@ Audio calls work on Linux and Android through the shared native WebRTC engine.
 The macOS app now shares that controller, with native audio and call UI pending Mac device validation.
 macOS has an experimental native SwiftUI client; iOS remains a scaffold.
 
-The v0.1.2 checkpoint includes an Android preview APK. See the
-[release notes](docs/releases/v0.1.2.md) and [roadmap](roadmap.md).
+The v0.0.4 checkpoint includes an Android preview APK. See the
+[release notes](docs/releases/v0.0.4.md) and [roadmap](roadmap.md).
 
 ## Repository layout
 

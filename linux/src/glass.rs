@@ -343,7 +343,7 @@ impl shader::Primitive for Primitive {
         bounds: &Rectangle,
         viewport: &Viewport,
     ) {
-        let scale = viewport.scale_factor() as f32;
+        let scale = viewport.scale_factor();
         let frame = viewport.physical_size();
         let (fw, fh) = (frame.width.max(1), frame.height.max(1));
         let clamp_rect = |x0: f32, y0: f32, x1: f32, y1: f32| {

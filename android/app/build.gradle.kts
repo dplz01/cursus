@@ -18,7 +18,9 @@ android {
         minSdk = 26
         targetSdk = 35
         versionName = cursusVersion
-        versionCode = cursusVersion.split('.').fold(0) { acc, part -> acc * 100 + part.toInt() }
+        // +1000: releases were renumbered from 0.1.x (code 102) to 0.0.x, and
+        // Android refuses to install a lower code over a higher one.
+        versionCode = 1000 + cursusVersion.split('.').fold(0) { acc, part -> acc * 100 + part.toInt() }
         // The official SimpleX core is published for 64-bit ARM only.
         ndk { abiFilters += "arm64-v8a" }
     }

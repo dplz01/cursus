@@ -106,6 +106,26 @@ fn role_or_member(role: &str) -> &str {
     }
 }
 
+/// Load libsimplex and start its runtime in the background, ahead of the
+/// unlock. Mapping its ~180 Haskell libraries takes seconds on phones and
+/// needs no password, so it can overlap the lock screen. [`Session::open`]
+/// then finds the library loaded, or waits for this load to finish. A failed
+/// preload is only logged: the unlock loads again and reports the error.
+pub fn preload_library() {
+    let spawned = std::thread::Builder::new()
+        .name("libsimplex-preload".into())
+        .spawn(|| {
+            let started = std::time::Instant::now();
+            match LibSimplex::shared(Some(&default_libs_dir())) {
+                Ok(_) => tracing::info!(ms = started.elapsed().as_millis() as u64, "libsimplex preloaded"),
+                Err(err) => tracing::info!(%err, "libsimplex preload failed; unlock will retry"),
+            }
+        });
+    if let Err(err) = spawned {
+        tracing::warn!(%err, "could not start libsimplex preload");
+    }
+}
+
 impl Session {
     pub fn open(config: SessionConfig) -> Result<Self> {
         // Owner-only data dir: SQLCipher DBs, log and prefs live here.

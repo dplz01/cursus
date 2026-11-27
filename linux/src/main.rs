@@ -850,6 +850,9 @@ pub fn main() -> iced::Result {
     }
     // Logout / shutdown / Ctrl+C / panic: wipe decrypted media on the way out.
     exit_wipe::install();
+    // Unlock is seconds faster when libsimplex is already mapped: load it
+    // while the window comes up and the password is typed.
+    cursus_core::preload_library();
 
     // Prefer Noto Sans as UI font (no dingbat ❤) and register color emoji for
     // Advanced shaping fallback — otherwise hearts render as ugly text glyphs.
@@ -909,6 +912,23 @@ pub fn main() -> iced::Result {
     }
 
     app.run()
+}
+
+/// A picture pasted into the composer: the encoded bytes to send, and the
+/// handle its preview card shows. Made once: a handle created in `view` gets a
+/// new id every frame, and iced then decodes and uploads the picture again on
+/// every redraw (each keystroke of a caption).
+#[derive(Debug, Clone)]
+pub(crate) struct PastedImage {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) preview: iced::widget::image::Handle,
+}
+
+impl PastedImage {
+    fn new(bytes: Vec<u8>) -> Self {
+        let preview = iced::widget::image::Handle::from_bytes(bytes.clone());
+        Self { bytes, preview }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1295,6 +1315,12 @@ pub enum Message {
         chat: ChatId,
         result: Option<Result<history::History, String>>,
     },
+    /// The history that took longer than `OPEN_WAIT`: the chat opened
+    /// without it and this same load fills it in (no second load).
+    LateHistory {
+        chat: ChatId,
+        result: Result<history::History, String>,
+    },
     MessagesLoaded {
         gen: u64,
         chat: ChatId,
@@ -1452,7 +1478,7 @@ struct App {
     /// conversation reloads, e.g. after a download completes.
     decrypts_failed: HashSet<PathBuf>,
     composer: text_editor::Content,
-    pasted_image: Option<Vec<u8>>,
+    pasted_image: Option<PastedImage>,
     /// Measured height of the floating composer (0 until first laid out).
     composer_height: f32,
     image_viewer: Option<(PathBuf, f32)>,
@@ -1596,6 +1622,10 @@ struct App {
     main_window: Option<iced::window::Id>,
     /// Start time while the phone-size decoration check is armed (see `WindowResized`).
     decorations_checked: Option<Instant>,
+    /// Running on a phone (a mobile shell, a handset, or a first window that
+    /// came up narrow and portrait). Opening a chat there leaves the composer
+    /// unfocused, so the on-screen keyboard only rises when it is tapped.
+    phone: bool,
     /// The page showing, to tell when a new one opens (see `page_motion`).
     page_key: page_motion::PageKey,
     /// A page sliding in, and the time of the last animation frame.
@@ -1619,6 +1649,9 @@ struct App {
     prefetching: Option<ChatId>,
     /// That history, handed to the `SelectChat` that opens the chat.
     prefetched: Option<(ChatId, Option<Result<history::History, String>>)>,
+    /// Chat opened before its history arrived, and the load generation
+    /// that [`Message::LateHistory`] delivers it as.
+    late_history: Option<(ChatId, u64)>,
     messages_snapshot_gen: u64,
     /// Bumps on each scheduled chat-list refresh; only the latest debounce fires.
     chats_refresh_gen: u64,
@@ -1790,6 +1823,7 @@ impl App {
                 about_open: false,
                 prefetching: None,
                 prefetched: None,
+                late_history: None,
                 messages_snapshot_gen: 0,
                 chats_refresh_gen: 0,
                 pending_url: None,
@@ -1825,6 +1859,7 @@ impl App {
                 window_focused: true,
                 main_window: Some(main_window),
                 decorations_checked: want_decorations().then(Instant::now),
+                phone: mobile_shell(),
                 page_key: page_motion::PageKey::default(),
                 page_motion: None,
                 section_motion: None,
@@ -2167,6 +2202,7 @@ impl App {
                             && size.height > size.width
                         {
                             self.decorations_checked = None;
+                            self.phone = true;
                             tasks.push(iced::window::toggle_decorations(id));
                         }
                     }
@@ -2248,15 +2284,34 @@ impl App {
                 // filling in — on a phone, the page slides in complete.
                 if preloaded.is_none() && self.selected_id.as_ref() != Some(&id) {
                     if let Some(session) = self.session.clone() {
-                        let count = (chat.unread.clamp(0, 5000) as u32 * 2 + HISTORY_PAGE).min(5000);
+                        let count = open_count(chat.unread);
                         self.prefetching = Some(id.clone());
-                        return Task::perform(
-                            async move {
-                                let result = tokio::time::timeout(OPEN_WAIT, load_messages(session, id.clone(), count))
-                                    .await
-                                    .ok();
-                                Message::ChatPrefetched { chat: id, result }
-                            },
+                        // A slow load opens the chat at OPEN_WAIT and keeps
+                        // going: its result follows as LateHistory.
+                        return Task::run(
+                            iced::stream::channel(
+                                2,
+                                move |mut out: iced::futures::channel::mpsc::Sender<Message>| async move {
+                                    use iced::futures::SinkExt;
+                                    let mut load = tokio::spawn(load_messages(session, id.clone(), count));
+                                    let joined = |r: Result<_, tokio::task::JoinError>| {
+                                        r.unwrap_or_else(|e| Err(e.to_string()))
+                                    };
+                                    match tokio::time::timeout(OPEN_WAIT, &mut load).await {
+                                        Ok(result) => {
+                                            let result = Some(joined(result));
+                                            let _ = out.send(Message::ChatPrefetched { chat: id, result }).await;
+                                        }
+                                        Err(_) => {
+                                            let opened = Message::ChatPrefetched { chat: id.clone(), result: None };
+                                            if out.send(opened).await.is_ok() {
+                                                let result = joined(load.await);
+                                                let _ = out.send(Message::LateHistory { chat: id, result }).await;
+                                            }
+                                        }
+                                    }
+                                },
+                            ),
                             |m| m,
                         );
                     }
@@ -2290,7 +2345,7 @@ impl App {
                 self.messages.clear();
                 self.new_messages_marker = None;
                 self.pending_auto_receives.clear();
-                self.history_count = (self.open_unread.clamp(0, 5000) as u32 * 2 + HISTORY_PAGE).min(5000);
+                self.history_count = open_count(self.open_unread);
                 self.pin_history_end = true;
                 self.reply_to = None;
                 self.editing = None;
@@ -2304,11 +2359,18 @@ impl App {
                 self.focus_item = None;
                 self.history_away_from_end = false;
                 HISTORY_AWAY_GATE.reset();
-                let history = match preloaded.flatten() {
-                    Some(result) => {
+                self.late_history = None;
+                let history = match preloaded {
+                    Some(Some(result)) => {
                         self.messages_load_gen = self.messages_load_gen.wrapping_add(1);
                         let gen = self.messages_load_gen;
                         self.update(Message::MessagesLoaded { gen, chat: id, result })
+                    }
+                    // Still loading: that load fills the chat in.
+                    Some(None) => {
+                        self.messages_load_gen = self.messages_load_gen.wrapping_add(1);
+                        self.late_history = Some((id, self.messages_load_gen));
+                        Task::none()
                     }
                     None => self.reload_messages(),
                 };
@@ -2319,7 +2381,13 @@ impl App {
                     } else {
                         Task::none()
                     },
-                    iced::widget::operation::focus(iced::widget::Id::new("composer-input")),
+                    // Desktop: type right away. Phone: focusing would pop
+                    // the on-screen keyboard over the messages just opened.
+                    if self.phone {
+                        Task::none()
+                    } else {
+                        iced::widget::operation::focus(iced::widget::Id::new("composer-input"))
+                    },
                 ])
             }
             Message::ComposerEdit(action) => {
@@ -2423,7 +2491,7 @@ impl App {
                     self.status = "Accept the contact request before sending messages.".into();
                     return Task::none();
                 }
-                if let Some(bytes) = self.pasted_image.take() {
+                if let Some(PastedImage { bytes, .. }) = self.pasted_image.take() {
                     return Task::perform(
                         async move {
                             let result =
@@ -2608,7 +2676,7 @@ impl App {
                 }
                 match image {
                     Ok(Some(bytes)) => {
-                        self.pasted_image = Some(bytes);
+                        self.pasted_image = Some(PastedImage::new(bytes));
                         Task::none()
                     }
                     Ok(None) => {
@@ -2639,7 +2707,7 @@ impl App {
                     && self.selected_chat_for_api().is_some_and(|c| c.id == chat)
                     && self.pasted_image.is_none()
                 {
-                    self.pasted_image = Some(bytes);
+                    self.pasted_image = Some(PastedImage::new(bytes));
                 }
                 self.update(Message::FileAttached(result))
             }
@@ -5674,6 +5742,14 @@ impl App {
                 self.prefetched = Some((chat, result));
                 self.update(Message::SelectChat(index))
             }
+            Message::LateHistory { chat, result } => match self.late_history.take() {
+                // A newer load (another chat, a refresh) supersedes it.
+                Some((want, gen)) if want == chat => self.update(Message::MessagesLoaded { gen, chat, result }),
+                other => {
+                    self.late_history = other;
+                    Task::none()
+                }
+            },
             Message::MessagesLoaded { gen, chat, result } => {
                 if gen != self.messages_load_gen || self.selected_id.as_ref() != Some(&chat) {
                     return Task::none();
@@ -9256,6 +9332,19 @@ async fn load_chats(session: Arc<Session>) -> Result<Vec<ChatPreview>, String> {
 
 /// Messages loaded when a chat opens, and added by "Load earlier messages".
 const HISTORY_PAGE: u32 = 100;
+
+/// Most messages a chat opens with. Every one is fetched through libsimplex,
+/// parsed and laid out before the first frame: a chat with thousands unread
+/// asked for up to 5000 and froze the UI on its first open (a 300-message
+/// first frame lays out in ~57 ms). Older ones load as the history scrolls up.
+const OPEN_MAX: u32 = 300;
+
+/// How many messages to open a chat with: room for its unread ones and the
+/// conversation before them, up to [`OPEN_MAX`]. With more unread than that,
+/// the "New messages" divider marks the oldest one loaded.
+fn open_count(unread: i64) -> u32 {
+    (unread.clamp(0, OPEN_MAX as i64) as u32 * 2 + HISTORY_PAGE).min(OPEN_MAX)
+}
 #[cfg(test)]
 thread_local! {
     /// Tests of page motion turn sliding on (it is off for screenshots).
@@ -9271,10 +9360,18 @@ async fn load_messages(
     count: u32,
 ) -> Result<history::History, String> {
     blocking(move || {
+        let started = Instant::now();
         session.list_messages(&chat, count).map(|messages| {
+            let fetched = started.elapsed();
             // Picture stand-ins are built here, off the UI thread, so the
             // first frame of the chat already has every picture's size.
             embedded_preview::warm(&messages);
+            tracing::info!(
+                count = messages.len(),
+                fetch_ms = fetched.as_millis() as u64,
+                previews_ms = (started.elapsed() - fetched).as_millis() as u64,
+                "history loaded"
+            );
             history::History::from(messages)
         })
     })
@@ -10659,5 +10756,20 @@ mod pointer_mode_tests {
         for step in 1..=4 { assert!(gate.filter_move(20.0 + step as f32 * 0.5, 25.0).is_none()); }
         assert!(gate.filter_move(22.5, 25.0).is_some());
         assert!(gate.hover_allowed());
+    }
+}
+
+#[cfg(test)]
+mod open_count_tests {
+    use super::*;
+
+    #[test]
+    fn chats_open_with_their_unread_but_never_thousands() {
+        assert_eq!(open_count(0), HISTORY_PAGE);
+        assert_eq!(open_count(-3), HISTORY_PAGE);
+        assert_eq!(open_count(40), 180);
+        assert_eq!(open_count(150), OPEN_MAX);
+        assert_eq!(open_count(4000), OPEN_MAX);
+        assert_eq!(open_count(i64::MAX), OPEN_MAX);
     }
 }

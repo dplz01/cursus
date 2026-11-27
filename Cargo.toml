@@ -36,6 +36,17 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-segmentation = "1"
 
+# Debug builds (`cargo run`, also how phones run Cursus from a checkout):
+# dependencies are built optimized once — iced, wgpu, text shaping, image /
+# audio decoding, tokio and WebRTC run several times slower unoptimized, which
+# made scrolling and page slides stutter on ARM. Our own crates stay
+# unoptimized with full debug info, so rebuilds stay quick.
+[profile.dev.package."*"]
+opt-level = 2
+# Line tables keep backtraces readable; full debug info for every dependency
+# made a ~760 MB binary that took long to link on a phone.
+debug = "line-tables-only"
+
 # Backdrop blur under floating glass: iced_wgpu with a readable window
 # surface (third_party/iced_wgpu/CURSUS_PATCH.md).
 [patch.crates-io]

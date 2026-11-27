@@ -2003,9 +2003,9 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     };
 
     // Editing wins over replying; both share one context bar.
-    let pasted_slot: Element<'_, Message> = if let Some(bytes) = &app.pasted_image {
+    let pasted_slot: Element<'_, Message> = if let Some(pasted) = &app.pasted_image {
         let card = row![
-            iced::widget::image(iced::widget::image::Handle::from_bytes(bytes.clone()))
+            iced::widget::image(pasted.preview.clone())
                 .width(72)
                 .height(72)
                 .content_fit(ContentFit::Contain),

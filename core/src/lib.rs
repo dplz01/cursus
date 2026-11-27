@@ -53,7 +53,7 @@ pub use rich_text::{
     suggest_emoji_shortcodes, EmojiSuggestion, FormatColor, SimplexLinkKind, TextSegment,
     TextStyle, LARGE_EMOJI_MAX,
 };
-pub use session::{ReceiveOutcome, Session, SessionConfig};
+pub use session::{preload_library, ReceiveOutcome, Session, SessionConfig};
 
 /// Tests that start libsimplex hold this: Argon2 hashing on another thread
 /// while the Haskell runtime starts up crashes the test process (the apps

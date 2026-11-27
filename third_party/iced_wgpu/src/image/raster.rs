@@ -50,11 +50,20 @@ impl Memory {
     }
 }
 
+/// Cursus patch: bytes of images kept although not drawn lately. Upstream
+/// dropped every image not drawn since the last new one, so scrolling a chat
+/// with pictures decoded the ones just off screen again from disk on the
+/// render thread each time they came back (scroll stutter on phones).
+const IDLE_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+
 #[derive(Debug, Default)]
 pub struct Cache {
     map: FxHashMap<image::Id, Memory>,
     hits: FxHashSet<image::Id>,
     should_trim: bool,
+    /// Cursus patch: the trim generation each image was last drawn before.
+    last_used: FxHashMap<image::Id, u64>,
+    generation: u64,
 }
 
 impl Cache {
@@ -85,19 +94,48 @@ impl Cache {
             return;
         }
 
+        self.generation += 1;
+        for id in &self.hits {
+            let _ = self.last_used.insert(*id, self.generation);
+        }
+
+        // Cursus patch: images not drawn lately stay (least recently drawn
+        // dropped first) while they fit in IDLE_BUDGET_BYTES.
         let hits = &self.hits;
+        let mut idle: Vec<(u64, image::Id, u64)> = self
+            .map
+            .iter()
+            .filter(|(id, memory)| {
+                !hits.contains(*id)
+                    && !is_held(memory)
+                    && !matches!(memory, Memory::Error(_))
+            })
+            .map(|(id, memory)| {
+                let size = memory.dimensions();
+                let bytes = u64::from(size.width) * u64::from(size.height) * 4;
+                let used = self.last_used.get(id).copied().unwrap_or(0);
+                (used, *id, bytes)
+            })
+            .collect();
+        let mut idle_bytes: u64 = idle.iter().map(|(_, _, bytes)| bytes).sum();
+        idle.sort_unstable_by_key(|(used, _, _)| *used);
+        let mut evict = FxHashSet::default();
+        for (_, id, bytes) in idle {
+            if idle_bytes <= IDLE_BUDGET_BYTES {
+                break;
+            }
+            idle_bytes -= bytes;
+            let _ = evict.insert(id);
+        }
 
         self.map.retain(|id, memory| {
             // Retain active allocations
-            if let Memory::Device { allocation, .. } = memory
-                && allocation
-                    .as_ref()
-                    .is_some_and(|allocation| allocation.strong_count() > 0)
-            {
+            if is_held(memory) {
                 return true;
             }
 
-            let retain = hits.contains(id);
+            let retain = hits.contains(id)
+                || (!evict.contains(id) && !matches!(memory, Memory::Error(_)));
 
             if !retain {
                 log::debug!("Dropping image allocation: {id:?}");
@@ -116,8 +154,15 @@ impl Cache {
 
             retain
         });
+        let map = &self.map;
+        self.last_used.retain(|id, _| map.contains_key(id));
 
         self.hits.clear();
         self.should_trim = false;
     }
+}
+
+/// An allocation the application still holds keeps its image.
+fn is_held(memory: &Memory) -> bool {
+    matches!(memory, Memory::Device { allocation: Some(allocation), .. } if allocation.strong_count() > 0)
 }

@@ -2,7 +2,7 @@
 
 Vendored from crates.io `iced_wgpu 0.14.0` (MIT, © Héctor Ramón and iced
 contributors) and wired in with `[patch.crates-io]` in the workspace
-`Cargo.toml`. Two changes:
+`Cargo.toml`. Three changes:
 
 - `window/compositor.rs` `configure_surface`: the surface also gets
   `TEXTURE_BINDING` when the adapter supports it, and
@@ -20,3 +20,9 @@ change above (search for "Cursus patch").
   they find no hardware adapter. Bringing GL up beside Vulkan loaded
   Mesa's GL stack (gallium + LLVM, ~25 MB resident) for nothing.
   `WGPU_BACKEND` still picks backends explicitly.
+
+- `image/raster.rs` `Cache::trim`: images not drawn lately are kept (least
+  recently drawn evicted first) while they fit in 32 MB. Upstream dropped
+  every image not drawn since the last new one, so scrolling a chat with
+  pictures decoded the ones just off screen again, on the render thread,
+  whenever they scrolled back into view.

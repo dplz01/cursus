@@ -923,6 +923,68 @@ fn frame_bench() {
     }
 }
 
+/// Opening a chat: what the first frames cost once its history has loaded,
+/// with the chat list already on screen (as when it's tapped). Every
+/// message is new to the renderer, like a chat opened for the first time.
+/// `cargo test --release -p cursus-linux open_bench -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn open_bench() {
+    load_fonts();
+    for (label, size) in [("mobile", MOBILE), ("desktop", DESKTOP)] {
+        for n in [100usize, 300, 2000] {
+            let mut app = demo_app(true, size.width, size.height);
+            select(&mut app, 0);
+            let base = app.messages.to_vec();
+            app.selected = None;
+            app.selected_id = None;
+            app.messages.clear();
+            let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+                iced::Font::with_name("Noto Sans"),
+                iced::Pixels(16.0),
+                Some("tiny-skia"),
+            ))
+            .unwrap();
+            let theme = app.iced_theme();
+            let style = iced::advanced::renderer::Style { text_color: iced::Color::WHITE };
+            let redraw = [iced::Event::Window(iced::window::Event::RedrawRequested(iced::time::Instant::now()))];
+            let mut frame = |app: &App, cache: Cache| -> (Cache, [f64; 3]) {
+                let t0 = std::time::Instant::now();
+                let el = app.view(iced::window::Id::unique());
+                let t1 = std::time::Instant::now();
+                let mut ui = UserInterface::build(el, size, cache, &mut renderer);
+                let mut msgs: Vec<Message> = Vec::new();
+                let _ = ui.update(&redraw, iced::mouse::Cursor::Unavailable, &mut renderer, &mut iced::advanced::clipboard::Null, &mut msgs);
+                let t2 = std::time::Instant::now();
+                ui.draw(&mut renderer, &theme, &style, iced::mouse::Cursor::Unavailable);
+                let t3 = std::time::Instant::now();
+                let ms = |a: std::time::Instant, b: std::time::Instant| (b - a).as_secs_f64() * 1000.0;
+                (ui.into_cache(), [ms(t0, t1), ms(t1, t2), ms(t2, t3)])
+            };
+            let mut cache = Cache::default();
+            for _ in 0..3 {
+                cache = frame(&app, cache).0;
+            }
+            select(&mut app, 0);
+            for i in 0..n {
+                let mut m = base[i % base.len()].clone();
+                m.item_id = 1000 + i as i64;
+                // Distinct text: nothing shaped before.
+                m.text = format!("{} ({i})", m.text);
+                m.segments.clear();
+                app.messages.push(m);
+            }
+            let mut line = format!("OPEN {label:7} {n:4} msgs:");
+            for f in 1..=3 {
+                let (next, [view, layout, draw]) = frame(&app, cache);
+                cache = next;
+                line += &format!("  f{f} view {view:.1} layout {layout:.1} draw {draw:.1} = {:.1} ms", view + layout + draw);
+            }
+            println!("{line}");
+        }
+    }
+}
+
 /// One headless frame through a persistent UI cache (like the real event
 /// loop), returning the pixels and the cache for the next frame.
 fn frame_pixels(
@@ -2024,7 +2086,7 @@ fn image_viewer_dismisses_before_the_chat_and_paste_stays_in_its_chat() {
         chat: app.selected_id.clone(),
         image: Ok(Some(vec![1, 2])),
     });
-    assert_eq!(app.pasted_image, Some(vec![1, 2]));
+    assert_eq!(app.pasted_image.as_ref().map(|p| p.bytes.as_slice()), Some(&[1u8, 2][..]));
     let _ = app.update(Message::DiscardComposerImage);
     assert!(app.pasted_image.is_none());
 }
@@ -2045,7 +2107,7 @@ fn shots_image_viewer_and_paste() {
         for (file, generation) in jobs { app.gallery_cache.complete(file.clone(), generation, crate::gallery::decode(&file)); }
         render(&app, Size::new(800.0, 760.0), if dark { "viewer-dark" } else { "viewer-light" });
         app.image_viewer = None;
-        app.pasted_image = Some(bytes.clone());
+        app.pasted_image = Some(crate::PastedImage::new(bytes.clone()));
         render(&app, Size::new(800.0, 760.0), if dark { "pasted-image-dark" } else { "pasted-image-light" });
     }
     std::fs::remove_file(path).unwrap();

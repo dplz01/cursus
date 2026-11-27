@@ -2826,3 +2826,50 @@ fn destinations_slide_sideways() {
     let _ = app.update(Message::Navigate(NavSection::Chats));
     assert!(app.section_slide().is_none());
 }
+
+#[test]
+fn composer_mic_click_reaches_the_app() {
+    // The mic is a glass square; glass shields its taps, so a press target
+    // wrapped around the glass (instead of inside it) never fired.
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use iced::{mouse, Event, Point};
+    load_fonts();
+    for size in [MOBILE, DESKTOP] {
+        let mut app = demo_app(true, size.width, size.height);
+        select(&mut app, 0);
+        let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+            iced::Font::with_name("Noto Sans"),
+            iced::Pixels(16.0),
+            Some("tiny-skia"),
+        ))
+        .expect("headless renderer");
+        let mut cache = Cache::default();
+        let mut hit = false;
+        'scan: for dy in (4..140).step_by(6) {
+            for dx in (4..140).step_by(6) {
+                let point = Point::new(size.width - dx as f32, size.height - dy as f32);
+                for event in [
+                    mouse::Event::CursorMoved { position: point },
+                    mouse::Event::ButtonPressed(mouse::Button::Left),
+                    mouse::Event::ButtonReleased(mouse::Button::Left),
+                ] {
+                    let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), size, cache, &mut renderer);
+                    let mut messages = Vec::new();
+                    let _ = ui.update(
+                        &[Event::Mouse(event)],
+                        mouse::Cursor::Available(point),
+                        &mut renderer,
+                        &mut iced::advanced::clipboard::Null,
+                        &mut messages,
+                    );
+                    cache = ui.into_cache();
+                    if messages.iter().any(|m| matches!(m, Message::ToggleVoiceRecord)) {
+                        hit = true;
+                        break 'scan;
+                    }
+                }
+            }
+        }
+        assert!(hit, "clicking the composer mic sends ToggleVoiceRecord ({size:?})");
+    }
+}

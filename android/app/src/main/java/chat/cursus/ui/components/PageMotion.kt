@@ -4,6 +4,7 @@ import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.PathEasing
 import androidx.compose.animation.core.tween
@@ -60,7 +61,7 @@ private fun fade(f: Float, startMs: Float) = ((f * TRANSITION_MS - startMs) / FA
  * - Back button / arrow: the reverse;
  * - predictive back: while the back gesture is held the page shrinks and
  *   follows the finger, uncovering the page below (a peek). Letting go
- *   finishes the move; dragging back cancels it.
+ *   slides it off the side; dragging back cancels it.
  *
  * [page] gets the animated Back to use for its own back arrow. Two panes:
  * no motion, Back closes the page at once.
@@ -86,7 +87,7 @@ fun StackedPage(
     val enter = remember(open) { Animatable(if (open && settled) 0f else 1f) }
     // Back arrow: 0 → 1 as the page leaves.
     val close = remember(open) { Animatable(0f) }
-    // Predictive back: how far the gesture is (0…1), then the commit fade.
+    // Predictive back: how far the gesture is (0…1), then the commit slide.
     val gesture = remember(open) { Animatable(0f) }
     val commit = remember(open) { Animatable(0f) }
     var fromLeft by remember { mutableStateOf(true) }
@@ -120,7 +121,7 @@ fun StackedPage(
             }
             leaving = true
             scope.launch {
-                commit.animateTo(1f, tween(200, easing = LinearEasing))
+                commit.animateTo(1f, tween(250, easing = LinearEasing))
                 onBack()
             }
         } catch (e: CancellationException) {
@@ -176,13 +177,16 @@ fun StackedPage(
                         g > 0f || k > 0f -> {
                             // Shrinks to 90% and drifts away from the edge
                             // the swipe started from, with rounded corners.
+                            // Letting go slides it the rest of the way out,
+                            // on from where the peek left it (no fade).
                             val shift = (w / 20f - 8.dp.toPx()).coerceAtLeast(0f)
                             scaleX = 1f - 0.1f * g
                             scaleY = scaleX
-                            translationX = (if (fromLeft) 1f else -1f) * shift * g
+                            val peek = shift * g
+                            val slide = FastOutSlowInEasing.transform(k)
+                            translationX = (if (fromLeft) 1f else -1f) * (peek + (w - peek) * slide)
                             shape = RoundedCornerShape(32.dp * g)
                             clip = true
-                            alpha = 1f - k
                         }
                     }
                 },

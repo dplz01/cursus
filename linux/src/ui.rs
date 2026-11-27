@@ -1655,10 +1655,15 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     } else if arming {
         // Capture is still probing — keep the mic, ignore presses so the
         // start tap cannot also stop a recorder that has not attached yet.
-        composer_inert_hit(soft_square(icons::mic_icon(icon_size, theme::t().accent), send_size), send_size)
+        composer_inert_hit(soft_square(icons::mic_icon(icon_size, theme::t().accent), send_size, None), send_size)
     } else {
         // Same soft rounded square as the list header's "+".
-        composer_hit(soft_square(icons::mic_icon(icon_size, theme::t().accent), send_size), send_size, Message::ToggleVoiceRecord)
+        // The press target sits inside the glass: `glass::surface` shields
+        // its taps, so a mouse_area around it would never see them.
+        composer_inert_hit(
+            soft_square(icons::mic_icon(icon_size, theme::t().accent), send_size, Some(Message::ToggleVoiceRecord)),
+            send_size,
+        )
     };
 
     let can_send = app.pasted_image.is_some() || !app.composer().trim().is_empty();
@@ -1969,7 +1974,7 @@ fn floating_shadow() -> iced::Shadow {
 }
 
 /// A glyph on the soft-accent rounded square (list header "+", composer mic).
-fn soft_square<'a>(icon: Element<'a, Message>, size: f32) -> Element<'a, Message> {
+fn soft_square<'a>(icon: Element<'a, Message>, size: f32, on_press: Option<Message>) -> Element<'a, Message> {
     let radius = theme::SMALL_CONTROL_RADIUS;
     // Glass like the field beside it (blurred backdrop + tint), with the
     // soft accent over the tint.
@@ -1983,6 +1988,13 @@ fn soft_square<'a>(icon: Element<'a, Message>, size: f32) -> Element<'a, Message
             border: iced::Border { radius: radius.into(), ..Default::default() },
             ..container::Style::default()
         });
+    let accent: Element<'a, Message> = match on_press {
+        Some(msg) => mouse_area(accent)
+            .on_press(msg)
+            .interaction(mouse::Interaction::Pointer)
+            .into(),
+        None => accent.into(),
+    };
     let glass = container(accent).style(move |_| container::Style {
         background: Some(iced::Background::Color(theme::glass_fill())),
         border: iced::Border { radius: radius.into(), width: 1.0, color: theme::glass_edge() },

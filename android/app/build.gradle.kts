@@ -27,7 +27,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8: shrinks and optimizes the Kotlin / Compose code (smaller
+            // APK, faster start and frames than the plain bytecode).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Until release signing is set up: installable debug-signed builds.
             signingConfig = signingConfigs.getByName("debug")
         }

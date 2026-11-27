@@ -7,6 +7,7 @@ mod avatar_cache;
 mod bubble_body;
 mod call;
 mod call_flow;
+mod long_list;
 mod desktop;
 mod desktop_entry;
 mod edit_menu;
@@ -1637,6 +1638,10 @@ struct App {
     open_after_reload: Option<ChatId>,
     /// Render as connected without a live session (screenshot harness only).
     demo: bool,
+    /// The section a chat is being opened from when it isn't Chats (a call
+    /// in Calls): it stays on screen while the history loads, and on a
+    /// phone its list stays under the chat page and Back returns to it.
+    list_return: Option<NavSection>,
     /// Selected Settings category (desktop two-pane settings).
     settings_section: SettingsSection,
     /// Composer selection just before the latest tap: a long-press starts with
@@ -1841,6 +1846,7 @@ impl App {
                 call: call_flow::CallState::default(),
                 open_after_reload: None,
                 demo: false,
+                list_return: None,
                 settings_section: SettingsSection::Profile,
                 composer_pre_click: None,
             },
@@ -2067,6 +2073,16 @@ impl App {
             }
         }
         let task = Task::batch([finished, self.update_inner(message)]);
+        // The chat opened from another section has closed: back to it.
+        if self.list_return.is_some()
+            && self.prefetching.is_none()
+            && self.selected.is_none()
+            && self.contact_profile.is_none()
+            && self.group_settings.is_none()
+            && self.support.is_none()
+        {
+            self.nav = self.list_return.take().unwrap_or(self.nav);
+        }
         self.track_page();
         if was_composing && !self.compose_open {
             return Task::batch([task, self.drop_unshared_invitation()]);
@@ -2096,6 +2112,7 @@ impl App {
                     self.motion_now = now;
                 }
                 self.nav = section;
+                self.list_return = None;
                 self.compose_open = false;
                 self.pref_menu = None;
                 // Keep an open conversation when moving Chats ↔ Channels if it
@@ -2245,6 +2262,14 @@ impl App {
                     }
                 }
                 let needs_read = chat.unread > 0 || chat.unread_chat;
+                // Opened from another section (a call): Chats now. A phone
+                // keeps that section's list under the page to return to.
+                if self.list_return.is_some() {
+                    self.nav = NavSection::Chats;
+                    if self.layout() != LayoutMode::Mobile {
+                        self.list_return = None;
+                    }
+                }
                 self.clear_pointer_gesture();
                 self.pasted_image = None;
                 self.clear_gallery();
@@ -3952,6 +3977,8 @@ impl App {
                                     id: chat_id.clone(),
                                     title: title.clone(),
                                     preview: "Channel created".into(),
+                                    preview_kind: cursus_core::PreviewKind::Text,
+                                    preview_segments: Vec::new(),
                                     unread: 0,
                                     unread_chat: false,
                                     settings: ChatSettings::default(),
@@ -6908,6 +6935,10 @@ impl App {
     pub(crate) fn history_fingerprint(&self) -> u64 {
         self.messages.fingerprint()
     }
+    /// Hash of the open chat's message `index` (see `History`).
+    pub(crate) fn message_hash(&self, index: usize) -> u64 {
+        self.messages.message_hash(index)
+    }
     /// The history is full to its page limit: there may be older messages.
     pub(crate) fn history_has_earlier(&self) -> bool {
         self.messages.len() as u32 >= self.history_count
@@ -7521,7 +7552,11 @@ impl App {
             return;
         }
         let old = std::mem::replace(&mut self.page_key, page);
-        if self.pages_slide() && self.pending_pop.is_none() && page_motion::is_push(&old, &self.page_key) {
+        let from_list = self.list_return.is_some_and(|nav| old.nav == Some(nav) && old.depth() == 0);
+        if self.pages_slide()
+            && self.pending_pop.is_none()
+            && (page_motion::is_push(&old, &self.page_key) || from_list && self.page_key.depth() > 0)
+        {
             let now = Instant::now();
             self.page_motion = Some(page_motion::Motion::push(self.parent_page(), now));
             self.motion_now = now;
@@ -7607,6 +7642,12 @@ impl App {
 
     /// Phone, while the destination changes: the one left, and the shift
     /// (fraction of the width) of it and of the new one.
+    /// The section whose list the phone shows (under a chat page opened
+    /// from it too; see `list_return`).
+    pub(crate) fn list_nav(&self) -> NavSection {
+        self.list_return.unwrap_or(self.nav)
+    }
+
     pub(crate) fn section_slide(&self) -> Option<(NavSection, f32, f32)> {
         self.section_motion.map(|(from, dir, m)| {
             let incoming = dir * m.offset(self.motion_now);
@@ -8950,7 +8991,13 @@ fn main_window_settings() -> iced::window::Settings {
         size: iced::Size::new(1180.0, 720.0),
         decorations: want_decorations(),
         exit_on_close_request: false,
-        icon: iced::window::icon::from_file_data(desktop_entry::logo_png(256), None).ok(),
+        icon: image::load_from_memory_with_format(desktop_entry::logo_png(256), image::ImageFormat::Png)
+            .ok()
+            .and_then(|img| {
+                let img = img.into_rgba8();
+                let (w, h) = img.dimensions();
+                iced::window::icon::from_rgba(img.into_raw(), w, h).ok()
+            }),
         // Wayland app id / X11 class — lets users write compositor rules.
         platform_specific: iced::window::settings::PlatformSpecific {
             // Matches the .desktop file (icon, taskbar): the Flatpak id inside

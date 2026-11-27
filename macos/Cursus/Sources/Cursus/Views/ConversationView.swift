@@ -613,7 +613,7 @@ struct EmojiSuggestionRow: View {
             }
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, minHeight: Self.height, maxHeight: Self.height)
-            .background(RoundedRectangle(cornerRadius: Radius.smallControl - Self.inset, style: .continuous)
+            .background(RoundedRectangle(cornerRadius: Radius.composer - Self.inset, style: .continuous)
                 .fill(selected ? Theme.accent : hovered ? Theme.accentSoft : Color.clear))
             .contentShape(Rectangle())
         }
@@ -1093,9 +1093,9 @@ struct ComposerView: View {
             VStack(spacing: 0) {
                 contextBar
                 if !suggestions.isEmpty { suggestionStrip }
-                // A floating field with the control radius of every other
-                // button, the paperclip inside it, and one rounded-square
-                // action beside it: mic while empty, Send once there is text.
+                // A floating field rounded like a message bubble, the
+                // paperclip inside it, and one rounded-square action beside
+                // it: mic while empty, Send once there is text.
                 HStack(alignment: .bottom, spacing: 8) {
                     HStack(alignment: .bottom, spacing: 4) {
                         ZStack(alignment: .topLeading) {
@@ -1122,7 +1122,7 @@ struct ComposerView: View {
                     }
                     .padding(.leading, 12)
                     .padding(.trailing, 2)
-                    .floatingSurface()
+                    .floatingSurface(radius: Radius.composer)
                     // Exactly the list header's "+" (CreationButton): 36 pt,
                     // radius 12, same style; Send is its solid accent twin.
                     if canSend {
@@ -1216,7 +1216,7 @@ struct ComposerView: View {
 
     /// Linux emoji suggestions: a fixed 5-row list on the composer field's
     /// surface, as wide as the field, hits glued to it; rows concentric with
-    /// the card (4pt inset, radius 12 − 4).
+    /// the card (4pt inset, radius 18 − 4).
     private var suggestionStrip: some View {
         VStack(spacing: 2) {
             Spacer(minLength: 0)
@@ -1227,7 +1227,7 @@ struct ComposerView: View {
         .frame(height: EmojiSuggestionRow.height * CGFloat(EmojiSuggestionRow.rows)
                + 2 * CGFloat(EmojiSuggestionRow.rows - 1))
         .padding(EmojiSuggestionRow.inset)
-        .floatingSurface()
+        .floatingSurface(radius: Radius.composer)
         // Ends where the field ends: the action button sits beside it.
         .padding(.leading, 10)
         .padding(.trailing, 10 + 36 + 8)

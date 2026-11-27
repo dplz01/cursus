@@ -46,6 +46,10 @@ struct Chat: Decodable, Identifiable, Equatable {
     let apiId: Int64
     let title: String
     let preview: String
+    /// What the last message is: text, image, video, voice, file or call.
+    let previewKind: String?
+    /// SimpleX formatting of the preview text (empty: plain).
+    let previewSegments: [Segment]?
     let unread: Int
     let unreadChat: Bool
     let notifications: String
@@ -445,7 +449,17 @@ enum Dates {
     /// Core timestamps carry up to nanoseconds ("…14.904358283Z"), more than
     /// ISO8601DateFormatter accepts; minutes are all the UI shows, so drop
     /// the fraction.
+    /// Items without a real time (the chat banner, some events) carry the
+    /// Unix epoch, 1 January 1970: no day label or time for those (Linux
+    /// `divider_time`).
     static func parse(_ raw: String) -> Date? {
+        guard let date = parseAny(raw), date > realTime else { return nil }
+        return date
+    }
+
+    private static let realTime = Date(timeIntervalSince1970: 946_684_800) // 2000-01-01
+
+    private static func parseAny(_ raw: String) -> Date? {
         guard let dot = raw.firstIndex(of: ".") else { return plain.date(from: raw) }
         let rest = raw[raw.index(after: dot)...]
         let zone = rest.firstIndex { !$0.isNumber } ?? rest.endIndex

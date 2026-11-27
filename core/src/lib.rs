@@ -37,7 +37,7 @@ pub use models::{
     ChatRelayInfo, ChatSettings, ChatTag, ChatType, ConnLink, DeletedState, DeliveryStatus, Event,
     FileInfo, FileKind, FileTransferState, GroupChatScope, GroupInvitationInfo, GroupMemberInfo,
     GroupProfileUpdate, GroupSupportChat, MemberReceipt, MessageInfo, MessageQuote, ReceiptState, MessageSender, NtfFilter,
-    ProfileFields, ReactionCount, ReactionMember, UserProfile, GROUP_ROLES, KNOWN_REACTIONS,
+    PreviewKind, ProfileFields, ReactionCount, ReactionMember, UserProfile, GROUP_ROLES, KNOWN_REACTIONS,
 };
 #[cfg(target_env = "musl")]
 pub use musl_compat::{compat_status_line, ensure_ld_preload_reexec, is_musl_host};

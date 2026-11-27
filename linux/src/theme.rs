@@ -333,10 +333,15 @@ pub const INSET_CONTROL_RADIUS: f32 = CONTROL_RADIUS - 4.0;
 /// Compact square controls (36–48px: header actions, voice play): a rounded
 /// square, like the nav destinations — never a circle.
 pub const SMALL_CONTROL_RADIUS: f32 = 12.0;
+/// Corner of a message bubble (its rounded corners).
+pub const BUBBLE_RADIUS: f32 = 18.0;
+/// The composer's text field: rounded like a bubble of its height (a pill
+/// for one line, a bubble's corners when it grows).
+pub const FIELD_RADIUS: f32 = BUBBLE_RADIUS;
 /// Inset of the `:shortcode` list inside its field-shaped card.
 pub const SUGGEST_INSET: f32 = 4.0;
 /// Concentric hover/selection inside that card.
-pub const SUGGEST_ROW_RADIUS: f32 = SMALL_CONTROL_RADIUS - SUGGEST_INSET;
+pub const SUGGEST_ROW_RADIUS: f32 = FIELD_RADIUS - SUGGEST_INSET;
 pub const DOCK_INSET: f32 = 5.0;
 pub const DOCK_SELECTION_RADIUS: f32 = CONTROL_RADIUS - DOCK_INSET;
 

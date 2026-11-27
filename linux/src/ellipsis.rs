@@ -306,6 +306,135 @@ impl Widget<Message, Theme, iced::Renderer> for Ellipsis {
     }
 }
 
+/// One span of a formatted preview (no links: the row is the tap target).
+pub(crate) type SpanOf = fn(&cursus_core::TextSegment, f32, Color) -> iced::widget::text::Span<'static, Message>;
+
+/// [`ellipsis_text`] for SimpleX-formatted text (bold, italic, links…): the
+/// same fit, with the spans' formatting kept up to the "…".
+pub(crate) fn rich_ellipsis<'a>(
+    segments: Vec<cursus_core::TextSegment>,
+    size: f32,
+    color: Color,
+    lines: usize,
+    span_of: SpanOf,
+) -> Element<'a, Message> {
+    let plain: String = segments.iter().map(|s| s.text.as_str()).collect();
+    let wrapping = preview_wrapping(&plain);
+    let mut rich = RichEllipsis { segments, plain, size, color, lines: lines.max(1), wrapping, span_of, inner: None, fitted_for: None };
+    rich.inner = Some(rich.rich(None));
+    Element::new(rich)
+}
+
+struct RichEllipsis {
+    segments: Vec<cursus_core::TextSegment>,
+    plain: String,
+    size: f32,
+    color: Color,
+    lines: usize,
+    wrapping: Wrapping,
+    span_of: SpanOf,
+    inner: Option<iced::widget::text::Rich<'static, Message, Message>>,
+    fitted_for: Option<f32>,
+}
+
+impl RichEllipsis {
+    /// The text cut after `keep` bytes of its plain form and ended with "…"
+    /// (`None`: all of it).
+    fn rich(&self, keep: Option<usize>) -> iced::widget::text::Rich<'static, Message, Message> {
+        let mut spans = Vec::new();
+        let mut left = keep.unwrap_or(usize::MAX);
+        for seg in &self.segments {
+            if left == 0 {
+                break;
+            }
+            let mut seg = seg.clone();
+            if seg.text.len() > left {
+                let mut end = left;
+                while !seg.text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                seg.text.truncate(end);
+            }
+            left -= seg.text.len().min(left);
+            if !seg.text.is_empty() {
+                spans.push((self.span_of)(&seg, self.size, self.color));
+            }
+        }
+        if keep.is_some() {
+            spans.push(iced::widget::span("…").color(self.color));
+        }
+        iced::widget::rich_text(spans)
+            .size(self.size)
+            .color(self.color)
+            .font(ui_font(false))
+            .line_height(LineHeight::Absolute((self.size * LINE_HEIGHT).into()))
+            .wrapping(self.wrapping)
+    }
+
+    fn fit(&mut self, max_w: f32) {
+        // Slack for bold / monospace spans measured as regular text.
+        let fitted = ellipsize_to_lines_font(&self.plain, (max_w - 8.0).max(20.0), self.size, self.lines, false);
+        let keep = if fitted == self.plain {
+            None
+        } else {
+            let head = fitted.strip_suffix('…').unwrap_or(&fitted).trim_end();
+            Some(if self.plain.starts_with(head) { head.len() } else { 0 })
+        };
+        self.inner = Some(self.rich(keep));
+        self.fitted_for = Some(max_w);
+    }
+
+    fn inner(&self) -> &iced::widget::text::Rich<'static, Message, Message> {
+        self.inner.as_ref().expect("built in rich_ellipsis()")
+    }
+}
+
+impl Widget<Message, Theme, iced::Renderer> for RichEllipsis {
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<RichEllipsis>()
+    }
+    fn children(&self) -> Vec<Tree> {
+        vec![Tree::new(self.inner() as &dyn Widget<Message, Theme, iced::Renderer>)]
+    }
+    fn diff(&self, tree: &mut Tree) {
+        tree.diff_children(&[self.inner() as &dyn Widget<Message, Theme, iced::Renderer>]);
+    }
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Shrink, Length::Shrink)
+    }
+    fn layout(&mut self, tree: &mut Tree, renderer: &iced::Renderer, limits: &layout::Limits) -> layout::Node {
+        let max_w = limits.max().width;
+        if self.fitted_for != Some(max_w) && max_w.is_finite() {
+            self.fit(max_w);
+            // The spans changed: their state starts afresh.
+            tree.diff_children(&[self.inner() as &dyn Widget<Message, Theme, iced::Renderer>]);
+        }
+        let inner = self.inner.as_mut().expect("built in rich_ellipsis()");
+        Widget::<Message, Theme, iced::Renderer>::layout(inner, &mut tree.children[0], renderer, limits)
+    }
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut iced::Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        Widget::<Message, Theme, iced::Renderer>::draw(self.inner(), &tree.children[0], renderer, theme, style, layout, cursor, viewport);
+    }
+    fn operate(
+        &mut self,
+        _tree: &mut Tree,
+        layout: Layout<'_>,
+        _renderer: &iced::Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        operation.text(None, layout.bounds(), &self.plain);
+    }
+}
+
 #[cfg(test)]
 mod ellipsize_tests {
     use super::{ellipsize_to_lines, measured_lines};

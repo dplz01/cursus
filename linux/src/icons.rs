@@ -111,9 +111,14 @@ pub fn image_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
     )
 }
 
-/// Generic file glyph — reuses image-square outline at muted weight for non-images.
+/// Document page — Cursus original (CC0).
 pub fn file_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
-    image_icon(size, color)
+    tinted(svg_handle!("../assets/icons/document.svg"), color, size)
+}
+
+/// Video camera — Cursus original (CC0).
+pub fn video_icon<'a>(size: f32, color: Color) -> Element<'a, Message> {
+    tinted(svg_handle!("../assets/icons/video.svg"), color, size)
 }
 
 /// Microphone — Cursus original (CC0).

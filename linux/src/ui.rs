@@ -737,7 +737,7 @@ fn phone_lists(app: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fill)
         .push(leaving)
-        .push(crate::page_motion::shift(list_of(app.nav()), incoming))
+        .push(crate::page_motion::shift(list_of(app.list_nav()), incoming))
         .into()
 }
 
@@ -762,30 +762,44 @@ fn stacked_shell(app: &App) -> Element<'_, Message> {
                 || app.group_settings().is_some()
                 || app.support().is_some());
 
+    // A page sliding in or out (GTK navigation): the page it covers or
+    // uncovers stays still underneath.
+    let slide = if show_detail {
+        app.page_slide().filter(|(offset, _)| *offset > 0.0)
+    } else {
+        None
+    };
+    let list_under = matches!(slide, Some((_, crate::page_motion::Under::List)));
+
+    // The list is always the bottom layer. While a page covers it, it is
+    // neither built nor drawn but keeps its widget state, so Back finds it
+    // scrolled where it was (rebuilding it there started it at the top).
+    let list = crate::retained::view((!show_detail || list_under).then(|| list_with_bottom_nav(app)));
+    // Any other page a sliding page uncovers (a chat under its contact page…).
+    let under: Element<'_, Message> = match slide {
+        Some((_, under)) if under != crate::page_motion::Under::List => under_page(app, under),
+        _ => Space::new().width(Length::Fill).height(Length::Fill).into(),
+    };
     // Exclusive pages: a chat / settings page fully replaces the list and
-    // its bar.
-    if show_detail {
+    // its bar. Same tree at rest and in motion, so the page keeps its state.
+    let page: Element<'_, Message> = if show_detail {
         let page = container(content_pane(app, true))
             .width(Length::Fill)
             .height(Length::Fill)
             .style(theme::panel_style());
-        // A page sliding in or out (GTK navigation): the page it covers or
-        // uncovers stays still underneath.
-        let (offset, under) = match app.page_slide() {
-            Some((offset, under)) if offset > 0.0 => (offset, Some(under_page(app, under))),
-            _ => (0.0, None),
-        };
-        let under = under.unwrap_or_else(|| Space::new().width(Length::Fill).height(Length::Fill).into());
-        // Same tree at rest and in motion, so the page keeps its state.
-        let stack = Stack::new()
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .push(under)
-            .push(crate::page_motion::slide(page, offset, crate::page_motion::shade(!theme::is_light_active())));
-        // Swipe right from the left edge to go back (GTK, touchscreen).
-        return crate::page_motion::back_swipe(stack, app.swipe_back_ready(), Message::BackSwipe);
-    }
-    list_with_bottom_nav(app)
+        let offset = slide.map_or(0.0, |(offset, _)| offset);
+        crate::page_motion::slide(page, offset, crate::page_motion::shade(!theme::is_light_active()))
+    } else {
+        Space::new().width(Length::Fill).height(Length::Fill).into()
+    };
+    let stack = Stack::new()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .push(list)
+        .push(under)
+        .push(page);
+    // Swipe right from the left edge to go back (GTK, touchscreen).
+    crate::page_motion::back_swipe(stack, show_detail && app.swipe_back_ready(), Message::BackSwipe)
 }
 
 /// The page under a sliding one (phone layout).
@@ -889,7 +903,7 @@ fn nav_destination(
     hit: f32,
     d: Density,
 ) -> Element<'_, Message> {
-    let active = app.nav() == section;
+    let active = app.list_nav() == section;
     let icon = icons::nav_icon(section.icon(), active, if vertical { d.icon } else { 22.0 });
     let hover_ok = app.hover_ok();
 
@@ -1031,10 +1045,9 @@ fn chat_list_for(app: &App, nav: NavSection) -> Element<'_, Message> {
         );
     }
 
-    let mut col = Column::new().spacing(0).padding(Padding::ZERO);
-
     let rows = app.chats_in(nav);
     if rows.is_empty() {
+        let mut col = Column::new().spacing(0).padding(Padding::ZERO);
         let (title, body) = match nav {
             NavSection::Channels => (
                 "No channels yet",
@@ -1049,111 +1062,249 @@ fn chat_list_for(app: &App, nav: NavSection) -> Element<'_, Message> {
         return scroll_y(col);
     }
 
+    // Rebuilt only when something a row shows changes (see `chat_list_key`):
+    // fling ticks, pointer moves and typing reuse the cached rows.
+    let key = chat_list_key(app, nav, d);
+    let clearance = nav_clearance(d);
+    scroll_y(crate::long_list::column(key, Padding::ZERO, move || chat_list_plan(app, nav, d, clearance)))
+}
+
+/// One span of a chat list preview: the bubble's formatting in the
+/// preview's colour, without links (tapping the row opens the chat).
+fn preview_span(seg: &TextSegment, size: f32, color: Color) -> iced::widget::text::Span<'static, Message> {
+    let s = span(seg.text.clone()).color(color);
+    let link_like = seg.simplex.is_some() || matches!(seg.style, TextStyle::Uri | TextStyle::Email | TextStyle::Phone);
+    let s = match seg.style {
+        TextStyle::Bold => s.font(Font { weight: font::Weight::Bold, ..Font::with_name("Noto Sans") }),
+        TextStyle::Italic => s.font(Font { style: font::Style::Italic, ..Font::with_name("Noto Sans") }),
+        TextStyle::Strike => s.strikethrough(true),
+        TextStyle::Snippet | TextStyle::Command => {
+            s.font(Font::MONOSPACE).background(iced::Background::Color(theme::t().bg_field))
+        }
+        TextStyle::Secret => s.color(theme::t().text_muted).background(iced::Background::Color(theme::t().accent_soft)),
+        TextStyle::Small => s.size((size * 0.85).round()),
+        TextStyle::Colored { color } => s.color(format_color(color)),
+        TextStyle::Mention => s.font(Font { weight: font::Weight::Medium, ..Font::with_name("Noto Sans") }),
+        _ => s,
+    };
+    if link_like { s.color(theme::t().accent) } else { s }
+}
+
+/// Fingerprint of everything [`chat_list_plan`] reads: the state shared by
+/// every row, then each row's own key.
+fn chat_list_key(app: &App, nav: NavSection, d: Density) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let base = chat_list_base_key(app, nav, d);
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    base.hash(&mut h);
+    nav_clearance(d).to_bits().hash(&mut h);
+    for (index, c) in app.chats_in(nav) {
+        chat_row_key(app, base, index, c).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// What every chat row depends on.
+fn chat_list_base_key(app: &App, nav: NavSection, d: Density) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for v in [d.body, d.meta, d.list_row] {
+        v.to_bits().hash(&mut h);
+    }
+    std::mem::discriminant(&nav).hash(&mut h);
+    app.layout().hash(&mut h);
+    app.hover_ok().hash(&mut h);
+    theme::is_light_active().hash(&mut h);
+    app.desktop_prefs().chat_previews.hash(&mut h);
+    // "Yesterday" / weekday stamps roll over at midnight.
+    chrono::Local::now().date_naive().hash(&mut h);
+    clock().hash(&mut h);
+    h.finish()
+}
+
+/// Everything one chat row shows.
+fn chat_row_key(app: &App, base: u64, index: usize, c: &cursus_core::ChatPreview) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    base.hash(&mut h);
+    index.hash(&mut h);
+    (app.selected() == Some(index)).hash(&mut h);
+    c.id.hash(&mut h);
+    c.title.hash(&mut h);
+    c.preview.hash(&mut h);
+    c.preview_kind.hash(&mut h);
+    c.preview_segments.hash(&mut h);
+    c.unread.hash(&mut h);
+    c.unread_chat.hash(&mut h);
+    c.settings.enable_ntfs.is_muted().hash(&mut h);
+    c.settings.favorite.hash(&mut h);
+    app.support_badge_count(c).hash(&mut h);
+    c.last_ts.hash(&mut h);
+    c.is_channel.hash(&mut h);
+    c.pending_request_id.is_some().hash(&mut h);
+    // Avatars: sampled like the avatar cache's own key, enough to tell
+    // pictures apart without hashing ~12 KB of base64 per row.
+    c.peer_profile
+        .image
+        .as_deref()
+        .map(|u| (u.len(), u.get(..64), u.get(u.len().saturating_sub(64)..)))
+        .hash(&mut h);
+    h.finish()
+}
+
+/// The rows of the chat list for `nav`, as a [`crate::long_list`] plan.
+fn chat_list_plan<'a>(app: &'a App, nav: NavSection, d: Density, clearance: f32) -> crate::long_list::Plan<'a> {
+    let rows = app.chats_in(nav);
+    let base = chat_list_base_key(app, nav, d);
+    let mut col = Bubbles(Vec::with_capacity(rows.len() + 1));
     // The open chat is highlighted only beside it (two columns). On a phone
     // the list is under the chat: a highlight there showed while Back slid
     // the chat away, then blinked off when it closed.
     let side_by_side = !matches!(app.layout(), LayoutMode::Mobile);
     for (index, chat) in rows {
-        let selected = side_by_side && app.selected() == Some(index);
-        let show_unread = chat.unread > 0 || chat.unread_chat;
-        let muted = chat.settings.enable_ntfs.is_muted();
-        let support_badge = app.support_badge_count(chat);
+        let key = chat_row_key(app, base, index, chat);
+        col = col.push(key, move || chat_row(app, index, chat, d, side_by_side));
+    }
+    col = col.push(row_key(0, ("gap", clearance.to_bits())), move || vertical().height(clearance));
+    col.0
+}
 
-        // Line 1: name · (muted) · time.
-        let mut top = Row::new()
-            .spacing(6)
-            .align_y(Alignment::Center)
-            .push(
-                container(crate::ellipsis::ellipsis_text_weight(
-                    chat.title.clone(),
-                    d.body,
-                    theme::t().text_primary,
-                    1,
-                    true,
-                ))
-                .width(Length::Fill)
-                .clip(true),
-            );
-        if muted {
-            top = top.push(icons::mute_icon(14.0, theme::t().text_muted));
-        }
-        if let Some(when) = format_list_time(chat.last_ts.as_deref()) {
-            top = top.push(
-                txt(when)
-                    .size(d.meta)
-                    .wrapping(Wrapping::None)
-                    .color(if show_unread && !muted {
-                        theme::t().accent
-                    } else {
-                        theme::t().text_muted
-                    }),
-            );
-        }
+/// One row of the chat list.
+fn chat_row(app: &App, index: usize, chat: &cursus_core::ChatPreview, d: Density, side_by_side: bool) -> Element<'static, Message> {
+    let selected = side_by_side && app.selected() == Some(index);
+    let show_unread = chat.unread > 0 || chat.unread_chat;
+    let muted = chat.settings.enable_ntfs.is_muted();
+    let support_badge = app.support_badge_count(chat);
 
-        // Line 2: preview (fitted to two lines with "…") · badges.
-        let preview: Element<'_, Message> = if chat.preview.is_empty()
-            || !app.desktop_prefs().chat_previews
-        {
-            Space::new().height(0).width(Length::Fill).into()
-        } else {
-            container(ellipsis_text(
+    // Line 1: name · (muted) · time.
+    let mut top = Row::new()
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .push(
+            container(crate::ellipsis::ellipsis_text_weight(
+                chat.title.clone(),
+                d.body,
+                theme::t().text_primary,
+                1,
+                true,
+            ))
+            .width(Length::Fill)
+            .clip(true),
+        );
+    if muted {
+        top = top.push(icons::mute_icon(14.0, theme::t().text_muted));
+    }
+    if let Some(when) = format_list_time(chat.last_ts.as_deref()) {
+        top = top.push(
+            txt(when)
+                .size(d.meta)
+                .wrapping(Wrapping::None)
+                .color(if show_unread && !muted {
+                    theme::t().accent
+                } else {
+                    theme::t().text_muted
+                }),
+        );
+    }
+
+    // Line 2: preview (fitted to two lines with "…") · badges.
+    let preview: Element<'_, Message> = if chat.preview.is_empty()
+        || !app.desktop_prefs().chat_previews
+    {
+        Space::new().height(0).width(Length::Fill).into()
+    } else {
+        let text = if chat.preview_segments.is_empty() {
+            ellipsis_text(
                 cursus_core::humanize_simplex_links(&chat.preview).into_owned(),
                 d.meta,
                 theme::t().text_secondary,
                 2,
-            ))
-            .width(Length::Fill)
-            .clip(true)
-            .into()
+            )
+        } else {
+            // Formatted as in the bubble; secrets stay hidden.
+            let segments = chat
+                .preview_segments
+                .iter()
+                .map(|seg| {
+                    let mut seg = seg.clone();
+                    if seg.style == TextStyle::Secret {
+                        seg.text = "•".repeat(seg.text.chars().count().max(1));
+                    }
+                    seg
+                })
+                .collect();
+            crate::ellipsis::rich_ellipsis(segments, d.meta, theme::t().text_secondary, 2, preview_span)
         };
-        let mut badges = Row::new().spacing(6).align_y(Alignment::Center);
-        if chat.settings.favorite {
-            badges = badges.push(icons::star_icon(14.0, theme::t().text_muted));
-        }
-        if support_badge > 0 {
-            badges = badges.push(
-                text(format!("⚑{support_badge}"))
-                    .size(d.meta)
-                    .color(theme::t().always),
-            );
-        }
-        if show_unread {
-            badges = badges.push(unread_count_badge(chat.unread, muted, d));
-        }
-        let bottom = row![preview, badges].spacing(8).align_y(Alignment::Start);
-
-        let content = container(
-            row![
-                chat_list_avatar(chat, 48.0),
-                container(column![top, bottom].spacing(2))
-                    .width(Length::Fill)
-                    .clip(true),
-            ]
-            .align_y(Alignment::Center)
-            .spacing(12),
-        )
-        .width(Length::Fill)
-        .padding(Padding {
-            top: d.list_row + 2.0,
-            right: 10.0,
-            bottom: d.list_row + 2.0,
-            left: 10.0,
-        });
-
-        // Hover paint + long-press slots without App Messages (avoids full view rebuild).
-        let row = hover::chat_row(
-            content,
-            index,
-            selected,
-            app.hover_ok(),
-            app.hover_slots(),
-            Message::ChatRowReleased(index),
-            Message::OpenChatMenu(index),
-        );
-
-        col = col.push(container(row).padding(Padding::from([0, 8])));
+        // Pictures, voice messages, files and calls lead with what they are.
+        let size = d.meta + 2.0;
+        let color = theme::t().text_muted;
+        let icon = match chat.preview_kind {
+            cursus_core::PreviewKind::Text => None,
+            cursus_core::PreviewKind::Image => Some(icons::image_icon(size, color)),
+            cursus_core::PreviewKind::Video => Some(icons::video_icon(size, color)),
+            cursus_core::PreviewKind::Voice => Some(icons::mic_icon(size, color)),
+            cursus_core::PreviewKind::File => Some(icons::file_icon(size, color)),
+            cursus_core::PreviewKind::Call => Some(icons::phone_icon(size, color)),
+        };
+        let line: Element<'_, Message> = match icon {
+            None => text,
+            Some(icon) => {
+                // Centred on the first line of the (up to two line) text.
+                let top = ((d.meta * crate::ellipsis::LINE_HEIGHT - size) / 2.0).max(0.0);
+                row![container(icon).padding(Padding { top, ..Padding::ZERO }), text]
+                    .spacing(4)
+                    .align_y(Alignment::Start)
+                    .into()
+            }
+        };
+        container(line).width(Length::Fill).clip(true).into()
+    };
+    let mut badges = Row::new().spacing(6).align_y(Alignment::Center);
+    if chat.settings.favorite {
+        badges = badges.push(icons::star_icon(14.0, theme::t().text_muted));
     }
-    scroll_y(col.push(vertical().height(nav_clearance(d))))
+    if support_badge > 0 {
+        badges = badges.push(
+            text(format!("⚑{support_badge}"))
+                .size(d.meta)
+                .color(theme::t().always),
+        );
+    }
+    if show_unread {
+        badges = badges.push(unread_count_badge(chat.unread, muted, d));
+    }
+    let bottom = row![preview, badges].spacing(8).align_y(Alignment::Start);
+
+    let content = container(
+        row![
+            chat_list_avatar(chat, 48.0),
+            container(column![top, bottom].spacing(2))
+                .width(Length::Fill)
+                .clip(true),
+        ]
+        .align_y(Alignment::Center)
+        .spacing(12),
+    )
+    .width(Length::Fill)
+    .padding(Padding {
+        top: d.list_row + 2.0,
+        right: 10.0,
+        bottom: d.list_row + 2.0,
+        left: 10.0,
+    });
+
+    // Hover paint + long-press slots without App Messages (avoids full view rebuild).
+    let row = hover::chat_row(
+        content,
+        index,
+        selected,
+        app.hover_ok(),
+        app.hover_slots(),
+        Message::ChatRowReleased(index),
+        Message::OpenChatMenu(index),
+    );
+
+    container(row).padding(Padding::from([0, 8])).into()
 }
 
 fn content_pane(app: &App, with_back: bool) -> Element<'_, Message> {
@@ -1761,14 +1912,14 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
     } else {
         (attach, mic)
     };
-    // A floating field with the control radius of every other button; the
+    // A floating field rounded like a message bubble of its height; the
     // paperclip (or ✕ while recording) sits inside it at the end. The tree
     // shape is the same in every state, so the editor keeps its focus.
     let pill = crate::glass::surface(
         container(row![editor, inner].align_y(Alignment::End))
             .width(Length::Fill)
-            .style(|_| floating_card()),
-        theme::SMALL_CONTROL_RADIUS,
+            .style(|_| field_card()),
+        theme::FIELD_RADIUS,
     );
     // Always End: equal-height single-line looks centered; multi-line grows up.
     let input_row = row![pill, trailing]
@@ -1840,8 +1991,8 @@ fn composer_bar(app: &App, d: Density) -> Element<'_, Message> {
             container(list)
                 .padding(theme::SUGGEST_INSET)
                 .width(Length::Fill)
-                .style(|_| floating_card()),
-            theme::SMALL_CONTROL_RADIUS,
+                .style(|_| field_card()),
+            theme::FIELD_RADIUS,
         );
         column![
             row![suggest_panel, Space::new().width(send_size + 8.0)],
@@ -1967,6 +2118,14 @@ fn floating_card() -> container::Style {
 /// gap between them and the content resting above. Nothing is painted in
 /// it; only the bars themselves are glass.
 pub(crate) const GLASS_FADE: f32 = 8.0;
+
+/// The composer's text field (and what takes its place: the voice draft,
+/// the `:shortcode` list): a floating card rounded like a message bubble.
+fn field_card() -> container::Style {
+    let mut style = floating_card();
+    style.border.radius = theme::FIELD_RADIUS.into();
+    style
+}
 
 /// Soft shadow under floating controls (composer field and its button).
 fn floating_shadow() -> iced::Shadow {
@@ -2107,27 +2266,48 @@ fn message_history<'a>(app: &'a App, d: Density) -> Element<'a, Message> {
     // The bubble column is rebuilt only when something it shows changes
     // (see `history_key`): scroll-fling ticks, pointer/hover messages, typing
     // in the composer, chat-list refreshes… reuse the cached widgets.
-    let col = iced::widget::lazy(history_key(app, d), move |_| history_column(app, d));
+    let base = history_base_key(app, d);
+    let key = history_key(app, d, base);
+    let col = crate::long_list::column(key, history_padding(app, d), move || history_plan(app, d, base));
     message_history_shell(col, app, d, jump_visible)
 }
 
-/// Fingerprint of everything [`history_column`] reads. When it is unchanged
+/// Fingerprint of everything [`history_plan`] reads. When it is unchanged
 /// the cached column is reused; anything that alters what a bubble shows must
-/// be hashed here. Messages hash through their derived `Hash` (every field),
-/// and per-file media state is hashed by the same lookups the bubbles make,
-/// so the key cannot drift from the view.
-fn history_key(app: &App, d: Density) -> u64 {
+/// be hashed here (in [`history_base_key`] when it affects every row, in
+/// [`message_state_key`] when it belongs to one message). Messages hash
+/// through their derived `Hash` (every field), and per-file media state is
+/// hashed by the same lookups the bubbles make, so the key cannot drift from
+/// the view.
+fn history_key(app: &App, d: Density, base: u64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    let f = |h: &mut std::collections::hash_map::DefaultHasher, v: f32| v.to_bits().hash(h);
+    base.hash(&mut h);
+    // Bottom room for the floating composer (the column's padding only).
+    let inset = if app.composer_floats() { app.composer_inset() } else { 0.0 };
+    inset.to_bits().hash(&mut h);
+    d.pad.to_bits().hash(&mut h);
+    app.new_messages_from().hash(&mut h);
+    // The messages themselves, hashed once per change (see `History`).
+    app.history_fingerprint().hash(&mut h);
+    app.history_has_earlier().hash(&mut h);
+    let now = std::time::Instant::now();
+    for msg in app.messages() {
+        message_state_key(app, msg, now, &mut h);
+    }
+    h.finish()
+}
 
+/// What every row of the history depends on: a change here rebuilds and
+/// re-lays out all bubbles.
+fn history_base_key(app: &App, d: Density) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
     // Layout / appearance inputs.
-    for v in [d.body, d.meta, d.title, d.pad, d.pad_tight, app.window_width()] {
-        f(&mut h, v);
+    for v in [d.body, d.meta, d.title, d.pad, d.pad_tight, app.window_width(), app.scale_factor()] {
+        v.to_bits().hash(&mut h);
     }
     app.layout().hash(&mut h);
-    // Bottom room for the floating composer.
-    f(&mut h, if app.composer_floats() { app.composer_inset() } else { 0.0 });
     theme::is_light_active().hash(&mut h);
     app.hover_ok().hash(&mut h);
     // "Today" / "Yesterday" dividers roll over at midnight.
@@ -2144,79 +2324,133 @@ fn history_key(app: &App, d: Density) -> u64 {
 
     // Media blur.
     app.desktop_prefs().blur_media.hash(&mut h);
-
-    // Selection, focus and reveal state.
-    app.new_messages_from().hash(&mut h);
     app.selection_mode().hash(&mut h);
-    app.focus_item().hash(&mut h);
-    let mut picked: Vec<i64> = app.selected_items().iter().copied().collect();
-    picked.sort_unstable();
-    picked.hash(&mut h);
 
-    // The messages themselves, hashed once per change (see `History`).
-    app.history_fingerprint().hash(&mut h);
-    app.history_has_earlier().hash(&mut h);
-    for msg in app.messages() {
-        app.is_deleted_revealed(msg.item_id).hash(&mut h);
-        for i in 0..msg.segments.len() {
-            app.is_secret_revealed(msg.item_id, i).hash(&mut h);
-        }
-        if let Some(sender) = msg.sender.as_ref() {
-            app.member_display_name(sender).hash(&mut h);
-        }
-        if let Some(file) = msg.file.as_ref() {
-            let plain = app.plaintext_path_for(file);
-            plain.hash(&mut h);
-            // The picture stand-in shows (sharp or not) before decrypting.
-            crate::embedded_preview::get(file.file_id).map(|(_, w, h)| (w, h)).hash(&mut h);
-            app.media_revealed(msg.item_id).hash(&mut h);
-            if let Some(p) = plain.as_ref() {
-                p.is_file().hash(&mut h);
-                app.image_preview_for(p, 0, 0).hash(&mut h);
-                app.blurred_preview_for(p).hash(&mut h);
-                app.media_revealed(msg.item_id).hash(&mut h);
-                if let Some(peaks) = app.waveform_for(p) {
-                    for v in peaks {
-                        f(&mut h, *v);
-                    }
-                }
-            }
-            if let Some(local) = file.local_path.as_ref() {
-                local.is_file().hash(&mut h);
-                if let Some(peaks) = app.waveform_for(local) {
-                    peaks.len().hash(&mut h);
-                }
-            }
-            app.voice_playback_progress(file.file_id)
-                .map(f32::to_bits)
-                .hash(&mut h);
+    // Sender names: a contact's local alias replaces the member's name
+    // (`member_display_name`). Hashing the alias table once stands in for
+    // a lookup per message, which scanned the chat list for every bubble.
+    for c in app.chats() {
+        if matches!(c.id.chat_type, cursus_core::ChatType::Direct) && !c.local_alias.trim().is_empty() {
+            (c.id.api_id, c.local_alias.trim()).hash(&mut h);
         }
     }
     h.finish()
 }
 
-/// Every message bubble, day divider and event row of the open chat.
-/// Owns all its data (`'static`) so [`iced::widget::lazy`] can cache it.
-fn history_column(app: &App, d: Density) -> Element<'static, Message> {
-    let messages = app.messages();
-    let show_members = app.selected_shows_member_headers();
-    let show_channel = app.selected_is_channel();
-    // Room at the end for the composer floating over the history.
+/// App state one message's bubble shows besides the message itself:
+/// selection, focus, reveals and its file's local state.
+fn message_state_key(app: &App, msg: &ChatMessage, now: std::time::Instant, h: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    let f = |h: &mut dyn std::hash::Hasher, v: f32| h.write_u32(v.to_bits());
+    app.selected_items().contains(&msg.item_id).hash(h);
+    (app.focus_item() == Some(msg.item_id)).hash(h);
+    app.is_deleted_revealed(msg.item_id).hash(h);
+    for i in 0..msg.segments.len() {
+        app.is_secret_revealed(msg.item_id, i).hash(h);
+    }
+    if let Some(file) = msg.file.as_ref() {
+        let plain = app.plaintext_path_for(file);
+        plain.hash(h);
+        // The picture stand-in shows (sharp or not) before decrypting.
+        crate::embedded_preview::get(file.file_id).map(|(_, w, h)| (w, h)).hash(h);
+        app.media_revealed(msg.item_id).hash(h);
+        if let Some(p) = plain.as_ref() {
+            file_present(p, now).hash(h);
+            app.image_preview_for(p, 0, 0).hash(h);
+            app.blurred_preview_for(p).hash(h);
+            if let Some(peaks) = app.waveform_for(p) {
+                for v in peaks {
+                    f(h, *v);
+                }
+            }
+        }
+        if let Some(local) = file.local_path.as_ref() {
+            file_present(local, now).hash(h);
+            if let Some(peaks) = app.waveform_for(local) {
+                peaks.len().hash(h);
+            }
+        }
+        app.voice_playback_progress(file.file_id).map(f32::to_bits).hash(h);
+    }
+}
+
+/// Key of one row of the history: the shared state plus what the row itself
+/// shows.
+fn row_key(base: u64, parts: impl std::hash::Hash) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    base.hash(&mut h);
+    parts.hash(&mut h);
+    h.finish()
+}
+
+/// Whether `path` is a file, re-checked at most once a second. The history
+/// key runs every frame and stat-ing every attachment each time added up in
+/// media-heavy chats. Only the key uses this: a rebuilt bubble checks the
+/// disk itself, and downloads finishing change the message (and so the key)
+/// anyway, so the most this delays is noticing a file deleted from outside.
+fn file_present(path: &std::path::Path, now: std::time::Instant) -> bool {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    thread_local! {
+        static SEEN: RefCell<HashMap<std::path::PathBuf, (bool, std::time::Instant)>> =
+            RefCell::new(HashMap::new());
+    }
+    SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        if let Some(&(present, at)) = seen.get(path) {
+            if now.duration_since(at) < std::time::Duration::from_secs(1) {
+                return present;
+            }
+        }
+        if seen.len() > 4096 {
+            seen.clear();
+        }
+        let present = path.is_file();
+        seen.insert(path.to_path_buf(), (present, now));
+        present
+    })
+}
+
+/// Room around the bubbles: the floating header above, and at the end the
+/// composer floating over the history.
+fn history_padding(app: &App, d: Density) -> Padding {
     let inset = if app.composer_floats() { app.composer_inset() } else { 0.0 };
     // No extra bottom padding: the composer's 8 px top inset is the whole
     // gap under the last message, as in WhatsApp / Telegram.
-    let mut col = Column::new().spacing(0).padding(Padding {
+    Padding {
         top: CHAT_HEADER_ROOM,
         right: d.pad,
         bottom: if inset > 0.0 { inset } else { 10.0 },
         left: d.pad,
-    });
-    col = col.width(Length::Fill);
+    }
+}
+
+/// Every message bubble, day divider and event row of the open chat, as a
+/// [`crate::long_list`] plan: each row's key, and how to build the row
+/// (done only for rows whose key is new).
+fn history_plan<'a>(app: &'a App, d: Density, base: u64) -> crate::long_list::Plan<'a> {
+    let messages = app.messages();
+    let show_members = app.selected_shows_member_headers();
+    let show_channel = app.selected_is_channel();
+    let mut col = Bubbles(Vec::with_capacity(messages.len() * 2 + 4));
     let mut prev_sender: Option<i64> = None;
     let mut prev_channel_block = false;
     let mut prev_day: Option<chrono::NaiveDate> = None;
+    let now = std::time::Instant::now();
+    // Everything a message's bubble shows: the message, its app state, and
+    // how it joins its neighbours.
+    let msg_key = |i: usize, msg: &ChatMessage, extra: (bool, bool)| {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        base.hash(&mut h);
+        app.message_hash(i).hash(&mut h);
+        message_state_key(app, msg, now, &mut h);
+        extra.hash(&mut h);
+        h.finish()
+    };
     if app.history_has_earlier() {
-        col = col.push(
+        col = col.push(row_key(base, "earlier"), move || {
             container(
                 button(text("Load earlier messages").size(d.meta).color(theme::t().accent))
                     .padding(Padding::from([6, 14]))
@@ -2225,38 +2459,38 @@ fn history_column(app: &App, d: Density) -> Element<'static, Message> {
             )
             .width(Length::Fill)
             .padding(Padding::from([6, 0]))
-            .center_x(Length::Fill),
-        );
+            .center_x(Length::Fill)
+        });
     }
-    let msgs: Vec<&ChatMessage> = messages.iter().collect();
+    let msgs: Vec<&'a ChatMessage> = messages.iter().collect();
     for (i, msg) in msgs.iter().copied().enumerate() {
         // Day divider whenever the local date changes.
         let at = divider_time(msg);
-        if let Some(at) = at.as_ref() {
+        if let Some(at) = at {
             if prev_day != Some(at.date_naive()) {
                 prev_day = Some(at.date_naive());
-                col = col.push(day_divider(at, d));
+                col = col.push(row_key(base, ("day", at.date_naive())), move || day_divider(&at, d));
                 prev_sender = None;
                 prev_channel_block = false;
             }
         }
         if app.new_messages_from() == Some(msg.item_id) {
-            col = col.push(new_messages_divider(d));
+            col = col.push(row_key(base, "new"), move || new_messages_divider(d));
             prev_sender = None;
             prev_channel_block = false;
         }
         if msg.group_invitation.is_some() {
             prev_sender = None;
             prev_channel_block = false;
-            col = col.push(vertical().height(10));
-            col = col.push(group_invitation_card(app, msg, d));
+            col = col.push(row_key(0, ("gap", 10)), || vertical().height(10));
+            col = col.push(msg_key(i, msg, (false, false)), move || group_invitation_card(app, msg, d));
             continue;
         }
         if msg.is_announcement {
             prev_sender = None;
             prev_channel_block = false;
-            col = col.push(vertical().height(6));
-            col = col.push(announcement_row(msg, d));
+            col = col.push(row_key(0, ("gap", 6)), || vertical().height(6));
+            col = col.push(msg_key(i, msg, (false, false)), move || announcement_row(msg, d));
             continue;
         }
         let joined_prev = i > 0 && cursus_core::runs::continues_run(msgs[i - 1], msg);
@@ -2287,16 +2521,24 @@ fn history_column(app: &App, d: Density) -> Element<'static, Message> {
             prev_sender = None;
         }
         // Tight inside a run from one sender, airy between runs.
-        col = col.push(vertical().height(if joined_prev { 2 } else { 10 }));
-        col = col.push(message_bubble(
-            app,
-            msg,
-            d,
-            show_header,
-            BubbleRun { joined_next },
-        ));
+        let gap = if joined_prev { 2 } else { 10 };
+        col = col.push(row_key(0, ("gap", gap)), move || vertical().height(gap));
+        col = col.push(msg_key(i, msg, (show_header, joined_next)), move || {
+            message_bubble(app, msg, d, show_header, BubbleRun { joined_next })
+        });
     }
-    col.into()
+    col.0
+}
+
+/// Keyed rows of a [`crate::long_list`], gathered with a Column-like `push`
+/// of how to build each row.
+struct Bubbles<'a>(crate::long_list::Plan<'a>);
+
+impl<'a> Bubbles<'a> {
+    fn push<E: Into<Element<'static, Message>>>(mut self, key: u64, build: impl FnOnce() -> E + 'a) -> Self {
+        self.0.push((key, Box::new(move || build().into())));
+        self
+    }
 }
 
 /// Scrollable + kinetic fling + jump-to-latest FAB around the (cached) column.
@@ -2646,7 +2888,7 @@ fn message_bubble<'a>(
     // Rounded everywhere except the sender's side (right for sent, left for
     // received): its top corner is always small, its bottom corner too on
     // every bubble of a run but the last (`cursus_core::runs`).
-    let r: f32 = if media_flush { 16.0 } else { 18.0 };
+    let r: f32 = if media_flush { 16.0 } else { theme::BUBBLE_RADIUS };
     const JOIN: f32 = 6.0;
     let side_top = JOIN;
     let side_bottom = if run.joined_next { JOIN } else { r };
@@ -3228,8 +3470,8 @@ fn voice_draft_bar(
     )
     .padding(Padding { top: 6.0, right: 12.0, bottom: 6.0, left: 0.0 })
     .width(Length::Fill)
-    .style(|_| floating_card());
-    let field = crate::glass::surface(field, theme::SMALL_CONTROL_RADIUS);
+    .style(|_| field_card());
+    let field = crate::glass::surface(field, theme::FIELD_RADIUS);
     container(
         row![
             field,

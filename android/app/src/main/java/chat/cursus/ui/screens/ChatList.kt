@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.defaultMinSize
 import chat.cursus.ui.components.RoundedField
 import chat.cursus.ui.components.CursusOverlay
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.text.withStyle
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.heightIn
@@ -184,13 +187,37 @@ private fun ChatRow(model: AppModel, chat: Chat, selected: Boolean, onSelect: ()
                         modifier = Modifier.padding(start = 8.dp), maxLines = 1, softWrap = false)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val label = when {
+                        chat.isRequest -> "Wants to connect with you"
+                        // "Message previews in chat list" off: names only.
+                        !model.prefs.chatPreviews -> ""
+                        else -> chat.preview
+                    }
+                    // Pictures, voice messages, files and calls lead with what they are.
+                    val kindIcon = when (chat.previewKind) {
+                        "image" -> R.drawable.ic_image_square
+                        "video" -> R.drawable.ic_video
+                        "voice" -> R.drawable.ic_mic
+                        "file" -> R.drawable.ic_document
+                        "call" -> R.drawable.ic_calls
+                        else -> null
+                    }?.takeIf { !chat.isRequest && label.isNotEmpty() }
                     Text(
-                        when {
-                            chat.isRequest -> "Wants to connect with you"
-                            // "Message previews in chat list" off: names only.
-                            !model.prefs.chatPreviews -> ""
-                            else -> chat.preview
+                        androidx.compose.ui.text.buildAnnotatedString {
+                            if (kindIcon != null) {
+                                appendInlineContent("kind", "•")
+                                append(" ")
+                            }
+                            if (chat.previewSegments.isEmpty() || label != chat.preview) append(label)
+                            else appendPreviewSegments(chat.previewSegments, c)
                         },
+                        inlineContent = if (kindIcon == null) emptyMap() else mapOf(
+                            "kind" to androidx.compose.foundation.text.InlineTextContent(
+                                androidx.compose.ui.text.Placeholder(
+                                    1.15.em, 1.15.em, androidx.compose.ui.text.PlaceholderVerticalAlign.TextCenter,
+                                ),
+                            ) { Icon(painterResource(kindIcon), null, Modifier.fillMaxSize(), tint = c.textMuted) },
+                        ),
                         style = Cursus.type.meta,
                         color = if (chat.isRequest) c.gold else c.textSecondary,
                         maxLines = 2,
@@ -378,5 +405,33 @@ private fun PendingLinksOverlay(model: AppModel, onDismiss: () -> Unit) {
                 DangerButton("Delete", { model.deleteInvitation(id); deleting = null })
             }
         }
+    }
+}
+
+/** A chat list preview's formatting, as in the bubble (no links: the row
+ *  opens the chat); secrets stay hidden. */
+private fun androidx.compose.ui.text.AnnotatedString.Builder.appendPreviewSegments(
+    segments: List<chat.cursus.core.Segment>,
+    c: chat.cursus.ui.theme.CursusColors,
+) {
+    for (s in segments) {
+        val style = when (s.style) {
+            "bold" -> androidx.compose.ui.text.SpanStyle(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            "italic" -> androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+            "strike" -> androidx.compose.ui.text.SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough)
+            "snippet", "command" -> androidx.compose.ui.text.SpanStyle(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, background = c.bgField)
+            "secret" -> androidx.compose.ui.text.SpanStyle(color = c.textMuted, background = c.accentSoft)
+            "small" -> androidx.compose.ui.text.SpanStyle(fontSize = 0.85.em)
+            "colored" -> androidx.compose.ui.text.SpanStyle(color = when (s.color) {
+                "red" -> c.danger; "green" -> c.success; "blue" -> c.accent; "yellow" -> c.gold
+                "cyan" -> Color(0xFF00A5B5); "magenta" -> Color(0xFFB0379A)
+                else -> c.textSecondary
+            })
+            "uri", "email", "phone" -> androidx.compose.ui.text.SpanStyle(color = c.accent)
+            "mention" -> androidx.compose.ui.text.SpanStyle(fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+            else -> if (s.simplex != null) androidx.compose.ui.text.SpanStyle(color = c.accent) else androidx.compose.ui.text.SpanStyle()
+        }
+        val text = if (s.style == "secret") "•".repeat(s.text.codePointCount(0, s.text.length).coerceAtLeast(1)) else s.text
+        withStyle(style) { append(text) }
     }
 }

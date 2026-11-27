@@ -53,6 +53,8 @@ fn chat(id: i64, kind: ChatType, title: &str, preview: &str, unread: i64) -> Cha
         id: ChatId::new(kind, id),
         title: title.into(),
         preview: preview.into(),
+        preview_kind: cursus_core::PreviewKind::Text,
+        preview_segments: Vec::new(),
         unread,
         unread_chat: false,
         settings: ChatSettings::default(),
@@ -129,9 +131,12 @@ fn demo_app(dark: bool, width: f32, height: f32) -> App {
     app.height = height;
 
     let mut alice = chat(1, ChatType::Direct, "Alice Marchetti", "See you at the station at 9 — bring the tickets!", 3);
+    alice.preview_segments = cursus_core::profile_text("See you at the station at **9** — bring the _tickets_!");
     alice.peer_profile = profile("Alice Marchetti", "Climbing, coffee, Rust.");
     let mut team = chat(2, ChatType::Group, "Cursus devs", "Bob: the invite page looks great now", 12);
     team.membership_role = Some("owner".into());
+    team.preview = "Bob: the invite page looks great now, and the new composer is round like a bubble — shipping it tomorrow after review".into();
+    team.preview_segments = cursus_core::profile_text("Bob: the **invite page** looks great now, and the _new composer_ is round like a bubble — shipping it tomorrow after review");
     team.group_preferences = Some(serde_json::json!({
         "directMessages": {"enable": "on"},
         "reactions": {"enable": "on"},
@@ -141,8 +146,10 @@ fn demo_app(dark: bool, width: f32, height: f32) -> App {
     let mut fav = chat(3, ChatType::Direct, "Marco", "https://smp9.simplex.im/i#3iqO73eh1l09QmQfRwMyM2MplnycyJT7/HzD4YSRIOBK_Bvi1gZiXI1BY", 0);
     fav.settings.favorite = true;
     let mut muted = chat(4, ChatType::Group, "Climbing club", "Sunday: Arco, meet 8:00 at the parking lot near the crag", 0);
+    muted.preview_kind = cursus_core::PreviewKind::Image;
     muted.settings.enable_ntfs = cursus_core::NtfFilter::None;
-    let mut notes = chat(5, ChatType::Local, "Notes", "Buy oat milk", 0);
+    let mut notes = chat(5, ChatType::Local, "Notes", "Voice message · 0:12", 0);
+    notes.preview_kind = cursus_core::PreviewKind::Voice;
     let mut chan = chat(6, ChatType::Group, "SimpleX news", "v6.5 is out: channels, relays and more", 1);
     chan.is_channel = true;
     let stamp = |c: &mut ChatPreview, ts: &str| c.last_ts = Some(ts.into());
@@ -741,66 +748,178 @@ fn support_back_returns_to_group_page() {
     assert!(app.support.is_none() && app.group_settings.is_none());
 }
 
-/// Frame-cost benchmark: what one update (fling tick, voice tick, core event)
-/// costs with a long conversation open. `cargo test --release -p cursus-linux
-/// frame_bench -- --ignored --nocapture`
+/// Frame-cost benchmark: what one frame costs with a long conversation and a
+/// long chat list, for the things that happen many times a second: an idle
+/// redraw (fling / voice tick), a keystroke in the composer, and the pointer
+/// moving over the history. `cargo test --release -p cursus-linux
+/// frame_bench -- --ignored --nocapture` (`CURSUS_BENCH_MSGS`, `CURSUS_BENCH_CHATS`).
 #[test]
 #[ignore]
 fn frame_bench() {
     load_fonts();
+    let env = |k: &str, d: usize| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let n = env("CURSUS_BENCH_MSGS", 300);
+    let chats = env("CURSUS_BENCH_CHATS", 300);
+    let avatars = env("CURSUS_BENCH_AVATARS", 1) == 1;
+    #[derive(Clone, Copy)]
+    enum Step {
+        Redraw,
+        Type,
+        Hover,
+        Incoming,
+    }
     for (label, size) in [("desktop", DESKTOP), ("mobile", MOBILE)] {
-        let mut app = demo_app(true, size.width, size.height);
-        select(&mut app, 0);
-        let base = app.messages.to_vec();
-        app.messages.clear();
-        let n = std::env::var("CURSUS_BENCH_MSGS").ok().and_then(|v| v.parse().ok()).unwrap_or(300usize);
-        for i in 0..n {
-            let mut m = base[i % base.len()].clone();
-            m.item_id = 1000 + i as i64;
-            m.created_at = Some(format!("2026-11-{:02}T{:02}:{:02}:00Z", 1 + (i / 100).min(5), 8 + (i / 10) % 12, i % 60));
-            app.messages.push(m);
-        }
-        let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
-            iced::Font::with_name("Noto Sans"),
-            iced::Pixels(16.0),
-            Some("tiny-skia"),
-        ))
-        .unwrap();
-        let theme = app.iced_theme();
-        let style = iced::advanced::renderer::Style { text_color: iced::Color::WHITE };
-        let mut cache = Cache::default();
-        let (mut t_view, mut t_build, mut t_update, mut t_draw) = (0.0, 0.0, 0.0, 0.0);
-        let frames = 30;
-        for f in 0..frames + 3 {
-            let t0 = std::time::Instant::now();
-            let el = app.view(iced::window::Id::unique());
-            let t1 = std::time::Instant::now();
-            let mut ui = UserInterface::build(el, size, cache, &mut renderer);
-            let t2 = std::time::Instant::now();
-            let mut msgs: Vec<Message> = Vec::new();
-            let _ = ui.update(
-                &[iced::Event::Window(iced::window::Event::RedrawRequested(iced::time::Instant::now()))],
-                iced::mouse::Cursor::Unavailable,
-                &mut renderer,
-                &mut iced::advanced::clipboard::Null,
-                &mut msgs,
-            );
-            let t3 = std::time::Instant::now();
-            ui.draw(&mut renderer, &theme, &style, iced::mouse::Cursor::Unavailable);
-            let t4 = std::time::Instant::now();
-            cache = ui.into_cache();
-            if f >= 3 {
-                t_view += (t1 - t0).as_secs_f64();
-                t_build += (t2 - t1).as_secs_f64();
-                t_update += (t3 - t2).as_secs_f64();
-                t_draw += (t4 - t3).as_secs_f64();
+        for (step_label, step) in [("redraw", Step::Redraw), ("type", Step::Type), ("hover", Step::Hover), ("arrive", Step::Incoming)] {
+            let mut app = demo_app(true, size.width, size.height);
+            let base_chat = app.chats[0].clone();
+            for i in 0..chats {
+                let mut c = base_chat.clone();
+                c.id = cursus_core::ChatId::new(ChatType::Direct, 1000 + i as i64);
+                c.title = format!("Contact {i}");
+                c.peer_profile = profile(&c.title, "");
+                if avatars {
+                    // A distinct small picture per chat, like real profiles.
+                    let img = image::RgbImage::from_fn(128, 128, |x, y| {
+                        image::Rgb([(i * 7 % 256) as u8, (x * 2) as u8, (y * 2) as u8])
+                    });
+                    let mut png = Vec::new();
+                    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+                    use base64::Engine as _;
+                    c.peer_profile.image = Some(format!(
+                        "data:image/png;base64,{}",
+                        base64::engine::general_purpose::STANDARD.encode(&png)
+                    ));
+                }
+                c.preview = format!("Message number {i} with a little bit of preview text");
+                app.chats.push(c);
             }
+            let member_avatars: Vec<String> = (0..7u8)
+                .map(|k| {
+                    let img = image::RgbImage::from_fn(96, 96, |x, y| {
+                        image::Rgb([k.wrapping_mul(37), (x as u8) ^ (y as u8), (x * y) as u8])
+                    });
+                    let mut jpg = Vec::new();
+                    img.write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Png).unwrap();
+                    use base64::Engine as _;
+                    format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&jpg))
+                })
+                .collect();
+            // Group chat: every message has a sender, every fourth a file.
+            let group = env("CURSUS_BENCH_GROUP", 0) == 1;
+            select(&mut app, if group { 1 } else { 0 });
+            let base = app.messages.to_vec();
+            app.messages.clear();
+            for i in 0..n {
+                let mut m = base[i % base.len()].clone();
+                m.item_id = 1000 + i as i64;
+                m.created_at = Some(format!("2026-11-{:02}T{:02}:{:02}:00Z", 1 + (i / 100).min(5), 8 + (i / 10) % 12, i % 60));
+                if group && !m.outgoing {
+                    m.sender = Some(MessageSender {
+                        group_member_id: (i % 7) as i64,
+                        contact_id: Some(5000 + (i % 7) as i64),
+                        display_name: format!("Member {}", i % 7),
+                        // Real members have ~12 KB profile pictures.
+                        image: avatars.then(|| member_avatars[i % 7].clone()),
+                        role: "member".into(),
+                    });
+                }
+                if group && i % 4 == 0 {
+                    m.file = Some(cursus_core::FileInfo {
+                        file_id: 1000 + i as i64,
+                        file_name: "notes.txt".into(),
+                        file_size: 1234,
+                        state: cursus_core::FileTransferState::Complete,
+                        kind: cursus_core::FileKind::File,
+                        duration_secs: None,
+                        local_path: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")),
+                        encrypted: false,
+                        crypto_key: None,
+                        crypto_nonce: None,
+                        transferred: None,
+                        transfer_total: None,
+                        error_detail: None,
+                        preview: None,
+                    });
+                }
+                app.messages.push(m);
+            }
+            let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+                iced::Font::with_name("Noto Sans"),
+                iced::Pixels(16.0),
+                Some("tiny-skia"),
+            ))
+            .unwrap();
+            let theme = app.iced_theme();
+            let style = iced::advanced::renderer::Style { text_color: iced::Color::WHITE };
+            let mut cache = Cache::default();
+            let (mut t_app, mut t_view, mut t_build, mut t_update, mut t_draw) = (0.0, 0.0, 0.0, 0.0, 0.0);
+            let frames = 40;
+            for f in 0..frames + 3 {
+                let t0 = std::time::Instant::now();
+                let (events, cursor) = match step {
+                    Step::Redraw => (
+                        vec![iced::Event::Window(iced::window::Event::RedrawRequested(iced::time::Instant::now()))],
+                        iced::mouse::Cursor::Unavailable,
+                    ),
+                    Step::Type => {
+                        let c = if f % 12 == 11 { ' ' } else { 'a' };
+                        let _ = app.update(Message::ComposerEdit(iced::widget::text_editor::Action::Edit(
+                            iced::widget::text_editor::Edit::Insert(c),
+                        )));
+                        (
+                            vec![iced::Event::Window(iced::window::Event::RedrawRequested(iced::time::Instant::now()))],
+                            iced::mouse::Cursor::Unavailable,
+                        )
+                    }
+                    Step::Incoming => {
+                        // A message arrives in the open chat: history and
+                        // chat list both change.
+                        let mut m = app.messages.to_vec().last().unwrap().clone();
+                        m.item_id += 1;
+                        app.messages.push(m);
+                        app.chats[0].preview = format!("new message {f}");
+                        (
+                            vec![iced::Event::Window(iced::window::Event::RedrawRequested(iced::time::Instant::now()))],
+                            iced::mouse::Cursor::Unavailable,
+                        )
+                    }
+                    Step::Hover => {
+                        let p = iced::Point::new(size.width * 0.7, 120.0 + (f % 20) as f32 * 25.0);
+                        (
+                            vec![iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: p })],
+                            iced::mouse::Cursor::Available(p),
+                        )
+                    }
+                };
+                let t1 = std::time::Instant::now();
+                let el = app.view(iced::window::Id::unique());
+                let t2 = std::time::Instant::now();
+                let mut ui = UserInterface::build(el, size, cache, &mut renderer);
+                let t3 = std::time::Instant::now();
+                let mut msgs: Vec<Message> = Vec::new();
+                let _ = ui.update(&events, cursor, &mut renderer, &mut iced::advanced::clipboard::Null, &mut msgs);
+                let t4 = std::time::Instant::now();
+                ui.draw(&mut renderer, &theme, &style, cursor);
+                let t5 = std::time::Instant::now();
+                cache = ui.into_cache();
+                for m in msgs {
+                    let _ = app.update(m);
+                }
+                if f >= 3 {
+                    t_app += (t1 - t0).as_secs_f64();
+                    t_view += (t2 - t1).as_secs_f64();
+                    t_build += (t3 - t2).as_secs_f64();
+                    t_update += (t4 - t3).as_secs_f64();
+                    t_draw += (t5 - t4).as_secs_f64();
+                }
+            }
+            let ms = |t: f64| t * 1000.0 / frames as f64;
+            println!(
+                "BENCH {label:7} {step_label:6} {n} msgs {chats} chats: app {:.2}  view {:.2}  build+layout {:.2}  update {:.2}  draw {:.2}  total {:.2} ms",
+                ms(t_app), ms(t_view), ms(t_build), ms(t_update), ms(t_draw),
+                ms(t_app + t_view + t_build + t_update + t_draw)
+            );
         }
-        let ms = |t: f64| t * 1000.0 / frames as f64;
-        println!(
-            "BENCH {label} {n} msgs: view {:.2}ms  build+layout {:.2}ms  update {:.2}ms  draw {:.2}ms  total {:.2}ms",
-            ms(t_view), ms(t_build), ms(t_update), ms(t_draw), ms(t_view + t_build + t_update + t_draw)
-        );
     }
 }
 
@@ -880,6 +999,21 @@ fn history_cache_never_goes_stale() {
         ("chat previews off", |a| {
             a.desktop_prefs.chat_previews = false
         }),
+        ("message removed", |a| {
+            let mut messages = a.messages.to_vec();
+            messages.remove(2);
+            a.messages = messages.into();
+        }),
+        ("messages loaded above", |a| {
+            let mut messages = vec![msg(60, "Older one", false, "07:00"), msg(61, "Older two", true, "07:01")];
+            messages.extend(a.messages.to_vec());
+            a.messages = messages.into();
+        }),
+        ("chat preview changed", |a| a.chats[2].preview = "A brand new last message".into()),
+        ("chats reordered", |a| {
+            a.chats.swap(1, 3);
+        }),
+        ("unread changed", |a| a.chats[1].unread = 40),
         ("epoch timestamp", |a| {
             let mut m = msg(51, "Group event without a real date", false, "00:00");
             m.created_at = Some("1970-01-01T00:00:00Z".into());
@@ -2872,4 +3006,99 @@ fn composer_mic_click_reaches_the_app() {
         }
         assert!(hit, "clicking the composer mic sends ToggleVoiceRecord ({size:?})");
     }
+}
+
+#[test]
+fn chat_opened_from_calls_slides_over_calls_and_back_returns_there() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    struct Slide;
+    impl Drop for Slide {
+        fn drop(&mut self) {
+            crate::TEST_PAGES_SLIDE.with(|s| s.set(false));
+        }
+    }
+    crate::TEST_PAGES_SLIDE.with(|s| s.set(true));
+    let _slide = Slide;
+    let later = || std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut app = demo_app(true, MOBILE.width, MOBILE.height);
+    let _ = app.update(Message::Navigate(NavSection::Calls));
+    let _ = app.update(Message::MotionFrame(later()));
+    // Tap a call with Alice (contact 1): her chat opens over the Calls list.
+    let _ = app.update(Message::Call(crate::call_flow::CallMsg::OpenChat(1)));
+    assert_eq!(app.nav(), NavSection::Chats);
+    assert_eq!(app.list_nav(), NavSection::Calls, "the Calls list stays under the page");
+    assert!(app.page_slide().is_some_and(|(offset, under)| offset > 0.5
+        && under == crate::page_motion::Under::List), "the chat slides in");
+    let _ = app.update(Message::MotionFrame(later()));
+    // Back slides the chat out, onto Calls.
+    let _ = app.update(Message::Back);
+    let _ = app.update(Message::MotionFrame(later()));
+    assert!(app.selected().is_none());
+    assert_eq!(app.nav(), NavSection::Calls, "Back returns to Calls");
+    assert_eq!(app.list_nav(), NavSection::Calls);
+}
+
+/// One headless frame that also delivers `events` (a wheel scroll…).
+fn frame_with_events(
+    app: &mut App,
+    size: Size,
+    renderer: &mut iced::Renderer,
+    cache: Cache,
+    events: &[iced::Event],
+    cursor: iced::mouse::Cursor,
+) -> (Vec<u8>, Cache) {
+    let theme = app.iced_theme();
+    let mut msgs: Vec<Message> = Vec::new();
+    let mut ui = UserInterface::build(app.view(iced::window::Id::unique()), size, cache, renderer);
+    let _ = ui.update(events, cursor, renderer, &mut iced::advanced::clipboard::Null, &mut msgs);
+    let base = iced::theme::Base::base(&theme);
+    ui.draw(renderer, &theme, &iced::advanced::renderer::Style { text_color: base.text_color }, cursor);
+    let cache = ui.into_cache();
+    for m in msgs {
+        let _ = app.update(m);
+    }
+    let px = iced::Size::new(size.width as u32, size.height as u32);
+    (renderer.screenshot(px, 1.0, base.background_color), cache)
+}
+
+#[test]
+fn phone_chat_list_keeps_its_scroll_after_a_chat() {
+    let _pointer_test = POINTER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    load_fonts();
+    let mut app = demo_app(true, MOBILE.width, MOBILE.height);
+    let base = app.chats[0].clone();
+    for i in 0..40 {
+        let mut c = base.clone();
+        c.id = cursus_core::ChatId::new(ChatType::Direct, 500 + i);
+        c.title = format!("Contact {i}");
+        app.chats.push(c);
+    }
+    let mut renderer = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
+        iced::Font::with_name("Noto Sans"), iced::Pixels(16.0), Some("tiny-skia"))).unwrap();
+    let redraw = [iced::Event::Window(iced::window::Event::RedrawRequested(iced::time::Instant::now()))];
+    let at = iced::mouse::Cursor::Available(iced::Point::new(200.0, 400.0));
+    let (_, mut cache) = frame_with_events(&mut app, MOBILE, &mut renderer, Cache::default(), &redraw, at);
+    // Scroll the list well down.
+    for _ in 0..6 {
+        let wheel = [iced::Event::Mouse(iced::mouse::Event::WheelScrolled {
+            delta: iced::mouse::ScrollDelta::Pixels { x: 0.0, y: -200.0 },
+        })];
+        let (_, c) = frame_with_events(&mut app, MOBILE, &mut renderer, cache, &wheel, at);
+        cache = c;
+    }
+    let (scrolled, c) = frame_with_events(&mut app, MOBILE, &mut renderer, cache, &redraw, at);
+    cache = c;
+    let (top, _) = frame_pixels(&app, MOBILE, &mut renderer, Cache::default());
+    assert!(scrolled != top, "the wheel scrolled the list");
+    // Open a chat, then come back.
+    select(&mut app, 3);
+    let (_, c) = frame_with_events(&mut app, MOBILE, &mut renderer, cache, &redraw, at);
+    cache = c;
+    let (_, c) = frame_with_events(&mut app, MOBILE, &mut renderer, cache, &redraw, at);
+    cache = c;
+    let _ = app.update(Message::Back);
+    let _ = app.update(Message::MotionFrame(std::time::Instant::now() + std::time::Duration::from_secs(5)));
+    assert!(app.selected().is_none());
+    let (back, _) = frame_with_events(&mut app, MOBILE, &mut renderer, cache, &redraw, at);
+    assert!(back == scrolled, "Back shows the list where it was scrolled");
 }

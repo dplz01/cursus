@@ -136,7 +136,9 @@ enum Radius {
     static let insetControl: CGFloat = control - 4
     /// Compact square controls (header actions, voice play): rounded square.
     static let smallControl: CGFloat = 12
-    static let composer: CGFloat = 12
+    /// The composer's text field: rounded like a message bubble of its
+    /// height (Linux `FIELD_RADIUS`).
+    static let composer: CGFloat = 18
     static let mediaInset: CGFloat = 12
     static let bubble: CGFloat = 18
 }
@@ -227,6 +229,8 @@ enum Icons {
         case "timer": return "timer"
         case "history": return "clock.arrow.circlepath"
         case "review-file": return "doc.text"
+        case "video": return "video"
+        case "document": return "doc"
         default: return "questionmark"
         }
     }

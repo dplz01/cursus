@@ -8,11 +8,11 @@ use crate::json::JsonExt;
 use crate::models::{
     ChatId, ChatMessage, ChatPreview, ChatRelayInfo, ChatSettings, ChatTag, ChatType, ConnLink,
     DeletedState, DeliveryStatus, Event, FileInfo, FileKind, FileTransferState, GroupInvitationInfo,
-    GroupMemberInfo, GroupSupportChat, MessageQuote, MessageSender, NtfFilter, ProfileFields,
+    GroupMemberInfo, GroupSupportChat, MessageQuote, MessageSender, NtfFilter, PreviewKind, ProfileFields,
     ReactionCount, ReactionMember, UserProfile, KNOWN_REACTIONS,
 };
 use crate::paths::{files_dir, resolve_local_file};
-use crate::rich_text::{expand_emoji_shortcodes, parse_formatted_text, TextStyle};
+use crate::rich_text::{expand_emoji_shortcodes, parse_formatted_text, TextStyle, TextSegment};
 
 // ── User and profiles ───────────────────────────────────────────────────
 
@@ -50,10 +50,6 @@ pub(crate) fn profile_fields(value: Option<&Value>) -> ProfileFields {
 }
 
 // ── Chat list ───────────────────────────────────────────────────────────
-
-pub(crate) fn chat_previews(value: &Value) -> Vec<ChatPreview> {
-    value.array_at("/chats").iter().filter_map(chat_preview).collect()
-}
 
 /// Request id that still needs Accept / Reject. Mirrors the official
 /// `nextAcceptContactRequest`: `contactRequestId` stays on the contact after
@@ -150,7 +146,11 @@ fn chat_preview(chat: &Value) -> Option<ChatPreview> {
     };
 
     let last_item = chat.array_at("/chatItems").first();
-    c.preview = last_item.map(item_preview).unwrap_or_default();
+    if let Some((text, kind, segments)) = last_item.and_then(item_preview) {
+        c.preview = text;
+        c.preview_kind = kind;
+        c.preview_segments = segments;
+    }
     if c.pending_request_id.is_some() && c.preview.is_empty() {
         c.preview = if c.member_request { "Direct message request from a group member — accept or decline." }
             else { "Incoming contact request — accept to chat." }.into();
@@ -171,13 +171,81 @@ fn chat_preview(chat: &Value) -> Option<ChatPreview> {
     Some(c)
 }
 
-/// List-row preview of a chat item. Deleted items never show their old text
-/// (it may be an invite link): a short tombstone instead, as the official apps.
-fn item_preview(item: &Value) -> String {
-    match deleted_state(item) {
-        Some(state) => state.label().into(),
-        None => expand_emoji_shortcodes(item_text(item)),
+/// List-row preview of a chat item, or `None` when it is no message at all
+/// (encryption banners, feature changes, members joining…), which the list
+/// skips for the last real message. Deleted items never show their old text
+/// (it may be an invite link): a short tombstone instead, as the official
+/// apps. Files show what they are; the apps lead with a matching icon.
+pub(crate) fn item_preview(item: &Value) -> Option<Preview> {
+    if let Some(state) = deleted_state(item) {
+        return Some((state.label().into(), PreviewKind::Text, Vec::new()));
     }
+    if let Some(call) = call_label(item) {
+        return Some((call, PreviewKind::Call, Vec::new()));
+    }
+    if is_announcement(item) {
+        return None;
+    }
+    let content = item.first(&["/content/msgContent", "/msgContent"]);
+    let caption = || {
+        let typed = content.and_then(|c| c.str_at("/text")).unwrap_or_default().trim();
+        (!typed.is_empty()).then(|| expand_emoji_shortcodes(typed))
+    };
+    let kind = content.and_then(|c| c.str_at("/type")).map(FileKind::from_msg_content_type).or_else(|| {
+        // A file with no message type: going by its name.
+        item.str_at("/file/fileName").map(kind_from_name)
+    });
+    let is_file = item.get("file").is_some_and(|f| !f.is_null());
+    let preview = match kind {
+        Some(FileKind::Image) => (caption().unwrap_or_else(|| "Image".into()), PreviewKind::Image),
+        Some(FileKind::Video) => (caption().unwrap_or_else(|| "Video".into()), PreviewKind::Video),
+        Some(FileKind::Voice) => {
+            let secs = content.and_then(|c| c.i64_at("/duration")).unwrap_or(0).max(0);
+            let label = if secs > 0 {
+                format!("Voice message · {}:{:02}", secs / 60, secs % 60)
+            } else {
+                "Voice message".into()
+            };
+            (label, PreviewKind::Voice)
+        }
+        _ if is_file => {
+            let name = item.str_at("/file/fileName").unwrap_or("File");
+            (caption().unwrap_or_else(|| name.to_string()), PreviewKind::File)
+        }
+        _ => {
+            let text = item_text(item);
+            let text = text.strip_prefix('📎').map(str::trim).unwrap_or(text);
+            let text = expand_emoji_shortcodes(text);
+            // Bold, italic, links… as in the bubble.
+            let segments = item_segments(item, false, &text);
+            return Some((text, PreviewKind::Text, segments));
+        }
+    };
+    Some((preview.0, preview.1, Vec::new()))
+}
+
+/// A chat list preview: its text, what kind of message it is, and the
+/// text's SimpleX formatting (empty: plain).
+pub(crate) type Preview = (String, PreviewKind, Vec<TextSegment>);
+
+/// The newest real message among `items` (oldest first), as [`item_preview`].
+pub(crate) fn latest_preview(items: &[Value]) -> Option<Preview> {
+    items.iter().rev().find_map(item_preview)
+}
+
+/// The chat list, and for each chat whose newest item is no message (see
+/// [`item_preview`]) that item's id: the caller looks further back.
+pub(crate) fn chat_previews_with_gaps(value: &Value) -> Vec<(ChatPreview, Option<i64>)> {
+    value
+        .array_at("/chats")
+        .iter()
+        .filter_map(|chat| {
+            let preview = chat_preview(chat)?;
+            let last = chat.array_at("/chatItems").first();
+            let gap = last.filter(|item| item_preview(item).is_none()).and_then(|item| item.i64_at("/meta/itemId"));
+            Some((preview, gap))
+        })
+        .collect()
 }
 
 fn chat_settings(value: Option<&Value>) -> ChatSettings {
@@ -347,17 +415,7 @@ pub(crate) fn message(item: &Value) -> Option<ChatMessage> {
     let text = expand_emoji_shortcodes(text.strip_prefix('📎').map(str::trim).unwrap_or(&text));
     let text = if is_announcement { announcement_text(item, text) } else { text };
 
-    // Metadata may already have had its original markers stripped by the
-    // pinned core. Apply Cursus syntax to the sender's actual source instead.
-    let source = item.str_at("/content/msgContent/text").unwrap_or(&text);
-    let mut segments = if source.contains('*') && !is_announcement {
-        crate::rich_text::profile_text(source)
-    } else {
-        parse_formatted_text(item.get("formattedText"))
-    };
-    for seg in segments.iter_mut().filter(|s| s.style == TextStyle::Plain) {
-        seg.text = expand_emoji_shortcodes(&seg.text);
-    }
+    let segments = item_segments(item, is_announcement, &text);
     Some(ChatMessage {
         item_id,
         text,
@@ -384,6 +442,22 @@ pub(crate) fn message(item: &Value) -> Option<ChatMessage> {
         edited: item.bool_at("/meta/itemEdited").unwrap_or(false),
         editable: item.bool_at("/meta/editable").unwrap_or(false),
     })
+}
+
+/// SimpleX formatting of an item's text (bubbles and the chat list preview).
+fn item_segments(item: &Value, is_announcement: bool, text: &str) -> Vec<TextSegment> {
+    // Metadata may already have had its original markers stripped by the
+    // pinned core. Apply Cursus syntax to the sender's actual source instead.
+    let source = item.str_at("/content/msgContent/text").unwrap_or(text);
+    let mut segments = if source.contains('*') && !is_announcement {
+        crate::rich_text::profile_text(source)
+    } else {
+        parse_formatted_text(item.get("formattedText"))
+    };
+    for seg in segments.iter_mut().filter(|s| s.style == TextStyle::Plain) {
+        seg.text = expand_emoji_shortcodes(&seg.text);
+    }
+    segments
 }
 
 fn group_invitation(item: &Value) -> Option<GroupInvitationInfo> {
@@ -728,6 +802,57 @@ mod tests {
             "content": { "type": "sndMsgContent", "msgContent": { "type": "text", "text": "hello" } }
         });
         assert_eq!(last_item_preview(live), "hello");
+    }
+
+    #[test]
+    fn chat_list_preview_names_media_and_skips_banners() {
+        let item = |content: Value, file: Value| json!({
+            "meta": { "itemId": 9, "itemText": "summary" },
+            "content": content,
+            "file": file,
+        });
+        let kind_of = |item: Value| {
+            let chat = json!({
+                "chatInfo": { "type": "local", "noteFolder": { "noteFolderId": 1 } },
+                "chatItems": [item]
+            });
+            let c = chat_preview(&chat).expect("chat");
+            (c.preview, c.preview_kind)
+        };
+        let msg = |mc: Value| json!({ "type": "rcvMsgContent", "msgContent": mc });
+        let file = json!({ "fileId": 1, "fileName": "report.pdf", "fileSize": 10 });
+
+        let banner = item(json!({ "type": "rcvDirectE2EEInfo", "e2eeInfo": {} }), Value::Null);
+        assert_eq!(kind_of(banner.clone()), (String::new(), PreviewKind::Text));
+        assert!(item_preview(&item(json!({ "type": "chatBanner" }), Value::Null)).is_none());
+        assert!(item_preview(&item(json!({ "type": "rcvChatFeature", "feature": "timedMessages" }), Value::Null)).is_none());
+
+        assert_eq!(kind_of(item(msg(json!({ "type": "image", "text": "", "image": "x" })), file.clone())), ("Image".into(), PreviewKind::Image));
+        assert_eq!(kind_of(item(msg(json!({ "type": "image", "text": "At the crag", "image": "x" })), file.clone())), ("At the crag".into(), PreviewKind::Image));
+        assert_eq!(kind_of(item(msg(json!({ "type": "video", "text": "", "image": "x", "duration": 4 })), file.clone())), ("Video".into(), PreviewKind::Video));
+        assert_eq!(kind_of(item(msg(json!({ "type": "voice", "text": "", "duration": 65 })), file.clone())), ("Voice message · 1:05".into(), PreviewKind::Voice));
+        assert_eq!(kind_of(item(msg(json!({ "type": "file", "text": "" })), file.clone())), ("report.pdf".into(), PreviewKind::File));
+        assert_eq!(kind_of(item(msg(json!({ "type": "text", "text": "hi" })), Value::Null)), ("summary".into(), PreviewKind::Text));
+        let call = item(json!({ "type": "sndCall", "status": "ended", "duration": 42 }), Value::Null);
+        assert_eq!(kind_of(call), ("Outgoing call · 0:42".into(), PreviewKind::Call));
+
+        // Formatting, as in the bubble.
+        let styled = json!({
+            "meta": { "itemId": 9, "itemText": "zio pera" },
+            "content": msg(json!({ "type": "text", "text": "*zio pera*" })),
+        });
+        let (_, kind, segments) = item_preview(&styled).unwrap();
+        assert_eq!(kind, PreviewKind::Text);
+        assert!(segments.iter().any(|s| s.style == TextStyle::Italic && s.text == "zio pera"), "{segments:?}");
+
+        // Looking back past events finds the newest real message.
+        let older = item(msg(json!({ "type": "text", "text": "hi" })), Value::Null);
+        assert_eq!(latest_preview(&[older, banner]).map(|p| (p.0, p.1)), Some(("summary".into(), PreviewKind::Text)));
+        let list = json!({ "chats": [{
+            "chatInfo": { "type": "local", "noteFolder": { "noteFolderId": 1 } },
+            "chatItems": [item(json!({ "type": "chatBanner" }), Value::Null)]
+        }]});
+        assert_eq!(chat_previews_with_gaps(&list)[0].1, Some(9));
     }
 
     #[test]

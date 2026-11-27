@@ -52,46 +52,81 @@ impl Compositor {
         compatible_window: Option<W>,
         shell: Shell,
     ) -> Result<Self, Error> {
-        let instance = wgpu::util::new_instance_with_webgpu_detection(
-            &wgpu::InstanceDescriptor {
-                backends: settings.backends,
-                flags: if cfg!(feature = "strict-assertions") {
-                    wgpu::InstanceFlags::debugging()
-                } else {
-                    wgpu::InstanceFlags::empty()
-                },
-                ..Default::default()
-            },
-        )
-        .await;
-
-        log::info!("{settings:#?}");
-
-        #[cfg(not(target_arch = "wasm32"))]
-        if log::max_level() >= log::LevelFilter::Info {
-            let available_adapters: Vec<_> = instance
-                .enumerate_adapters(settings.backends)
-                .iter()
-                .map(wgpu::Adapter::get_info)
-                .collect();
-            log::info!("Available adapters: {available_adapters:#?}");
-        }
-
-        #[allow(unsafe_code)]
-        let compatible_surface = compatible_window
-            .and_then(|window| instance.create_surface(window).ok());
-
-        let adapter_options = wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::from_env()
-                .unwrap_or(wgpu::PowerPreference::HighPerformance),
-            compatible_surface: compatible_surface.as_ref(),
-            force_fallback_adapter: false,
+        // Cursus patch: with every backend allowed, try Vulkan / Metal /
+        // DX12 first and bring up GL only when they find no hardware
+        // adapter (GLES-only phones). Creating a GL instance beside Vulkan
+        // loads Mesa's whole GL stack (gallium + LLVM, ~25 MB resident, and
+        // start-up time) that is never used.
+        let passes: &[wgpu::Backends] = if settings.backends == wgpu::Backends::all() {
+            &[wgpu::Backends::PRIMARY, wgpu::Backends::SECONDARY]
+        } else {
+            std::slice::from_ref(&settings.backends)
         };
 
-        let adapter =
-            instance.request_adapter(&adapter_options).await.map_err(
-                |_error| Error::NoAdapterFound(format!("{adapter_options:?}")),
-            )?;
+        let mut picked: Option<(wgpu::Instance, wgpu::Adapter)> = None;
+        let mut tried = Vec::new();
+        for &backends in passes {
+            let instance = wgpu::util::new_instance_with_webgpu_detection(
+                &wgpu::InstanceDescriptor {
+                    backends,
+                    flags: if cfg!(feature = "strict-assertions") {
+                        wgpu::InstanceFlags::debugging()
+                    } else {
+                        wgpu::InstanceFlags::empty()
+                    },
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            log::info!("{settings:#?}");
+
+            #[cfg(not(target_arch = "wasm32"))]
+            if log::max_level() >= log::LevelFilter::Info {
+                let available_adapters: Vec<_> = instance
+                    .enumerate_adapters(backends)
+                    .iter()
+                    .map(wgpu::Adapter::get_info)
+                    .collect();
+                log::info!("Available adapters: {available_adapters:#?}");
+            }
+
+            // Only used to pick a compatible adapter (dropped below).
+            #[allow(unsafe_code)]
+            let compatible_surface = compatible_window
+                .as_ref()
+                .and_then(|window| instance.create_surface(window).ok());
+
+            let adapter_options = wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::from_env()
+                    .unwrap_or(wgpu::PowerPreference::HighPerformance),
+                compatible_surface: compatible_surface.as_ref(),
+                force_fallback_adapter: false,
+            };
+            tried.push(format!("{backends:?}: {adapter_options:?}"));
+
+            let Ok(adapter) = instance.request_adapter(&adapter_options).await else {
+                continue;
+            };
+            drop(compatible_surface);
+            // A software adapter (lavapipe) only wins when no later pass
+            // has a hardware one.
+            let software = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+            if picked.is_none() || !software {
+                picked = Some((instance, adapter));
+            }
+            if !software {
+                break;
+            }
+        }
+        let (instance, adapter) =
+            picked.ok_or_else(|| Error::NoAdapterFound(tried.join("; ")))?;
+
+        // The surface the formats below are checked against.
+        #[allow(unsafe_code)]
+        let compatible_surface = compatible_window
+            .as_ref()
+            .and_then(|window| instance.create_surface(window).ok());
 
         log::info!("Selected: {:#?}", adapter.get_info());
 

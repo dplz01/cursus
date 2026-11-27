@@ -1,6 +1,7 @@
 //! An open SimpleX chat session: every command the apps send goes through
 //! [`Session`]; replies are turned into models by [`crate::parse`].
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -71,6 +72,10 @@ pub struct Session {
     /// Unused own one-time links, from the last chat-list load and kept up
     /// to date by create / rename / delete (see `crate::invitations`).
     pending: Mutex<Vec<Invitation>>,
+    /// Chats whose newest item is no message (a banner, a member joining…):
+    /// the last real message found further back, by that newest item's id,
+    /// so the history is read again only when the chat moves on.
+    previews: Mutex<HashMap<ChatId, (i64, Option<parse::Preview>)>>,
 }
 
 // The chat controller is used concurrently from command and receive
@@ -83,6 +88,10 @@ unsafe impl Sync for Session {}
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+/// How far back the chat list looks for a real message when a chat's newest
+/// item is a banner or an event.
+const PREVIEW_LOOKBACK: u32 = 30;
 
 fn command_error(message: impl Into<String>) -> Error {
     Error::Command(message.into())
@@ -123,6 +132,7 @@ impl Session {
             user: Mutex::new(None),
             encrypt_local_files: AtomicBool::new(true),
             pending: Mutex::new(Vec::new()),
+            previews: Mutex::new(HashMap::new()),
         };
         // The active user; a new database gets one with the welcome name.
         let name = Some(config.initial_display_name.trim()).filter(|n| !n.is_empty()).unwrap_or("Cursus");
@@ -283,7 +293,37 @@ impl Session {
     pub fn list_chats(&self) -> Result<Vec<ChatPreview>> {
         let value = self.send(&Commands::get_chats(self.user_id()?))?;
         *lock(&self.pending) = invitations::pending_invitations(&value);
-        Ok(parse::chat_previews(&value))
+        let chats = parse::chat_previews_with_gaps(&value);
+        let mut cache = lock(&self.previews);
+        let mut seen = std::collections::HashSet::with_capacity(chats.len());
+        let chats = chats
+            .into_iter()
+            .map(|(mut chat, gap)| {
+                seen.insert(chat.id.clone());
+                let Some(last_id) = gap else { return chat };
+                let found = match cache.get(&chat.id) {
+                    Some((id, found)) if *id == last_id => found.clone(),
+                    _ => {
+                        // Read back for the newest real message; a chat with
+                        // none (just connected, only events) shows no preview.
+                        let found = self
+                            .send(&Commands::get_chat(&chat.id, PREVIEW_LOOKBACK))
+                            .ok()
+                            .and_then(|v| parse::latest_preview(v.array_at("/chat/chatItems")));
+                        cache.insert(chat.id.clone(), (last_id, found.clone()));
+                        found
+                    }
+                };
+                if let Some((text, kind, segments)) = found {
+                    chat.preview = text;
+                    chat.preview_kind = kind;
+                    chat.preview_segments = segments;
+                }
+                chat
+            })
+            .collect();
+        cache.retain(|id, _| seen.contains(id));
+        Ok(chats)
     }
 
     /// Clear unread state for a chat (badge goes to zero after list refresh).

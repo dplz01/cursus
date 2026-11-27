@@ -20,7 +20,7 @@ cursus-core.workspace = true
 base64 = "0.22"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 chrono.workspace = true
-iced = { version = "0.14", features = ["tokio", "debug", "svg", "image", "canvas", "advanced", "lazy"] }
+iced = { version = "0.14", features = ["tokio", "svg", "image-without-codecs", "canvas", "advanced", "lazy"] }
 # Backdrop blur (glass.rs): wgpu types + the patched surface flag.
 iced_wgpu = "0.14"
 iced_aw = { version = "0.14.1", default-features = false, features = ["context_menu"] }

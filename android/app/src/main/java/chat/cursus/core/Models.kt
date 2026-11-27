@@ -56,6 +56,10 @@ data class Chat(
     val apiId: Long,
     val title: String = "",
     val preview: String = "",
+    /** What the last message is: text, image, video, voice, file or call. */
+    val previewKind: String = "text",
+    /** SimpleX formatting of the preview text (empty: plain). */
+    val previewSegments: List<Segment> = emptyList(),
     val unread: Long = 0,
     val unreadChat: Boolean = false,
     val notifications: String = "all",
@@ -225,7 +229,13 @@ object Stamps {
     private val dateOfInfo = DateTimeFormatter.ofPattern("d MMM yyyy")
     private val fullDay = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
 
+    /** Items without a real time (the chat banner, some events) carry the
+     *  Unix epoch, 1 January 1970: no day label or time for those (Linux
+     *  `divider_time`). */
     fun parse(raw: String?): Instant? = raw?.let { runCatching { Instant.parse(it) }.getOrNull() }
+        ?.takeIf { it.isAfter(REAL_TIME) }
+
+    private val REAL_TIME: Instant = Instant.parse("2000-01-01T00:00:00Z")
 
     fun time(raw: String?): String =
         parse(raw)?.atZone(ZoneId.systemDefault())?.format(time) ?: ""

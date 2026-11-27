@@ -28,6 +28,7 @@ Icons under this directory are vendored from [SVG Repo](https://www.svgrepo.com/
 | `mic.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `play.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `stop.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
+| `video.svg`, `document.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `back.svg`, `next.svg` | Cursus original | — | CC0 / public domain dedication | Yes |
 | `paste.svg` | [svgrepo/521781](https://www.svgrepo.com/svg/521781/paste) | Gentlecons Interface Icons / Konstantin Filatov | **CC Attribution** — attribution required | Yes (with credit) |
 | `address-card.svg` | [svgrepo/533175](https://www.svgrepo.com/svg/533175/address-card) | Dazzle Line Icons / Dazzle UI | **CC Attribution** — attribution required | Yes (with credit) |

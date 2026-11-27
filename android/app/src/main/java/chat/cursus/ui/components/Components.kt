@@ -381,10 +381,18 @@ fun initials(name: String): String =
         .joinToString("") { it.substring(0, it.offsetByCodePoints(0, 1)).uppercase() }
         .ifEmpty { "?" }
 
-fun decodeDataUrl(url: String): ImageBitmap? = runCatching {
+/** Decoded avatars and inline previews by their data URL. Rows of the chat
+ *  list and the history are composed again whenever they scroll back into
+ *  view; without this every one decoded its picture again on the main
+ *  thread, which showed as jank while scrolling. */
+private val dataUrlCache = object : android.util.LruCache<String, ImageBitmap>(12 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
+}
+
+fun decodeDataUrl(url: String): ImageBitmap? = dataUrlCache.get(url) ?: runCatching {
     val data = Base64.decode(url.substringAfter("base64,"), Base64.DEFAULT)
     BitmapFactory.decodeByteArray(data, 0, data.size)?.asImageBitmap()
-}.getOrNull()
+}.getOrNull()?.also { dataUrlCache.put(url, it) }
 
 /** Unread pill: solid accent (muted chats: grey), as on Linux and macOS. */
 @Composable

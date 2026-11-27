@@ -424,6 +424,30 @@ struct ChatRow: View {
         return previews ? chat.preview : ""
     }
 
+    /// The preview formatted as in the bubble (secrets hidden), without
+    /// links: clicking the row opens the chat.
+    private var previewAttributed: AttributedString {
+        guard chat.pendingRequestId == nil, previews,
+              let segments = chat.previewSegments, !segments.isEmpty
+        else { return AttributedString(previewText) }
+        var text = RichText.attributed(segments, plain: chat.preview)
+        for run in text.runs { text[run.range].link = nil }
+        return text
+    }
+
+    /// Pictures, voice messages, files and calls lead with what they are.
+    private var kindIcon: String? {
+        if chat.pendingRequestId != nil || previewText.isEmpty { return nil }
+        switch chat.previewKind ?? "text" {
+        case "image": return "image-square"
+        case "video": return "video"
+        case "voice": return "mic"
+        case "file": return "document"
+        case "call": return "calls"
+        default: return nil
+        }
+    }
+
     var body: some View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 10) {
@@ -442,7 +466,10 @@ struct ChatRow: View {
                         }
                     }
                     HStack(alignment: .top, spacing: 4) {
-                        Text(previewText)
+                        if let icon = kindIcon {
+                            CIcon(icon, size: 13, color: Theme.mutedText).padding(.top, 1)
+                        }
+                        Text(previewAttributed)
                             .font(.cMeta)
                             .foregroundColor(chat.pendingRequestId != nil ? Theme.gold : Theme.secondaryText)
                             .lineLimit(2)

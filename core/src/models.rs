@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -175,11 +177,49 @@ pub struct ChatTag {
     pub emoji: Option<String>,
 }
 
+/// What a chat's last message is, so the list can lead its preview with an
+/// icon (a picture, a voice message…) instead of the core's summary text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum PreviewKind {
+    /// Text, links, invitations, deleted tombstones: the preview is the text.
+    #[default]
+    Text,
+    /// A picture: its caption, else "Image".
+    Image,
+    /// A video: its caption, else "Video".
+    Video,
+    /// A voice message: "Voice message" and its length.
+    Voice,
+    /// Any other file: its name.
+    File,
+    /// A call: "Outgoing call · 0:42", "Missed call"…
+    Call,
+}
+
+impl PreviewKind {
+    /// Name used by the native apps' JSON (`previewKind`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Voice => "voice",
+            Self::File => "file",
+            Self::Call => "call",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ChatPreview {
     pub id: ChatId,
     pub title: String,
+    /// The last actual message (banners and protocol events are skipped),
+    /// as the list shows it after [`Self::preview_kind`]'s icon.
     pub preview: String,
+    pub preview_kind: PreviewKind,
+    /// SimpleX formatting of a text [`Self::preview`] (empty: plain).
+    pub preview_segments: Vec<crate::rich_text::TextSegment>,
     pub unread: i64,
     /// Soft unread flag (`/_unread chat … on`) independent of item counts.
     pub unread_chat: bool,
@@ -228,6 +268,8 @@ impl ChatPreview {
             id,
             title,
             preview: String::new(),
+            preview_kind: PreviewKind::Text,
+            preview_segments: Vec::new(),
             unread: 0,
             unread_chat: false,
             settings: ChatSettings::default(),
@@ -473,7 +515,7 @@ impl FileKind {
     }
 }
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone)]
 pub struct FileInfo {
     pub file_id: i64,
     pub file_name: String,
@@ -499,6 +541,67 @@ pub struct FileInfo {
     /// Small inline picture (data-URL) the sender embedded in an image or
     /// video message: shown until the file itself is downloaded.
     pub preview: Option<String>,
+}
+
+/// Hashes a picture data URL (profile image, embedded preview) by its length
+/// and three sampled windows instead of every byte. UIs hash whole message
+/// histories to tell whether anything changed; with a ~12 KB picture per
+/// group message, hashing every byte dominated that. Different pictures
+/// differ in their compressed payload, so equal length *and* equal windows
+/// do not happen in practice.
+pub fn hash_data_url<H: Hasher>(url: &Option<String>, h: &mut H) {
+    const WINDOW: usize = 256;
+    let Some(url) = url else {
+        h.write_u8(0);
+        return;
+    };
+    let bytes = url.as_bytes();
+    h.write_u8(1);
+    h.write_usize(bytes.len());
+    if bytes.len() <= WINDOW * 3 {
+        h.write(bytes);
+    } else {
+        let mid = bytes.len() / 2 - WINDOW / 2;
+        h.write(&bytes[..WINDOW]);
+        h.write(&bytes[mid..mid + WINDOW]);
+        h.write(&bytes[bytes.len() - WINDOW..]);
+    }
+}
+
+impl Hash for FileInfo {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        // Every field, so a new one can't be forgotten here.
+        let Self {
+            file_id,
+            file_name,
+            file_size,
+            state,
+            kind,
+            duration_secs,
+            local_path,
+            encrypted,
+            crypto_key,
+            crypto_nonce,
+            transferred,
+            transfer_total,
+            error_detail,
+            preview,
+        } = self;
+        file_id.hash(h);
+        file_name.hash(h);
+        file_size.hash(h);
+        state.hash(h);
+        kind.hash(h);
+        duration_secs.hash(h);
+        local_path.hash(h);
+        encrypted.hash(h);
+        crypto_key.hash(h);
+        crypto_nonce.hash(h);
+        transferred.hash(h);
+        transfer_total.hash(h);
+        error_detail.hash(h);
+        hash_data_url(preview, h);
+    }
 }
 
 impl FileInfo {
@@ -712,7 +815,7 @@ pub struct MessageQuote {
 }
 
 /// Sender of an incoming group / channel message (`chatDir.groupMember`).
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone)]
 pub struct MessageSender {
     pub group_member_id: i64,
     /// Linked direct contact when known (`memberContactId`).
@@ -720,6 +823,17 @@ pub struct MessageSender {
     pub display_name: String,
     pub image: Option<String>,
     pub role: String,
+}
+
+impl Hash for MessageSender {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        let Self { group_member_id, contact_id, display_name, image, role } = self;
+        group_member_id.hash(h);
+        contact_id.hash(h);
+        display_name.hash(h);
+        hash_data_url(image, h);
+        role.hash(h);
+    }
 }
 
 /// Group invitation embedded in a direct-chat item (`rcvGroupInvitation` / `sndGroupInvitation`).

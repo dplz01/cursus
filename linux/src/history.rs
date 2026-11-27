@@ -13,6 +13,8 @@ use cursus_core::ChatMessage;
 #[derive(Clone, Debug, Default)]
 pub struct History {
     messages: Vec<ChatMessage>,
+    /// Hash of each message, for keys of single bubbles.
+    hashes: Vec<u64>,
     fingerprint: u64,
 }
 
@@ -24,6 +26,11 @@ impl History {
     /// Hash of every message; equal fingerprints mean equal histories.
     pub(crate) fn fingerprint(&self) -> u64 {
         self.fingerprint
+    }
+
+    /// Hash of message `index` (every field), computed once per change.
+    pub(crate) fn message_hash(&self, index: usize) -> u64 {
+        self.hashes[index]
     }
 
     #[cfg(test)]
@@ -42,9 +49,17 @@ impl History {
 
 impl From<Vec<ChatMessage>> for History {
     fn from(messages: Vec<ChatMessage>) -> Self {
+        let hashes: Vec<u64> = messages
+            .iter()
+            .map(|m| {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                m.hash(&mut h);
+                h.finish()
+            })
+            .collect();
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        messages.hash(&mut h);
-        Self { fingerprint: h.finish(), messages }
+        hashes.hash(&mut h);
+        Self { fingerprint: h.finish(), hashes, messages }
     }
 }
 

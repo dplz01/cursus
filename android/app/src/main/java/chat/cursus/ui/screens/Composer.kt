@@ -57,7 +57,9 @@ import chat.cursus.ui.theme.Radius
 /** One-line field and its action: 42dp (between the 36dp "+" and the
  *  48dp of other messengers), radius 12 like the "+", so corners match. */
 private val ROW_HIT = 42.dp
-private val FieldShape get() = Radius.smallControl
+/** The text field (and the voice draft / emoji list in its place): rounded
+ *  like a message bubble of its height. Linux `FIELD_RADIUS`. */
+private val FieldShape get() = Radius.bubble
 /** Soft lift of the square action beside the field (as the glass card). */
 private val FLOAT_ELEVATION = 3.dp
 
@@ -178,7 +180,7 @@ fun Composer(model: AppModel) {
 /** Icon button inside the composer field (paperclip / ✕), field-height hit. */
 @Composable
 private fun InFieldTool(icon: Int, description: String, onClick: () -> Unit) {
-    Box(Modifier.size(ROW_HIT).clip(FieldShape).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(ROW_HIT).clip(Radius.smallControl).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
         Icon(painterResource(icon), description, Modifier.size(20.dp), tint = Cursus.colors.textSecondary)
     }
 }
@@ -233,7 +235,7 @@ private fun ContextBar(model: AppModel) {
 
 /** Linux `SUGGEST_INSET` / `SUGGEST_ROW_RADIUS`: concentric with the field. */
 private val SUGGEST_INSET = 4.dp
-private val SuggestRowShape = RoundedCornerShape(12.dp - SUGGEST_INSET)
+private val SuggestRowShape = RoundedCornerShape(18.dp - SUGGEST_INSET)
 
 /** Linux emoji suggestions: fixed 5-row card, hits glued to the field. */
 @Composable

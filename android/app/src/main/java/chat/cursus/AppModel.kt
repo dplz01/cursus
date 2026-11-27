@@ -433,8 +433,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val list: List<Chat> = Core.call("listChats")
-                chats.clear()
-                chats.addAll(list)
+                chats.replaceKeeping(list) { it.ref }
                 refreshPendingInvitations() // same reply carried them
             } catch (e: Exception) {
                 notice = e.message
@@ -536,8 +535,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             openingReadAnchor = chat.cursus.core.latestReadAnchor(list, openingUnread)
             openingUnread = 0
         }
-        messages.clear()
-        messages.addAll(list)
+        messages.replaceKeeping(list) { it.id }
         messagesFor = ref
         loadImages(list)
         autoDownload(list)
@@ -642,6 +640,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 try {
                     Core.run("sendFile", mapOf("chat" to ref, "path" to file.absolutePath))
                     reloadMessages(ref)
+                    scheduleChatsReload()
                     withContext(Dispatchers.IO) { file.parentFile?.deleteRecursively() }
                 } catch (e: Exception) {
                     if (selection == ref && !appLocked && pastedImage == null) pastedImage = file
@@ -674,6 +673,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
                 reloadMessages(ref)
+                // What you sent is the chat's last message now (the core
+                // sends no event for your own messages).
+                scheduleChatsReload()
             } catch (e: Exception) {
                 draft = text
                 composeMode = mode
@@ -693,6 +695,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         Core.run("deleteItems", mapOf("chat" to selection, "itemIds" to ids, "forEveryone" to forEveryone))
         calls.invalidateHistory()
         selection?.let { reloadMessages(it) }
+        scheduleChatsReload()
     }
 
     // Selecting several messages (message menu → Select), as on Linux:
@@ -838,6 +841,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 withContext(Dispatchers.IO) { file.parentFile?.deleteRecursively() }
             }
             reloadMessages(ref)
+            scheduleChatsReload()
         }
     }
 
@@ -898,6 +902,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 withContext(Dispatchers.IO) { draft.file.delete() }
             }
             reloadMessages(ref)
+            scheduleChatsReload()
         }
     }
 
@@ -1231,4 +1236,19 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+}
+
+/**
+ * Replaces the list's contents with [new], keeping the old instance of every
+ * element that is unchanged. Every new message or list refresh reloads the
+ * whole chat list / history; with fresh instances Compose recomposed every
+ * visible row, while kept ones are skipped (equal by identity).
+ */
+private fun <T, K> androidx.compose.runtime.snapshots.SnapshotStateList<T>.replaceKeeping(new: List<T>, key: (T) -> K) {
+    val old = HashMap<K, T>(size * 2)
+    for (o in this) old[key(o)] = o
+    val merged = new.map { n -> old[key(n)]?.takeIf { it == n } ?: n }
+    if (merged.size == size && merged.indices.all { merged[it] === this[it] }) return
+    clear()
+    addAll(merged)
 }

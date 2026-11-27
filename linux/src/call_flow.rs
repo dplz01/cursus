@@ -387,7 +387,13 @@ impl App {
                     self.status = "That contact's chat is gone.".into();
                     return iced::Task::none();
                 };
-                self.nav = NavSection::Chats;
+                // Stay on Calls while the history loads (switching first
+                // showed the Chats list for that moment); `SelectChat` moves
+                // to Chats as the chat opens, over the Calls list on a phone,
+                // and Back returns there (`list_return`).
+                if self.nav != NavSection::Chats {
+                    self.list_return = Some(self.nav);
+                }
                 self.update(Message::SelectChat(index))
             }
             CallMsg::Start(contact_id) => self.start_call(contact_id),

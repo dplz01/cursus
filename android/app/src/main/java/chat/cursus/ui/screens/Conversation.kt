@@ -236,18 +236,22 @@ private sealed interface Row_ {
 
 @Composable
 private fun MessageList(model: AppModel, chat: Chat, bottomInset: androidx.compose.ui.unit.Dp = 0.dp) {
-    val rows = remember(model.messages.toList()) {
-        buildList<Row_> {
-            var lastDay: LocalDate? = null
-            for (m in model.messages) {
-                val day = Stamps.day(m.createdAt)
-                if (day != null && day != lastDay) {
-                    add(Row_.Day(day)); lastDay = day
+    // Rebuilt only when the history changes (copying and comparing the
+    // whole list on every recomposition used to stand in for the key).
+    val rows by remember {
+        androidx.compose.runtime.derivedStateOf {
+            buildList<Row_> {
+                var lastDay: LocalDate? = null
+                for (m in model.messages) {
+                    val day = Stamps.day(m.createdAt)
+                    if (day != null && day != lastDay) {
+                        add(Row_.Day(day)); lastDay = day
+                    }
+                    // Runs (same sender, same day, ≤5 min) come from the core.
+                    add(Row_.Msg(m, firstOfRun = !m.joinedPrev, lastOfRun = !m.joinedNext))
                 }
-                // Runs (same sender, same day, ≤5 min) come from the core.
-                add(Row_.Msg(m, firstOfRun = !m.joinedPrev, lastOfRun = !m.joinedNext))
-            }
-        }.asReversed()
+            }.asReversed()
+        }
     }
     val state = rememberLazyListState()
     var displayedLast by androidx.compose.runtime.saveable.rememberSaveable(chat.ref) { mutableStateOf<Long?>(null) }
@@ -296,7 +300,7 @@ private fun MessageList(model: AppModel, chat: Chat, bottomInset: androidx.compo
                 is Row_.Day -> "d" + r.date
                 is Row_.Msg -> "m" + r.message.id
             }
-        }) { i ->
+        }, contentType = { i -> if (rows[i] is Row_.Day) 0 else 1 }) { i ->
             when (val r = rows[i]) {
                 is Row_.Day -> DayLabel(r.date)
                 is Row_.Msg -> MessageRow(model, chat, r.message, r.firstOfRun, r.lastOfRun,

@@ -369,11 +369,24 @@ impl Widget<Message, Theme, iced::Renderer> for Shift<'_> {
         viewport: &Rectangle,
     ) {
         let Some(child) = layout.children().next() else { return };
-        if self.offset == 0.0 {
+        let bounds = layout.bounds();
+        // At rest, or within the last pixel of the slide (the shift rounds
+        // to 0): drawn as is, no layer of its own.
+        if self.offset == 0.0 || child.bounds() == bounds {
             self.content.as_widget().draw(&tree.children[0], renderer, theme, style, child, cursor, viewport);
             return;
         }
-        let Some(clip) = layout.bounds().intersection(viewport) else { return };
+        // Clipped to where the page is now, not where it rests, so the page
+        // leaving and the one arriving never get layers with the same
+        // bounds. Clipping both to the resting bounds made the slide's last
+        // frames (one page wholly off screen, the other at rest but for a
+        // fraction of a pixel) lose the arriving page's own content on the
+        // GPU renderer (its header; all of Calls): a dark blink as the
+        // slide ended. Those frames now draw like the resting one.
+        let Some(clip) = child.bounds().intersection(&bounds).and_then(|c| c.intersection(viewport)) else {
+            // Wholly off screen: nothing to draw.
+            return;
+        };
         renderer.with_layer(clip, |r| {
             self.content.as_widget().draw(&tree.children[0], r, theme, style, child, cursor, &clip);
         });

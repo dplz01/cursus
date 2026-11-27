@@ -4,6 +4,9 @@ use serde_json::{json, Value};
 
 use crate::models::{CallMedia, ChatId, ChatSettings, ChatType, GroupProfileUpdate, ProfileFields};
 
+/// Shared by the item text of every call (`ciContentToText` in the core).
+const CALL_ITEM_TEXT: &str = "call:";
+
 pub struct Commands;
 
 fn on_off(on: bool) -> &'static str {
@@ -511,6 +514,18 @@ impl Commands {
         format!("/_get items {before}count={count}")
     }
 
+    /// Newest call items across all chats. The core stores calls with the
+    /// text "outgoing call: …" / "incoming call: …", and `search=` filters
+    /// on that text (it must stay last: it takes the rest of the line).
+    pub fn get_call_items(count: u32, before: Option<i64>) -> String {
+        format!("{} search={CALL_ITEM_TEXT}", Self::get_items(count, before))
+    }
+
+    /// Newest call items of one chat (calls only live in direct chats).
+    pub fn get_chat_call_items(chat: &ChatId, count: u32) -> String {
+        format!("{} search={CALL_ITEM_TEXT}", Self::get_chat(chat, count))
+    }
+
     /// Callee → caller: WebRTC offer (`/_call offer @{id} {WebRTCCallOffer}`).
     /// `rtc_session` / `rtc_ice_candidates` are LZString-base64 JSON, as the
     /// official clients send them.
@@ -641,6 +656,11 @@ mod tests {
         assert_eq!(Commands::forward_items(&chat, &direct(3), &[4, 5]), "/_forward @3 as_group=off @9 4,5 ttl=default");
         assert_eq!(Commands::get_items(5, None), "/_get items count=5");
         assert_eq!(Commands::get_items(5, Some(9)), "/_get items before=9 count=5");
+        assert_eq!(Commands::get_call_items(5, Some(9)), "/_get items before=9 count=5 search=call:");
+        assert_eq!(
+            Commands::get_chat_call_items(&ChatId::new(ChatType::Direct, 4), 20),
+            "/_get chat @4 count=20 search=call:"
+        );
     }
 
     #[test]

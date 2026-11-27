@@ -839,17 +839,11 @@ impl Session {
     }
 
     /// Recent calls, newest first. The core keeps each call as a chat item
-    /// in the contact's chat; there is no call-only query, so this pages
-    /// back through the newest items of all chats (at most `scan_items`)
-    /// until `limit` calls are found.
+    /// in the contact's chat; this pages back through the newest call items
+    /// of all chats (filtered on their text, at most `scan_items`) until
+    /// `limit` calls are found, falling back to one direct chat at a time.
     pub fn call_history(&self, limit: usize, scan_items: u32) -> Result<Vec<CallRecord>> {
-        scan_call_history(
-            limit,
-            scan_items,
-            250,
-            |count, before| self.send(&Commands::get_items(count, before)),
-            |_| {},
-        )
+        self.call_history_progress(limit, scan_items, |_| {})
     }
 
     /// Publish useful results after each page instead of hiding them until the
@@ -858,16 +852,72 @@ impl Session {
         &self,
         limit: usize,
         scan_items: u32,
-        progress: impl FnMut(&[CallRecord]),
+        mut progress: impl FnMut(&[CallRecord]),
     ) -> Result<Vec<CallRecord>> {
-        scan_call_history(
+        let scanned = scan_call_history(
             limit,
             scan_items,
             100,
-            |count, before| self.send(&Commands::get_items(count, before)),
-            progress,
-        )
+            |count, before| self.send(&Commands::get_call_items(count, before)),
+            &mut progress,
+        );
+        match scanned {
+            Ok(calls) => Ok(calls),
+            // `/_get items` loads every item's chat, and the core fails the
+            // whole page on one it can't load, e.g. an item left in a group
+            // member's deleted support chat ("no support chat"). Calls only
+            // live in direct chats: ask each of those instead.
+            Err(err) => {
+                tracing::warn!(%err, "call history: all-chats scan failed, scanning direct chats");
+                let direct: Vec<ChatId> = self
+                    .list_chats()?
+                    .into_iter()
+                    .map(|chat| chat.id)
+                    .filter(|id| id.chat_type == ChatType::Direct)
+                    .collect();
+                let per_chat = (scan_items / 4).max(limit as u32).max(1);
+                scan_direct_call_history(limit, &direct, per_chat, |chat, count| {
+                    self.send(&Commands::get_chat_call_items(chat, count))
+                }, progress)
+            }
+        }
     }
+}
+
+/// Call history from each direct chat in turn (newest chats first). A chat
+/// the core can't load is skipped rather than hiding every other call.
+fn scan_direct_call_history(
+    limit: usize,
+    chats: &[ChatId],
+    per_chat: u32,
+    mut fetch: impl FnMut(&ChatId, u32) -> Result<Value>,
+    mut progress: impl FnMut(&[CallRecord]),
+) -> Result<Vec<CallRecord>> {
+    let mut calls: Vec<CallRecord> = Vec::new();
+    if limit == 0 {
+        return Ok(calls);
+    }
+    for chat in chats {
+        let value = match fetch(chat, per_chat) {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!(%err, chat = chat.api_id, "call history: chat skipped");
+                continue;
+            }
+        };
+        let Some(info) = value.pointer("/chat/chatInfo") else { continue };
+        let previous = calls.len();
+        calls.extend(value.array_at("/chat/chatItems").iter().filter_map(|item| {
+            CallRecord::parse(&serde_json::json!({ "chatInfo": info, "chatItem": item }))
+        }));
+        if calls.len() != previous {
+            calls.sort_by_key(|r| std::cmp::Reverse(r.item_id));
+            calls.dedup_by_key(|r| r.item_id);
+            calls.truncate(limit);
+            progress(&calls);
+        }
+    }
+    Ok(calls)
 }
 
 fn scan_call_history(
@@ -1042,6 +1092,28 @@ mod tests {
     }
 
     #[test]
+    fn direct_call_history_skips_chats_the_core_cannot_load() {
+        let chats = [ChatId::new(ChatType::Direct, 1), ChatId::new(ChatType::Direct, 2), ChatId::new(ChatType::Direct, 3)];
+        let mut updates = 0;
+        let calls = scan_direct_call_history(10, &chats, 50, |chat, count| {
+            assert_eq!(count, 50);
+            if chat.api_id == 2 {
+                return Err(command_error("no support chat"));
+            }
+            Ok(json!({"chat": {
+                "chatInfo": {"type": "direct", "contact": {"contactId": chat.api_id, "profile": {"displayName": "Bob"}}},
+                "chatItems": [
+                    {"meta": {"itemId": chat.api_id * 10}, "content": {"type": "sndCall", "status": "ended", "duration": 41}},
+                    {"meta": {"itemId": chat.api_id * 10 + 1}, "content": {"type": "sndMsgContent"}}
+                ]
+            }}))
+        }, |_| updates += 1).unwrap();
+        assert_eq!(calls.iter().map(|c| (c.item_id, c.contact_id)).collect::<Vec<_>>(), vec![(30, 3), (10, 1)]);
+        assert!(calls.iter().all(|c| c.outgoing && c.duration_secs == 41));
+        assert_eq!(updates, 2);
+    }
+
+    #[test]
     fn file_not_approved_lists_server_hosts() {
         let err = json!({"type": "error", "errorType": {
             "type": "fileNotApproved", "fileId": 9,
@@ -1121,6 +1193,32 @@ mod live_tests {
             .expect("save inline markdown in a valid SimpleX name");
         assert_eq!(user.profile.display_name, "Team *Cursus* 🚀");
         assert_eq!(user.profile.short_descr, "Build _nice_ things");
+        drop(session);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The call-history queries parse in the real core and filter on the
+    /// item text (calls need the network, so notes stand in for them).
+    #[test]
+    fn call_item_search_filters_in_the_real_core() {
+        let _startup = crate::LIBSIMPLEX_STARTUP
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("cursus-call-search-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let session = open(&dir);
+        let notes = session.list_chats().unwrap().into_iter().find(|c| c.id.chat_type == ChatType::Local).unwrap().id;
+        session.send_text(&notes, "plain note", None).unwrap();
+        session.send_text(&notes, "outgoing call: ended 00:41", None).unwrap();
+        let texts = |items: &[Value]| -> Vec<String> {
+            items.iter().filter_map(|i| i.pointer("/chatItem/meta/itemText").or_else(|| i.pointer("/meta/itemText")))
+                .filter_map(Value::as_str).map(str::to_string).collect()
+        };
+        let all = session.send(&Commands::get_call_items(50, None)).expect("all-chats call search");
+        assert_eq!(texts(all.array_at("/chatItems")), vec!["outgoing call: ended 00:41"]);
+        let one = session.send(&Commands::get_chat_call_items(&notes, 50)).expect("one-chat call search");
+        assert_eq!(texts(one.array_at("/chat/chatItems")), vec!["outgoing call: ended 00:41"]);
         drop(session);
         let _ = std::fs::remove_dir_all(dir);
     }
